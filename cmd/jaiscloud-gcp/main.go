@@ -357,6 +357,10 @@ func startCmd() *cobra.Command {
 					// jaiscloud-events-topic label.
 					dataproccore.WithEventPublisher(pubsubP),
 					dataproccore.WithEventsTopic(os.Getenv("JAISCLOUD_DATAPROC_EVENTS_TOPIC")),
+					// Stage each job's driver output/control files into the
+					// emulated GCS. The core only sees the BlobSink interface,
+					// so it never imports provider/storage.
+					dataproccore.WithBlobSink(storageP),
 				}
 				if cfg.K8sSparkSA != "" {
 					dataprocOpts = append(dataprocOpts, dataproccore.WithServiceAccountName(cfg.K8sSparkSA))

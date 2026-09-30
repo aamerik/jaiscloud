@@ -32,9 +32,14 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 	}
 
 	j := jobToStore(project, region, in)
-	if _, err := s.store.GetCluster(ctx, project, region, j.PlacementClusterName); err != nil {
+	cluster, err := s.store.GetCluster(ctx, project, region, j.PlacementClusterName)
+	if err != nil {
 		return dpstore.Job{}, model.NewProviderError("NotFound", "cluster not found: "+j.PlacementClusterName, 404)
 	}
+	// Allocate the driver-output/control-file URIs (and provision the staging
+	// bucket) now, so they are persisted with the job and survive the cluster
+	// being deleted before the job reaches a terminal state.
+	s.prepareDriverOutput(ctx, cluster, &j)
 
 	// Fail-loud on unsupported job types — never silently succeed.
 	if unsupportedJobTypes[j.Type] {
@@ -48,6 +53,7 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 			return dpstore.Job{}, mapCreateJobErr(err)
 		}
 		s.emitJobStateChange(ctx, project, region, j, dpstore.JobStatus{})
+		s.materializeDriverOutput(ctx, j, nil)
 		return j, nil
 	}
 
@@ -59,6 +65,7 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 			return dpstore.Job{}, mapCreateJobErr(createErr)
 		}
 		s.emitJobStateChange(ctx, project, region, j, dpstore.JobStatus{})
+		s.materializeDriverOutput(ctx, j, nil)
 		return j, nil
 	}
 
@@ -347,7 +354,7 @@ func (s *Service) advanceSubmitOperation(ctx context.Context, op dpstore.Operati
 // CancelJob: whichever of the two acquires the lock first wins the terminal-
 // state transition, and the other sees the already-terminal state inside its
 // own mutate and no-ops instead of overwriting it.
-func (s *Service) finishJob(project, region string, j dpstore.Job, state, details string) {
+func (s *Service) finishJob(project, region string, j dpstore.Job, state, details string, driverOutput []byte) {
 	now := clock.Now().UTC()
 	var transitioned bool
 	var prev dpstore.JobStatus
@@ -365,9 +372,7 @@ func (s *Service) finishJob(project, region string, j dpstore.Job, state, detail
 			return fresh, nil
 		}
 		fresh.Status = dpstore.JobStatus{State: state, Details: details, StateStartTime: now, Substate: jobSubstateFor(state)}
-		if state == jobStateDone && fresh.DriverOutputResourceURI == "" {
-			fresh.DriverOutputResourceURI = mockDriverOutputURI(fresh.JobUUID)
-		}
+		ensureDriverOutputURIs(project, region, &fresh)
 		return fresh, nil
 	})
 	if err != nil {
@@ -378,6 +383,7 @@ func (s *Service) finishJob(project, region string, j dpstore.Job, state, detail
 		return
 	}
 	s.emitJobStateChange(context.Background(), project, region, fresh, prev)
+	s.materializeDriverOutput(context.Background(), fresh, driverOutput)
 	s.completeSubmitOperation(context.Background(), project, region, fresh)
 }
 

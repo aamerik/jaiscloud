@@ -85,12 +85,6 @@ func jobSubstateFor(state string) string {
 	return ""
 }
 
-// mockDriverOutputURI is the synthetic driver-output object the emulator
-// advertises until the real GCS-backed output lands (W3.1).
-func mockDriverOutputURI(jobUUID string) string {
-	return "gs://jaiscloud-dataproc/" + jobUUID + "/driveroutput"
-}
-
 // advanceJob lazily settles a transitional job once jobStateDelay has elapsed
 // since it entered that state. It serializes with runJob/finishJob/CancelJob
 // through UpdateJobAtomic, so a concurrent writer cannot double-apply a
@@ -114,8 +108,8 @@ func (s *Service) advanceJob(ctx context.Context, project, region, jobID string)
 		prev = cur.Status
 		cur.StatusHistory = append(cur.StatusHistory, cur.Status)
 		cur.Status = dpstore.JobStatus{State: next, StateStartTime: clock.Now().UTC(), Substate: jobSubstateFor(next)}
-		if next == jobStateDone && cur.DriverOutputResourceURI == "" {
-			cur.DriverOutputResourceURI = mockDriverOutputURI(cur.JobUUID)
+		if jobTerminal(next) {
+			ensureDriverOutputURIs(project, region, &cur)
 		}
 		return cur, nil
 	})
@@ -126,6 +120,10 @@ func (s *Service) advanceJob(ctx context.Context, project, region, jobID string)
 		s.emitJobStateChange(ctx, project, region, j, prev)
 	}
 	if transitioned && jobTerminal(j.Status.State) {
+		// Mock mode has no executor goroutine to capture driver logs, so write a
+		// synthetic output object (the URIs were allocated at submit) to keep
+		// the advertised location resolvable.
+		s.materializeDriverOutput(ctx, j, nil)
 		s.completeSubmitOperation(ctx, project, region, j)
 	}
 	return j, nil

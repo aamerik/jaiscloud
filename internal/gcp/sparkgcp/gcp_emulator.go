@@ -2,9 +2,42 @@ package sparkgcp
 
 import (
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 )
+
+// gcpDriverEnvNames are the environment variable names DriverEnv mirrors into a
+// job's driver/executor pods. They are also the executorEnv.* Spark conf keys
+// the emulator owns (see ProtectedSparkConf).
+var gcpDriverEnvNames = []string{
+	"GOOGLE_CLOUD_PROJECT",
+	"GOOGLE_CLOUD_PROJECT_ID",
+	"GOOGLE_CLOUD_LOCATION",
+	"STORAGE_EMULATOR_HOST",
+	"GOOGLE_APPLICATION_CREDENTIALS",
+}
+
+// ProtectedSparkConf reports whether a spark-submit conf key belongs to the
+// emulator's GCS connector wiring (DriverSparkConfsFromEnv). Caller-supplied
+// job `properties` with these keys are dropped at the Dataproc layer so a
+// caller cannot strip fs.gs.* / executorEnv.* and break gs:// access against
+// the local emulator. Keys the emulator does not own (including the later
+// metastore confs) are left to the caller.
+func ProtectedSparkConf(key string) bool {
+	if strings.HasPrefix(key, "spark.hadoop.fs.gs.") {
+		return true
+	}
+	if key == "spark.hadoop.fs.AbstractFileSystem.gs.impl" {
+		return true
+	}
+	for _, name := range gcpDriverEnvNames {
+		if key == "spark.executorEnv."+name {
+			return true
+		}
+	}
+	return false
+}
 
 // GCPEmulatorConfig carries the GCP emulator endpoint wiring needed by Spark
 // driver pods so that gs:// paths, BigQuery, and the metadata service all hit

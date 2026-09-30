@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/sparkgcp"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/sparkhelpers"
 )
@@ -104,7 +105,10 @@ func jobToEntryPoint(jobType string, typeJob map[string]any) (sparkhelpers.Entry
 }
 
 // propertiesToConfArgs converts a type-job properties map into "--conf k=v"
-// flags (Spark last-value-wins, so these are prepended before caller args).
+// flags. Caller properties that collide with the emulator's GCS connector
+// wiring (sparkgcp.ProtectedSparkConf) are dropped: the emulator injects those
+// via ExtraSparkConfs, and a caller-supplied override would break gs:// access
+// against the local emulator. Every other property is passed through verbatim.
 func propertiesToConfArgs(typeJob map[string]any) []string {
 	props, _ := typeJob["properties"].(map[string]any)
 	if props == nil {
@@ -112,6 +116,9 @@ func propertiesToConfArgs(typeJob map[string]any) []string {
 	}
 	var out []string
 	for k, v := range props {
+		if sparkgcp.ProtectedSparkConf(k) {
+			continue
+		}
 		if s, ok := v.(string); ok {
 			out = append(out, "--conf", k+"="+s)
 		}

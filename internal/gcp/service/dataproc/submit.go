@@ -1,6 +1,7 @@
 package dataproc
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"time"
@@ -12,6 +13,33 @@ import (
 )
 
 const tailLogsTimeout = 60 * time.Second
+
+// driverLogLimit caps how many driver stdout/stderr bytes the emulator buffers
+// in memory (and stages into GCS). A chatty or looping driver must not exhaust
+// emulator memory; the cap is a fidelity tradeoff (the tail beyond the limit is
+// dropped).
+const driverLogLimit = 4 << 20 // 4 MiB
+
+// cappedBuffer is an io.Writer that keeps at most max bytes and silently drops
+// the rest. It always reports a full write, so an over-limit log stream keeps
+// draining rather than aborting.
+type cappedBuffer struct {
+	buf bytes.Buffer
+	max int
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if rem := c.max - c.buf.Len(); rem > 0 {
+		if len(p) > rem {
+			p = p[:rem]
+		}
+		_, _ = c.buf.Write(p)
+	}
+	return n, nil
+}
+
+func (c *cappedBuffer) Bytes() []byte { return c.buf.Bytes() }
 
 // cancelKey scopes a job cancellation to its project+region so a CancelJob in
 // one region cannot cancel a same-named job in another.
@@ -40,7 +68,7 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 
 	ep, sparkArgs, jarArgs, err := entryPointForJob(j)
 	if err != nil {
-		s.finishJob(project, region, j, jobStateError, err.Error())
+		s.finishJob(project, region, j, jobStateError, err.Error(), nil)
 		return
 	}
 
@@ -73,6 +101,10 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 	if jobEmulator != nil {
 		copy := *jobEmulator
 		copy.ProjectID = project
+		// The emulator config is process-wide; scope the location to the
+		// cluster's region so driver/executor pods report the right
+		// GOOGLE_CLOUD_LOCATION for this job.
+		copy.Region = region
 		jobEmulator = &copy
 	}
 	driverEnv := sparkgcp.DriverEnv(jobEmulator)
@@ -100,7 +132,7 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 		}
 		slog.Warn("dataproc: SubmitClientMode failed", "job", jobID, "err", err)
 		s.persistSnapshot(runCtx, project, region, jobID, k8shelpers.BuildSnapshotFromError(err))
-		s.finishJob(project, region, j, jobStateError, err.Error())
+		s.finishJob(project, region, j, jobStateError, err.Error(), nil)
 		return
 	}
 
@@ -117,19 +149,23 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 		}
 		slog.Warn("dataproc: WaitTerminal failed", "job", jobID, "err", err)
 		s.persistSnapshot(runCtx, project, region, jobID, k8shelpers.BuildSnapshotFromError(err))
-		s.finishJob(project, region, j, jobStateError, err.Error())
+		s.finishJob(project, region, j, jobStateError, err.Error(), nil)
 		return
 	}
 
+	// Capture the driver container's stdout/stderr and stage it into the job's
+	// GCS driver-output object at terminal state (finishJob). The capture is
+	// byte-capped so a chatty driver cannot exhaust emulator memory.
+	driverLog := &cappedBuffer{max: driverLogLimit}
 	tailCtx, tailCancel := context.WithTimeout(ctx, tailLogsTimeout)
 	defer tailCancel()
-	if tailErr := k8shelpers.TailLogs(tailCtx, s.k8sClient, handle, k8shelpers.LogKindMain, &discardWriter{}); tailErr != nil {
+	if tailErr := k8shelpers.TailLogs(tailCtx, s.k8sClient, handle, k8shelpers.LogKindMainRaw, driverLog); tailErr != nil {
 		slog.Warn("dataproc: TailLogs failed", "job", jobID, "err", tailErr)
 	}
 
 	state, reason := finalToJobState(final)
 	s.persistSnapshot(runCtx, project, region, jobID, k8shelpers.BuildSnapshot(final.Final, state))
-	s.finishJob(project, region, j, state, reason)
+	s.finishJob(project, region, j, state, reason, driverLog.Bytes())
 }
 
 // entryPointForJob derives the sparkhelpers.EntryPoint + args for a stored job.
@@ -157,9 +193,3 @@ func finalToJobState(f sparkhelpers.Final) (state, reason string) {
 	}
 	return jobStateError, f.SparkReason
 }
-
-// discardWriter drops driver logs (Dataproc has no per-job log sink in the
-// emulator; logs are best-effort tailed for Spark exit classification only).
-type discardWriter struct{}
-
-func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }

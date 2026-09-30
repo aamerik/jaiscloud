@@ -2831,6 +2831,44 @@ func (p *Provider) EnsureBucket(ctx context.Context, project, bucket, location s
 	return nil
 }
 
+// PutObjectBytes writes a small server-side object through the shared
+// envelope-encryption + blob-store path. It is the server-side counterpart to
+// FetchObjectBytes, used by other emulated services (e.g. the Dataproc core
+// staging a job's driver output) that hold a plain gs://bucket/object
+// reference rather than a NormalizedRequest. The bucket is created when absent
+// (idempotent). Versioning is left off: repeated writes replace the live
+// generation, exactly like a plain objects.insert.
+func (p *Provider) PutObjectBytes(ctx context.Context, project, bucket, object, contentType string, data []byte) error {
+	if bucket == "" || object == "" {
+		return fmt.Errorf("storage: PutObjectBytes requires bucket and object")
+	}
+	if err := p.EnsureBucket(ctx, project, bucket, ""); err != nil {
+		return err
+	}
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	now := clock.Now()
+	meta := gcs.ObjectMeta{
+		Bucket:         bucket,
+		Name:           object,
+		Generation:     p.nextGen(),
+		Metageneration: "1",
+		ContentType:    contentType,
+		StorageClass:   "STANDARD",
+		TimeCreated:    now,
+		Updated:        now,
+	}
+	// Capture the prior live generation so a non-versioned overwrite cleans up
+	// its blob after the new one is durably stored (mirrors ObjectsInsert).
+	var priorBlobKey string
+	if prev, gerr := p.objects.GetObjectMeta(ctx, bucket, object); gerr == nil && prev.Generation != meta.Generation {
+		priorBlobKey = blobKey(bucket, object, prev.Generation)
+	}
+	_, err := p.PutObjectData(ctx, project, meta, data, false, priorBlobKey, false, "", nil, "", nil)
+	return err
+}
+
 // ObjectsUpdate implements objects.update (HTTP PUT). GCS PUT semantics are a
 // strict replacement of the object's writable metadata: fields omitted from
 // the request body are cleared (or reset to defaults), not preserved.

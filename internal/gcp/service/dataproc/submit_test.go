@@ -98,7 +98,7 @@ func TestSubmitJobAsOperation_K8sDoneFalseThenCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get job: %v", err)
 	}
-	p.finishJob("proj", "us-central1", j, "DONE", "")
+	p.finishJob("proj", "us-central1", j, "DONE", "", nil)
 
 	// Operation id == job id, so GetOperation finds it via the job id.
 	got, err := p.GetOperation(ctx, "proj", "us-central1", "j1")

@@ -2386,3 +2386,42 @@ func TestFetchObjectBytesRoundTrip(t *testing.T) {
 		t.Fatalf("missing object err = %v, want gcs.ErrNoSuchObject", err)
 	}
 }
+
+// TestPutObjectBytesRoundTrip verifies the server-side object write used by
+// other emulated services (e.g. Dataproc driver output): the bucket is created
+// lazily, the bytes round-trip through the encryption + blob path, and an
+// overwrite replaces the live generation and cleans up the prior blob.
+func TestPutObjectBytesRoundTrip(t *testing.T) {
+	blobs := blobfs.NewMemoryBlobStore()
+	p := New(gcs.NewMemoryObjectStore(), store.NewMemoryResourceStore(), blobs, crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+	ctx := context.Background()
+
+	if err := p.PutObjectBytes(ctx, "proj", "stage-bkt", "meta/jobs/j1/driveroutput", "text/plain", []byte("hello")); err != nil {
+		t.Fatalf("PutObjectBytes: %v", err)
+	}
+	got, err := p.FetchObjectBytes(ctx, "stage-bkt", "meta/jobs/j1/driveroutput")
+	if err != nil {
+		t.Fatalf("FetchObjectBytes: %v", err)
+	}
+	if string(got) != "hello" {
+		t.Fatalf("round-trip = %q, want %q", got, "hello")
+	}
+
+	prev, err := p.objects.GetObjectMeta(ctx, "stage-bkt", "meta/jobs/j1/driveroutput")
+	if err != nil {
+		t.Fatalf("GetObjectMeta: %v", err)
+	}
+	if err := p.PutObjectBytes(ctx, "proj", "stage-bkt", "meta/jobs/j1/driveroutput", "text/plain", []byte("world")); err != nil {
+		t.Fatalf("PutObjectBytes overwrite: %v", err)
+	}
+	got, err = p.FetchObjectBytes(ctx, "stage-bkt", "meta/jobs/j1/driveroutput")
+	if err != nil {
+		t.Fatalf("FetchObjectBytes after overwrite: %v", err)
+	}
+	if string(got) != "world" {
+		t.Fatalf("overwrite round-trip = %q, want %q", got, "world")
+	}
+	if _, err := blobs.Get(ctx, blobsNamespace, blobKey("stage-bkt", "meta/jobs/j1/driveroutput", prev.Generation)); err == nil {
+		t.Error("prior generation blob was not cleaned up on overwrite")
+	}
+}
