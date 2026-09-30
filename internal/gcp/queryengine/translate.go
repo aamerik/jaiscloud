@@ -2,6 +2,7 @@ package queryengine
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -57,16 +58,28 @@ func tokenize(q string) ([]token, error) {
 			i += 2 + j + 2
 		case c == '\'' || c == '"':
 			quote := c
+			// Triple-quoted literals are a BigQuery extension v1 does not
+			// support; reject rather than mis-tokenize.
+			if i+2 < n && q[i+1] == quote && q[i+2] == quote {
+				return nil, unsupported("triple-quoted string literals are not supported")
+			}
 			start := i
 			i++
+			var inner strings.Builder
 			closed := false
 			for i < n {
-				if q[i] == '\\' && i+1 < n {
-					i += 2
+				if q[i] == '\\' {
+					dec, adv, err := decodeEscape(q[i:])
+					if err != nil {
+						return nil, err
+					}
+					inner.WriteString(dec)
+					i += adv
 					continue
 				}
 				if q[i] == quote {
 					if i+1 < n && q[i+1] == quote { // doubled quote escape
+						inner.WriteByte(quote)
 						i += 2
 						continue
 					}
@@ -74,12 +87,14 @@ func tokenize(q string) ([]token, error) {
 					closed = true
 					break
 				}
+				inner.WriteByte(q[i])
 				i++
 			}
 			if !closed {
 				return nil, unsupported("unterminated string literal")
 			}
-			toks = append(toks, token{kind: tokString, raw: q[start:i]})
+			// Keep the raw text for diagnostics; val holds the decoded bytes.
+			toks = append(toks, token{kind: tokString, raw: q[start:i], val: inner.String()})
 		case c == '`':
 			j := i + 1
 			for j < n && q[j] != '`' {
@@ -202,11 +217,19 @@ var typeKeywords = map[string]bool{
 
 func validate(toks []token) error {
 	for i, tk := range toks {
+		if tk.kind == tokOp && (tk.raw == "@" || tk.raw == "?") {
+			return unsupported("query parameters are not supported")
+		}
 		if tk.kind != tokIdent {
 			continue
 		}
 		if rejectedKeywords[tk.up] {
 			return unsupported(fmt.Sprintf("%s is not supported", tk.up))
+		}
+		// Raw/bytes string prefixes (r'…', b'…', rb'…') are not supported.
+		if (tk.up == "R" || tk.up == "B" || tk.up == "RB" || tk.up == "BR") &&
+			i+1 < len(toks) && toks[i+1].kind == tokString {
+			return unsupported(fmt.Sprintf("%s string literals are not supported", tk.up))
 		}
 		if typeKeywords[tk.up] && i+1 < len(toks) && toks[i+1].kind == tokString {
 			return unsupported(fmt.Sprintf("%s literals are not supported", tk.up))
@@ -390,7 +413,12 @@ func translate(query string, resolve resolveFunc) (string, error) {
 			continue
 		}
 		if expectTable && tk.kind == tokQuoted {
-			name, isCTE, err := resolveIfTable(tk.val)
+			ref, last, ok := collectTableRef(toks, i)
+			if !ok {
+				writeToken(&b, tk)
+				continue
+			}
+			name, isCTE, err := resolveIfTable(ref)
 			if err != nil {
 				return "", err
 			}
@@ -399,6 +427,7 @@ func translate(query string, resolve resolveFunc) (string, error) {
 			} else {
 				writeToken(&b, token{kind: tokIdent, raw: name})
 			}
+			i = last
 			expectTable = false
 			continue
 		}
@@ -460,14 +489,20 @@ func collectCTENames(toks []token) map[string]bool {
 	if withIdx < 0 {
 		return names
 	}
-	for j := withIdx + 1; j < len(toks); j++ {
-		if toks[j].kind != tokIdent {
+	j := withIdx + 1
+	for j < len(toks) {
+		nameTok := toks[j]
+		if nameTok.kind != tokIdent && nameTok.kind != tokQuoted {
 			break
 		}
 		if j+1 >= len(toks) || toks[j+1].kind != tokIdent || toks[j+1].up != "AS" {
 			break
 		}
-		names[strings.ToLower(toks[j].raw)] = true
+		name := nameTok.raw
+		if nameTok.kind == tokQuoted {
+			name = nameTok.val
+		}
+		names[strings.ToLower(name)] = true
 		k := j + 2
 		if k >= len(toks) || toks[k].kind != tokOp || toks[k].raw != "(" {
 			break
@@ -486,8 +521,9 @@ func collectCTENames(toks []token) map[string]bool {
 				}
 			}
 		}
-		j = k
-		if j+1 < len(toks) && toks[j+1].kind == tokOp && toks[j+1].raw == "," {
+		// k is the CTE body's closing paren; a following comma starts another.
+		if k+1 < len(toks) && toks[k+1].kind == tokOp && toks[k+1].raw == "," {
+			j = k + 2
 			continue
 		}
 		break
@@ -501,24 +537,22 @@ func collectCTENames(toks []token) map[string]bool {
 // (the caller already checked); its value may still contain dots (a
 // fully-qualified `project.dataset.table`) or be a plain table name.
 func collectTableRef(toks []token, i int) (string, int, bool) {
-	t := toks[i]
-	if t.kind == tokQuoted {
-		return t.val, i, true
-	}
-	if t.kind != tokIdent {
+	first := toks[i]
+	if first.kind != tokIdent && first.kind != tokQuoted {
 		return "", i, false
 	}
-	parts := []string{t.raw}
+	part := func(t token) string {
+		if t.kind == tokQuoted {
+			return t.val
+		}
+		return t.raw
+	}
+	parts := []string{part(first)}
 	last := i
 	for last+2 < len(toks) && toks[last+1].kind == tokOp && toks[last+1].raw == "." {
 		nxt := toks[last+2]
-		if nxt.kind == tokIdent {
-			parts = append(parts, nxt.raw)
-			last += 2
-			continue
-		}
-		if nxt.kind == tokQuoted {
-			parts = append(parts, nxt.val)
+		if nxt.kind == tokIdent || nxt.kind == tokQuoted {
+			parts = append(parts, part(nxt))
 			last += 2
 			continue
 		}
@@ -534,11 +568,90 @@ func writeToken(b *strings.Builder, tk token) {
 	if b.Len() > 0 {
 		b.WriteByte(' ')
 	}
-	if tk.kind == tokQuoted {
+	switch tk.kind {
+	case tokQuoted:
 		b.WriteString(quoteSQLiteIdent(tk.val))
-		return
+	case tokString:
+		// Re-emit as a SQLite single-quoted literal built from the decoded
+		// value, so BigQuery backslash escapes can never terminate the SQLite
+		// string early (and a double-quoted BigQuery string is not mistaken for
+		// a SQLite identifier).
+		b.WriteString(sqliteStringLiteral(tk.val))
+	default:
+		b.WriteString(tk.raw)
 	}
-	b.WriteString(tk.raw)
+}
+
+// decodeEscape decodes one BigQuery string escape sequence starting at the
+// backslash. It returns the decoded text and the number of source bytes
+// consumed. Unknown escapes fail loud.
+func decodeEscape(s string) (string, int, error) {
+	if len(s) < 2 {
+		return "", 0, unsupported("unterminated string escape")
+	}
+	switch s[1] {
+	case 'a':
+		return "\a", 2, nil
+	case 'b':
+		return "\b", 2, nil
+	case 'f':
+		return "\f", 2, nil
+	case 'n':
+		return "\n", 2, nil
+	case 'r':
+		return "\r", 2, nil
+	case 't':
+		return "\t", 2, nil
+	case 'v':
+		return "\v", 2, nil
+	case '\\', '?', '"', '\'', '`':
+		return s[1:2], 2, nil
+	case '\n':
+		return "", 2, nil // line continuation
+	case 'x', 'X':
+		j := 2
+		for j < len(s) && j < 4 && isHex(s[j]) {
+			j++
+		}
+		if j == 2 {
+			return "", 0, unsupported("invalid \\x escape")
+		}
+		n, _ := strconv.ParseUint(s[2:j], 16, 32)
+		return string(rune(n)), j, nil
+	case 'u', 'U':
+		width := 4
+		if s[1] == 'U' {
+			width = 8
+		}
+		if len(s) < 2+width {
+			return "", 0, unsupported("invalid unicode escape")
+		}
+		n, err := strconv.ParseUint(s[2:2+width], 16, 32)
+		if err != nil {
+			return "", 0, unsupported("invalid unicode escape")
+		}
+		return string(rune(n)), 2 + width, nil
+	default:
+		if s[1] >= '0' && s[1] <= '7' {
+			j := 1
+			for j < len(s) && j < 4 && s[j] >= '0' && s[j] <= '7' {
+				j++
+			}
+			n, _ := strconv.ParseUint(s[1:j], 8, 32)
+			return string(rune(n)), j, nil
+		}
+		return "", 0, unsupported(fmt.Sprintf("unsupported string escape \\%c", s[1]))
+	}
+}
+
+func isHex(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// sqliteStringLiteral renders a decoded value as a SQLite single-quoted string
+// literal ('...' with embedded quotes doubled).
+func sqliteStringLiteral(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 // quoteSQLiteIdent quotes a (possibly dotted) identifier for SQLite, splitting

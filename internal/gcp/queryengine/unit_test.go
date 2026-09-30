@@ -215,9 +215,47 @@ func TestExecuteCastAndDefaultProjectFallback(t *testing.T) {
 }
 
 func TestExecuteMultiCTE(t *testing.T) {
-	res := exec(t, "WITH a AS (SELECT * FROM `p.ds.people`), b AS (SELECT * FROM `p.ds.orders`) SELECT COUNT(*) FROM a")
-	if res.Rows[0][0] != int64(4) {
+	// Reference the *second* CTE: collectCTENames must collect all of them.
+	res := exec(t, "WITH a AS (SELECT * FROM `p.ds.people`), b AS (SELECT * FROM `p.ds.orders`) SELECT COUNT(*) FROM b")
+	if res.Rows[0][0] != int64(3) {
 		t.Fatalf("multi-cte = %v", res.Rows)
+	}
+	res = exec(t, "WITH a AS (SELECT * FROM `p.ds.people`), b AS (SELECT * FROM `p.ds.orders`) SELECT COUNT(*) FROM a, b")
+	if res.Rows[0][0] != int64(12) {
+		t.Fatalf("multi-cte cross = %v", res.Rows)
+	}
+}
+
+func TestExecuteStringLiteralSafety(t *testing.T) {
+	// A BigQuery backslash-escaped quote must be decoded and re-quoted for
+	// SQLite, never allowed to terminate the literal early.
+	res := exec(t, `SELECT 'a\'; DROP TABLE bq_t0; --' AS x FROM people LIMIT 1`)
+	if len(res.Rows) != 1 || res.Rows[0][0] != "a'; DROP TABLE bq_t0; --" {
+		t.Fatalf("decoded literal = %#v", res.Rows)
+	}
+	r := exec(t, "SELECT COUNT(*) FROM people")
+	if r.Rows[0][0] != int64(4) {
+		t.Fatalf("people damaged by injection: %v", r.Rows)
+	}
+}
+
+func TestExecuteDoubleQuotedString(t *testing.T) {
+	// BigQuery "..." is a string literal; it must not become a SQLite
+	// identifier (which would make `name = "name"` match every row).
+	res := exec(t, `SELECT name FROM people WHERE name = "name"`)
+	if len(res.Rows) != 0 {
+		t.Fatalf(`double-quoted "name" must be a string literal, got %v`, res.Rows)
+	}
+}
+
+func TestExecuteLikeCaseSensitive(t *testing.T) {
+	res := exec(t, `SELECT COUNT(*) FROM people WHERE name LIKE 'AL%'`)
+	if res.Rows[0][0] != int64(0) {
+		t.Fatalf("LIKE must be case-sensitive, got %v", res.Rows)
+	}
+	res = exec(t, `SELECT COUNT(*) FROM people WHERE name LIKE 'al%'`)
+	if res.Rows[0][0] != int64(1) {
+		t.Fatalf("LIKE lowercase count = %v", res.Rows)
 	}
 }
 

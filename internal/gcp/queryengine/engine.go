@@ -34,6 +34,11 @@ func Execute(ctx context.Context, cat Catalog, req Request) (Result, error) {
 	// modernc.org/sqlite's ":memory:" database lives on a single connection;
 	// pin the pool so hydration and execution share one scratch database.
 	db.SetMaxOpenConns(1)
+	// BigQuery LIKE is case-sensitive; SQLite's default is case-insensitive
+	// for ASCII. Pin the pragma on the (single) scratch connection.
+	if _, err := db.ExecContext(ctx, "PRAGMA case_sensitive_like = ON"); err != nil {
+		return Result{}, err
+	}
 
 	h := &hydrator{
 		ctx:    ctx,
@@ -90,8 +95,10 @@ func (h *hydrator) qualify(ref string) (project, dataset, table string, err erro
 	if strings.Contains(ref, "*") {
 		return "", "", "", unsupported("wildcard tables are not supported")
 	}
-	if strings.Contains(strings.ToUpper(ref), "INFORMATION_SCHEMA") {
-		return "", "", "", unsupported("INFORMATION_SCHEMA is not supported")
+	for _, p := range strings.Split(ref, ".") {
+		if strings.EqualFold(p, "INFORMATION_SCHEMA") {
+			return "", "", "", unsupported("INFORMATION_SCHEMA is not supported")
+		}
 	}
 	parts := strings.Split(ref, ".")
 	switch len(parts) {
@@ -183,6 +190,9 @@ func (h *hydrator) hydrate(project, dataset, table string) error {
 func (h *hydrator) run(translated string) (Result, error) {
 	rows, err := h.db.QueryContext(h.ctx, translated)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return Result{}, err
+		}
 		return Result{}, unsupported(err.Error())
 	}
 	defer rows.Close()

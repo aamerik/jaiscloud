@@ -982,6 +982,14 @@ func (p *Provider) Query(ctx context.Context, nr *model.NormalizedRequest) (*mod
 	if boolValue(body, "useLegacySql") {
 		return nil, invalidQuery("legacy SQL is not supported; use standard SQL (useLegacySql=false)")
 	}
+	if boolValue(body, "dryRun") {
+		// Dry run: validate the query (surfacing the same errors a real run
+		// would) but return no rows and persist no job.
+		if _, err := p.runQuery(ctx, projectOf(nr), body); err != nil {
+			return nil, err
+		}
+		return provider.OK(encodeQueryResult("queryResponse", projectOf(nr), newID(), strValue(body, "location"), queryengine.Result{})), nil
+	}
 	// Evaluate before persisting so a failing query never leaves a job that
 	// reports success. A query is synchronous here (accepted-risk LROs).
 	res, err := p.runQuery(ctx, projectOf(nr), body)
@@ -1025,7 +1033,7 @@ func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequ
 	// no schema change, and snapshots/--dsn stay untouched.
 	q := jobQueryBody(j)
 	if q == nil {
-		return provider.OK(encodeQueryResult("getQueryResultsResponse", projectOf(nr), jobID, jobLocation(j), queryengine.Result{})), nil
+		return nil, invalidQuery(fmt.Sprintf("job %s is not a query job", jobID))
 	}
 	if boolValue(q, "useLegacySql") {
 		return nil, invalidQuery("legacy SQL is not supported; use standard SQL (useLegacySql=false)")

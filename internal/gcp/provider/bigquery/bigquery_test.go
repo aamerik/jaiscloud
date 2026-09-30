@@ -677,6 +677,53 @@ func TestQueryFailLoud(t *testing.T) {
 	}
 }
 
+// TestQueryDryRun locks in that dryRun validates the query but returns no rows
+// and persists no job.
+func TestQueryDryRun(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+
+	q, err := p.Query(ctx, newNR(map[string]any{"body": map[string]any{"query": "SELECT 1", "dryRun": true}}))
+	if err != nil {
+		t.Fatalf("dryRun: %v", err)
+	}
+	if rows, _ := q.Data["rows"].([]any); len(rows) != 0 {
+		t.Fatalf("dryRun returned rows: %v", rows)
+	}
+	list, err := p.ListJobs(ctx, newNR(map[string]any{}))
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if jobs, _ := list.Data["jobs"].([]any); len(jobs) != 0 {
+		t.Fatalf("dryRun persisted a job: %v", jobs)
+	}
+
+	// An invalid dry run still fails loud.
+	_, err = p.Query(ctx, newNR(map[string]any{"body": map[string]any{"query": "CREATE TABLE x (a INT64)", "dryRun": true}}))
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.Code != "InvalidQuery" {
+		t.Fatalf("dryRun invalid: expected InvalidQuery, got %v", err)
+	}
+}
+
+// TestGetQueryResultsNonQueryJob pins that reading results of a job that is not
+// a query job is an error rather than a successful empty result.
+func TestGetQueryResultsNonQueryJob(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+
+	if _, err := p.InsertJob(ctx, newNR(map[string]any{"body": map[string]any{
+		"jobReference": map[string]any{"projectId": "proj", "jobId": "j1"},
+	}})); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	_, err := p.GetQueryResults(ctx, newNR(map[string]any{"jobId": "j1"}))
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.Code != "InvalidQuery" || perr.HTTPStatus != 400 {
+		t.Fatalf("expected InvalidQuery/400, got %v", err)
+	}
+}
+
 func TestListPagination(t *testing.T) {
 	ctx := context.Background()
 	p := New(bqstore.NewMemoryStore())
