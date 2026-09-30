@@ -15,7 +15,9 @@
 // Create/Update/Delete complete synchronously and return a done=true
 // google.longrunning.Operation (mirroring the GCP REST LRO convention used by
 // Firestore CreateIndex). The operation is persisted so GetOperation can return
-// it.
+// it. The LRO timing is opt-in via WithLROMode: when enabled, operations are
+// stored done=false and settle lazily on read (see settle); the default remains
+// synchronous.
 package workflows
 
 import (
@@ -24,6 +26,7 @@ import (
 	"strings"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/paging"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 	"jaiscloud/internal/model"
@@ -33,11 +36,29 @@ import (
 // workflows store.
 type Service struct {
 	workflows workflowsstore.Store
+	// lroMode controls operation timing. The zero value is synchronous: every
+	// operation is stored done=true inline, matching the v1.1.0 contract. An
+	// enabled mode stores operations done=false and settles them lazily on read.
+	lroMode lro.Mode
+}
+
+// Option configures Service.
+type Option func(*Service)
+
+// WithLROMode sets the long-running-operation timing mode. The zero value is
+// synchronous; Mode{Enabled: true, Delay: d} stores create/update/delete
+// operations done=false and settles them on read once d has elapsed.
+func WithLROMode(m lro.Mode) Option {
+	return func(s *Service) { s.lroMode = m }
 }
 
 // NewService returns a Cloud Workflows core backed by the given store.
-func NewService(workflows workflowsstore.Store) *Service {
-	return &Service{workflows: workflows}
+func NewService(workflows workflowsstore.Store, opts ...Option) *Service {
+	s := &Service{workflows: workflows}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // CreateInput carries the caller-supplied fields of a workflow create. The
@@ -224,7 +245,15 @@ func (s *Service) GetOperation(ctx context.Context, project, location, opID stri
 	if err != nil {
 		return workflowsstore.Operation{}, mapStoreError(err)
 	}
-	return op, nil
+	return s.settle(op), nil
+}
+
+// IsNotFound reports whether err is the canonical NotFound provider error (as
+// returned by GetOperation for an absent operation), so a transport's
+// ResolveOperation can decline an unknown name instead of surfacing an error.
+func IsNotFound(err error) bool {
+	var perr *model.ProviderError
+	return errors.As(err, &perr) && perr.Code == "NotFound"
 }
 
 // invalidArgument builds the canonical InvalidArgument provider error both

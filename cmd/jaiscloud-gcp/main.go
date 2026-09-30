@@ -34,6 +34,7 @@ import (
 	grpcstorage "jaiscloud/internal/gcp/grpc/storage"
 	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
 	hms "jaiscloud/internal/gcp/hms"
+	"jaiscloud/internal/gcp/lro"
 	bigqueryprovider "jaiscloud/internal/gcp/provider/bigquery"
 	clouddnsprovider "jaiscloud/internal/gcp/provider/clouddns"
 	cloudsqlprovider "jaiscloud/internal/gcp/provider/cloudsql"
@@ -204,6 +205,14 @@ func startCmd() *cobra.Command {
 			}
 			slog.Info("gcp transports selected", "rest", transports.REST(), "grpc", transports.GRPC(), "selection", transports.String())
 
+			// Long-running-operation timing is an opt-in, cross-service mode.
+			// The default (env unset) keeps every operation synchronously done,
+			// matching the v1.1.0 contract and the conformance transcripts;
+			// JAISCLOUD_LRO_MODE=async stores operations in flight and settles
+			// them lazily when a client polls Operations.GetOperation.
+			lroMode := lro.FromEnv()
+			slog.Info("gcp lro mode", "async", lroMode.Async(), "delay", lroMode.Delay)
+
 			// serviceEnabled reports whether a wire service is exposed on at
 			// least one transport. Disabled services are neither constructed
 			// (for the heavyweight ones) nor registered.
@@ -335,7 +344,7 @@ func startCmd() *cobra.Command {
 			// core is only built when workflows is enabled on some transport.
 			var workflowsCore *workflowscore.Service
 			if serviceEnabled("workflows") {
-				workflowsCore = workflowscore.NewService(stores.workflows)
+				workflowsCore = workflowscore.NewService(stores.workflows, workflowscore.WithLROMode(lroMode))
 			}
 			workflowsP := restworkflows.NewProvider(workflowsCore, cfg.ProjectID)
 			// Cloud Workflow Executions' transport-neutral core is shared by the
@@ -688,6 +697,13 @@ func startCmd() *cobra.Command {
 				// top-level (operations/{id}) and v2 names are location-scoped.
 				if transports.GRPCFor("functions") && functionsCore != nil {
 					opsResolvers = append(opsResolvers, functionsGRPC, functionsV2GRPC)
+				}
+				// Cloud Workflows publishes location-scoped operations. In the
+				// default sync mode a done operation never reaches the resolver
+				// (the create response is already done) and unknown names fall
+				// through to the terminal stub, so registering it is safe.
+				if transports.GRPCFor("workflows") && workflowsCore != nil {
+					opsResolvers = append(opsResolvers, workflowsGRPC)
 				}
 				longrunningpb.RegisterOperationsServer(gserv.GRPC(), grpcoperations.New(opsResolvers...))
 			}

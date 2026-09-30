@@ -59,32 +59,40 @@ func WorkflowJSON(w workflowsstore.Workflow, project string) map[string]any {
 }
 
 // OperationJSON renders a stored Operation as a google.longrunning.Operation
-// wire map. The response body is the JSON persisted when the operation was
-// created.
+// wire map. The response body and metadata.endTime are only present once the
+// operation is done: real GCP omits them while in flight. A done operation
+// keeps the original shape exactly.
 func OperationJSON(op workflowsstore.Operation, project string) map[string]any {
 	name := OperationName(project, op.Location, op.ID)
-	var response any = map[string]any{}
-	if op.Response != "" {
-		_ = json.Unmarshal([]byte(op.Response), &response)
+	metadata := map[string]any{
+		"@type":      operationMetadataType,
+		"createTime": op.CreateTime.Format(time.RFC3339Nano),
+		"target":     op.Target,
+		"verb":       op.Verb,
+		"apiVersion": "v1",
 	}
-	return map[string]any{
-		"name": name,
-		"metadata": map[string]any{
-			"@type":      operationMetadataType,
-			"createTime": op.CreateTime.Format(time.RFC3339Nano),
-			"endTime":    op.EndTime.Format(time.RFC3339Nano),
-			"target":     op.Target,
-			"verb":       op.Verb,
-			"apiVersion": "v1",
-		},
+	out := map[string]any{
+		"name":     name,
+		"metadata": metadata,
 		"done":     op.Done,
-		"response": response,
 	}
+	if op.Done {
+		metadata["endTime"] = op.EndTime.Format(time.RFC3339Nano)
+		var response any = map[string]any{}
+		if op.Response != "" {
+			_ = json.Unmarshal([]byte(op.Response), &response)
+		}
+		out["response"] = response
+	}
+	return out
 }
 
-// storeOperation persists a done google.longrunning.Operation and returns it.
-// Marshalling the plain maps this package builds cannot fail, so a marshal
-// error is ignored and surfaces as an empty JSON object on read-back.
+// storeOperation persists a google.longrunning.Operation and returns it. In the
+// default synchronous mode it is stored done=true with EndTime=now, exactly as
+// before. In async mode it is stored done=false with a zero EndTime; the settle
+// helper derives completion on read. Marshalling the plain maps this package
+// builds cannot fail, so a marshal error is ignored and surfaces as an empty
+// JSON object on read-back.
 func (s *Service) storeOperation(ctx context.Context, project, location, verb, target string, response map[string]any) (workflowsstore.Operation, error) {
 	now := clock.Now().UTC()
 	respJSON, _ := json.Marshal(response)
@@ -92,17 +100,40 @@ func (s *Service) storeOperation(ctx context.Context, project, location, verb, t
 		ID:         randomHex(12),
 		ProjectID:  project,
 		Location:   location,
-		Done:       true,
 		Verb:       verb,
 		Target:     target,
 		CreateTime: now,
-		EndTime:    now,
 		Response:   string(respJSON),
+	}
+	if s.lroMode.Async() {
+		op.Done = false
+	} else {
+		op.Done = true
+		op.EndTime = now
 	}
 	if err := s.workflows.CreateOperation(ctx, project, location, op); err != nil {
 		return workflowsstore.Operation{}, err
 	}
 	return op, nil
+}
+
+// settle derives the rendered state of a persisted operation from its stored
+// done flag and the configured timing mode. An in-flight operation (done=false)
+// becomes done once the delay has elapsed, with a deterministic EndTime of
+// createTime+delay (a zero delay yields createTime).
+//
+// The flip is derived on read rather than written back: the workflows store has
+// no UpdateOperation (adding one would be a store migration for no behavioral
+// gain), and the persisted flag is an input while the settled state is a pure
+// function of it and the clock. A store that later needs the settled flag to be
+// visible to other readers can add the write without changing this contract.
+func (s *Service) settle(op workflowsstore.Operation) workflowsstore.Operation {
+	if op.Done || s.lroMode.Pending(op.CreateTime) {
+		return op
+	}
+	op.Done = true
+	op.EndTime = op.CreateTime.Add(s.lroMode.Delay)
+	return op
 }
 
 // workflowOpResponse is the Workflow payload embedded in a create/update LRO's

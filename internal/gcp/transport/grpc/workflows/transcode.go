@@ -5,6 +5,7 @@ import (
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	workflowspb "cloud.google.com/go/workflows/apiv1/workflowspb"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -87,15 +88,20 @@ func workflowToProto(w workflowsstore.Workflow, project string) *workflowspb.Wor
 // operationToProto renders a stored operation as the proto
 // google.longrunning.Operation, packing the workflows.v1.OperationMetadata and
 // the caller-supplied response message (a Workflow, or Empty for delete) as
-// typed Any values.
+// typed Any values. The result and metadata.endTime are only attached once the
+// operation is done: real GCP omits them while in flight, and a done operation
+// keeps the original output exactly.
 func operationToProto(op workflowsstore.Operation, project string, response proto.Message) (*longrunningpb.Operation, error) {
-	metadata, err := anypb.New(&workflowspb.OperationMetadata{
+	meta := &workflowspb.OperationMetadata{
 		CreateTime: timestamppb.New(op.CreateTime),
-		EndTime:    timestamppb.New(op.EndTime),
 		Target:     op.Target,
 		Verb:       op.Verb,
 		ApiVersion: "v1",
-	})
+	}
+	if op.Done {
+		meta.EndTime = timestamppb.New(op.EndTime)
+	}
+	metadata, err := anypb.New(meta)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -104,7 +110,7 @@ func operationToProto(op workflowsstore.Operation, project string, response prot
 		Metadata: metadata,
 		Done:     op.Done,
 	}
-	if response != nil {
+	if op.Done && response != nil {
 		resp, err := anypb.New(response)
 		if err != nil {
 			return nil, mapError(err)
@@ -112,6 +118,27 @@ func operationToProto(op workflowsstore.Operation, project string, response prot
 		out.Result = &longrunningpb.Operation_Response{Response: resp}
 	}
 	return out, nil
+}
+
+// operationResponse reconstructs the typed result message for a settled
+// operation from its stored Discovery-shape JSON: create/update carry a
+// Workflow and delete carries google.protobuf.Empty. Any other verb, an empty
+// body, or a body that cannot be decoded falls back to Empty so a poll never
+// fails on a malformed record.
+func operationResponse(op workflowsstore.Operation) proto.Message {
+	if op.Verb != "create" && op.Verb != "update" {
+		return emptyResponse()
+	}
+	if op.Response == "" {
+		return emptyResponse()
+	}
+	w := &workflowspb.Workflow{}
+	// The stored body carries the Workflow @type discriminator, which protojson
+	// does not expect on the message itself, so unknown fields are discarded.
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(op.Response), w); err != nil {
+		return emptyResponse()
+	}
+	return w
 }
 
 // emptyResponse builds the google.protobuf.Empty result a delete operation
