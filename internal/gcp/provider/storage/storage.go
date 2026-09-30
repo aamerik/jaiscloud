@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1706,7 +1707,14 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(toMap(final)), nil
+	resp := provider.OK(toMap(final))
+	if isXMLAPI(nr) {
+		// XML API PUT Object: real GCS answers 200 with an empty body plus the
+		// object's ETag/generation/hash headers. The codec drops the JSON body and
+		// emits these headers (see GCSCodec.Encode).
+		resp.Data[wire.HeadersKey] = mediaHeaders(toStoreObject(final), true)
+	}
+	return resp, nil
 }
 
 // writeObjectRaw computes checksums over the plaintext, envelope-encrypts it,
@@ -1903,7 +1911,7 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 		return nil, err
 	}
 	status := 200
-	headers := mediaHeaders(meta)
+	headers := mediaHeaders(meta, isXMLAPI(nr))
 	body := plain
 	// Honor HTTP Range requests (the gcs-connector uses them to fetch object
 	// footers and read large objects in chunks); otherwise the gcs-connector's
@@ -2019,8 +2027,10 @@ func parseByteRange(rng string, total int64) (start, end int64, res rangeParse) 
 // mediaHeaders builds the GCS media-download response headers for an object so
 // the Go SDK's Reader.Attrs (and reader.Metadata()) populate: x-goog-hash,
 // x-goog-generation, x-goog-metageneration, x-goog-stored-content-length, and
-// one x-goog-meta-<key> header per custom metadata entry.
-func mediaHeaders(m gcs.ObjectMeta) map[string]string {
+// one x-goog-meta-<key> header per custom metadata entry. xmlAPI selects the
+// XML API ETag format (quoted hex MD5) instead of the JSON API's constant etag;
+// it is also used for the XML API PUT Object response headers.
+func mediaHeaders(m gcs.ObjectMeta, xmlAPI bool) map[string]string {
 	h := map[string]string{
 		"x-goog-generation":            m.Generation,
 		"x-goog-metageneration":        m.Metageneration,
@@ -2029,9 +2039,14 @@ func mediaHeaders(m gcs.ObjectMeta) map[string]string {
 	if m.StorageClass != "" {
 		h["x-goog-storage-class"] = m.StorageClass
 	}
-	// Real GCS media downloads carry an ETag header; the emulator uses the same
-	// constant object etag as the JSON metadata ("CAE=").
+	// The JSON API carries the constant object etag ("CAE="), shared with the
+	// object metadata resource. Real GCS XML API responses always carry a quoted
+	// ETag; for a normal object that is the lowercase-hex MD5. Fall back to the
+	// quoted constant when no MD5 is stored (composite objects).
 	h["ETag"] = "CAE="
+	if xmlAPI {
+		h["ETag"] = xmlETag(m.MD5Hash)
+	}
 	var hashes []string
 	if m.CRC32C != "" {
 		hashes = append(hashes, "crc32c="+m.CRC32C)
@@ -2066,6 +2081,29 @@ func canonicalMetaKey(key string) string {
 	r := []rune(k)
 	r[0] = unicode.ToUpper(r[0])
 	return string(r)
+}
+
+// xmlETag renders the XML API object ETag: the quoted lowercase-hex MD5 of the
+// object data (the XML API's documented ETag format), falling back to the
+// quoted constant etag when no MD5 is stored. The emulator computes MD5 for
+// every non-composite write (including CSEK/CMEK); compose is the one path that
+// leaves it empty.
+func xmlETag(md5Base64 string) string {
+	if md5Base64 == "" {
+		return `"CAE="`
+	}
+	raw, err := base64.StdEncoding.DecodeString(md5Base64)
+	if err != nil || len(raw) != md5.Size {
+		return `"CAE="`
+	}
+	return `"` + hex.EncodeToString(raw) + `"`
+}
+
+// isXMLAPI reports whether the request arrived on the XML API raw path
+// /{bucket}/{object} (as opposed to the JSON API under /storage/v1).
+func isXMLAPI(nr *model.NormalizedRequest) bool {
+	v, _ := nr.Params[wire.XMLAPIKey].(bool)
+	return v
 }
 
 // uploadMetadata merges custom object metadata from the request body's

@@ -2,15 +2,35 @@ package storage
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"hash/crc32"
 	"strings"
 	"testing"
 
+	"jaiscloud/internal/gcp/store/gcs"
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 )
+
+// md5HexFromB64 decodes a base64 GCS md5Hash into the lowercase hex the XML API
+// uses for its ETag.
+func md5HexFromB64(t *testing.T, b64 string) string {
+	t.Helper()
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatalf("decode md5 %q: %v", b64, err)
+	}
+	return hex.EncodeToString(raw)
+}
+
+// gcsObjectMetaWithMD5 builds an ObjectMeta carrying the base64 MD5 of content.
+func gcsObjectMetaWithMD5(content string) gcs.ObjectMeta {
+	sum := md5.Sum([]byte(content))
+	return gcs.ObjectMeta{MD5Hash: base64.StdEncoding.EncodeToString(sum[:])}
+}
 
 // crc32cB64 computes the GCS crc32c checksum (Castagnoli, big-endian, base64)
 // the same way the provider does.
@@ -338,5 +358,103 @@ func TestObjectsCopyReturnsObject(t *testing.T) {
 	}
 	if _, err := p.ObjectsGet(ctx, bucketParamsWithObj("bkt", "src.txt")); err != nil {
 		t.Fatalf("source should remain after copy: %v", err)
+	}
+}
+
+// TestMediaHeadersXMLEtag verifies the XML API ETag (quoted lowercase hex MD5)
+// versus the JSON API constant etag, including the no-MD5 fallback.
+func TestMediaHeadersXMLEtag(t *testing.T) {
+	m := gcsObjectMetaWithMD5("hello")
+	xml := mediaHeaders(m, true)
+	if !strings.HasPrefix(xml["ETag"], `"`) || !strings.HasSuffix(xml["ETag"], `"`) {
+		t.Fatalf("XML ETag not quoted: %q", xml["ETag"])
+	}
+	if xml["ETag"] != `"`+md5HexFromB64(t, m.MD5Hash)+`"` {
+		t.Errorf("XML ETag = %q, want quoted hex of %q", xml["ETag"], m.MD5Hash)
+	}
+	if got := mediaHeaders(m, false)["ETag"]; got != "CAE=" {
+		t.Errorf("JSON ETag = %q, want CAE=", got)
+	}
+	// No stored MD5 (composite objects): fall back to the quoted constant etag.
+	noMD5 := gcsObjectMetaWithMD5("hello")
+	noMD5.MD5Hash = ""
+	if got := mediaHeaders(noMD5, true)["ETag"]; got != `"CAE="` {
+		t.Errorf(`XML ETag without md5 = %q, want "CAE="`, got)
+	}
+}
+
+// TestObjectsInsertXMLAPIHeaders verifies an XML API PUT attaches the object's
+// response headers (J39) while the JSON API insert attaches none.
+func TestObjectsInsertXMLAPIHeaders(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+
+	// JSON API insert: no XML headers attached.
+	jsonNr := bucketParamsWithObj("bkt", "json.txt")
+	jsonNr.Params[wire.MediaKey] = []byte("hello")
+	if resp, err := p.ObjectsInsert(ctx, jsonNr); err != nil {
+		t.Fatalf("json insert: %v", err)
+	} else if _, ok := resp.Data[wire.HeadersKey]; ok {
+		t.Error("JSON insert must not attach XML response headers")
+	}
+
+	// XML API insert: header set present and correct.
+	nr = bucketParamsWithObj("bkt", "xml.txt")
+	nr.Params[wire.MediaKey] = []byte("hello")
+	nr.Params[wire.XMLAPIKey] = true
+	resp, err := p.ObjectsInsert(ctx, nr)
+	if err != nil {
+		t.Fatalf("xml insert: %v", err)
+	}
+	hdr, _ := resp.Data[wire.HeadersKey].(map[string]string)
+	if hdr == nil {
+		t.Fatal("expected XML API response headers")
+	}
+	md5b64, _ := resp.Data["md5Hash"].(string)
+	if hdr["ETag"] != `"`+md5HexFromB64(t, md5b64)+`"` {
+		t.Errorf("ETag = %q, want quoted hex of %q", hdr["ETag"], md5b64)
+	}
+	if hdr["x-goog-generation"] == "" || hdr["x-goog-generation"] != resp.Data["generation"] {
+		t.Errorf("x-goog-generation = %q, generation = %v", hdr["x-goog-generation"], resp.Data["generation"])
+	}
+	if hdr["x-goog-stored-content-length"] != "5" {
+		t.Errorf("x-goog-stored-content-length = %q, want 5", hdr["x-goog-stored-content-length"])
+	}
+	if !strings.Contains(hdr["x-goog-hash"], "crc32c=") || !strings.Contains(hdr["x-goog-hash"], "md5=") {
+		t.Errorf("x-goog-hash = %q, want crc32c and md5", hdr["x-goog-hash"])
+	}
+}
+
+// TestObjectsGetMediaXMLEtag verifies raw XML media downloads carry the quoted
+// hex-MD5 ETag while JSON/download-path media reads keep the constant etag.
+func TestObjectsGetMediaXMLEtag(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	insertTestObject(t, p, "bkt", "obj.txt", "text/plain", nil)
+
+	nr := bucketParamsWithObj("bkt", "obj.txt")
+	nr.Params[wire.XMLAPIKey] = true
+	media, err := p.ObjectsGetMedia(ctx, nr)
+	if err != nil {
+		t.Fatalf("xml media: %v", err)
+	}
+	xmlHdr, _ := media.Data[wire.HeadersKey].(map[string]string)
+	if xmlHdr == nil || !strings.HasPrefix(xmlHdr["ETag"], `"`) {
+		t.Fatalf("expected quoted XML ETag, got %v", xmlHdr)
+	}
+
+	jsonMedia, err := p.ObjectsGetMedia(ctx, bucketParamsWithObj("bkt", "obj.txt"))
+	if err != nil {
+		t.Fatalf("json media: %v", err)
+	}
+	jsonHdr, _ := jsonMedia.Data[wire.HeadersKey].(map[string]string)
+	if jsonHdr == nil || jsonHdr["ETag"] != "CAE=" {
+		t.Fatalf("expected constant JSON ETag, got %v", jsonHdr)
 	}
 }
