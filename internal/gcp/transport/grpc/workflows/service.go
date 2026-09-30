@@ -5,22 +5,25 @@
 // core errors to gRPC status codes. It owns no business logic and no state
 // beyond its default project.
 //
-// CreateWorkflow, UpdateWorkflow, and DeleteWorkflow return a done
+// CreateWorkflow, UpdateWorkflow, and DeleteWorkflow return a
 // google.longrunning.Operation with the response (a Workflow, or Empty for
-// delete) packed as a typed Any, so the generated client's Wait observes it
-// without polling. GetOperation is served by the shared
-// google.longrunning.Operations service (the Operations stub in main.go);
-// ListWorkflowRevisions is not implemented (Unimplemented), matching the
-// emulator's control-plane scope.
+// delete) packed as a typed Any. By default the operation is done and the
+// generated client's Wait observes it without polling; in the opt-in async mode
+// it is returned in flight and the client's poll resolves it through
+// ResolveOperation (registered with the shared google.longrunning.Operations
+// service in main.go). ListWorkflowRevisions is not implemented (Unimplemented),
+// matching the emulator's control-plane scope.
 package workflows
 
 import (
 	"context"
+	"strings"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	workflowspb "cloud.google.com/go/workflows/apiv1/workflowspb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
+	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	core "jaiscloud/internal/gcp/service/workflows"
 )
 
@@ -106,5 +109,47 @@ func (s *Service) DeleteWorkflow(ctx context.Context, req *workflowspb.DeleteWor
 	return operationToProto(op, project, emptyResponse())
 }
 
-// compile-time assertion that Service implements the generated server.
-var _ workflowspb.WorkflowsServer = (*Service)(nil)
+// ResolveOperation implements the google.longrunning.Operations resolver for
+// Cloud Workflows. Names are location-scoped
+// (projects/{p}/locations/{l}/operations/{id}); a name outside that shape — or
+// an id the workflows store does not know, since a location-scoped name is
+// shared with other services — is not ours (handled=false) so the generic
+// terminal stub keeps serving it done=true.
+func (s *Service) ResolveOperation(ctx context.Context, name string) (*longrunningpb.Operation, bool, error) {
+	project, location, id, ok := parseOperationName(name)
+	if !ok {
+		return nil, false, nil
+	}
+	op, err := s.core.GetOperation(ctx, project, location, id)
+	if err != nil {
+		if core.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, true, mapError(err)
+	}
+	out, err := operationToProto(op, project, operationResponse(op))
+	if err != nil {
+		return nil, true, err
+	}
+	return out, true, nil
+}
+
+// parseOperationName parses a Cloud Workflows location operation name
+// projects/{project}/locations/{location}/operations/{id}.
+func parseOperationName(name string) (project, location, id string, ok bool) {
+	parts := strings.Split(strings.TrimPrefix(name, "/"), "/")
+	if len(parts) != 6 || parts[0] != "projects" || parts[2] != "locations" || parts[4] != "operations" {
+		return "", "", "", false
+	}
+	if parts[1] == "" || parts[3] == "" || parts[5] == "" {
+		return "", "", "", false
+	}
+	return parts[1], parts[3], parts[5], true
+}
+
+// compile-time assertions that Service implements the generated server and the
+// operations resolver.
+var (
+	_ workflowspb.WorkflowsServer = (*Service)(nil)
+	_ grpcoperations.Resolver     = (*Service)(nil)
+)
