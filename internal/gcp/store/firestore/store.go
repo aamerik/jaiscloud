@@ -23,6 +23,29 @@ var (
 	ErrAborted            = errors.New("Aborted")
 )
 
+// DocumentMissingError reports a write whose currentDocument.exists=true
+// precondition failed because the target document is absent. It carries the
+// document name so the provider can render the canonical Firestore NOT_FOUND
+// message ("No document to update: <name>"), and unwraps to
+// ErrPreconditionFailed so errors.Is classification still works.
+type DocumentMissingError struct{ Name string }
+
+func (e *DocumentMissingError) Error() string { return "document does not exist: " + e.Name }
+
+// Unwrap lets existing errors.Is(err, ErrPreconditionFailed) checks keep
+// matching a missing-document existence failure.
+func (e *DocumentMissingError) Unwrap() error { return ErrPreconditionFailed }
+
+// DocumentExistsError reports a write whose currentDocument.exists=false
+// precondition failed because the target document already exists. It unwraps to
+// ErrDocumentExists.
+type DocumentExistsError struct{ Name string }
+
+func (e *DocumentExistsError) Error() string { return "document already exists: " + e.Name }
+
+// Unwrap lets existing errors.Is(err, ErrDocumentExists) checks keep matching.
+func (e *DocumentExistsError) Unwrap() error { return ErrDocumentExists }
+
 // Document is a single Firestore document. Name is the full resource name
 // ("projects/{p}/databases/{db}/documents/{path}"). CollectionID and ParentPath
 // are derived from Name and persisted only for efficient collectionGroup and
@@ -83,9 +106,11 @@ type FirestoreStore interface {
 	ListDocuments(ctx context.Context, project, database string) ([]Document, error)
 	// Commit applies a batch of writes atomically after (1) re-validating the
 	// transaction read-set and (2) validating each write's precondition. It
-	// returns ErrAborted when a read-set entry no longer matches, and
-	// ErrPreconditionFailed when a write precondition fails; in both cases no
-	// writes are applied.
+	// returns ErrAborted when a read-set entry no longer matches; for a failed
+	// precondition it returns *DocumentMissingError (exists=true, absent,
+	// errors.Is ErrPreconditionFailed) or *DocumentExistsError (exists=false,
+	// present, errors.Is ErrDocumentExists), or ErrPreconditionFailed for an
+	// updateTime mismatch. In every case no writes are applied.
 	Commit(ctx context.Context, reads []ReadRef, writes []Write) error
 	Reset(ctx context.Context)
 }

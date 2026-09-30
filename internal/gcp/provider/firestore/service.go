@@ -298,15 +298,9 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 	}
 
 	// Optimistic precondition check (currentDocument.exists / updateTime).
-	if exists {
-		if err := checkPrecondition(true, existing.UpdateTime, pre); err != nil {
-			return firestorestore.Document{}, err
-		}
-	} else if existsPreconditionRequiresMissing(exists, pre) {
-		// exists=true on a missing document: real Firestore rejects the
-		// update with NOT_FOUND, not FAILED_PRECONDITION.
-		return firestorestore.Document{}, newUpdateMissingErr(name)
-	} else if err := checkPrecondition(false, time.Time{}, pre); err != nil {
+	// exists=true on a missing document -> NOT_FOUND; exists=false on a present
+	// document -> ALREADY_EXISTS; updateTime mismatch -> FAILED_PRECONDITION.
+	if err := checkPrecondition(name, exists, existing.UpdateTime, pre); err != nil {
 		return firestorestore.Document{}, err
 	}
 
@@ -358,11 +352,7 @@ func (s *Service) DeleteDocument(ctx context.Context, project, database, path st
 		if err != nil && !errors.Is(err, firestorestore.ErrDocumentNotFound) {
 			return err
 		}
-		var updateTime time.Time
-		if exists {
-			updateTime = existing.UpdateTime
-		}
-		if err := checkPrecondition(exists, updateTime, pre); err != nil {
+		if err := checkPrecondition(name, exists, existing.UpdateTime, pre); err != nil {
 			return err
 		}
 	}
@@ -614,7 +604,11 @@ func (s *Service) BatchGet(ctx context.Context, documents []string, transaction 
 // store.Commit (see buildUpdate's doc comment). Delete writes need no
 // implicit ReadRef: an unconditional delete is idempotent by design (real
 // Firestore's DeleteDocument doesn't error without an explicit precondition),
-// so there's no "lost update" for a concurrent delete to cause.
+// so there's no "lost update" for a concurrent delete to cause. Existence
+// preconditions are left to store.Commit, which validates the transaction
+// read-set first and then the per-write precondition under its lock, returning
+// the named DocumentMissingError / DocumentExistsError the caller maps to the
+// canonical NOT_FOUND / ALREADY_EXISTS.
 func (s *Service) buildWrites(ctx context.Context, wire []*writeWire, now time.Time) ([]firestorestore.Write, []map[string]any, []firestorestore.ReadRef, error) {
 	writes := make([]firestorestore.Write, 0, len(wire))
 	results := make([]map[string]any, 0, len(wire))
@@ -677,11 +671,6 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 	exists := err == nil
 	if err != nil && !errors.Is(err, firestorestore.ErrDocumentNotFound) {
 		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
-	}
-	if existsPreconditionRequiresMissing(exists, pre) {
-		// exists=true on a missing document: NOT_FOUND, matching the
-		// PatchDocument path and real Firestore (the Java SDK's update()).
-		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, newUpdateMissingErr(dw.Name)
 	}
 	readRef := firestorestore.ReadRef{Name: dw.Name, Exists: exists, UpdateTime: existing.UpdateTime}
 
@@ -752,9 +741,6 @@ func (s *Service) buildTransform(ctx context.Context, tw *documentTransformWire,
 	exists := err == nil
 	if err != nil && !errors.Is(err, firestorestore.ErrDocumentNotFound) {
 		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
-	}
-	if existsPreconditionRequiresMissing(exists, pre) {
-		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, newUpdateMissingErr(tw.Document)
 	}
 	readRef := firestorestore.ReadRef{Name: tw.Document, Exists: exists, UpdateTime: existing.UpdateTime}
 

@@ -391,17 +391,38 @@ func randomID(n int) string {
 	return string(b)
 }
 
+// existencePreconditionErr returns the provider error for a failed
+// currentDocument existence precondition, or nil when the precondition holds
+// (or is unset). Real Firestore distinguishes the two directions:
+//   - exists=true on a missing document  -> NOT_FOUND "No document to update: <name>"
+//   - exists=false on a present document -> ALREADY_EXISTS "Document already exists: <name>"
+//
+// The unary REST/gRPC paths and the Commit/BatchWrite build paths all funnel
+// through this helper, so the same contract holds for updates, transforms and
+// deletes.
+func existencePreconditionErr(name string, exists bool, pre *firestorestore.Precondition) error {
+	if pre == nil || pre.Exists == nil {
+		return nil
+	}
+	if *pre.Exists && !exists {
+		return newUpdateMissingErr(name)
+	}
+	if !*pre.Exists && exists {
+		return newAlreadyExistsErr(name)
+	}
+	return nil
+}
+
 // checkPrecondition validates a document precondition against the current state
-// (exists and updateTime). It returns a FAILED_PRECONDITION error on mismatch.
-func checkPrecondition(exists bool, updateTime time.Time, pre *firestorestore.Precondition) error {
+// (exists and updateTime). Existence mismatches return the canonical NOT_FOUND /
+// ALREADY_EXISTS errors; an updateTime mismatch (or an absent document under an
+// updateTime precondition) returns FAILED_PRECONDITION.
+func checkPrecondition(name string, exists bool, updateTime time.Time, pre *firestorestore.Precondition) error {
 	if pre == nil {
 		return nil
 	}
 	if pre.Exists != nil {
-		if *pre.Exists != exists {
-			return newPreconditionErr("precondition failed: document existence does not match")
-		}
-		return nil
+		return existencePreconditionErr(name, exists, pre)
 	}
 	if pre.UpdateTime != nil {
 		if !exists || !updateTime.Equal(*pre.UpdateTime) {
@@ -409,14 +430,6 @@ func checkPrecondition(exists bool, updateTime time.Time, pre *firestorestore.Pr
 		}
 	}
 	return nil
-}
-
-// existsPreconditionRequiresMissing reports whether pre is
-// currentDocument.exists=true while the target document is absent. Real
-// Firestore reports this as NOT_FOUND ("No document to update"), not
-// FAILED_PRECONDITION.
-func existsPreconditionRequiresMissing(exists bool, pre *firestorestore.Precondition) bool {
-	return !exists && pre != nil && pre.Exists != nil && *pre.Exists
 }
 
 // maskFields projects a document's fields down to the given field paths. A path
