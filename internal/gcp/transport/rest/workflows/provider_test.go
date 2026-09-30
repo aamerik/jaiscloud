@@ -130,3 +130,57 @@ func TestProviderUsesDefaultProjectWhenAbsent(t *testing.T) {
 		t.Fatalf("list with default project: %v", err)
 	}
 }
+
+// stubOperationResolver reports handled when opID matches want, returning body.
+type stubOperationResolver struct {
+	want    string
+	body    map[string]any
+	handled bool
+}
+
+func (s stubOperationResolver) ResolveOperation(_ context.Context, _, _, opID string) (map[string]any, bool, error) {
+	if s.handled && opID == s.want {
+		return s.body, true, nil
+	}
+	return nil, false, nil
+}
+
+// TestProviderResolvesForeignLocationOperation verifies that an unknown
+// Workflows operation name falls through to the wired cross-service resolvers
+// (the opt-in async path for Metastore/Managed Kafka) and that a resolver that
+// declines still yields the canonical NotFound.
+func TestProviderResolvesForeignLocationOperation(t *testing.T) {
+	ctx := context.Background()
+	get := nr(map[string]any{
+		"project": "proj", "location": "us-central1",
+		"name": "projects/proj/locations/us-central1/operations/abc123",
+	})
+
+	// No resolvers → the Workflows NotFound stands.
+	p := newProvider(t)
+	if _, err := p.GetOperation(ctx, get); err == nil || !core.IsNotFound(err) {
+		t.Fatalf("expected NotFound without resolvers, got %v", err)
+	}
+
+	// A declining resolver does not change that.
+	declining := newProvider(t)
+	declining.SetOperationResolvers(stubOperationResolver{want: "abc123", handled: false})
+	if _, err := declining.GetOperation(ctx, get); err == nil || !core.IsNotFound(err) {
+		t.Fatalf("expected NotFound with a declining resolver, got %v", err)
+	}
+
+	// An owning resolver serves its own JSON.
+	owning := newProvider(t)
+	owning.SetOperationResolvers(stubOperationResolver{
+		want:    "abc123",
+		handled: true,
+		body:    map[string]any{"name": get.Params["name"], "done": true},
+	})
+	resp, err := owning.GetOperation(ctx, get)
+	if err != nil {
+		t.Fatalf("resolved operation: %v", err)
+	}
+	if resp.Data["done"] != true || resp.Data["name"] != get.Params["name"] {
+		t.Fatalf("resolved data = %v", resp.Data)
+	}
+}
