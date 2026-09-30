@@ -16,14 +16,40 @@ import (
 // single query cannot exhaust the process. Exceeding it fails loud.
 const maxHydratedRows = 1_000_000
 
-// Execute translates and runs one BigQuery-subset query over the tables
-// resolved through cat, returning the ordered result set.
+// Execute translates and runs one BigQuery-subset SELECT over the tables
+// resolved through cat. DDL/DML require a Mutator and use ExecuteStatement.
 func Execute(ctx context.Context, cat Catalog, req Request) (Result, error) {
+	return execute(ctx, cat, nil, req)
+}
+
+// ExecuteStatement translates and runs one BigQuery-subset statement — SELECT,
+// DDL or DML — against a Mutator. DDL/DML write through the mutator (the store
+// stays the source of truth); SELECT only reads.
+func ExecuteStatement(ctx context.Context, m Mutator, req Request) (Result, error) {
+	if m == nil {
+		return Result{}, errors.New("queryengine: nil mutator")
+	}
+	return execute(ctx, m, m, req)
+}
+
+func execute(ctx context.Context, cat Catalog, w Mutator, req Request) (Result, error) {
 	if strings.TrimSpace(req.Query) == "" {
 		return Result{}, unsupported("query is empty")
 	}
 	if cat == nil {
 		return Result{}, errors.New("queryengine: nil catalog")
+	}
+
+	toks, err := tokenize(req.Query)
+	if err != nil {
+		return Result{}, err
+	}
+	typ := classifyStatement(toks)
+	if typ == "" {
+		return Result{}, unsupported("only SELECT, DDL and DML statements are supported")
+	}
+	if typ != StatementSelect && w == nil {
+		return Result{}, unsupported(typ + " statements are not supported")
 	}
 
 	db, err := sql.Open("sqlite", ":memory:")
@@ -41,31 +67,54 @@ func Execute(ctx context.Context, cat Catalog, req Request) (Result, error) {
 	}
 
 	h := &hydrator{
-		ctx:    ctx,
-		cat:    cat,
-		db:     db,
-		req:    req,
-		byKey:  map[string]string{},
-		byRef:  map[string]string{},
-		fields: map[string]Field{},
+		ctx:         ctx,
+		cat:         cat,
+		w:           w,
+		db:          db,
+		req:         req,
+		dryRun:      req.DryRun,
+		byKey:       map[string]string{},
+		byRef:       map[string]string{},
+		fields:      map[string]Field{},
+		tableScopes: map[string]tableScope{},
+		tableFields: map[string][]Field{},
 	}
-	translated, err := translate(req.Query, h.resolve)
-	if err != nil {
-		return Result{}, err
+
+	switch typ {
+	case StatementSelect:
+		return h.executeSelect(toks)
+	case StatementCreateTable, StatementCreateTableAsSelect:
+		return h.executeCreateTable(toks)
+	case StatementCreateSchema:
+		return h.executeCreateSchema(toks)
+	case StatementDropTable:
+		return h.executeDropTable(toks)
+	case StatementDropSchema:
+		return h.executeDropSchema(toks)
+	default:
+		return h.executeDML(typ, toks)
 	}
-	return h.run(translated)
+}
+
+// tableScope is the fully-qualified name behind an internal scratch table.
+type tableScope struct {
+	project, dataset, table string
 }
 
 type hydrator struct {
-	ctx    context.Context
-	cat    Catalog
-	db     *sql.DB
-	req    Request
-	next   int
-	byKey  map[string]string // "project\x00dataset\x00table" -> internal name
-	byRef  map[string]string // raw reference -> internal name
-	fields map[string]Field  // lower(column name) -> declared field (first wins)
-	total  int
+	ctx         context.Context
+	cat         Catalog
+	w           Mutator
+	db          *sql.DB
+	req         Request
+	dryRun      bool
+	next        int
+	byKey       map[string]string     // "project\x00dataset\x00table" -> internal name
+	byRef       map[string]string     // raw reference -> internal name
+	fields      map[string]Field      // lower(column name) -> declared field (first wins)
+	tableScopes map[string]tableScope // internal name -> fully-qualified name
+	tableFields map[string][]Field    // internal name -> declared fields
+	total       int
 }
 
 // resolve qualifies a table reference, hydrates it on first use and returns the
@@ -179,6 +228,8 @@ func (h *hydrator) hydrate(project, dataset, table string) error {
 
 	key := project + "\x00" + dataset + "\x00" + table
 	h.byKey[key] = name
+	h.tableScopes[name] = tableScope{project: project, dataset: dataset, table: table}
+	h.tableFields[name] = tbl.Fields
 	for _, f := range tbl.Fields {
 		if _, ok := h.fields[strings.ToLower(f.Name)]; !ok {
 			h.fields[strings.ToLower(f.Name)] = f
@@ -187,7 +238,7 @@ func (h *hydrator) hydrate(project, dataset, table string) error {
 	return nil
 }
 
-func (h *hydrator) run(translated string) (Result, error) {
+func (h *hydrator) run(translated string, inferred []Field) (Result, error) {
 	rows, err := h.db.QueryContext(h.ctx, translated)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -206,6 +257,10 @@ func (h *hydrator) run(translated string) (Result, error) {
 		name := c
 		if !isSimpleIdent(c) {
 			name = fmt.Sprintf("f%d_", i) // BigQuery's name for an expression column
+		}
+		if i < len(inferred) && inferred[i].Type != "" {
+			fields[i] = Field{Name: name, Type: inferred[i].Type, Mode: modeOrDefault(inferred[i].Mode)}
+			continue
 		}
 		if f, ok := h.fields[strings.ToLower(name)]; ok {
 			fields[i] = Field{Name: name, Type: f.Type, Mode: modeOrDefault(f.Mode)}

@@ -476,6 +476,43 @@ func (s *PostgresStore) InsertRows(ctx context.Context, projectID, datasetID, ta
 	return dups, nil
 }
 
+func (s *PostgresStore) ReplaceRows(ctx context.Context, projectID, datasetID, tableID string, rows []Row) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM jc_bq_rows WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3
+	`, projectID, datasetID, tableID); err != nil {
+		return err
+	}
+	for i := range rows {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_bq_rows (project_id, dataset_id, table_id, seq, data)
+			VALUES ($1,$2,$3,$4,$5)
+		`, projectID, datasetID, tableID, int64(i+1), nullableJSONRaw(rows[i].Data, "{}")); err != nil {
+			return err
+		}
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_bq_tables SET num_rows=$4, update_time=now()
+		WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3
+	`, projectID, datasetID, tableID, len(rows))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchTable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.dedup.forget(tableScope(projectID, datasetID, tableID))
+	return nil
+}
+
 func (s *PostgresStore) ListRows(ctx context.Context, projectID, datasetID, tableID string) ([]Row, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT project_id, dataset_id, table_id, seq, data

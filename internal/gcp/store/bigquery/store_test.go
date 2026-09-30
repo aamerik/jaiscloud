@@ -102,6 +102,31 @@ func runStoreTests(t *testing.T, s Store) {
 		t.Fatalf("expected numRows=4 after dedup, got %d", gotTable.NumRows)
 	}
 
+	// ReplaceRows: the whole row set is swapped, Seq reassigned, NumRows updated.
+	if err := s.ReplaceRows(ctx, "proj", "Sales", "Orders", []Row{
+		{Data: []byte(`{"id":7,"name":"zoe"}`)},
+	}); err != nil {
+		t.Fatalf("replace rows: %v", err)
+	}
+	gotTable, _ = s.GetTable(ctx, "proj", "Sales", "Orders")
+	if gotTable.NumRows != 1 {
+		t.Fatalf("expected numRows=1 after replace, got %d", gotTable.NumRows)
+	}
+	replaced, err := s.ListRows(ctx, "proj", "Sales", "Orders")
+	if err != nil || len(replaced) != 1 || replaced[0].Seq != 1 || string(replaced[0].Data) != `{"id":7,"name":"zoe"}` {
+		t.Fatalf("replaced rows = %+v, err=%v", replaced, err)
+	}
+	// An empty replacement clears the table but keeps it.
+	if err := s.ReplaceRows(ctx, "proj", "Sales", "Orders", nil); err != nil {
+		t.Fatalf("replace with empty: %v", err)
+	}
+	if gotTable, _ = s.GetTable(ctx, "proj", "Sales", "Orders"); gotTable.NumRows != 0 {
+		t.Fatalf("expected numRows=0 after empty replace, got %d", gotTable.NumRows)
+	}
+	if err := s.ReplaceRows(ctx, "proj", "Sales", "missing", nil); err != ErrNoSuchTable {
+		t.Fatalf("expected ErrNoSuchTable on replace into missing table, got %v", err)
+	}
+
 	// Jobs
 	if _, err := s.GetJob(ctx, "proj", "nope"); err != ErrNoSuchJob {
 		t.Fatalf("expected ErrNoSuchJob, got %v", err)

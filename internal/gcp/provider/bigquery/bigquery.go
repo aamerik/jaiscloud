@@ -908,6 +908,25 @@ func (p *Provider) InsertJob(ctx context.Context, nr *model.NormalizedRequest) (
 	if _, err := p.store.GetJob(ctx, projectOf(nr), jobID); err == nil {
 		return nil, mapErr(bqstore.ErrAlreadyExists)
 	}
+	// A query job is evaluated synchronously (accepted-risk LROs), exactly like
+	// jobs.query, so its statistics are persisted on the job. That also means a
+	// later getQueryResults never re-executes DDL/DML through this path.
+	if q := mapValue(mapValue(body, "configuration"), "query"); q != nil {
+		if boolValue(q, "useLegacySql") {
+			return nil, invalidQuery("legacy SQL is not supported; use standard SQL (useLegacySql=false)")
+		}
+		res, err := p.runQuery(ctx, projectOf(nr), q, false)
+		if err != nil {
+			return nil, err
+		}
+		if res.StatementType != "" {
+			stats := map[string]any{"statementType": res.StatementType}
+			if isDMLStatement(res.StatementType) {
+				stats["numDmlAffectedRows"] = strconv.FormatInt(res.NumDMLAffectedRows, 10)
+			}
+			body["statistics"] = map[string]any{"query": stats}
+		}
+	}
 	now := clock.Now().UTC()
 	j := bqstore.Job{JobID: jobID, CreateTime: now}
 	if body != nil {
@@ -984,15 +1003,17 @@ func (p *Provider) Query(ctx context.Context, nr *model.NormalizedRequest) (*mod
 	}
 	if boolValue(body, "dryRun") {
 		// Dry run: validate the query (surfacing the same errors a real run
-		// would) but return no rows and persist no job.
-		if _, err := p.runQuery(ctx, projectOf(nr), body); err != nil {
+		// would) but perform no DDL/DML mutation, return no rows, and persist
+		// no job.
+		res, err := p.runQuery(ctx, projectOf(nr), body, true)
+		if err != nil {
 			return nil, err
 		}
-		return provider.OK(encodeQueryResult("queryResponse", projectOf(nr), newID(), strValue(body, "location"), queryengine.Result{})), nil
+		return provider.OK(encodeQueryResult("queryResponse", projectOf(nr), newID(), strValue(body, "location"), res, true)), nil
 	}
 	// Evaluate before persisting so a failing query never leaves a job that
 	// reports success. A query is synchronous here (accepted-risk LROs).
-	res, err := p.runQuery(ctx, projectOf(nr), body)
+	res, err := p.runQuery(ctx, projectOf(nr), body, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1005,6 +1026,16 @@ func (p *Provider) Query(ctx context.Context, nr *model.NormalizedRequest) (*mod
 	if loc := strValue(body, "location"); loc != "" {
 		jobCfg["jobReference"].(map[string]any)["location"] = loc
 	}
+	// Persist the statement statistics on the job so a later getQueryResults
+	// can report the DDL/DML outcome without re-executing it (a second INSERT
+	// or UPDATE would otherwise mutate the store twice).
+	if res.StatementType != "" {
+		stats := map[string]any{"statementType": res.StatementType}
+		if isDMLStatement(res.StatementType) {
+			stats["numDmlAffectedRows"] = strconv.FormatInt(res.NumDMLAffectedRows, 10)
+		}
+		jobCfg["statistics"] = map[string]any{"query": stats}
+	}
 	data, err := json.Marshal(jobCfg)
 	if err != nil {
 		// Never report jobComplete=true for a job that wasn't actually stored —
@@ -1016,7 +1047,7 @@ func (p *Provider) Query(ctx context.Context, nr *model.NormalizedRequest) (*mod
 	if err := p.store.CreateJob(ctx, projectOf(nr), j); err != nil {
 		return nil, mapErr(err)
 	}
-	return provider.OK(encodeQueryResult("queryResponse", projectOf(nr), jobID, strValue(body, "location"), res)), nil
+	return provider.OK(encodeQueryResult("queryResponse", projectOf(nr), jobID, strValue(body, "location"), res, false)), nil
 }
 
 func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -1038,11 +1069,44 @@ func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequ
 	if boolValue(q, "useLegacySql") {
 		return nil, invalidQuery("legacy SQL is not supported; use standard SQL (useLegacySql=false)")
 	}
-	res, err := p.runQuery(ctx, projectOf(nr), q)
+	// A DDL/DML job is not re-executed: the mutation already happened at
+	// jobs.query time, so replaying it would double-apply. Return the persisted
+	// statement statistics instead (the job config stores them). SELECT keeps
+	// re-executing (BQ6), because reads are idempotent.
+	if typ, affected, ok := jobQueryStats(j); ok && typ != queryengine.StatementSelect {
+		return provider.OK(encodeQueryResult("getQueryResultsResponse", projectOf(nr), jobID, jobLocation(j),
+			queryengine.Result{StatementType: typ, NumDMLAffectedRows: affected}, false)), nil
+	}
+	res, err := p.runQuery(ctx, projectOf(nr), q, false)
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(encodeQueryResult("getQueryResultsResponse", projectOf(nr), jobID, jobLocation(j), res)), nil
+	return provider.OK(encodeQueryResult("getQueryResultsResponse", projectOf(nr), jobID, jobLocation(j), res, false)), nil
+}
+
+// jobQueryStats returns the statementType and DML affected-row count persisted
+// on a query job's configuration.statistics.query.
+func jobQueryStats(j bqstore.Job) (typ string, affected int64, ok bool) {
+	if len(j.Config) == 0 {
+		return "", 0, false
+	}
+	var cfg map[string]any
+	if json.Unmarshal(j.Config, &cfg) != nil {
+		return "", 0, false
+	}
+	stats, _ := cfg["statistics"].(map[string]any)
+	qs, _ := stats["query"].(map[string]any)
+	if qs == nil {
+		return "", 0, false
+	}
+	typ = strValue(qs, "statementType")
+	if typ == "" {
+		return "", 0, false
+	}
+	if s := strValue(qs, "numDmlAffectedRows"); s != "" {
+		affected, _ = strconv.ParseInt(s, 10, 64)
+	}
+	return typ, affected, true
 }
 
 func (p *Provider) GetServiceAccount(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
