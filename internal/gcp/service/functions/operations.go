@@ -117,12 +117,8 @@ func (s *Service) DeleteOperation(ctx context.Context, project, name string) err
 		return err
 	}
 	if location == "" {
-		// v1 top-level name: recover the location from the stored record.
-		op, err := s.functions.GetOperationByID(ctx, project, id)
-		if err != nil {
-			return mapErr(err)
-		}
-		location = op.Location
+		// v1 top-level name: the operation is not project/location scoped.
+		return mapErr(s.functions.DeleteOperationByID(ctx, id))
 	}
 	if err := s.functions.DeleteOperation(ctx, project, location, id); err != nil {
 		return mapErr(err)

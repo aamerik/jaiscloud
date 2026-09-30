@@ -354,7 +354,17 @@ func seedFunctions(d *driver, suffix string) (func() error, func() error, error)
 		return nil, nil, fmt.Errorf("POST %s: no operation name in response: %s", post, truncate(resp))
 	}
 	get := fmt.Sprintf("/v1/projects/%s/locations/%s/functions/%s", project, location, id)
-	opPath := "/v2/" + strings.TrimPrefix(op.Name, "/")
+	// The v1 operation is named top-level "operations/{id}" and is read back
+	// over /v1/operations/{id}; a location-scoped name (other services / older
+	// shape) is read over /v2/. Follow the name the API actually handed out.
+	opPath := op.Name
+	if !strings.HasPrefix(opPath, "/") {
+		if strings.HasPrefix(opPath, "operations/") {
+			opPath = "/v1/" + opPath
+		} else {
+			opPath = "/v2/" + opPath
+		}
+	}
 	survived := func() error {
 		if err := d.verifyPresent(get)(); err != nil {
 			return err

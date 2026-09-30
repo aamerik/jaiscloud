@@ -193,11 +193,15 @@ type Store interface {
 	// project+location scoped and keyed by their opaque id.
 	CreateOperation(ctx context.Context, projectID, location string, op Operation) error
 	GetOperation(ctx context.Context, projectID, location, id string) (Operation, error)
-	// GetOperationByID finds an operation by id across every location of a
-	// project. The v1 Cloud Functions operations surface is top-level
-	// (operations/{id}) with no location segment, so the location must be
-	// recovered from the stored record. ErrNoSuchOperation when absent.
+	// GetOperationByID finds an operation by its (globally unique) id. The v1
+	// Cloud Functions operations surface is top-level (operations/{id}) with no
+	// project or location segment, so the lookup is NOT scoped to a project: it
+	// returns the operation wherever it lives. ErrNoSuchOperation when absent.
 	GetOperationByID(ctx context.Context, projectID, id string) (Operation, error)
+	// DeleteOperationByID removes an operation by its globally unique id (the
+	// v1 top-level name carries no project/location). ErrNoSuchOperation when
+	// absent.
+	DeleteOperationByID(ctx context.Context, id string) error
 	DeleteOperation(ctx context.Context, projectID, location, id string) error
 	ListOperations(ctx context.Context, projectID, location string) ([]Operation, error)
 
