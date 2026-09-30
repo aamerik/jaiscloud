@@ -121,6 +121,9 @@ func TestJSONCodecDecode(t *testing.T) {
 		{"DELETE", "/v1/projects/p/locations/us-central1/channels/c", "DeleteChannel"},
 		{"GET", "/v1/projects/p/locations/us-central1/providers", "ListProviders"},
 		{"GET", "/v1/projects/p/locations/us-central1/providers/pubsub.googleapis.com", "GetProvider"},
+		// Cloud Functions v1 top-level operations (J60).
+		{"GET", "/v1/operations", "ListOperations"},
+		{"GET", "/v1/operations/op1", "GetOperation"},
 	}
 	for _, tc := range cases {
 		codec := &JSONCodec{Service: "test"}
@@ -210,7 +213,10 @@ func TestDetectV1Service(t *testing.T) {
 		"/v1/projects/p/serviceAccounts/sa@x.com:disable":                                     "iam",
 		"/v1/projects/p/serviceAccounts/sa@x.com:undelete":                                    "iam",
 		"/v1/projects/p/serviceAccounts/sa@x.com:signBlob":                                    "iam",
-		"/v1/projects/p/locations/us-central1/functions/f":                                    "functions",
+		// Cloud Functions v1 top-level operations (J60): no projects segment.
+		"/v1/operations":     "functions",
+		"/v1/operations/op1": "functions",
+		"/v1/projects/p/locations/us-central1/functions/f": "functions",
 		// The v2 runtime catalog is not a v1 surface.
 		"/v1/projects/p/locations/us-central1/runtimes": "",
 		// Cloud Workflows management + executions share the path shape; the

@@ -316,6 +316,20 @@ func (s *PostgresStore) GetOperation(ctx context.Context, projectID, location, i
 	return op, err
 }
 
+// GetOperationByID finds an operation by id across every location of projectID
+// (the v1 Cloud Functions operations name carries no location).
+func (s *PostgresStore) GetOperationByID(ctx context.Context, projectID, id string) (Operation, error) {
+	op, err := scanOperation(s.pool.QueryRow(ctx, `
+		SELECT operation_id, location, done, verb, target, function, create_time, end_time
+		FROM jc_functions_operations WHERE project_id=$1 AND operation_id=$2
+		LIMIT 1
+	`, projectID, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Operation{}, ErrNoSuchOperation
+	}
+	return op, err
+}
+
 func (s *PostgresStore) DeleteOperation(ctx context.Context, projectID, location, id string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_functions_operations WHERE project_id=$1 AND location=$2 AND operation_id=$3`, projectID, location, id)
 	if err != nil {

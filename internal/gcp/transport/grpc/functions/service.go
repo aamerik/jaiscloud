@@ -22,6 +22,7 @@ package functions
 
 import (
 	"context"
+	"strings"
 
 	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
 	apiv2functionspb "cloud.google.com/go/functions/apiv2/functionspb"
@@ -372,6 +373,80 @@ func policyToProto(p policy.Policy) *iampb.Policy {
 		return &iampb.Policy{}
 	}
 	return &out
+}
+
+// ─── google.longrunning.Operations resolvers (J58/J60) ───────────────────────
+//
+// Function mutations return their operation inline, but a gRPC client that
+// explicitly polls Operations.GetOperation/:wait must get the typed Operation
+// (a function/Empty Any), not the shared stub's empty terminal op. Both the v1
+// and v2 function services register a resolver with the shared Operations
+// service (see cmd/jaiscloud-gcp/main.go).
+
+// isTopLevelOperationName reports whether name has the v1 functions operation
+// shape "operations/{id}".
+func isTopLevelOperationName(name string) bool {
+	parts := strings.Split(strings.Trim(name, "/"), "/")
+	return len(parts) == 2 && parts[0] == "operations" && parts[1] != ""
+}
+
+// parseV2OperationName parses a location-scoped operation name
+// ("projects/{p}/locations/{l}/operations/{id}") into its parts.
+func parseV2OperationName(name string) (project, location, id string, ok bool) {
+	parts := strings.Split(strings.Trim(name, "/"), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		switch parts[i] {
+		case "projects":
+			project = parts[i+1]
+		case "locations":
+			location = parts[i+1]
+		case "operations":
+			id = parts[i+1]
+		}
+	}
+	return project, location, id, id != "" && location != ""
+}
+
+// ResolveOperation resolves a v1 function operation name (operations/{id}). The
+// name is unambiguously the v1 functions shape, so an unseen id is a NotFound.
+func (s *Service) ResolveOperation(ctx context.Context, name string) (*longrunningpb.Operation, bool, error) {
+	if !isTopLevelOperationName(name) {
+		return nil, false, nil
+	}
+	project := resolveProject(ctx, "", s.defaultProj)
+	op, err := s.core.LoadOperation(ctx, project, name)
+	if err != nil {
+		return nil, true, mapError(err)
+	}
+	out, err := operationToProtoV1(project, op)
+	if err != nil {
+		return nil, true, err
+	}
+	return out, true, nil
+}
+
+// ResolveOperation resolves a v2 function operation name
+// (projects/{p}/locations/{l}/operations/{id}). A location-scoped name is shared
+// with other services, so an id absent from the function store is not handled
+// here — the shared stub (or another resolver) answers it instead.
+func (s *ServiceV2) ResolveOperation(ctx context.Context, name string) (*longrunningpb.Operation, bool, error) {
+	project, _, _, ok := parseV2OperationName(name)
+	if !ok {
+		return nil, false, nil
+	}
+	project = resolveProject(ctx, project, s.defaultProj)
+	op, err := s.core.LoadOperation(ctx, project, name)
+	if err != nil {
+		if core.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, true, mapError(err)
+	}
+	out, err := operationToProtoV2(project, op)
+	if err != nil {
+		return nil, true, err
+	}
+	return out, true, nil
 }
 
 // compile-time assertions that the servers implement both generated interfaces.
