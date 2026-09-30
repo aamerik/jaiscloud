@@ -745,6 +745,52 @@ func TestGCSCodecEncodeErrorXML(t *testing.T) {
 	}
 }
 
+func TestGCSCodecEncodeErrorXMLAPI(t *testing.T) {
+	c := &GCSCodec{}
+	xmlReq := func(method string) *model.NormalizedRequest {
+		r := httptest.NewRequest(method, "/bkt/obj.txt", nil)
+		return &model.NormalizedRequest{Params: map[string]any{wire.XMLAPIKey: true}, Raw: r}
+	}
+
+	// Missing object on the raw path → NoSuchKey XML document.
+	status, hdr, body := c.EncodeError(xmlReq("GET"),
+		model.NewProviderError("NotFound", "object not found", 404))
+	if status != 404 {
+		t.Fatalf("status = %d, want 404", status)
+	}
+	if ct := hdr.Get("Content-Type"); ct != "application/xml; charset=UTF-8" {
+		t.Fatalf("Content-Type = %q, want application/xml; charset=UTF-8", ct)
+	}
+	if s := string(body); !strings.Contains(s, "<Code>NoSuchKey</Code>") {
+		t.Fatalf("expected NoSuchKey, got %q", s)
+	}
+
+	// Missing bucket → NoSuchBucket.
+	_, _, body = c.EncodeError(xmlReq("GET"),
+		model.NewProviderError("NotFound", "bucket not found", 404))
+	if s := string(body); !strings.Contains(s, "<Code>NoSuchBucket</Code>") {
+		t.Fatalf("expected NoSuchBucket, got %q", s)
+	}
+
+	// A CSEK failure maps the JSON reason to the capitalized XML code.
+	_, _, body = c.EncodeError(xmlReq("GET"),
+		model.NewProviderError("InvalidRequest", "bad key", 400).
+			WithData(map[string]any{"reason": "customerEncryptionKeyIsIncorrect"}))
+	if s := string(body); !strings.Contains(s, "<Code>CustomerEncryptionKeyIsIncorrect</Code>") {
+		t.Fatalf("expected CustomerEncryptionKeyIsIncorrect, got %q", s)
+	}
+
+	// HEAD carries the status and Content-Type but no body.
+	status, hdr, body = c.EncodeError(xmlReq("HEAD"),
+		model.NewProviderError("NotFound", "object not found", 404))
+	if status != 404 || len(body) != 0 {
+		t.Fatalf("HEAD error: status=%d body=%q, want 404/empty", status, body)
+	}
+	if hdr.Get("Content-Type") == "" {
+		t.Fatal("HEAD error should still set Content-Type")
+	}
+}
+
 func TestGCSCodecParseMultipartSingleQuotedBoundary(t *testing.T) {
 	// gcloud/apitools emits `boundary='...=='` (single-quoted, with tspecial '='
 	// chars) — mime.ParseMediaType rejects this, so the boundary is extracted

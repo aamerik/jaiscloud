@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"jaiscloud/internal/gcp/adapter"
+	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 )
 
@@ -74,6 +75,28 @@ func TestGCPAdapter_GzipMalformedBody(t *testing.T) {
 	}
 	if pe.HTTPStatus != 400 {
 		t.Errorf("expected 400, got %d", pe.HTTPStatus)
+	}
+}
+
+// TestGCPAdapter_XMLPutKeepsObjectEncoding covers J69: a raw XML API object PUT
+// with Content-Encoding describes the object's own encoding, not the transport,
+// so the bytes must be stored as-is and the header captured as contentEncoding.
+func TestGCPAdapter_XMLPutKeepsObjectEncoding(t *testing.T) {
+	a := gcp.New()
+	gz := gzipBytes(t, []byte("object bytes"))
+	r := httptest.NewRequest("PUT", "/bkt/obj.txt", bytes.NewReader(gz))
+	r.Header.Set("Content-Encoding", "gzip")
+
+	nr, _, err := a.DetectAndDecode(r, gz)
+	if err != nil {
+		t.Fatalf("DetectAndDecode: %v", err)
+	}
+	if got, _ := nr.Params["contentEncoding"].(string); got != "gzip" {
+		t.Errorf("contentEncoding = %q, want gzip", got)
+	}
+	// The stored bytes must be the gzip body, not a transport-decoded plaintext.
+	if got, _ := nr.Params[wire.MediaKey].([]byte); !bytes.Equal(got, gz) {
+		t.Errorf("media bytes were altered: got %d bytes, want %d", len(got), len(gz))
 	}
 }
 

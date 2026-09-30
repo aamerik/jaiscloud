@@ -144,6 +144,14 @@ func decodeGzippedBody(r *http.Request, body []byte) ([]byte, error) {
 	if r.URL.Query().Get("uploadType") == "media" {
 		return body, nil
 	}
+	// A raw XML API object PUT (/ {bucket}/{object}) carries Content-Encoding as
+	// the object's own encoding, not the transport's: real GCS stores the gzip
+	// bytes as-is and records x-goog-stored-content-encoding. Decompressing here
+	// would corrupt the stored object, so leave the body and header untouched
+	// (the codec captures the header as Object.contentEncoding).
+	if r.Method == http.MethodPut && isRawStorageMediaPath(r) {
+		return body, nil
+	}
 	r.Header.Del("Content-Encoding")
 
 	// Non-streaming: the gateway already buffered the body.

@@ -76,7 +76,7 @@ func (s *Service) BidiReadObject(stream storagepb.Storage_BidiReadObjectServer) 
 	if spec.GetRoutingToken() != "" {
 		return status.Error(codes.Unimplemented, "BidiReadObject routing_token is not supported (no read redirects)")
 	}
-	if err := validateBidiReadCommonParams(spec.GetCommonObjectRequestParams()); err != nil {
+	if err := validateCommonObjectParams(spec.GetCommonObjectRequestParams()); err != nil {
 		return err
 	}
 
@@ -325,10 +325,13 @@ func (s *Service) bidiReadObjectMeta(ctx context.Context, bucket, object, genera
 	return meta, nil
 }
 
-// validateBidiReadCommonParams rejects an encryption algorithm the emulator
-// cannot honor. The official clients only ever send "AES256" (alongside the raw
-// CSEK) or leave it unset.
-func validateBidiReadCommonParams(cop *storagepb.CommonObjectRequestParams) error {
+// validateCommonObjectParams rejects an encryption algorithm the emulator
+// cannot honor and a malformed key/hash length. The official clients only ever
+// send "AES256" (alongside the raw CSEK) or leave it unset. J62: the unary
+// ReadObject/RewriteObject paths run the same validation as BidiReadObject so a
+// malformed CommonObjectRequestParams is rejected up front rather than being
+// silently treated as "no key" (or skipped entirely on a zero-length read).
+func validateCommonObjectParams(cop *storagepb.CommonObjectRequestParams) error {
 	if cop == nil {
 		return nil
 	}
