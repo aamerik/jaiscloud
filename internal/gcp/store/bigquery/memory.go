@@ -45,6 +45,12 @@ func (s *MemoryStore) CreateDataset(_ context.Context, projectID string, d Datas
 	if _, ok := s.datasets[key]; ok {
 		return ErrAlreadyExists
 	}
+	if d.CreateTime.IsZero() {
+		d.CreateTime = clock.Now()
+	}
+	if d.UpdateTime.IsZero() {
+		d.UpdateTime = d.CreateTime
+	}
 	d.ProjectID = projectID
 	s.datasets[key] = d
 	return nil
@@ -133,6 +139,12 @@ func (s *MemoryStore) CreateTable(_ context.Context, projectID, datasetID string
 	if _, ok := s.tables[key]; ok {
 		return ErrAlreadyExists
 	}
+	if t.CreateTime.IsZero() {
+		t.CreateTime = clock.Now()
+	}
+	if t.UpdateTime.IsZero() {
+		t.UpdateTime = t.CreateTime
+	}
 	t.ProjectID = projectID
 	t.DatasetID = datasetID
 	s.tables[key] = t
@@ -214,6 +226,9 @@ func (s *MemoryStore) CreateJob(_ context.Context, projectID string, j Job) erro
 	if _, ok := s.jobs[key]; ok {
 		return ErrAlreadyExists
 	}
+	if j.CreateTime.IsZero() {
+		j.CreateTime = clock.Now()
+	}
 	j.ProjectID = projectID
 	s.jobs[key] = j
 	return nil
@@ -289,6 +304,9 @@ func (s *MemoryStore) InsertRows(_ context.Context, projectID, datasetID, tableI
 	}
 	s.rows[key] = existing
 	t.NumRows += int64(added)
+	if added > 0 {
+		t.UpdateTime = clock.Now().UTC()
+	}
 	s.tables[key] = t
 	return dups, nil
 }
@@ -311,6 +329,7 @@ func (s *MemoryStore) ReplaceRows(_ context.Context, projectID, datasetID, table
 	}
 	s.rows[key] = stored
 	t.NumRows = int64(len(stored))
+	t.UpdateTime = clock.Now().UTC()
 	s.tables[key] = t
 	s.dedup.forget(key)
 	return nil
