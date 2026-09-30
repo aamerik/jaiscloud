@@ -94,6 +94,12 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 	if err := validateVirtualClusterConfig(in.VirtualClusterConfig); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
+	if err := validateMetastoreConfigShape(in); err != nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, err
+	}
+	if err := s.validateClusterMetastore(ctx, project, region, in); err != nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, err
+	}
 	now := clock.Now().UTC()
 	c := dpstore.Cluster{
 		ProjectID:            project,
@@ -175,10 +181,19 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 			return dpstore.Cluster{}, dpstore.Operation{}, err
 		}
 	}
+	if err := validateMetastoreConfigShape(in); err != nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, err
+	}
 	// Settle any pending create/update before applying this one, so the update
 	// starts from a stable state and its operation can reach a target.
-	if _, err := s.advanceCluster(ctx, project, region, name); err != nil {
+	current, err := s.advanceCluster(ctx, project, region, name)
+	if err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
+	}
+	// Validate the attachment of the cluster this update will actually produce
+	// (the effective merged config under the mask), not the raw request body.
+	if err := s.validateClusterMetastoreUpdate(ctx, project, region, current, in, mask); err != nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
 	var transitioned bool
 	var prev dpstore.ClusterStatus

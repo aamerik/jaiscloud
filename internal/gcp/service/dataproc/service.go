@@ -105,6 +105,16 @@ type Service struct {
 	// in main.go, so the core never imports provider/storage.
 	blobSink BlobSink
 
+	// metastoreResolver validates a cluster's Dataproc Metastore attachment and
+	// formats its thrift endpoint. Satisfied by the Metastore core and wired in
+	// main.go, so the core never imports service/metastore. Nil leaves the
+	// attachment stored/echoed but unvalidated and not injected into jobs.
+	metastoreResolver MetastoreResolver
+	// hmsEndpointOverride, when set, replaces the synthesized per-service
+	// endpoint with a reachable Hive Metastore address (from
+	// JAISCLOUD_DATAPROC_HMS_ENDPOINT). See WithHMSEndpointOverride.
+	hmsEndpointOverride string
+
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
