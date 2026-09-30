@@ -54,7 +54,7 @@ rather than a raw `ga` ratio.
 | --- | --- | --- | --- |
 | 🟢 **Green** | `ga` cells, no `preview` | **Yes** — for data-plane services; shape only for metadata services | Build the GCP adapter and unit/CI-test it against the emulator. |
 | 🟡 **Yellow** | only `limited` cells (or a large `limited` share) | **Shape only** | Control-plane/IaC metadata works; data-plane and authorization behaviour is not modelled. Gate on a real-GCP smoke test. |
-| 🔴 **Red** | any `preview` cell | **No** | No engine/logic behind it (e.g. BigQuery SQL). Local green would be meaningless. |
+| 🔴 **Red** | any `preview` cell | **No** | No engine/logic behind it (e.g. BigLake Iceberg). Local green would be meaningless. |
 
 > `ga` means *supported and wire-conformant*, not *behaves like real GCP*. Read §5
 > (behavioural depth) alongside the colour — a Green service can still be metadata-only.
@@ -68,12 +68,12 @@ of writing:
 
 | Layer | Cells | `ga` | `limited` | `preview` | `unsupported` | `ga` share |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 808 | 573 | 97 | 37 | 101 | 71% |
+| **Overall** | 808 | 573 | 117 | 14 | 104 | 71% |
 | **gRPC** (official clients) | 379 | 276 | 11 | 0 | 92 | 73% |
-| **REST** (Discovery-backed) | 429 | 297 | 86 | 37 | 9 | 69% |
+| **REST** (Discovery-backed) | 429 | 297 | 106 | 14 | 12 | 69% |
 
 - gRPC-only services (no REST transport): **Firestore Admin, Operations (long-running)**.
-- gRPC split = 276 `ga` + 11 `limited` + 92 `unsupported` = 379. REST split = 297 + 86 + 37 + 9 = 429.
+- gRPC split = 276 `ga` + 11 `limited` + 92 `unsupported` = 379. REST split = 297 + 106 + 14 + 12 = 429.
   Overall = 379 + 429 = 808.
 
 **How to refresh.** The matrix is generated, not hand-edited. Run
@@ -115,14 +115,14 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `cloudsql` | rest | 0/24 | 🟡 | Metadata only | Metadata only | No SQL engine or data plane. |
 | `clouddns` | rest | 0/16 | 🟡 | Metadata only | Metadata only | No authoritative DNS server. |
 | `memorystore` | rest | 0/8 | 🟡 | Metadata only | Metadata only | No Redis data plane. |
-| `bigquery` | rest | 0/23 | 🔴 | None | No | No SQL engine; `jobs.query` evaluates nothing. |
+| `bigquery` | rest | 0/23 | 🟡 | Shape only | Shape only | A documented Standard SQL subset (`SELECT` + DDL/DML) runs on an in-process pure-Go SQLite engine in both memory and `--dsn` modes; `routines`/`models`/`rowAccessPolicies` are `501` stubs and the full GoogleSQL surface is not modelled. |
 | `iceberg` | rest | 0/14 | 🔴 | None | No | BigLake Iceberg REST catalog; `preview`. |
 
 Tier groups: **Green (19)** `dataproc`, `datastore`, `eventarc`, `firestore`,
 `firestoreadmin`, `iam`, `kms`, `logging`, `managedkafka`, `metastore`, `monitoring`,
 `operations`, `pubsub`, `resourcemanager`, `secretmanager`, `serviceusage`, `storage`,
-`workflowexecutions`, `workflows`. **Yellow (5)** `clouddns`,
-`cloudsql`, `compute`, `functions`, `memorystore`. **Red (2)** `bigquery`, `iceberg`.
+`workflowexecutions`, `workflows`. **Yellow (6)** `bigquery`, `clouddns`,
+`cloudsql`, `compute`, `functions`, `memorystore`. **Red (1)** `iceberg`.
 
 ---
 
@@ -134,9 +134,9 @@ behind a wire-conformant API.
 | Depth | Services | What you can actually rely on locally |
 | --- | --- | --- |
 | **Full** | `pubsub`, `storage`, `kms`, `secretmanager`, `firestore`, `datastore`, `monitoring`, `logging` | Data-plane operations and most semantics, gated against captured real-GCP responses. |
-| **Shape only** (wire-conformant, thin behaviour) | `iam` (authz not enforced), `resourcemanager` (v1 REST + v3 gRPC over one core; projects synthesized; authz not enforced; IAM policy is metadata), `serviceusage` (no real API gating), `eventarc` (Cloud Functions-only delivery), `firestoreadmin` (composite-index CRUD only), `managedkafka` (no broker), `metastore` (control plane shape only; the Hive Thrift plane serves databases/tables/partitions/locks plus Hive-3.x `get_table_meta`/`alter_table_with_cascade`, the identity RPC `set_ugi`, and the request-struct reads `get_table_req`/`get_table_objects_by_name_req`; niche partition methods unsupported), `operations` (LROs synchronous), `workflows` (LROs synchronous), `workflowexecutions` (LROs synchronous), `dataproc` (no real cluster locally unless an executor is wired), `functions` (no real container build; single revision) | Control-plane shape and metadata. Real behaviour must be tested on real GCP. |
+| **Shape only** (wire-conformant, thin behaviour) | `iam` (authz not enforced), `resourcemanager` (v1 REST + v3 gRPC over one core; projects synthesized; authz not enforced; IAM policy is metadata), `serviceusage` (no real API gating), `eventarc` (Cloud Functions-only delivery), `firestoreadmin` (composite-index CRUD only), `managedkafka` (no broker), `metastore` (control plane shape only; the Hive Thrift plane serves databases/tables/partitions/locks plus Hive-3.x `get_table_meta`/`alter_table_with_cascade`, the identity RPC `set_ugi`, and the request-struct reads `get_table_req`/`get_table_objects_by_name_req`; niche partition methods unsupported), `operations` (LROs synchronous), `workflows` (LROs synchronous), `workflowexecutions` (LROs synchronous), `dataproc` (no real cluster locally unless an executor is wired), `functions` (no real container build; single revision), `bigquery` (a documented Standard SQL subset — `SELECT` + DDL/DML — executes locally on an in-process SQLite engine; arrays/structs/`UNNEST`, scripting, wildcard tables and `INFORMATION_SCHEMA` fail loud, and the full GoogleSQL surface is not modelled) | Control-plane shape and metadata. Real behaviour must be tested on real GCP. |
 | **Metadata only** | `compute`, `cloudsql`, `clouddns`, `memorystore` | Resource records + `get`/`list`; nothing actually runs. |
-| **None (preview)** | `bigquery` (no SQL engine), `iceberg` | Nothing local counts as evidence. |
+| **None (preview)** | `iceberg` | Nothing local counts as evidence. |
 
 > **Rule of thumb:** build against **Full** services locally; treat **Shape only**,
 > **Metadata only**, and **None** as "the API shape is right, the behaviour is not
@@ -158,13 +158,13 @@ behind a wire-conformant API.
 | CloudWatch Logs / Metrics | **Cloud Logging / Monitoring** | 🟢 `ga` (Logging 31/54, Monitoring 48/48) | High; `TailLogEntries` is a bounded poll, sink routing is evaluated but not delivered, and the logging bucket/view/link/CMEK gRPC RPCs are `unsupported` stubs; `condition_threshold` + `condition_absent` evaluated. |
 | EventBridge | **Eventarc** | 🟢 `ga` (30/57) | Trigger CRUD; Pub/Sub-sourced `cloudFunction` triggers deliver to their function with a backing subscription dead-letter surface. |
 | Step Functions | **Workflows / Workflow Executions** | 🟢 `ga` (Workflows 11/12, Executions 8/8) | LROs complete synchronously. |
-| Athena / Redshift | **BigQuery** | 🔴 `preview` (0/23) | **None** — real GCP required. |
+| Athena / Redshift | **BigQuery** | 🟡 `limited` (0/23) | Shape only — a documented Standard SQL subset (`SELECT` + DDL/DML) executes locally; full GoogleSQL and real GCP semantics must be tested on real GCP. |
 | RDS | **Cloud SQL** | 🟡 `limited` (0/24) | Metadata only. |
 | EC2 | **Compute Engine** | 🟡 `limited` (0/33) | Metadata only. |
 | ElastiCache | **Memorystore** | 🟡 `limited` (0/8) | Metadata only. |
 | Route 53 | **Cloud DNS** | 🟡 `limited` (0/16) | Metadata only. |
 
-*(The last five rows — BigQuery, Cloud SQL, Compute, Memorystore, Cloud DNS — are the
+*(The last four rows — Cloud SQL, Compute, Memorystore, Cloud DNS — are the
 ones where AWS parity cannot be validated locally at all; budget real-GCP testing for
 them up front.)*
 
@@ -183,8 +183,12 @@ evidence for any of them.
       locally and may fail against real, eventually-consistent GCP.
 - [ ] **Metadata-only services.** `compute`, `cloudsql`, `clouddns`, `memorystore` have
       no control/data plane locally — only resource records. Test the real data plane.
-- [ ] **BigQuery.** No SQL engine ships locally; `jobs.query` evaluates nothing. All
-      query behaviour must be tested against real BigQuery.
+- [ ] **BigQuery.** Only the documented Standard SQL subset executes locally — `SELECT`
+      plus DDL/DML on an in-process SQLite engine. `ARRAY`/`STRUCT`/`UNNEST`, `GEOGRAPHY`,
+      wildcard/`TABLE_SUFFIX` tables, `INFORMATION_SCHEMA`, scripting, `MERGE`, and legacy SQL
+      fail loud (`400 invalidQuery`), and DDL/DML job timing / result paging / `getQueryResults`
+      snapshot semantics are simplified. Full GoogleSQL behaviour must be tested against real
+      BigQuery.
 - [ ] **Cloud Functions v2 build.** v2 request/response *shapes* are served, runtime resolution
       works (`/v2/.../runtimes`), `gcloud functions deploy --gen2` runs end-to-end
       (`generateUploadUrl` → GCS-backed upload → create → poll), and source referenced by a GCS

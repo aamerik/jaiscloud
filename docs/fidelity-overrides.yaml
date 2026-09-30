@@ -13,8 +13,8 @@
 # Applied to every operation of a service unless overridden per-operation.
 defaults:
   bigquery:
-    state: preview
-    reason: "no SQL engine; metadata + stored rows only"
+    state: limited
+    reason: "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
   cloudsql:
     state: limited
     reason: "metadata-only over ResourceStore (no control plane)"
@@ -527,3 +527,19 @@ operations:
     operation: CopyLogEntries
     state: unsupported
     reason: "cross-project log copy is not modelled; explicit Unimplemented stub"
+
+  # BigQuery routines/models/rowAccessPolicies are deliberate 501 stubs (the
+  # SQL engine covers datasets/tables/jobs/rows); the rest of the service is
+  # graded `limited` by the bigquery default override above.
+  - service: bigquery
+    operation: BigQuery.Routines
+    state: unsupported
+    reason: "dataset routines are not modelled; explicit Unimplemented (501) stub"
+  - service: bigquery
+    operation: BigQuery.Models
+    state: unsupported
+    reason: "models are not modelled; explicit Unimplemented (501) stub"
+  - service: bigquery
+    operation: BigQuery.RowAccessPolicies
+    state: unsupported
+    reason: "row access policies are not modelled; explicit Unimplemented (501) stub"

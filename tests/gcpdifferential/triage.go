@@ -73,16 +73,14 @@ var triageRules = []TriageRule{
 		Reason:   "human-readable error prose only; HTTP status, error code and envelope shape match real GCP",
 	},
 
-	// ── BigQuery: declared preview, no SQL engine ───────────────────────────
-	// Every BigQuery cell is `preview` with reason "no SQL engine; metadata +
-	// stored rows only" (docs/fidelity-overrides.yaml). jobs.query by contract
-	// does not evaluate SQL, so rows/schema and per-job statistics are absent
-	// by design and the emulator is not claiming to produce them.
-	{
-		Service: "bigquery",
-		Op:      "query",
-		Reason:  "BigQuery is declared `preview` (no SQL engine; metadata + stored rows only); jobs.query by contract does not evaluate SQL, so rows/schema and per-job statistics are absent by design",
-	},
+	// ── BigQuery executed SQL: job statistics / timing ─────────────────────
+	// jobs.query now evaluates the documented Standard SQL subset and its
+	// executed rows/schema/statementType match real GCP (BQ1/BQ2). The
+	// remaining differences are the output-only job-statistics/timing fields
+	// the emulator does not synthesize; they are additive metadata. Each is
+	// accepted by its own Location-scoped rule (see the init below) rather than
+	// by one blanket op rule, so a regression in the executed result itself
+	// (rows/schema/statementType/totalRows) still surfaces as an open bug.
 	// The modern google.rpc error envelope carries code+message; the legacy
 	// errors[] array is per-generation shape variance, modeled as acceptable by
 	// the wire-conformance harness (tests/gcpconformance/allowlist.go). The
@@ -190,6 +188,37 @@ var triageRules = []TriageRule{
 		Location: "primary.protectionLevel",
 		Reason:   "protection level is SOFTWARE (the default) and the same key's versionTemplate.protectionLevel already returns it, so absence loses no information",
 	},
+}
+
+// bigQueryQueryStatFields are the output-only job-statistics/timing members of a
+// jobs.query response that the emulator does not synthesize. jobs.query now
+// evaluates the documented Standard SQL subset, and its executed rows/schema/
+// statementType match real GCP, so these omissions are additive metadata. They
+// are scoped by Location (rather than one blanket bigquery/query rule) so a
+// regression in the executed result itself — rows, schema, statementType or
+// totalRows — still surfaces as an open divergence.
+var bigQueryQueryStatFields = []string{
+	"response.cacheHit",
+	"response.creationTime",
+	"response.endTime",
+	"response.jobCreationReason",
+	"response.pageRowCount",
+	"response.queryId",
+	"response.startTime",
+	"response.totalBytesBilled",
+	"response.totalBytesProcessed",
+}
+
+func init() {
+	for _, loc := range bigQueryQueryStatFields {
+		triageRules = append(triageRules, TriageRule{
+			Service:  "bigquery",
+			Op:       "query",
+			Kind:     "missing_field",
+			Location: loc,
+			Reason:   "output-only job-statistics/timing field the emulator does not synthesize; executed rows/schema/statementType match real GCP",
+		})
+	}
 }
 
 // matchRule returns the first rule in rules matching d, or nil.

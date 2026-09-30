@@ -178,7 +178,13 @@ func Scenarios(suffix string) []Scenario {
 	)
 
 	// ─── BigQuery ─────────────────────────────────────────────────────────────
+	// Executed-SQL coverage: the emulator evaluates a bounded Standard SQL
+	// subset (BQ1/BQ2), so the wire harness exercises SELECT, DDL (CREATE TABLE
+	// AS SELECT), DML (INSERT) and the fail-loud error path alongside the
+	// metadata + insertAll surface. The job ids captured from the jobs.query
+	// responses feed getQueryResults and jobs.get.
 	bqBase := "/bigquery/v2/projects/" + p
+	bqTbl2 := "conf_tbl2_" + suffix
 	sc = append(sc,
 		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets",
 			Body: fmt.Sprintf(`{"datasetReference":{"projectId":%q,"datasetId":%q}}`, p, ds)},
@@ -191,9 +197,30 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/insertAll",
 			Body: `{"rows":[{"insertId":"1","json":{"id":"1"}}]}`},
 		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/data"},
+		// SELECT over the stored row; capture the job id for the read-back calls.
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/queries",
+			Body: fmt.Sprintf("{\"query\":\"SELECT id FROM `%s.%s.%s` WHERE id = 1\",\"useLegacySql\":false}", p, ds, tbl),
+			Save: map[string]string{"bqSelectJob": "jobReference.jobId"}},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/queries/${bqSelectJob}"},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/jobs/${bqSelectJob}"},
+		// DDL: CREATE TABLE AS SELECT.
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/queries",
+			Body: fmt.Sprintf("{\"query\":\"CREATE TABLE `%s.%s.%s` AS SELECT id FROM `%s.%s.%s`\",\"useLegacySql\":false}", p, ds, bqTbl2, p, ds, tbl),
+			Save: map[string]string{"bqDdlJob": "jobReference.jobId"}},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/queries/${bqDdlJob}"},
+		// DML: INSERT INTO the CTAS table, then read it back.
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/queries",
+			Body: fmt.Sprintf("{\"query\":\"INSERT INTO `%s.%s.%s` (id) VALUES (2)\",\"useLegacySql\":false}", p, ds, bqTbl2),
+			Save: map[string]string{"bqDmlJob": "jobReference.jobId"}},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/queries/${bqDmlJob}"},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/tables/" + bqTbl2 + "/data"},
 		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/queries", Body: `{"query":"SELECT 1"}`},
+		// Fail loud: a construct outside the frozen subset is a 400 invalidQuery.
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/queries",
+			Body: fmt.Sprintf("{\"query\":\"MERGE `%s.%s.%s` T USING `%s.%s.%s` S ON T.id = S.id\",\"useLegacySql\":false}", p, ds, tbl, p, ds, tbl)},
 		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/missing_" + suffix},
 		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl},
+		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + bqTbl2},
 		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds},
 	)
 

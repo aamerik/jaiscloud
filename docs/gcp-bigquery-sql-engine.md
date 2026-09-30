@@ -1,20 +1,24 @@
 # BigQuery SQL engine — decision record (BQ0)
 
-> **Status: DECIDED — Option A: pure-Go in-process SQLite (`modernc.org/sqlite`),
-> one engine in both memory and `--dsn` modes. No engine shipped yet.**
-> This record freezes the engine choice and the v1 dialect subset. Implementation
-> is BQ1–BQ4 (`plan_docs/gcp-bigquery-ga-wave-plan.md`).
+> **Status: IMPLEMENTED — Option A: pure-Go in-process SQLite
+> (`modernc.org/sqlite`), one engine in both memory and `--dsn` modes.**
+> This record freezes the engine choice and the v1 dialect subset. BQ1 (translator
+> + SELECT) and BQ2/BQ8 (DDL/DML + catalog sync + result encoding) shipped
+> (`internal/gcp/queryengine`, `internal/gcp/provider/bigquery`); BQ3 re-graded
+> the fidelity cells to `limited`, and BQ4 covers memory/`--dsn` parity, snapshots
+> and lakehouse scale (`plan_docs/gcp-bigquery-ga-wave-plan.md`).
 
 Date: 2026-09-29 · Backlog ID: **BQ0** · Branch: `spike/gcp-bigquery-sql-engine`
 
 ## 1. Problem
 
-BigQuery is the only `preview` GCP service in jaiscloud: all 23 cells are
+At BQ0, BigQuery was the only `preview` GCP service in jaiscloud: all 23 cells were
 "metadata + stored rows only, **no SQL engine**" (`docs/GA.md` §7,
-`docs/fidelity/fidelity-matrix.md`). `jobs.query` stores the query and returns
-`jobComplete=true` with an empty result (`internal/gcp/provider/bigquery/bigquery.go`),
-so any client that evaluates SQL locally gets a successful-looking wrong answer.
-`docs/GCP-TESTABILITY.md` §4 grades `bigquery` 🔴 *"Nothing local counts as evidence."*
+`docs/fidelity/fidelity-matrix.md`), and `jobs.query` stored the query and returned
+`jobComplete=true` with an empty result, so any client that evaluated SQL locally got a
+successful-looking wrong answer. `docs/GCP-TESTABILITY.md` §4 graded `bigquery` 🔴
+*"Nothing local counts as evidence."* **That gap is closed:** the engine below shipped in
+BQ1/BQ2 and BQ3 re-graded the cells to `limited` (20) + `unsupported` (3).
 
 Nothing else in the emulator consumes BigQuery (it is a leaf: no Logging sink
 delivery, no Dataflow, Spark wires only GCS), so this is a **client-fidelity
@@ -80,7 +84,10 @@ subset, plus the encoding to the Discovery result shape. Results:
 - `SELECT` / `WHERE` / `GROUP BY` / `HAVING` / `ORDER BY` / `LIMIT` / `OFFSET` /
   `DISTINCT`; `INNER`/`LEFT` joins; subqueries; `WITH` CTEs; `UNION ALL`.
 - Aggregates (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`) and window functions.
-- A bounded scalar/string/date function set mapped to SQLite equivalents.
+- A bounded string/math/null function set mapped to SQLite equivalents
+  (`LENGTH`, `UPPER`, `LOWER`, `SUBSTR`, `TRIM`, `LTRIM`, `RTRIM`, `REPLACE`,
+  `INSTR`, `ABS`, `ROUND`, `COALESCE`, `NULLIF`, `IFNULL`) — **no date/format
+  functions**.
 - `COUNT(*)` and typed column references.
 
 **Emulated** (translated, must not silently diverge):
@@ -88,15 +95,17 @@ subset, plus the encoding to the Discovery result shape. Results:
 - BigQuery `/` → `CAST(… AS REAL)/CAST(… AS REAL)` (FLOAT64 division).
 - Backticked `` `project.dataset.table` `` / `` `dataset.table` `` → hydrated
   temp tables (`defaultDataset` supplies the project/dataset when unqualified).
-- `QUALIFY` → subquery + `WHERE` (or fail loud if not implemented).
-- `SAFE.` functions → NULL-on-error patterns where feasible.
+- Bare-column and expression output types inferred from the query plan
+  (`INT64`/`FLOAT64`/`BOOL`), accepting both the engine-canonical names and the
+  Discovery/`TableFieldSchema` aliases (`INTEGER`/`FLOAT`/`BOOLEAN`).
 
 **Fail loud (`InvalidArgument` / 400 `invalidQuery`)** — never return wrong rows:
 
 - `UNNEST` / `ARRAY` / `STRUCT` (beyond storage round-trip), `GEOGRAPHY`.
 - Wildcard tables / `TABLE_SUFFIX`, `INFORMATION_SCHEMA`.
-- Scripting, stored procedures, `MERGE`, DDL/DML beyond the accepted set,
-  legacy SQL.
+- Scripting, stored procedures, `MERGE`, `QUALIFY`, `SAFE.` functions, date /
+  format functions, query parameters and raw/bytes/triple-quoted string
+  literals, DDL/DML beyond the accepted set, legacy SQL (recorded as BQ7).
 - Any construct the translator cannot map.
 
 ## 6. Non-goals (recorded so they are not re-litigated)

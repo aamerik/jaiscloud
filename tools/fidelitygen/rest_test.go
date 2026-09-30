@@ -173,16 +173,44 @@ func TestRestFactsOverrideWiring(t *testing.T) {
 func TestRestFactsFindingAttribution(t *testing.T) {
 	ops := conf.Enumerate()
 	docs := loadDocsForTest(t)
-	report := loadReportForTest(t)
+
+	// A synthetic report keeps this attribution check deterministic and
+	// independent of the recorded transcript (the executed-SQL work removed the
+	// last real bigquery tabledata.list divergence): one finding keyed to the
+	// tabledata.list Discovery method, one keyed to an unknown method that must
+	// fall back to the whole service.
+	report := &conf.Report{Divergences: []conf.Divergence{
+		{
+			Service: "bigquery", Method: "bigquery.tabledata.list",
+			Kind: "missing_field", Path: "response.startIndex", Severity: "low",
+			Expected: "\"0\"", Actual: "absent",
+		},
+		{
+			Service: "bigquery", Method: "bigquery.nonexistent.method",
+			Kind: "extra_field", Path: "response.x", Severity: "info",
+			Expected: "absent", Actual: "1",
+		},
+	}}
 	facts := RestFacts(ops, docs, report, loadOverridesForTest(t, ops))
 
-	// report.json has bigquery.tabledata.list findings -> BigQuery.ListRows.
+	// The tabledata.list finding lands on BigQuery.ListRows (the unknown-method
+	// finding also falls back to the whole service, so ListRows carries both).
 	listRows := findFact(t, facts, "BigQuery.ListRows")
-	if len(listRows.Findings) == 0 {
-		t.Errorf("BigQuery.ListRows: no findings, want the tabledata.list divergences")
+	foundSpecific := false
+	for _, f := range listRows.Findings {
+		if f.Kind == "missing_field" && f.Path == "response.startIndex" {
+			foundSpecific = true
+		}
+	}
+	if !foundSpecific {
+		t.Errorf("BigQuery.ListRows: findings = %+v, want the tabledata.list divergence", listRows.Findings)
 	}
 	if got := findFact(t, facts, "Storage.ObjectsGet"); len(got.Findings) != 0 {
 		t.Errorf("Storage.ObjectsGet: unexpected findings %+v", got.Findings)
+	}
+	// The unknown-method finding falls back to the whole bigquery service.
+	if got := findFact(t, facts, "BigQuery.Query"); len(got.Findings) != 1 {
+		t.Errorf("BigQuery.Query: findings = %+v, want the service-wide fallback", got.Findings)
 	}
 
 	// Report attribution stats so service-wide fallbacks stay visible.

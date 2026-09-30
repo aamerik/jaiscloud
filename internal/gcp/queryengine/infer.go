@@ -208,7 +208,7 @@ func inferFunctionType(expr []token, fields map[string]Field) string {
 	case "PERCENT_RANK", "CUME_DIST", "AVG":
 		return "FLOAT64"
 	case "SUM":
-		if argType(0) == "FLOAT64" || argType(0) == "NUMERIC" {
+		if isFloatType(argType(0)) {
 			return "FLOAT64"
 		}
 		return "INT64"
@@ -266,11 +266,25 @@ func numericExprType(expr []token, fields map[string]Field) string {
 				t = columnType(tk.raw, fields)
 			}
 		}
-		if t == "FLOAT64" || t == "NUMERIC" {
+		if isFloatType(t) {
 			return "FLOAT64"
 		}
 	}
 	return "INT64"
+}
+
+// isFloatType reports whether a BigQuery type name is floating point. Field
+// types may arrive in either the engine-canonical form (FLOAT64) or the
+// Discovery/TableFieldSchema form (FLOAT) when a table schema is read back from
+// the store, so both must be recognized when promoting an arithmetic
+// expression.
+func isFloatType(t string) bool {
+	switch strings.ToUpper(t) {
+	case "FLOAT64", "FLOAT", "REAL", "DOUBLE",
+		"NUMERIC", "BIGNUMERIC", "DECIMAL", "BIGDECIMAL":
+		return true
+	}
+	return false
 }
 
 // columnType resolves a (possibly qualified) column name against the hydrated
