@@ -237,11 +237,11 @@ func insertObjectGeneration(ctx context.Context, tx pgx.Tx, meta ObjectMeta) err
 	timeDeleted := nullableTime(meta.TimeDeleted)
 	_, err := tx.Exec(ctx, `
 		INSERT INTO jc_gcs_objects
-		  (bucket, name, generation, metageneration, content_type, size, md5_hash, crc32c, storage_class, metadata, time_created, updated, retain_until, retention_mode, temporary_hold, event_based_hold, time_deleted, kms_key_name, wrapped_dek, cse_key_sha256, component_count)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+		  (bucket, name, generation, metageneration, content_type, size, md5_hash, crc32c, storage_class, metadata, time_created, updated, retain_until, retention_mode, temporary_hold, event_based_hold, time_deleted, kms_key_name, wrapped_dek, cse_key_sha256, component_count, content_encoding)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
 	`, meta.Bucket, meta.Name, meta.Generation, meta.Metageneration, meta.ContentType, meta.Size, meta.MD5Hash, meta.CRC32C,
 		meta.StorageClass, json.RawMessage(metaRaw), meta.TimeCreated, meta.Updated, retainUntil, retentionMode,
-		meta.TemporaryHold, meta.EventBasedHold, timeDeleted, meta.KmsKeyName, meta.WrappedDEK, meta.CSEKeySHA256, meta.ComponentCount)
+		meta.TemporaryHold, meta.EventBasedHold, timeDeleted, meta.KmsKeyName, meta.WrappedDEK, meta.CSEKeySHA256, meta.ComponentCount, meta.ContentEncoding)
 	if err != nil {
 		return err
 	}
@@ -249,7 +249,7 @@ func insertObjectGeneration(ctx context.Context, tx pgx.Tx, meta ObjectMeta) err
 }
 
 // objectCols is the shared SELECT column list for object rows.
-const objectCols = "bucket, name, generation, metageneration, content_type, size, md5_hash, crc32c, storage_class, metadata, time_created, updated, retain_until, retention_mode, temporary_hold, event_based_hold, time_deleted, kms_key_name, wrapped_dek, cse_key_sha256, component_count"
+const objectCols = "bucket, name, generation, metageneration, content_type, size, md5_hash, crc32c, storage_class, metadata, time_created, updated, retain_until, retention_mode, temporary_hold, event_based_hold, time_deleted, kms_key_name, wrapped_dek, cse_key_sha256, component_count, content_encoding"
 
 // scanObject scans the objectCols columns into an ObjectMeta.
 func scanObject(scan func(...any) error) (ObjectMeta, error) {
@@ -259,7 +259,7 @@ func scanObject(scan func(...any) error) (ObjectMeta, error) {
 	var retainUntil pgtype.Timestamptz
 	var timeDeleted pgtype.Timestamptz
 	err := scan(&m.Bucket, &m.Name, &m.Generation, &m.Metageneration, &m.ContentType, &m.Size, &m.MD5Hash, &m.CRC32C,
-		&m.StorageClass, &metaRaw, &m.TimeCreated, &m.Updated, &retainUntil, &retentionMode, &m.TemporaryHold, &m.EventBasedHold, &timeDeleted, &m.KmsKeyName, &m.WrappedDEK, &m.CSEKeySHA256, &m.ComponentCount)
+		&m.StorageClass, &metaRaw, &m.TimeCreated, &m.Updated, &retainUntil, &retentionMode, &m.TemporaryHold, &m.EventBasedHold, &timeDeleted, &m.KmsKeyName, &m.WrappedDEK, &m.CSEKeySHA256, &m.ComponentCount, &m.ContentEncoding)
 	if err != nil {
 		return ObjectMeta{}, err
 	}
@@ -415,11 +415,60 @@ func (s *PostgresObjectStore) UpdateObjectMetaChecked(ctx context.Context, bucke
 			UPDATE jc_gcs_objects
 			SET metageneration=$4, content_type=$5, storage_class=$6, metadata=$7,
 			    updated=$8, temporary_hold=$9, event_based_hold=$10,
-			    retain_until=$11, retention_mode=$12
+			    retain_until=$11, retention_mode=$12, content_encoding=$13
 			WHERE bucket=$1 AND name=$2 AND generation=$3
 		`, bucket, name, current.Generation, meta.Metageneration, meta.ContentType,
 			meta.StorageClass, json.RawMessage(metaRaw), meta.Updated, meta.TemporaryHold,
-			meta.EventBasedHold, retainUntil, retentionMode); err != nil {
+			meta.EventBasedHold, retainUntil, retentionMode, meta.ContentEncoding); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	})
+}
+
+// UpdateObjectGenerationMetaChecked updates the mutable metadata of one specific
+// generation in place (live or non-current), mirroring UpdateObjectMetaChecked
+// but targeting the revision named by generation. The selected row is locked FOR
+// UPDATE and the precondition validated against it inside the same Serializable
+// transaction. Only the mutable metadata columns change; the generation id,
+// creation time, size/checksums, and encryption material are left untouched.
+func (s *PostgresObjectStore) UpdateObjectGenerationMetaChecked(ctx context.Context, bucket, name, generation string, meta ObjectMeta, precondition *Precondition) error {
+	return retrySerializableErr(ctx, func() error {
+		meta.Bucket = bucket
+		meta.Name = name
+		meta.Generation = generation
+		normalizeMeta(&meta)
+		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+		row := tx.QueryRow(ctx, `
+			SELECT `+objectCols+`
+			FROM jc_gcs_objects WHERE bucket=$1 AND name=$2 AND generation=$3
+			FOR UPDATE
+		`, bucket, name, generation)
+		target, err := scanObject(row.Scan)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNoSuchObject
+		}
+		if err != nil {
+			return err
+		}
+		if !objectPreconditionMatches(target, true, precondition) {
+			return ErrPreconditionFailed
+		}
+		metaRaw, _ := json.Marshal(meta.Metadata)
+		retainUntil, retentionMode := retentionArgs(&meta)
+		if _, err := tx.Exec(ctx, `
+			UPDATE jc_gcs_objects
+			SET metageneration=$4, content_type=$5, storage_class=$6, metadata=$7,
+			    updated=$8, temporary_hold=$9, event_based_hold=$10,
+			    retain_until=$11, retention_mode=$12, content_encoding=$13
+			WHERE bucket=$1 AND name=$2 AND generation=$3
+		`, bucket, name, generation, meta.Metageneration, meta.ContentType,
+			meta.StorageClass, json.RawMessage(metaRaw), meta.Updated, meta.TemporaryHold,
+			meta.EventBasedHold, retainUntil, retentionMode, meta.ContentEncoding); err != nil {
 			return err
 		}
 		return tx.Commit(ctx)

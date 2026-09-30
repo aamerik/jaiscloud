@@ -266,6 +266,51 @@ func (s *MemoryObjectStore) UpdateObjectMetaChecked(_ context.Context, bucket, n
 	// struct would zero the wrapped DEK and make a CMEK object unreadable.
 	cur := gens[idx]
 	cur.ContentType = meta.ContentType
+	cur.ContentEncoding = meta.ContentEncoding
+	cur.StorageClass = meta.StorageClass
+	cur.Metadata = meta.Metadata
+	cur.TemporaryHold = meta.TemporaryHold
+	cur.EventBasedHold = meta.EventBasedHold
+	cur.Retention = meta.Retention
+	cur.Metageneration = meta.Metageneration
+	cur.Updated = meta.Updated
+	gens[idx] = cur
+	s.objects[bucket][name] = gens
+	return nil
+}
+
+// UpdateObjectGenerationMetaChecked updates one specific generation's mutable
+// metadata in place, mirroring UpdateObjectMetaChecked but targeting the
+// revision named by generation (live or non-current). The selected generation's
+// immutable fields are preserved; the precondition is validated against that
+// generation under the same write lock.
+func (s *MemoryObjectStore) UpdateObjectGenerationMetaChecked(_ context.Context, bucket, name, generation string, meta ObjectMeta, precondition *Precondition) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	gens, ok := s.objects[bucket][name]
+	if !ok {
+		return ErrNoSuchObject
+	}
+	idx := -1
+	for i, g := range gens {
+		if g.Generation == generation {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return ErrNoSuchObject
+	}
+	if !objectPreconditionMatches(gens[idx], true, precondition) {
+		return ErrPreconditionFailed
+	}
+	meta.Bucket = bucket
+	meta.Name = name
+	meta.Generation = generation
+	normalizeMeta(&meta)
+	cur := gens[idx]
+	cur.ContentType = meta.ContentType
+	cur.ContentEncoding = meta.ContentEncoding
 	cur.StorageClass = meta.StorageClass
 	cur.Metadata = meta.Metadata
 	cur.TemporaryHold = meta.TemporaryHold

@@ -151,15 +151,16 @@ type completedSession struct {
 
 // uploadSession holds the state of an in-progress resumable upload.
 type uploadSession struct {
-	Bucket      string
-	Object      string
-	ContentType string
-	Metadata    map[string]string // custom object metadata captured at session start
-	buf         []byte            // in-memory bytes up to resumableSpillThreshold
-	tmpPath     string            // spill file path once threshold is exceeded
-	tmpFile     *os.File          // open handle for appending spilled bytes
-	length      int64             // total accumulated bytes across chunks
-	lastAccess  time.Time         // last chunk/status-query time, for the TTL sweep
+	Bucket          string
+	Object          string
+	ContentType     string
+	ContentEncoding string
+	Metadata        map[string]string // custom object metadata captured at session start
+	buf             []byte            // in-memory bytes up to resumableSpillThreshold
+	tmpPath         string            // spill file path once threshold is exceeded
+	tmpFile         *os.File          // open handle for appending spilled bytes
+	length          int64             // total accumulated bytes across chunks
+	lastAccess      time.Time         // last chunk/status-query time, for the TTL sweep
 }
 
 // New returns a GCS provider backed by the dedicated object store (buckets +
@@ -366,23 +367,26 @@ type bucketMeta struct {
 }
 
 type objectMeta struct {
-	Kind           string            `json:"kind"`
-	ID             string            `json:"id,omitempty"`
-	Name           string            `json:"name"`
-	Bucket         string            `json:"bucket"`
-	Size           string            `json:"size,omitempty"`
-	ContentType    string            `json:"contentType,omitempty"`
-	Md5Hash        string            `json:"md5Hash,omitempty"`
-	Crc32c         string            `json:"crc32c,omitempty"`
-	Etag           string            `json:"etag,omitempty"`
-	SelfLink       string            `json:"selfLink,omitempty"`
-	MediaLink      string            `json:"mediaLink,omitempty"`
-	Metadata       map[string]string `json:"metadata,omitempty"`
-	Generation     string            `json:"generation,omitempty"`
-	Metageneration string            `json:"metageneration,omitempty"`
-	StorageClass   string            `json:"storageClass,omitempty"`
-	TimeCreated    string            `json:"timeCreated,omitempty"`
-	Updated        string            `json:"updated,omitempty"`
+	Kind        string `json:"kind"`
+	ID          string `json:"id,omitempty"`
+	Name        string `json:"name"`
+	Bucket      string `json:"bucket"`
+	Size        string `json:"size,omitempty"`
+	ContentType string `json:"contentType,omitempty"`
+	// ContentEncoding is the object's own content encoding (e.g. "gzip"),
+	// distinct from HTTP transport encoding (GCS Object.contentEncoding).
+	ContentEncoding string            `json:"contentEncoding,omitempty"`
+	Md5Hash         string            `json:"md5Hash,omitempty"`
+	Crc32c          string            `json:"crc32c,omitempty"`
+	Etag            string            `json:"etag,omitempty"`
+	SelfLink        string            `json:"selfLink,omitempty"`
+	MediaLink       string            `json:"mediaLink,omitempty"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
+	Generation      string            `json:"generation,omitempty"`
+	Metageneration  string            `json:"metageneration,omitempty"`
+	StorageClass    string            `json:"storageClass,omitempty"`
+	TimeCreated     string            `json:"timeCreated,omitempty"`
+	Updated         string            `json:"updated,omitempty"`
 	// TimeFinalized is when the object's content was finalized (upload
 	// complete). TimeStorageClassUpdated is when the storage class was last
 	// set. The emulator does not track storage-class transitions separately,
@@ -442,22 +446,23 @@ func toStoreObject(o objectMeta) gcs.ObjectMeta {
 	up, _ := time.Parse(time.RFC3339Nano, o.Updated)
 	size, _ := strconv.ParseInt(o.Size, 10, 64)
 	m := gcs.ObjectMeta{
-		Bucket:         o.Bucket,
-		Name:           o.Name,
-		Generation:     o.Generation,
-		Metageneration: o.Metageneration,
-		ContentType:    o.ContentType,
-		Size:           size,
-		MD5Hash:        o.Md5Hash,
-		CRC32C:         o.Crc32c,
-		StorageClass:   o.StorageClass,
-		Metadata:       o.Metadata,
-		ComponentCount: o.ComponentCount,
-		TimeCreated:    tc,
-		Updated:        up,
-		TemporaryHold:  o.TemporaryHold,
-		EventBasedHold: o.EventBasedHold,
-		KmsKeyName:     o.KmsKeyName,
+		Bucket:          o.Bucket,
+		Name:            o.Name,
+		Generation:      o.Generation,
+		Metageneration:  o.Metageneration,
+		ContentType:     o.ContentType,
+		ContentEncoding: o.ContentEncoding,
+		Size:            size,
+		MD5Hash:         o.Md5Hash,
+		CRC32C:          o.Crc32c,
+		StorageClass:    o.StorageClass,
+		Metadata:        o.Metadata,
+		ComponentCount:  o.ComponentCount,
+		TimeCreated:     tc,
+		Updated:         up,
+		TemporaryHold:   o.TemporaryHold,
+		EventBasedHold:  o.EventBasedHold,
+		KmsKeyName:      o.KmsKeyName,
 	}
 	if o.CustomerEncryption != nil {
 		m.CSEKeySHA256 = o.CustomerEncryption.KeySha256
@@ -500,21 +505,22 @@ func bucketSelfLink(base, name string) string {
 // re-deriving the derived fields (kind/id/etag/selfLink/mediaLink).
 func fromStoreObject(nr *model.NormalizedRequest, m gcs.ObjectMeta) objectMeta {
 	o := objectMeta{
-		Kind:           "storage#object",
-		Name:           m.Name,
-		Bucket:         m.Bucket,
-		Size:           strconv.FormatInt(m.Size, 10),
-		ContentType:    m.ContentType,
-		Md5Hash:        m.MD5Hash,
-		Crc32c:         m.CRC32C,
-		Etag:           "CAE=",
-		Metadata:       m.Metadata,
-		Generation:     m.Generation,
-		Metageneration: m.Metageneration,
-		StorageClass:   m.StorageClass,
-		ComponentCount: m.ComponentCount,
-		TemporaryHold:  m.TemporaryHold,
-		EventBasedHold: m.EventBasedHold,
+		Kind:            "storage#object",
+		Name:            m.Name,
+		Bucket:          m.Bucket,
+		Size:            strconv.FormatInt(m.Size, 10),
+		ContentType:     m.ContentType,
+		ContentEncoding: m.ContentEncoding,
+		Md5Hash:         m.MD5Hash,
+		Crc32c:          m.CRC32C,
+		Etag:            "CAE=",
+		Metadata:        m.Metadata,
+		Generation:      m.Generation,
+		Metageneration:  m.Metageneration,
+		StorageClass:    m.StorageClass,
+		ComponentCount:  m.ComponentCount,
+		TemporaryHold:   m.TemporaryHold,
+		EventBasedHold:  m.EventBasedHold,
 	}
 	if !m.TimeCreated.IsZero() {
 		o.TimeCreated = m.TimeCreated.Format(time.RFC3339Nano)
@@ -539,6 +545,16 @@ func fromStoreObject(nr *model.NormalizedRequest, m gcs.ObjectMeta) objectMeta {
 	}
 	if m.CSEKeySHA256 != "" {
 		o.CustomerEncryption = &customerEncryption{EncryptionAlgorithm: "AES256", KeySha256: m.CSEKeySHA256}
+		// J37: real GCS encrypts a CSEK object's md5Hash/crc32c with the
+		// customer-supplied key and withholds both until the matching key is
+		// supplied on the request. objectResponse/ObjectsList build their
+		// responses through here, so dropping them when the request carries no
+		// (or a mismatched) key reproduces that contract; a request that does
+		// carry the key still sees them.
+		if !csekKeyMatchesRequest(nr, m) {
+			o.Md5Hash = ""
+			o.Crc32c = ""
+		}
 	}
 	o.ID = m.Bucket + "/" + m.Name + "/" + m.Generation
 	base := baseURL(nr)
@@ -1296,19 +1312,20 @@ func notificationEventMatches(types []string, eventType string) bool {
 // storage#object resource for the object that changed.
 func objectEventData(m gcs.ObjectMeta) []byte {
 	o := objectMeta{
-		Kind:           "storage#object",
-		ID:             m.Bucket + "/" + m.Name + "/" + m.Generation,
-		Name:           m.Name,
-		Bucket:         m.Bucket,
-		Size:           strconv.FormatInt(m.Size, 10),
-		ContentType:    m.ContentType,
-		Md5Hash:        m.MD5Hash,
-		Crc32c:         m.CRC32C,
-		Etag:           "CAE=",
-		Metadata:       m.Metadata,
-		Generation:     m.Generation,
-		Metageneration: m.Metageneration,
-		StorageClass:   m.StorageClass,
+		Kind:            "storage#object",
+		ID:              m.Bucket + "/" + m.Name + "/" + m.Generation,
+		Name:            m.Name,
+		Bucket:          m.Bucket,
+		Size:            strconv.FormatInt(m.Size, 10),
+		ContentType:     m.ContentType,
+		ContentEncoding: m.ContentEncoding,
+		Md5Hash:         m.MD5Hash,
+		Crc32c:          m.CRC32C,
+		Etag:            "CAE=",
+		Metadata:        m.Metadata,
+		Generation:      m.Generation,
+		Metageneration:  m.Metageneration,
+		StorageClass:    m.StorageClass,
 	}
 	if !m.TimeCreated.IsZero() {
 		o.TimeCreated = m.TimeCreated.Format(time.RFC3339Nano)
@@ -1628,6 +1645,13 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
+	// Object.contentEncoding is writable metadata (JSON "contentEncoding" body
+	// field); the XML API PUT expresses it as the request's Content-Encoding
+	// header, captured by the codec as a param (J69).
+	contentEncoding, _ := nr.Params["contentEncoding"].(string)
+	if contentEncoding == "" && body != nil {
+		contentEncoding, _ = body["contentEncoding"].(string)
+	}
 
 	now := clock.Now()
 	generation := p.nextGen()
@@ -1655,16 +1679,17 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 	}
 
 	o := objectMeta{
-		Kind:           "storage#object",
-		Name:           object,
-		Bucket:         bucket,
-		ContentType:    contentType,
-		Generation:     generation,
-		Metageneration: "1",
-		StorageClass:   "STANDARD",
-		TimeCreated:    now.Format(time.RFC3339Nano),
-		Updated:        now.Format(time.RFC3339Nano),
-		Retention:      retention,
+		Kind:            "storage#object",
+		Name:            object,
+		Bucket:          bucket,
+		ContentType:     contentType,
+		ContentEncoding: contentEncoding,
+		Generation:      generation,
+		Metageneration:  "1",
+		StorageClass:    "STANDARD",
+		TimeCreated:     now.Format(time.RFC3339Nano),
+		Updated:         now.Format(time.RFC3339Nano),
+		Retention:       retention,
 	}
 	if retention != nil {
 		o.RetentionExpirationTime = retention.RetainUntilTime
@@ -1885,6 +1910,16 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 	if err := requireDownscope(nr, downscope.ReadObject, bucket, object); err != nil {
 		return nil, err
 	}
+	// Distinguish a missing bucket from a missing object so the XML API error
+	// mapper can pick NoSuchBucket vs NoSuchKey (the store folds both into
+	// ErrNoSuchObject for a bare object lookup).
+	if _, err := p.objects.GetBucket(ctx, bucket); err != nil {
+		if errors.Is(err, gcs.ErrNoSuchBucket) {
+			return nil, model.NewProviderError("NotFound", "bucket not found", 404).
+				WithData(map[string]any{"xmlCode": "NoSuchBucket"})
+		}
+		return nil, err
+	}
 	// Metadata first: metadata gone → 404; metadata present + blob absent → 404
 	// (a tombstoned/deleted version whose data was dropped, not corruption).
 	meta, err := p.getObjectForRead(ctx, bucket, object, nr.Params)
@@ -1912,6 +1947,11 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 	}
 	status := 200
 	headers := mediaHeaders(meta, isXMLAPI(nr))
+	if isXMLAPI(nr) {
+		if exp := p.lifecycleExpiration(ctx, bucket, meta); exp != "" {
+			headers["x-goog-expiration"] = exp
+		}
+	}
 	body := plain
 	// Honor HTTP Range requests (the gcs-connector uses them to fetch object
 	// footers and read large objects in chunks); otherwise the gcs-connector's
@@ -2038,6 +2078,14 @@ func mediaHeaders(m gcs.ObjectMeta, xmlAPI bool) map[string]string {
 	}
 	if m.StorageClass != "" {
 		h["x-goog-storage-class"] = m.StorageClass
+	}
+	// J69: the XML API download surfaces the object's own content encoding and,
+	// for composite objects, the component count, matching real GCS.
+	if m.ContentEncoding != "" {
+		h["x-goog-stored-content-encoding"] = m.ContentEncoding
+	}
+	if m.ComponentCount > 0 {
+		h["x-goog-component-count"] = strconv.FormatInt(m.ComponentCount, 10)
 	}
 	// The JSON API carries the constant object etag ("CAE="), shared with the
 	// object metadata resource. Real GCS XML API responses always carry a quoted
@@ -2510,6 +2558,10 @@ func (p *Provider) ObjectsRestore(ctx context.Context, nr *model.NormalizedReque
 			return nil, err
 		}
 	}
+	// J31: restoring a generation makes it live again, so real GCS publishes
+	// OBJECT_FINALIZE for the newly-restored object (the write-core finalize/
+	// archive/delete events did not cover the restore path).
+	p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_FINALIZE", meta, clock.Now(), nil)
 	return provider.OK(toMap(fromStoreObject(nr, meta))), nil
 }
 
@@ -2594,6 +2646,9 @@ func (p *Provider) ObjectsCompose(ctx context.Context, nr *model.NormalizedReque
 	if dest != nil {
 		if ct, _ := dest["contentType"].(string); ct != "" {
 			o.ContentType = ct
+		}
+		if ce, _ := dest["contentEncoding"].(string); ce != "" {
+			o.ContentEncoding = ce
 		}
 		if md, ok := dest["metadata"].(map[string]any); ok {
 			o.Metadata = make(map[string]string, len(md))
@@ -2710,6 +2765,28 @@ func resolveCSEK(params map[string]any, algKey, keyKey, shaKey string) ([]byte, 
 			"customer-supplied encryption key sha256 mismatch")
 	}
 	return key, expected, nil
+}
+
+// csekKeyMatchesRequest reports whether the incoming request supplied the
+// customer-supplied encryption key whose SHA-256 matches meta's stored key hash
+// — the condition under which real GCS returns a CSEK object's md5Hash/crc32c.
+// A request with no key, a malformed key, or a non-matching key returns false,
+// so the checksums are withheld. It is used by fromStoreObject (J37); the value
+// is only ever "should the hashes be visible", never an authorization decision.
+func csekKeyMatchesRequest(nr *model.NormalizedRequest, meta gcs.ObjectMeta) bool {
+	if meta.CSEKeySHA256 == "" || nr == nil {
+		return true
+	}
+	keyB64, _ := nr.Params[wire.CSEKKey].(string)
+	if keyB64 == "" {
+		return false
+	}
+	key, err := base64.StdEncoding.DecodeString(keyB64)
+	if err != nil || len(key) != 32 {
+		return false
+	}
+	sum := sha256.Sum256(key)
+	return base64.StdEncoding.EncodeToString(sum[:]) == meta.CSEKeySHA256
 }
 
 // copySourceCSEKParams builds the source-object read params from the
@@ -2916,7 +2993,7 @@ func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedReques
 	if err := requireDownscope(nr, downscope.WriteObject, bucket, object); err != nil {
 		return nil, err
 	}
-	meta, err := p.objects.GetObjectMeta(ctx, bucket, object)
+	meta, err := p.objectMetaForWrite(ctx, bucket, object, nr.Params)
 	if err != nil {
 		if errors.Is(err, gcs.ErrNoSuchObject) {
 			return nil, model.NewProviderError("NotFound", "object not found", 404)
@@ -2928,6 +3005,7 @@ func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedReques
 	// Strict replace: writable metadata is taken verbatim from the request —
 	// omitted fields are cleared.
 	o.ContentType, _ = bodyString(nr.Params, "contentType")
+	o.ContentEncoding, _ = bodyString(nr.Params, "contentEncoding")
 	o.Metadata = bodyMetadata(nr.Params)
 	o.StorageClass, _ = bodyString(nr.Params, "storageClass")
 	if o.StorageClass == "" {
@@ -2943,7 +3021,7 @@ func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedReques
 	// Metadata update is in-place: real GCS keeps the generation and every
 	// noncurrent generation, bumping only the metageneration (the
 	// replace-semantics PutObjectMeta* would discard noncurrent versions).
-	if err := p.objects.UpdateObjectMetaChecked(ctx, bucket, object, toStoreObject(o), objectPrecondition(nr)); err != nil {
+	if err := p.updateObjectMetaChecked(ctx, nr, bucket, object, toStoreObject(o), objectPrecondition(nr)); err != nil {
 		if errors.Is(err, gcs.ErrNoSuchBucket) {
 			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
 		}
@@ -2955,6 +3033,10 @@ func (p *Provider) ObjectsUpdate(ctx context.Context, nr *model.NormalizedReques
 		}
 		return nil, err
 	}
+	// J31: a metadata change publishes OBJECT_METADATA_UPDATE (real GCS fires
+	// it on objects.patch/objects.update), distinct from the finalize/archive/
+	// delete events the write/delete paths already emit.
+	p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_METADATA_UPDATE", toStoreObject(o), clock.Now(), nil)
 	return provider.OK(toMap(o)), nil
 }
 
@@ -2967,7 +3049,7 @@ func (p *Provider) ObjectsPatch(ctx context.Context, nr *model.NormalizedRequest
 	if err := requireDownscope(nr, downscope.WriteObject, bucket, object); err != nil {
 		return nil, err
 	}
-	meta, err := p.objects.GetObjectMeta(ctx, bucket, object)
+	meta, err := p.objectMetaForWrite(ctx, bucket, object, nr.Params)
 	if err != nil {
 		if errors.Is(err, gcs.ErrNoSuchObject) {
 			return nil, model.NewProviderError("NotFound", "object not found", 404)
@@ -2980,6 +3062,9 @@ func (p *Provider) ObjectsPatch(ctx context.Context, nr *model.NormalizedRequest
 	if body, ok := nr.Params["body"].(map[string]any); ok {
 		if ct, _ := body["contentType"].(string); ct != "" {
 			o.ContentType = ct
+		}
+		if ce, _ := body["contentEncoding"].(string); ce != "" {
+			o.ContentEncoding = ce
 		}
 		if sc, _ := body["storageClass"].(string); sc != "" {
 			o.StorageClass = sc
@@ -2999,7 +3084,7 @@ func (p *Provider) ObjectsPatch(ctx context.Context, nr *model.NormalizedRequest
 	// Metadata update is in-place: real GCS keeps the generation and every
 	// noncurrent generation, bumping only the metageneration (the
 	// replace-semantics PutObjectMeta* would discard noncurrent versions).
-	if err := p.objects.UpdateObjectMetaChecked(ctx, bucket, object, toStoreObject(o), objectPrecondition(nr)); err != nil {
+	if err := p.updateObjectMetaChecked(ctx, nr, bucket, object, toStoreObject(o), objectPrecondition(nr)); err != nil {
 		if errors.Is(err, gcs.ErrNoSuchBucket) {
 			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
 		}
@@ -3011,6 +3096,10 @@ func (p *Provider) ObjectsPatch(ctx context.Context, nr *model.NormalizedRequest
 		}
 		return nil, err
 	}
+	// J31: a metadata change publishes OBJECT_METADATA_UPDATE (real GCS fires
+	// it on objects.patch/objects.update), distinct from the finalize/archive/
+	// delete events the write/delete paths already emit.
+	p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_METADATA_UPDATE", toStoreObject(o), clock.Now(), nil)
 	return provider.OK(toMap(o)), nil
 }
 
@@ -3262,6 +3351,47 @@ func (p *Provider) filterLifecycle(ctx context.Context, bucket string, objs []gc
 	return out
 }
 
+// lifecycleExpiration returns the RFC 3339 time at which a bucket lifecycle
+// Delete rule will expire the object, or "" when no age-based Delete rule
+// applies. It backs the XML API x-goog-expiration response header (J69).
+func (p *Provider) lifecycleExpiration(ctx context.Context, bucket string, m gcs.ObjectMeta) string {
+	bmeta, err := p.objects.GetBucket(ctx, bucket)
+	if err != nil || m.TimeCreated.IsZero() {
+		return ""
+	}
+	lc, _ := bmeta["lifecycle"].(map[string]any)
+	if lc == nil {
+		return ""
+	}
+	rules, _ := lc["rule"].([]any)
+	var earliest time.Time
+	for _, rr := range rules {
+		rule, ok := rr.(map[string]any)
+		if !ok {
+			continue
+		}
+		action, _ := rule["action"].(map[string]any)
+		if actionType, _ := action["type"].(string); actionType != "Delete" {
+			continue
+		}
+		cond, _ := rule["condition"].(map[string]any)
+		ageDays, _ := cond["age"].(float64)
+		if ageDays <= 0 {
+			continue
+		}
+		exp := m.TimeCreated.Add(time.Duration(ageDays) * 24 * time.Hour)
+		if earliest.IsZero() || exp.Before(earliest) {
+			earliest = exp
+		}
+	}
+	if earliest.IsZero() {
+		return ""
+	}
+	// The XML API documents x-goog-expiration as an HTTP date (RFC 1123 GMT),
+	// e.g. "Tue, 25 Jun 2013 00:00:00 GMT".
+	return earliest.UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT")
+}
+
 // objectLifecycleExpired reports whether a Delete rule's condition.age matches
 // the object's creation time.
 func objectLifecycleExpired(lc map[string]any, created time.Time) bool {
@@ -3454,6 +3584,27 @@ func (p *Provider) objectResponse(ctx context.Context, nr *model.NormalizedReque
 	}
 	o := fromStoreObject(nr, meta)
 	return provider.OK(toMap(o)), nil
+}
+
+// objectMetaForWrite resolves the object metadata a metadata write targets: the
+// specific revision named by ?generation= (which may be a noncurrent version),
+// or the live generation when the param is absent. J57: real GCS's
+// objects.patch/objects.update update the selected revision in place by id.
+func (p *Provider) objectMetaForWrite(ctx context.Context, bucket, object string, params map[string]any) (gcs.ObjectMeta, error) {
+	generation, _ := params["generation"].(string)
+	if generation != "" {
+		return p.objects.GetObjectGeneration(ctx, bucket, object, generation)
+	}
+	return p.objects.GetObjectMeta(ctx, bucket, object)
+}
+
+// updateObjectMetaChecked applies a metadata update to the request's target
+// revision: the ?generation= revision when present, else the live generation.
+func (p *Provider) updateObjectMetaChecked(ctx context.Context, nr *model.NormalizedRequest, bucket, object string, meta gcs.ObjectMeta, precondition *gcs.Precondition) error {
+	if generation, _ := nr.Params["generation"].(string); generation != "" {
+		return p.objects.UpdateObjectGenerationMetaChecked(ctx, bucket, object, generation, meta, precondition)
+	}
+	return p.objects.UpdateObjectMetaChecked(ctx, bucket, object, meta, precondition)
 }
 
 // getObjectForRead resolves the object metadata for a read, honouring the
@@ -3891,6 +4042,14 @@ func (p *Provider) ObjectsInsertStartResumable(ctx context.Context, nr *model.No
 		return nil, err
 	}
 	ct, _ := nr.Params[wire.ContentTypeKey].(string)
+	// Object.contentEncoding may arrive on the initiation body (JSON) or as the
+	// request's Content-Encoding (raw XML); carry it through to finalize (J69).
+	ce, _ := nr.Params["contentEncoding"].(string)
+	if ce == "" {
+		if body, ok := nr.Params["body"].(map[string]any); ok {
+			ce, _ = body["contentEncoding"].(string)
+		}
+	}
 
 	id := p.nextGen() // atomic + monotonic, collision-free under concurrency
 	now := clock.RealNow()
@@ -3900,7 +4059,7 @@ func (p *Provider) ObjectsInsertStartResumable(ctx context.Context, nr *model.No
 		p.mu.Unlock()
 		return nil, model.NewProviderError("InvalidRequest", "too many active resumable uploads", 429)
 	}
-	p.uploads[id] = &uploadSession{Bucket: bucket, Object: object, ContentType: ct, Metadata: uploadMetadata(nr.Params), lastAccess: now}
+	p.uploads[id] = &uploadSession{Bucket: bucket, Object: object, ContentType: ct, ContentEncoding: ce, Metadata: uploadMetadata(nr.Params), lastAccess: now}
 	p.mu.Unlock()
 
 	// Sweep stale sessions from the durable store (may hold orphans from a
@@ -3993,6 +4152,7 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 	bucket := sess.Bucket
 	object := sess.Object
 	contentType := sess.ContentType
+	contentEncoding := sess.ContentEncoding
 	metadata := sess.Metadata
 	length := sess.length
 	tmpPath := sess.tmpPath
@@ -4052,6 +4212,9 @@ func (p *Provider) ObjectsInsertResumable(ctx context.Context, nr *model.Normali
 	nr.Params["object"] = object
 	nr.Params[wire.StreamKey] = stream
 	nr.Params[wire.ContentTypeKey] = contentType
+	if contentEncoding != "" {
+		nr.Params["contentEncoding"] = contentEncoding
+	}
 	if metadata != nil {
 		nr.Params[wire.MetaHeadersKey] = metadata
 	}

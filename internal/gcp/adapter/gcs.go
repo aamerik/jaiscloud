@@ -3,6 +3,7 @@ package gcp
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/xml"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -87,6 +88,11 @@ func (c *GCSCodec) decodeRawMedia(r *http.Request, body []byte) (*model.Normaliz
 		}
 		if ct := r.Header.Get("Content-Type"); ct != "" {
 			nr.Params[wire.ContentTypeKey] = ct
+		}
+		// The XML API PUT's Content-Encoding is the object's own stored
+		// encoding (e.g. gzip), captured as Object.contentEncoding (J69).
+		if ce := r.Header.Get("Content-Encoding"); ce != "" {
+			nr.Params["contentEncoding"] = ce
 		}
 	default:
 		return nil, model.NewProviderError("InvalidRequest", "unsupported storage path", 404)
@@ -643,6 +649,14 @@ func (c *GCSCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provider
 		}
 	}
 	headers.Set("Content-Type", "application/json; charset=UTF-8")
+	// J61: a request that arrived on the raw XML API path /{bucket}/{object}
+	// answers errors with the XML error document and XML-API code names instead
+	// of the JSON envelope. The signed-URL errors above already set
+	// errorFormat "xml" and are handled there; this covers every other error on
+	// the raw path (missing object, precondition, range, CSEK, ...).
+	if xmlAPI, _ := nrBoolParam(nr, wire.XMLAPIKey); xmlAPI {
+		return xmlAPIError(status, perr, isHeadRequest(nr))
+	}
 	// A provider may carry the documented GCS reason (e.g. the CSEK
 	// customerEncryption* reasons); it wins over the canonical-code mapping.
 	reason := gcpReason(perr.Code)
@@ -664,6 +678,81 @@ func (c *GCSCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provider
 	}
 	out, _ := json.Marshal(env)
 	return status, headers, out
+}
+
+// nrBoolParam reads a bool request param, tolerating a nil NormalizedRequest
+// (a codec can be asked to encode a decode-time error).
+func nrBoolParam(nr *model.NormalizedRequest, key string) (bool, bool) {
+	if nr == nil {
+		return false, false
+	}
+	v, ok := nr.Params[key].(bool)
+	return v, ok
+}
+
+// isHeadRequest reports whether the original HTTP request used HEAD.
+func isHeadRequest(nr *model.NormalizedRequest) bool {
+	return nr != nil && nr.Raw != nil && nr.Raw.Method == http.MethodHead
+}
+
+// xmlAPIErrorCode maps a canonical ProviderError code to the XML API <Code>
+// element. The XML API uses different names than the JSON API's reason strings
+// (e.g. NotFound is NoSuchKey/NoSuchBucket), and the CSEK customerEncryption*
+// reasons are capitalized (CustomerEncryptionKeyIsIncorrect, ...). Unknown codes
+// pass through unchanged (the signed-URL codes already are XML API names).
+func xmlAPIErrorCode(perr *model.ProviderError) string {
+	// An explicit xmlCode set by the provider wins (e.g. NoSuchBucket, which is
+	// otherwise indistinguishable from NoSuchKey by the canonical NotFound code).
+	if c, _ := perr.Data["xmlCode"].(string); c != "" {
+		return c
+	}
+	if r, _ := perr.Data["reason"].(string); strings.HasPrefix(r, "customerEncryption") {
+		return strings.ToUpper(r[:1]) + r[1:]
+	}
+	switch perr.Code {
+	case "NotFound":
+		return "NoSuchKey"
+	case "InvalidRange":
+		return "InvalidRange"
+	case "PreconditionFailed":
+		return "PreconditionFailed"
+	case "InvalidArgument":
+		return "InvalidArgument"
+	case "AlreadyExists", "Conflict":
+		return "Conflict"
+	case "UnsupportedOperation":
+		return "NotImplemented"
+	}
+	return perr.Code
+}
+
+// xmlAPIError renders the XML API error document for a request that arrived on
+// the raw /{bucket}/{object} path (J61). A HEAD request gets the status and
+// Content-Type but no body, matching real GCS.
+func xmlAPIError(status int, perr *model.ProviderError, head bool) (int, http.Header, []byte) {
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/xml; charset=UTF-8")
+	if head {
+		return status, headers, nil
+	}
+	var b strings.Builder
+	b.WriteString("<?xml version='1.0' encoding='utf-8'?><Error><Code>")
+	writeXMLEscaped(&b, xmlAPIErrorCode(perr))
+	b.WriteString("</Code><Message>")
+	writeXMLEscaped(&b, perr.Message)
+	b.WriteString("</Message>")
+	if param, _ := perr.Data["parameterName"].(string); param != "" {
+		b.WriteString("<ParameterName>")
+		writeXMLEscaped(&b, param)
+		b.WriteString("</ParameterName>")
+	}
+	b.WriteString("</Error>")
+	return status, headers, []byte(b.String())
+}
+
+// writeXMLEscaped writes s with XML metacharacters escaped.
+func writeXMLEscaped(b *strings.Builder, s string) {
+	_ = xml.EscapeText(b, []byte(s))
 }
 
 // gcpReason maps a canonical ProviderError code to a GCS error reason string.

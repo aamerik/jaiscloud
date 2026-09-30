@@ -68,13 +68,14 @@ type Service struct {
 // tmpFile so a large upload never buffers fully in memory (mirroring the REST
 // provider's spill model).
 type uploadSession struct {
-	bucket       string
-	object       string
-	contentType  string
-	metadata     map[string]string
-	kmsKeyName   string
-	cseKey       []byte
-	cseKeySHA256 string
+	bucket          string
+	object          string
+	contentType     string
+	contentEncoding string
+	metadata        map[string]string
+	kmsKeyName      string
+	cseKey          []byte
+	cseKeySHA256    string
 	// temporaryHold/eventBasedHold mirror the write spec's Object hold fields.
 	// eventBasedHold is a *bool so an omitted field (nil) can inherit the
 	// bucket's defaultEventBasedHold while an explicit false overrides it.
@@ -191,20 +192,21 @@ func ts(t time.Time) *timestamppb.Timestamp {
 // the bucket as a full resource name (projects/_/buckets/{bucket}).
 func objectToProto(m gcs.ObjectMeta) *storagepb.Object {
 	o := &storagepb.Object{
-		Name:           m.Name,
-		Bucket:         bucketResourceName(m.Bucket),
-		Etag:           "CAE=",
-		Generation:     genToInt64(m.Generation),
-		Metageneration: genToInt64(m.Metageneration),
-		StorageClass:   m.StorageClass,
-		Size:           m.Size,
-		ContentType:    m.ContentType,
-		ComponentCount: int32(m.ComponentCount),
-		Metadata:       m.Metadata,
-		TemporaryHold:  m.TemporaryHold,
-		KmsKey:         m.KmsKeyName,
-		CreateTime:     ts(m.TimeCreated),
-		UpdateTime:     ts(m.Updated),
+		Name:            m.Name,
+		Bucket:          bucketResourceName(m.Bucket),
+		Etag:            "CAE=",
+		Generation:      genToInt64(m.Generation),
+		Metageneration:  genToInt64(m.Metageneration),
+		StorageClass:    m.StorageClass,
+		Size:            m.Size,
+		ContentType:     m.ContentType,
+		ContentEncoding: m.ContentEncoding,
+		ComponentCount:  int32(m.ComponentCount),
+		Metadata:        m.Metadata,
+		TemporaryHold:   m.TemporaryHold,
+		KmsKey:          m.KmsKeyName,
+		CreateTime:      ts(m.TimeCreated),
+		UpdateTime:      ts(m.Updated),
 	}
 	// The proto field is optional but, per the API contract, always set in a
 	// response (true or false), so clients can distinguish it from "unknown".
@@ -223,6 +225,19 @@ func objectToProto(m gcs.ObjectMeta) *storagepb.Object {
 				o.Checksums = &storagepb.ObjectChecksums{}
 			}
 			o.Checksums.Md5Hash = b
+		}
+	}
+	// J63: a CSEK-encrypted object carries its AES256 algorithm + key-SHA256
+	// descriptor so a gRPC client (compose/read) can see which key is required —
+	// the same data the REST customerEncryption field exposes. The stored value
+	// is the base64 SHA-256 the REST provider writes; decode it back to the raw
+	// bytes the proto field carries.
+	if m.CSEKeySHA256 != "" {
+		if sha, err := base64.StdEncoding.DecodeString(m.CSEKeySHA256); err == nil {
+			o.CustomerEncryption = &storagepb.CustomerEncryption{
+				EncryptionAlgorithm: "AES256",
+				KeySha256Bytes:      sha,
+			}
 		}
 	}
 	return o
@@ -308,6 +323,7 @@ func protoResourceToMeta(resource *storagepb.Object, bucket, object, generation 
 		if meta.ContentType == "" {
 			meta.ContentType = "application/octet-stream"
 		}
+		meta.ContentEncoding = resource.GetContentEncoding()
 		meta.StorageClass = resource.GetStorageClass()
 		if meta.StorageClass == "" {
 			meta.StorageClass = "STANDARD"
@@ -1103,7 +1119,20 @@ func (s *Service) UpdateObject(ctx context.Context, req *storagepb.UpdateObjectR
 	if err := s.requireDownscope(ctx, downscope.WriteObject, bucket, object); err != nil {
 		return nil, err
 	}
-	meta, err := s.objects.GetObjectMeta(ctx, bucket, object)
+	// J57: a target generation (Object.generation) selects a specific revision —
+	// including a noncurrent one — to update in place, instead of the live
+	// generation. Real GCS updates the selected revision by id.
+	targetGen := ""
+	if req.GetObject().GetGeneration() > 0 {
+		targetGen = int64ToGen(req.GetObject().GetGeneration())
+	}
+	var meta gcs.ObjectMeta
+	var err error
+	if targetGen != "" {
+		meta, err = s.objects.GetObjectGeneration(ctx, bucket, object, targetGen)
+	} else {
+		meta, err = s.objects.GetObjectMeta(ctx, bucket, object)
+	}
 	if err != nil {
 		if errors.Is(err, gcs.ErrNoSuchObject) {
 			return nil, mapError(model.NewProviderError("NotFound", "object not found", 404))
@@ -1134,6 +1163,9 @@ func (s *Service) UpdateObject(ctx context.Context, req *storagepb.UpdateObjectR
 	if maskIncludes(mask, "content_type") {
 		meta.ContentType = pb.GetContentType()
 	}
+	if maskIncludes(mask, "content_encoding") {
+		meta.ContentEncoding = pb.GetContentEncoding()
+	}
 	if maskIncludes(mask, "storage_class") && pb.GetStorageClass() != "" {
 		meta.StorageClass = pb.GetStorageClass()
 	}
@@ -1151,11 +1183,17 @@ func (s *Service) UpdateObject(ctx context.Context, req *storagepb.UpdateObjectR
 	// Re-validate the preconditions atomically with the write to close the race
 	// between the check above and the store update.
 	pre := grpcObjectPrecondition(req.IfGenerationMatch, req.IfGenerationNotMatch, req.IfMetagenerationMatch, req.IfMetagenerationNotMatch)
-	if err := s.objects.UpdateObjectMetaChecked(ctx, bucket, object, meta, pre); err != nil {
-		if errors.Is(err, gcs.ErrNoSuchObject) {
+	var werr error
+	if targetGen != "" {
+		werr = s.objects.UpdateObjectGenerationMetaChecked(ctx, bucket, object, targetGen, meta, pre)
+	} else {
+		werr = s.objects.UpdateObjectMetaChecked(ctx, bucket, object, meta, pre)
+	}
+	if werr != nil {
+		if errors.Is(werr, gcs.ErrNoSuchObject) {
 			return nil, mapError(model.NewProviderError("NotFound", "object not found", 404))
 		}
-		return nil, mapError(preconditionResult(err))
+		return nil, mapError(preconditionResult(werr))
 	}
 	return objectToProto(meta), nil
 }
@@ -1265,6 +1303,9 @@ func rewriteDestinationMeta(src gcs.ObjectMeta, dest *storagepb.Object, dstBucke
 		if ct := dest.GetContentType(); ct != "" {
 			meta.ContentType = ct
 		}
+		if ce := dest.GetContentEncoding(); ce != "" {
+			meta.ContentEncoding = ce
+		}
 		if dest.GetMetadata() != nil {
 			meta.Metadata = dest.GetMetadata()
 		}
@@ -1306,6 +1347,10 @@ func (s *Service) RewriteObject(ctx context.Context, req *storagepb.RewriteObjec
 		return nil, err
 	}
 	if err := s.requireDownscope(ctx, downscope.WriteObject, dstBucket, dstObject); err != nil {
+		return nil, err
+	}
+	// J62: validate the request's CSEK parameters up front, matching BidiReadObject.
+	if err := validateCommonObjectParams(req.GetCommonObjectRequestParams()); err != nil {
 		return nil, err
 	}
 
@@ -1420,15 +1465,16 @@ func (s *Service) StartResumableWrite(ctx context.Context, req *storagepb.StartR
 	}
 
 	sess := &uploadSession{
-		bucket:         bucket,
-		object:         object,
-		contentType:    resource.GetContentType(),
-		metadata:       resource.GetMetadata(),
-		kmsKeyName:     resource.GetKmsKey(),
-		temporaryHold:  resource.GetTemporaryHold(),
-		eventBasedHold: resource.EventBasedHold,
-		precondition:   pre,
-		lastAccess:     now,
+		bucket:          bucket,
+		object:          object,
+		contentType:     resource.GetContentType(),
+		contentEncoding: resource.GetContentEncoding(),
+		metadata:        resource.GetMetadata(),
+		kmsKeyName:      resource.GetKmsKey(),
+		temporaryHold:   resource.GetTemporaryHold(),
+		eventBasedHold:  resource.EventBasedHold,
+		precondition:    pre,
+		lastAccess:      now,
 	}
 	if sess.contentType == "" {
 		sess.contentType = "application/octet-stream"
@@ -1592,17 +1638,18 @@ func (s *Service) finalize(ctx context.Context, project string, sess *uploadSess
 		}
 	}
 	meta := gcs.ObjectMeta{
-		Bucket:         sess.bucket,
-		Name:           sess.object,
-		Generation:     s.provider.NextGen(),
-		Metageneration: "1",
-		ContentType:    sess.contentType,
-		StorageClass:   "STANDARD",
-		Metadata:       sess.metadata,
-		KmsKeyName:     sess.kmsKeyName,
-		TemporaryHold:  sess.temporaryHold,
-		TimeCreated:    clock.Now(),
-		Updated:        clock.Now(),
+		Bucket:          sess.bucket,
+		Name:            sess.object,
+		Generation:      s.provider.NextGen(),
+		Metageneration:  "1",
+		ContentType:     sess.contentType,
+		ContentEncoding: sess.contentEncoding,
+		StorageClass:    "STANDARD",
+		Metadata:        sess.metadata,
+		KmsKeyName:      sess.kmsKeyName,
+		TemporaryHold:   sess.temporaryHold,
+		TimeCreated:     clock.Now(),
+		Updated:         clock.Now(),
 	}
 	if sess.eventBasedHold != nil {
 		meta.EventBasedHold = *sess.eventBasedHold
@@ -1655,14 +1702,15 @@ func (s *Service) WriteObject(stream storagepb.Storage_WriteObjectServer) error 
 			case *storagepb.WriteObjectRequest_WriteObjectSpec:
 				res := fm.WriteObjectSpec.GetResource()
 				sess = &uploadSession{
-					bucket:         parseBucketName(res.GetBucket()),
-					object:         res.GetName(),
-					contentType:    res.GetContentType(),
-					metadata:       res.GetMetadata(),
-					kmsKeyName:     res.GetKmsKey(),
-					temporaryHold:  res.GetTemporaryHold(),
-					eventBasedHold: res.EventBasedHold,
-					precondition:   grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
+					bucket:          parseBucketName(res.GetBucket()),
+					object:          res.GetName(),
+					contentType:     res.GetContentType(),
+					contentEncoding: res.GetContentEncoding(),
+					metadata:        res.GetMetadata(),
+					kmsKeyName:      res.GetKmsKey(),
+					temporaryHold:   res.GetTemporaryHold(),
+					eventBasedHold:  res.EventBasedHold,
+					precondition:    grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
 				}
 				project = s.projectForBucket(ctx, sess.bucket)
 				if err := s.requireDownscope(ctx, downscope.WriteObject, sess.bucket, sess.object); err != nil {
@@ -1747,14 +1795,15 @@ func (s *Service) BidiWriteObject(stream storagepb.Storage_BidiWriteObjectServer
 			case *storagepb.BidiWriteObjectRequest_WriteObjectSpec:
 				res := fm.WriteObjectSpec.GetResource()
 				sess = &uploadSession{
-					bucket:         parseBucketName(res.GetBucket()),
-					object:         res.GetName(),
-					contentType:    res.GetContentType(),
-					metadata:       res.GetMetadata(),
-					kmsKeyName:     res.GetKmsKey(),
-					temporaryHold:  res.GetTemporaryHold(),
-					eventBasedHold: res.EventBasedHold,
-					precondition:   grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
+					bucket:          parseBucketName(res.GetBucket()),
+					object:          res.GetName(),
+					contentType:     res.GetContentType(),
+					contentEncoding: res.GetContentEncoding(),
+					metadata:        res.GetMetadata(),
+					kmsKeyName:      res.GetKmsKey(),
+					temporaryHold:   res.GetTemporaryHold(),
+					eventBasedHold:  res.EventBasedHold,
+					precondition:    grpcObjectPrecondition(fm.WriteObjectSpec.IfGenerationMatch, fm.WriteObjectSpec.IfGenerationNotMatch, fm.WriteObjectSpec.IfMetagenerationMatch, fm.WriteObjectSpec.IfMetagenerationNotMatch),
 				}
 				if sess.contentType == "" {
 					sess.contentType = "application/octet-stream"
@@ -1841,6 +1890,12 @@ func (s *Service) ReadObject(req *storagepb.ReadObjectRequest, stream storagepb.
 	bucket := parseBucketName(req.GetBucket())
 	project := s.projectForBucket(ctx, bucket)
 	if err := s.requireDownscope(ctx, downscope.ReadObject, bucket, req.GetObject()); err != nil {
+		return err
+	}
+	// J62: validate the request's CSEK parameters before the zero-length
+	// early return, so a malformed key/algorithm is rejected even when no blob
+	// bytes are read.
+	if err := validateCommonObjectParams(req.GetCommonObjectRequestParams()); err != nil {
 		return err
 	}
 	gen := ""

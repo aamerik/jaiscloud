@@ -88,6 +88,19 @@ func isRawStorageMediaPath(r *http.Request) bool {
 	if p == "" || strings.HasPrefix(p, "_jaiscloud") {
 		return false
 	}
+	// Known API prefixes own their paths (the service/version routers handle
+	// them); the raw media fallback must not claim one, or a JSON metadata
+	// write like PUT /storage/v1/b/{bucket}/o/{object} would be mistaken for an
+	// object upload (and its gzip transport body left undecoded). The versioned
+	// /v1//v2/ namespaces are reserved by the other GCP services' routers.
+	for _, prefix := range []string{
+		"v1/", "v2/", "bigquery/", "storage/v1/", "upload/storage/", "download/storage/",
+		"resumable/upload/", "batch/storage/", "projects/",
+	} {
+		if strings.HasPrefix(p, prefix) {
+			return false
+		}
+	}
 	idx := strings.IndexByte(p, '/')
 	return idx > 0 && idx < len(p)-1
 }

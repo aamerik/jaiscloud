@@ -138,16 +138,20 @@ type ObjectRetention struct {
 // ObjectMeta holds GCS object metadata. Generation/metageneration are the GCS
 // analogues of S3's version_id; CRC32C is the GCS checksum (vs S3's IEEE CRC32).
 type ObjectMeta struct {
-	Bucket         string            `json:"bucket"`
-	Name           string            `json:"name"`
-	Generation     string            `json:"generation"`
-	Metageneration string            `json:"metageneration"`
-	ContentType    string            `json:"contentType,omitempty"`
-	Size           int64             `json:"size"`
-	MD5Hash        string            `json:"md5Hash,omitempty"`
-	CRC32C         string            `json:"crc32c,omitempty"`
-	StorageClass   string            `json:"storageClass"`
-	Metadata       map[string]string `json:"metadata,omitempty"`
+	Bucket         string `json:"bucket"`
+	Name           string `json:"name"`
+	Generation     string `json:"generation"`
+	Metageneration string `json:"metageneration"`
+	ContentType    string `json:"contentType,omitempty"`
+	// ContentEncoding is the object's own content encoding (GCS
+	// Object.contentEncoding), e.g. "gzip". It is distinct from HTTP transport
+	// encoding and surfaces as x-goog-stored-content-encoding on the XML API.
+	ContentEncoding string            `json:"contentEncoding,omitempty"`
+	Size            int64             `json:"size"`
+	MD5Hash         string            `json:"md5Hash,omitempty"`
+	CRC32C          string            `json:"crc32c,omitempty"`
+	StorageClass    string            `json:"storageClass"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
 	// ComponentCount is the number of source objects accumulated by compose
 	// operations (GCS Object.componentCount). Zero for non-composite objects.
 	ComponentCount int64     `json:"componentCount,omitempty"`
@@ -252,6 +256,17 @@ type ObjectStore interface {
 	// ErrNoSuchObject when no live generation exists and ErrPreconditionFailed
 	// — without applying the write — on a mismatch.
 	UpdateObjectMetaChecked(ctx context.Context, bucket, name string, meta ObjectMeta, precondition *Precondition) error
+	// UpdateObjectGenerationMetaChecked updates the metadata of one specific
+	// generation in place (live or non-current), preserving every other
+	// generation and the target's immutable fields (id, creation time,
+	// size/checksums, encryption material). This backs GCS's
+	// objects.patch/objects.update and gRPC UpdateObject when the request
+	// selects a revision via ?generation= / Object.generation: real GCS updates
+	// the selected revision (including noncurrent) by id. precondition (if
+	// non-nil) is validated against the selected generation atomically with the
+	// write. Returns ErrNoSuchObject when the generation does not exist and
+	// ErrPreconditionFailed — without applying the write — on a mismatch.
+	UpdateObjectGenerationMetaChecked(ctx context.Context, bucket, name, generation string, meta ObjectMeta, precondition *Precondition) error
 	DeleteObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) error
 	TombstoneObjectMetaChecked(ctx context.Context, bucket, name string, precondition *Precondition) (ObjectMeta, error)
 	// DeleteObjectGeneration removes exactly one generation (live or non-live)
