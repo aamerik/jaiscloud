@@ -207,7 +207,15 @@ func (h *hydrator) hydrate(project, dataset, table string) error {
 	for i, f := range tbl.Fields {
 		cols[i] = quoteSQLiteIdent(f.Name) + " " + sqliteAffinity(f.Type)
 	}
-	if _, err := h.db.ExecContext(h.ctx, fmt.Sprintf("CREATE TABLE %s (%s)", quoteSQLiteIdent(name), strings.Join(cols, ", "))); err != nil {
+	// Hydrate the whole table in one transaction with a reused statement:
+	// per-row autocommit is the dominant cost for large tables, and the scratch
+	// database is private to this query so nothing observes a partial load.
+	tx, err := h.db.BeginTx(h.ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(h.ctx, fmt.Sprintf("CREATE TABLE %s (%s)", quoteSQLiteIdent(name), strings.Join(cols, ", "))); err != nil {
 		return err
 	}
 
@@ -216,14 +224,22 @@ func (h *hydrator) hydrate(project, dataset, table string) error {
 		ph[i] = "?"
 	}
 	insert := fmt.Sprintf("INSERT INTO %s VALUES (%s)", quoteSQLiteIdent(name), strings.Join(ph, ","))
+	stmt, err := tx.PrepareContext(h.ctx, insert)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
 	for _, row := range tbl.Rows {
 		vals := make([]any, len(tbl.Fields))
 		for i, f := range tbl.Fields {
 			vals[i] = toSQLite(f, row[f.Name])
 		}
-		if _, err := h.db.ExecContext(h.ctx, insert, vals...); err != nil {
+		if _, err := stmt.ExecContext(h.ctx, vals...); err != nil {
 			return err
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 
 	key := project + "\x00" + dataset + "\x00" + table

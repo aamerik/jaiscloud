@@ -542,6 +542,9 @@ test-e2e-persistence: test-e2e-cloudformation test-e2e-kms ## CloudFormation + K
 test-e2e-gcp-persistence: postgres-up build-gcp ## GCP Postgres persistence tests (requires Docker for Postgres)
 	JAISCLOUD_DSN=$(JAISCLOUD_DSN) JAISCLOUD_GCP_PERSIST_PORT=8099 \
 	  go test -tags gcp_persistence -p 1 -count=1 -timeout 5m ./tests/persistent_mode/gcp/...
+	JAISCLOUD_DSN=$(JAISCLOUD_DSN) \
+	  go test -tags gcp_persistence -p 1 -count=1 -timeout 5m \
+	    ./internal/gcp/provider/bigquery/... ./internal/gcp/store/bigquery/...
 	cd tests/persistent_mode/gcp/parity-grpc && JAISCLOUD_DSN=$(JAISCLOUD_DSN) \
 	  go test -tags gcp_persistence -p 1 -count=1 -timeout 5m ./...
 	cd tests/persistent_mode/gcp/hms && JAISCLOUD_DSN=$(JAISCLOUD_DSN) \

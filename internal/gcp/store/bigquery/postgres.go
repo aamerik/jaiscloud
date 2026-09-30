@@ -461,9 +461,9 @@ func (s *PostgresStore) InsertRows(ctx context.Context, projectID, datasetID, ta
 		}
 	}
 	tag, err := tx.Exec(ctx, `
-		UPDATE jc_bq_tables SET num_rows = num_rows + $4, update_time = now()
+		UPDATE jc_bq_tables SET num_rows = num_rows + $4, update_time = $5
 		WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3
-	`, projectID, datasetID, tableID, len(keep))
+	`, projectID, datasetID, tableID, len(keep), clock.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -497,9 +497,9 @@ func (s *PostgresStore) ReplaceRows(ctx context.Context, projectID, datasetID, t
 		}
 	}
 	tag, err := tx.Exec(ctx, `
-		UPDATE jc_bq_tables SET num_rows=$4, update_time=now()
+		UPDATE jc_bq_tables SET num_rows=$4, update_time=$5
 		WHERE project_id=$1 AND dataset_id=$2 AND table_id=$3
-	`, projectID, datasetID, tableID, len(rows))
+	`, projectID, datasetID, tableID, len(rows), clock.Now().UTC())
 	if err != nil {
 		return err
 	}

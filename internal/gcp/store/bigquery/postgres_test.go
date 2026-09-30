@@ -12,6 +12,7 @@ import (
 )
 
 // TestPostgresStore runs the shared store matrix against the Postgres backend.
+// The gcp_persistence gate runs with -p 1 because these tests share one database.
 func TestPostgresStore(t *testing.T) {
 	dsn := os.Getenv("JAISCLOUD_DSN")
 	if dsn == "" {
@@ -32,6 +33,30 @@ func TestPostgresStore(t *testing.T) {
 	s.Reset(ctx)
 
 	runStoreTests(t, s)
+}
+
+// TestPostgresSnapshotRoundTrip exercises the snapshot/export/import contract
+// against Postgres: the store must round-trip datasets, tables, rows and jobs
+// through Snapshot/Restore just like the memory store (BQ4).
+func TestPostgresSnapshotRoundTrip(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres snapshot test")
+	}
+	ctx := context.Background()
+
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	s := NewPostgresStore(pg.Pool())
+	s.Reset(ctx)
+	runSnapshotRoundTrip(t, s, func() snapshotStore { return NewPostgresStore(pg.Pool()) })
 }
 
 // TestPostgresDeleteDatasetCascades locks in the cascade: deleting a dataset

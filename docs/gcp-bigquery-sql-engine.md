@@ -5,8 +5,8 @@
 > This record freezes the engine choice and the v1 dialect subset. BQ1 (translator
 > + SELECT) and BQ2/BQ8 (DDL/DML + catalog sync + result encoding) shipped
 > (`internal/gcp/queryengine`, `internal/gcp/provider/bigquery`); BQ3 re-graded
-> the fidelity cells to `limited`, and BQ4 covers memory/`--dsn` parity, snapshots
-> and lakehouse scale (`plan_docs/gcp-bigquery-ga-wave-plan.md`).
+> the fidelity cells to `limited`, and BQ4 proved memory/`--dsn` parity, snapshot/
+> export safety and bounded scale (`plan_docs/gcp-bigquery-ga-wave-plan.md` §7).
 
 Date: 2026-09-29 · Backlog ID: **BQ0** · Branch: `spike/gcp-bigquery-sql-engine`
 
@@ -130,6 +130,42 @@ subset, plus the encoding to the Discovery result shape. Results:
   `limited` (not `ga`), updating `docs/GA.md` §1/§7, `docs/GCP-TESTABILITY.md` §4,
   README-GCP and the matrix overrides. **BQ4** proves memory/`--dsn` parity,
   snapshot/export safety and lakehouse scale.
+
+### BQ4 outcome (2026-09-30) — parity, snapshots, scale
+
+- **Per-query hydration retained; no incremental SQLite mirror.** The engine
+  stays stateless scratch and the store stays the single source of truth, so
+  snapshots/export/import/reset and `--dsn` durability need no invalidation
+  logic. Hydration now loads each table inside **one SQLite transaction with a
+  reused prepared statement** (was one implicit transaction per row).
+- **Memory/`--dsn` parity is proven, not assumed.** The two store backends
+  diverged in ways the engine could not see: Postgres bumped a table's
+  `update_time` on streaming insert/`ReplaceRows` via SQL `now()` (bypassing the
+  frozen clock), memory did not bump it at all, and memory did not default zero
+  `createTime`/`updateTime`. Both now use `clock.Now().UTC()` and bump together,
+  so `tables.get` `lastModifiedTime`/`etag`/`numRows` **agree across the two
+  backends**. This is a cross-backend agreement guarantee, not a claim of exact
+  real-GCP semantics: the emulator has no streaming buffer, so `insertAll`
+  commits rows immediately (pre-existing `numRows` behavior) and `lastModifiedTime`
+  advances on insert; real GCP excludes the streaming buffer from `numRows` and
+  lags `lastModifiedTime` until flush. A cross-backend provider fingerprint
+  (`TestSQLParityPostgres`, tag `gcp_persistence`) runs the same SQL workload
+  against memory and Postgres and asserts the encoded
+  `jobs.query`/`getQueryResults`/`tables.get`/`tabledata.list` bodies match after
+  JSON canonicalization (random job IDs masked, clock frozen).
+- **The store contract is JSON-value equality, not byte equality.** Postgres
+  JSONB canonicalizes whitespace/key order, so the shared store matrix now
+  compares configuration/schema/row JSON semantically (the memory/Postgres
+  snapshot round-trip is shared too).
+- **Scale is bounded and measured.** A table scan beyond `maxHydratedRows`
+  (1,000,000) still fails loud (`invalidQuery`, never stale rows);
+  `BenchmarkHydrateSelect` records hydration+aggregation over a 100k-row table.
+  The `lakehouse` k3d E2E is a Spark/GCS pipeline and does not execute BigQuery
+  SQL, so it is not this engine's scale evidence.
+- **Remaining documented deviation:** a `dryRun` `CREATE SCHEMA` on an existing
+  dataset is not validated (recorded as BQ12; the timestamp-parity half of that
+  item is now fixed).
+
 - **`go.mod` gains `modernc.org/sqlite` in BQ1**, not here; BQ0 ships no
   production code.
 - BQ3 must not chase floci-gcp's `invalidQuery` assertions for constructs the

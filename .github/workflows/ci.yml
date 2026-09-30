@@ -527,7 +527,10 @@ jobs:
         env:
           JAISCLOUD_DSN: postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud
           JAISCLOUD_GCP_BIN: ${{ github.workspace }}/jaiscloud-gcp
-        run: go test -tags gcp_persistence -p 1 -count=1 -timeout 300s ./tests/persistent_mode/gcp/...
+        run: >
+          go test -tags gcp_persistence -p 1 -count=1 -timeout 300s
+          ./tests/persistent_mode/gcp/...
+          ./internal/gcp/provider/bigquery/... ./internal/gcp/store/bigquery/...
 
       - name: Run GCP gRPC persistence parity tests
         working-directory: tests/persistent_mode/gcp/parity-grpc

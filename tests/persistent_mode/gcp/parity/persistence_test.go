@@ -172,17 +172,84 @@ func truncate(s string) string {
 
 // ── per-service seeds ────────────────────────────────────────────────────────
 
-// seedBigQuery creates a dataset (bigquery/v2 projects.datasets.insert).
+// seedBigQuery creates a dataset + table, streams rows through
+// tabledata.insertAll, and executes a SQL job over them. The survived check
+// asserts the table and its streamed rows still answer an executed query after
+// a restart; the cleared check asserts the dataset is gone after reset.
 func seedBigQuery(d *driver, suffix string) (func() error, func() error, error) {
 	id := "ds-" + suffix
+	tbl := "t-" + suffix
 	post := fmt.Sprintf("/bigquery/v2/projects/%s/datasets", project)
 	if err := d.expect("POST", post, jsonBody(map[string]any{
 		"datasetReference": map[string]any{"projectId": project, "datasetId": id},
 	}), http.StatusOK); err != nil {
 		return nil, nil, err
 	}
-	get := post + "/" + id
-	return d.verifyPresent(get), d.verifyGone(get), nil
+	tables := post + "/" + id + "/tables"
+	if err := d.expect("POST", tables, jsonBody(map[string]any{
+		"tableReference": map[string]any{"projectId": project, "datasetId": id, "tableId": tbl},
+		"schema": map[string]any{"fields": []any{
+			map[string]any{"name": "id", "type": "INTEGER", "mode": "NULLABLE"},
+			map[string]any{"name": "name", "type": "STRING", "mode": "NULLABLE"},
+		}},
+	}), http.StatusOK); err != nil {
+		return nil, nil, err
+	}
+	if err := d.expect("POST", tables+"/"+tbl+"/insertAll", jsonBody(map[string]any{
+		"rows": []any{
+			map[string]any{"insertId": "1", "json": map[string]any{"id": 1, "name": "alice"}},
+			map[string]any{"insertId": "2", "json": map[string]any{"id": 2, "name": "bob"}},
+		},
+	}), http.StatusOK); err != nil {
+		return nil, nil, err
+	}
+
+	// Executing a query is the strongest survival assertion: it requires the
+	// dataset, the table, its schema and every streamed row to have survived.
+	queryBody := jsonBody(map[string]any{
+		"query":        fmt.Sprintf("SELECT name FROM `%s.%s.%s` ORDER BY id", project, id, tbl),
+		"useLegacySql": false,
+	})
+	runQuery := func() error {
+		code, body, err := d.do("POST", fmt.Sprintf("/bigquery/v2/projects/%s/queries", project), queryBody)
+		if err != nil {
+			return fmt.Errorf("bigquery query: %w", err)
+		}
+		if code != http.StatusOK {
+			return fmt.Errorf("bigquery query: got HTTP %d (want 200): %s", code, truncate(body))
+		}
+		var resp struct {
+			TotalRows string `json:"totalRows"`
+			Rows      []struct {
+				F []struct {
+					V string `json:"v"`
+				} `json:"f"`
+			} `json:"rows"`
+		}
+		if err := json.Unmarshal([]byte(body), &resp); err != nil {
+			return fmt.Errorf("parse query response: %w: %s", err, truncate(body))
+		}
+		if resp.TotalRows != "2" || len(resp.Rows) != 2 {
+			return fmt.Errorf("query returned totalRows=%q rows=%d, want 2", resp.TotalRows, len(resp.Rows))
+		}
+		if resp.Rows[0].F[0].V != "alice" || resp.Rows[1].F[0].V != "bob" {
+			return fmt.Errorf("query rows = %+v, want alice,bob", resp.Rows)
+		}
+		return nil
+	}
+
+	getDataset := post + "/" + id
+	getTable := tables + "/" + tbl
+	survived := func() error {
+		if err := d.verifyPresent(getDataset)(); err != nil {
+			return err
+		}
+		if err := d.verifyPresent(getTable)(); err != nil {
+			return err
+		}
+		return runQuery()
+	}
+	return survived, d.verifyGone(getDataset), nil
 }
 
 // seedCloudDNS creates a managed zone (dns/v1 projects.managedZones.create).
