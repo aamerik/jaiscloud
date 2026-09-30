@@ -27,6 +27,13 @@ const (
 	TypeStorageFinalize = "google.storage.object.finalize"
 	TypeStorageDelete   = "google.storage.object.delete"
 
+	// Dataproc lifecycle event types. Unlike the storage/pubsub types above,
+	// these are an emulator-defined contract: real GCP has no native Dataproc
+	// Pub/Sub event source, so the emulator raises them for job/cluster state
+	// transitions to let event-driven consumers observe the Dataproc lifecycle.
+	TypeDataprocJobStateChange     = "google.cloud.dataproc.v1.job.v1.stateChange"
+	TypeDataprocClusterStateChange = "google.cloud.dataproc.v1.cluster.v1.stateChange"
+
 	// TypePubSubPublishCloudEvent is the Eventarc CloudEvent spelling of the
 	// Pub/Sub message-published event; a materialized Eventarc trigger filters
 	// on it. NormalizeEventType folds it onto TypePubSubPublish.
@@ -61,6 +68,7 @@ const (
 	SourcePubSub   = "pubsub"
 	SourceStorage  = "storage"
 	SourceEventarc = "eventarc"
+	SourceDataproc = "dataproc"
 )
 
 // Event is one event raised by a producer for delivery to any subscribed Cloud

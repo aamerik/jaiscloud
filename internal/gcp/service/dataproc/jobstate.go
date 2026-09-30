@@ -98,6 +98,7 @@ func mockDriverOutputURI(jobUUID string) string {
 // terminal state.
 func (s *Service) advanceJob(ctx context.Context, project, region, jobID string) (dpstore.Job, error) {
 	transitioned := false
+	var prev dpstore.JobStatus
 	j, err := s.store.UpdateJobAtomic(ctx, project, region, jobID, func(cur dpstore.Job) (dpstore.Job, error) {
 		if !jobTransitional(cur.Status.State) || clock.Now().UTC().Before(cur.Status.StateStartTime.Add(s.jobStateDelay)) {
 			return cur, nil
@@ -110,6 +111,7 @@ func (s *Service) advanceJob(ctx context.Context, project, region, jobID string)
 			next = jobStateAttemptFail
 		}
 		transitioned = true
+		prev = cur.Status
 		cur.StatusHistory = append(cur.StatusHistory, cur.Status)
 		cur.Status = dpstore.JobStatus{State: next, StateStartTime: clock.Now().UTC(), Substate: jobSubstateFor(next)}
 		if next == jobStateDone && cur.DriverOutputResourceURI == "" {
@@ -119,6 +121,9 @@ func (s *Service) advanceJob(ctx context.Context, project, region, jobID string)
 	})
 	if err != nil {
 		return j, err
+	}
+	if transitioned {
+		s.emitJobStateChange(ctx, project, region, j, prev)
 	}
 	if transitioned && jobTerminal(j.Status.State) {
 		s.completeSubmitOperation(ctx, project, region, j)
@@ -133,11 +138,13 @@ func (s *Service) advanceJob(ctx context.Context, project, region, jobID string)
 // untouched rather than resurrecting it.
 func (s *Service) setJobState(ctx context.Context, project, region, jobID string, from map[string]bool, to, details string) (dpstore.Job, bool) {
 	applied := false
+	var prev dpstore.JobStatus
 	j, err := s.store.UpdateJobAtomic(ctx, project, region, jobID, func(cur dpstore.Job) (dpstore.Job, error) {
 		if !from[cur.Status.State] {
 			return cur, nil
 		}
 		applied = true
+		prev = cur.Status
 		cur.StatusHistory = append(cur.StatusHistory, cur.Status)
 		cur.Status = dpstore.JobStatus{State: to, Details: details, StateStartTime: clock.Now().UTC(), Substate: jobSubstateFor(to)}
 		return cur, nil
@@ -145,6 +152,9 @@ func (s *Service) setJobState(ctx context.Context, project, region, jobID string
 	if err != nil {
 		slog.Warn("dataproc: setJobState failed", "job", jobID, "state", to, "err", err)
 		return dpstore.Job{}, false
+	}
+	if applied {
+		s.emitJobStateChange(ctx, project, region, j, prev)
 	}
 	return j, applied
 }

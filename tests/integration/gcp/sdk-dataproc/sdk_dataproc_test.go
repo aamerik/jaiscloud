@@ -10,7 +10,9 @@ package sdk_dataproc_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -18,7 +20,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/dataproc/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
+	"google.golang.org/api/pubsub/v1"
 )
 
 func endpoint() string {
@@ -123,6 +127,114 @@ func TestSDKDataproc(t *testing.T) {
 	// The cluster is gone.
 	_, err = svc.Projects.Regions.Clusters.Get(project, region, clusterName).Do()
 	require.Error(t, err)
+}
+
+// TestSDKDataprocJobEvents verifies that job state transitions publish
+// CloudEvents to the configured Pub/Sub topic. The emulator must be started
+// with JAISCLOUD_DATAPROC_EVENTS_TOPIC set (the same env var names the topic
+// this test subscribes to); otherwise the test skips.
+func TestSDKDataprocJobEvents(t *testing.T) {
+	topicID := os.Getenv("JAISCLOUD_DATAPROC_EVENTS_TOPIC")
+	if topicID == "" {
+		t.Skip("JAISCLOUD_DATAPROC_EVENTS_TOPIC not set; skipping Dataproc event test")
+	}
+	ctx := context.Background()
+	const project = "proj"
+	const region = "us-central1"
+
+	svc, err := dataproc.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	ps, err := pubsub.NewService(ctx, opts()...)
+	require.NoError(t, err)
+
+	// The topic is created idempotently: a prior run in the same emulator may
+	// already have it.
+	topicName := "projects/" + project + "/topics/" + topicID
+	if _, err := ps.Projects.Topics.Create(topicName, &pubsub.Topic{}).Do(); err != nil {
+		var gerr *googleapi.Error
+		if !errors.As(err, &gerr) || gerr.Code != 409 {
+			require.NoError(t, err)
+		}
+	}
+	subName := "projects/" + project + "/subscriptions/" + unique("sub")
+	_, err = ps.Projects.Subscriptions.Create(subName, &pubsub.Subscription{Topic: topicName}).Do()
+	require.NoError(t, err)
+	t.Cleanup(func() { ps.Projects.Subscriptions.Delete(subName).Do() })
+
+	clusterName := unique("c")
+	op, err := svc.Projects.Regions.Clusters.Create(project, region, &dataproc.Cluster{
+		ProjectId:   project,
+		ClusterName: clusterName,
+		Config: &dataproc.ClusterConfig{
+			GceClusterConfig: &dataproc.GceClusterConfig{ZoneUri: "us-central1-a"},
+		},
+	}).Do()
+	require.NoError(t, err)
+	require.True(t, pollOperation(t, svc, op.Name).Done)
+
+	jobID := unique("job")
+	_, err = svc.Projects.Regions.Jobs.Submit(project, region, &dataproc.SubmitJobRequest{
+		Job: &dataproc.Job{
+			Reference: &dataproc.JobReference{ProjectId: project, JobId: jobID},
+			Placement: &dataproc.JobPlacement{ClusterName: clusterName},
+			PysparkJob: &dataproc.PySparkJob{
+				MainPythonFileUri: "gs://jaiscloud-bucket/main.py",
+			},
+		},
+	}).Do()
+	require.NoError(t, err)
+	require.Equal(t, "DONE", pollJob(t, svc, project, region, jobID).Status.State)
+
+	// Pull the topic subscription and collect the job's and cluster's
+	// state-change events (both publish to the same topic).
+	jobStates := map[string]bool{}
+	clusterStates := map[string]bool{}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if jobStates["PENDING"] && jobStates["RUNNING"] && jobStates["DONE"] &&
+			clusterStates["CREATING"] && clusterStates["RUNNING"] {
+			break
+		}
+		require.False(t, time.Now().After(deadline), "missing state events; job=%v cluster=%v", jobStates, clusterStates)
+		resp, err := ps.Projects.Subscriptions.Pull(subName, &pubsub.PullRequest{
+			MaxMessages:       50,
+			ReturnImmediately: true,
+		}).Do()
+		require.NoError(t, err)
+		var ackIDs []string
+		for _, rm := range resp.ReceivedMessages {
+			ackIDs = append(ackIDs, rm.AckId)
+			body, err := base64.StdEncoding.DecodeString(rm.Message.Data)
+			require.NoError(t, err)
+			var ce map[string]any
+			require.NoError(t, json.Unmarshal(body, &ce))
+			require.Equal(t, "1.0", ce["specversion"])
+			inner, _ := ce["data"].(map[string]any)
+			switch ce["type"] {
+			case "google.cloud.dataproc.v1.job.v1.stateChange":
+				if inner["jobId"] != jobID {
+					continue
+				}
+				require.Equal(t, clusterName, inner["clusterName"])
+				require.Equal(t, project, inner["projectId"])
+				if state, ok := inner["state"].(string); ok {
+					jobStates[state] = true
+				}
+			case "google.cloud.dataproc.v1.cluster.v1.stateChange":
+				if inner["clusterName"] != clusterName {
+					continue
+				}
+				if state, ok := inner["state"].(string); ok {
+					clusterStates[state] = true
+				}
+			}
+		}
+		if len(ackIDs) > 0 {
+			_, err = ps.Projects.Subscriptions.Acknowledge(subName, &pubsub.AcknowledgeRequest{AckIds: ackIDs}).Do()
+			require.NoError(t, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // pollJob polls jobs.get until the job reaches a terminal state.
