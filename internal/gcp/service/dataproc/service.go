@@ -28,6 +28,7 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/sparkgcp"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/k8shelpers"
@@ -82,6 +83,21 @@ type Service struct {
 	// emulator's Spark engine does not retry, so a transient failure has no
 	// natural producer. nil disables it.
 	jobAttemptFailureHook func(project, region, jobID string) bool
+
+	// eventPublisher publishes lifecycle events (cluster/job state changes) to a
+	// configured Pub/Sub topic. Nil disables Pub/Sub publishing. Publishing is
+	// best-effort: a failure never fails the underlying transition.
+	eventPublisher EventPublisher
+	// eventsTopic is the default lifecycle events topic (a topic ID or full
+	// name, project-scoped at emit time). Empty (the default) disables Pub/Sub
+	// event publishing; a cluster may override it with the eventsTopicLabel
+	// label. See events.go.
+	eventsTopic string
+	// eventDispatcher delivers lifecycle events to the Cloud Functions
+	// event-delivery engine so a function whose eventTrigger names a Dataproc
+	// state-change type receives them directly (independent of the Pub/Sub
+	// topic). Nil disables direct delivery.
+	eventDispatcher eventing.Dispatcher
 
 	ctx         context.Context
 	cancel      context.CancelFunc

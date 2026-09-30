@@ -111,6 +111,7 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
 	}
 	slog.Info("dataproc: cluster creating", "project", project, "region", region, "cluster", name, "placement", clusterPlacement(c))
+	s.emitClusterStateChange(ctx, project, region, c, dpstore.ClusterStatus{})
 	op, err := s.createClusterOperation(ctx, project, region, "create", ClusterName(project, region, name),
 		clusterOperationMetadata(name, c.ClusterUUID, "CREATE", "RUNNING"))
 	if err != nil {
@@ -179,6 +180,8 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 	if _, err := s.advanceCluster(ctx, project, region, name); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
 	}
+	var transitioned bool
+	var prev dpstore.ClusterStatus
 	c, err := s.store.UpdateClusterAtomic(ctx, project, region, name, func(c dpstore.Cluster) (dpstore.Cluster, error) {
 		if apply("labels") && in.Labels != nil {
 			c.Labels = in.Labels
@@ -200,6 +203,8 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 			return c, invalidArgument("cluster must specify exactly one of config or virtualClusterConfig")
 		}
 		if !clusterTransitional(c.Status.State) {
+			transitioned = true
+			prev = c.Status
 			c.StatusHistory = append(c.StatusHistory, c.Status)
 			c.Status = dpstore.ClusterStatus{State: "UPDATING", StateStartTime: clock.Now().UTC()}
 		}
@@ -208,6 +213,9 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 	})
 	if err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
+	}
+	if transitioned {
+		s.emitClusterStateChange(ctx, project, region, c, prev)
 	}
 	op, err := s.createClusterOperation(ctx, project, region, "update", ClusterName(project, region, name),
 		clusterOperationMetadata(name, c.ClusterUUID, "UPDATE", "RUNNING"))
@@ -228,7 +236,9 @@ func (s *Service) DeleteCluster(ctx context.Context, project, region, name strin
 	if _, err := s.advanceCluster(ctx, project, region, name); err != nil {
 		return dpstore.Operation{}, mapErr(err)
 	}
+	var prev dpstore.ClusterStatus
 	c, err := s.store.UpdateClusterAtomic(ctx, project, region, name, func(c dpstore.Cluster) (dpstore.Cluster, error) {
+		prev = c.Status
 		if !clusterTransitional(c.Status.State) {
 			c.StatusHistory = append(c.StatusHistory, c.Status)
 		}
@@ -238,6 +248,9 @@ func (s *Service) DeleteCluster(ctx context.Context, project, region, name strin
 	})
 	if err != nil {
 		return dpstore.Operation{}, mapErr(err)
+	}
+	if prev.State != "DELETING" {
+		s.emitClusterStateChange(ctx, project, region, c, prev)
 	}
 	op, err := s.createClusterOperation(ctx, project, region, "delete", ClusterName(project, region, name),
 		clusterOperationMetadata(name, c.ClusterUUID, "DELETE", "RUNNING"))
@@ -257,7 +270,9 @@ func (s *Service) startStopCluster(ctx context.Context, project, region, name, t
 	if _, err := s.advanceCluster(ctx, project, region, name); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
 	}
+	var prev dpstore.ClusterStatus
 	c, err := s.store.UpdateClusterAtomic(ctx, project, region, name, func(c dpstore.Cluster) (dpstore.Cluster, error) {
+		prev = c.Status
 		if !clusterTransitional(c.Status.State) {
 			c.StatusHistory = append(c.StatusHistory, c.Status)
 		}
@@ -267,6 +282,9 @@ func (s *Service) startStopCluster(ctx context.Context, project, region, name, t
 	})
 	if err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
+	}
+	if prev.State != toState {
+		s.emitClusterStateChange(ctx, project, region, c, prev)
 	}
 	op, err := s.createClusterOperation(ctx, project, region, verb, ClusterName(project, region, name),
 		clusterOperationMetadata(name, c.ClusterUUID, operationType, "RUNNING"))
@@ -349,29 +367,53 @@ var errClusterDeleteDue = errors.New("dataproc: cluster delete transition due")
 // double-apply a transition. A DELETING cluster past its delay is removed and
 // reported as ErrNoSuchCluster; any settled cluster is returned unchanged.
 func (s *Service) advanceCluster(ctx context.Context, project, region, name string) (dpstore.Cluster, error) {
+	transitioned := false
+	var prev dpstore.ClusterStatus
+	var deleted dpstore.Cluster
 	c, err := s.store.UpdateClusterAtomic(ctx, project, region, name, func(c dpstore.Cluster) (dpstore.Cluster, error) {
 		if !clusterTransitional(c.Status.State) || clock.Now().UTC().Before(c.Status.StateStartTime.Add(s.clusterReadyDelay)) {
 			return c, nil
 		}
 		if c.Status.State == "DELETING" {
+			deleted = c
 			return c, errClusterDeleteDue
 		}
 		next := clusterTargetState(c)
 		if next == "RUNNING" && s.clusterErrorHook != nil && s.clusterErrorHook(project, region, name) {
 			next = "ERROR"
 		}
+		transitioned = true
+		prev = c.Status
 		c.StatusHistory = append(c.StatusHistory, c.Status)
 		c.Status = dpstore.ClusterStatus{State: next, StateStartTime: clock.Now().UTC()}
 		c.UpdateTime = clock.Now().UTC()
 		return c, nil
 	})
 	if errors.Is(err, errClusterDeleteDue) {
-		if delErr := s.store.DeleteCluster(ctx, project, region, name); delErr != nil && !errors.Is(delErr, dpstore.ErrNoSuchCluster) {
+		delErr := s.store.DeleteCluster(ctx, project, region, name)
+		if delErr != nil && !errors.Is(delErr, dpstore.ErrNoSuchCluster) {
 			return dpstore.Cluster{}, delErr
+		}
+		// Emit the terminal DELETED transition only when this reader actually
+		// removed the record, so two concurrent readers polling the same due
+		// DELETING cluster cannot both publish it. The delete happens outside
+		// the atomic mutate (which aborted), so existence is decided here.
+		if delErr == nil {
+			gone := deleted
+			gone.Status = dpstore.ClusterStatus{State: clusterDeletedState, StateStartTime: clock.Now().UTC()}
+			s.emitClusterStateChange(ctx, project, region, gone, deleted.Status)
 		}
 		return dpstore.Cluster{}, dpstore.ErrNoSuchCluster
 	}
-	return c, err
+	if err != nil {
+		// The mutate ran (so transitioned/prev/deleted may be set) but the write
+		// failed: never publish a transition that did not persist.
+		return c, err
+	}
+	if transitioned {
+		s.emitClusterStateChange(ctx, project, region, c, prev)
+	}
+	return c, nil
 }
 
 // clusterNameFromTarget extracts the cluster name from a stored operation's

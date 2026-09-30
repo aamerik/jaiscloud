@@ -47,6 +47,7 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 		if err := s.store.CreateJob(ctx, project, region, j); err != nil {
 			return dpstore.Job{}, mapCreateJobErr(err)
 		}
+		s.emitJobStateChange(ctx, project, region, j, dpstore.JobStatus{})
 		return j, nil
 	}
 
@@ -57,12 +58,14 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 		if createErr := s.store.CreateJob(ctx, project, region, j); createErr != nil {
 			return dpstore.Job{}, mapCreateJobErr(createErr)
 		}
+		s.emitJobStateChange(ctx, project, region, j, dpstore.JobStatus{})
 		return j, nil
 	}
 
 	if err := s.store.CreateJob(ctx, project, region, j); err != nil {
 		return dpstore.Job{}, mapCreateJobErr(err)
 	}
+	s.emitJobStateChange(ctx, project, region, j, dpstore.JobStatus{})
 
 	// Mock mode: the job stays PENDING and advances through SETUP_DONE /
 	// RUNNING / DONE lazily on reads (advanceJob), so pollers observe the state
@@ -243,11 +246,13 @@ func (s *Service) CancelJob(ctx context.Context, project, region, jobID string) 
 	}
 	now := clock.Now().UTC()
 	var transitioned bool
+	var prev dpstore.JobStatus
 	j, err := s.store.UpdateJobAtomic(ctx, project, region, jobID, func(j dpstore.Job) (dpstore.Job, error) {
 		if jobTerminal(j.Status.State) || j.Status.State == jobStateCancelPending || j.Status.State == jobStateCancelStarted {
 			return j, nil // already terminal / already cancelling — nothing to do
 		}
 		transitioned = true
+		prev = j.Status
 		j.StatusHistory = append(j.StatusHistory, j.Status)
 		j.Status = dpstore.JobStatus{State: jobStateCancelPending, StateStartTime: now}
 		return j, nil
@@ -258,6 +263,7 @@ func (s *Service) CancelJob(ctx context.Context, project, region, jobID string) 
 	if !transitioned {
 		return j, nil
 	}
+	s.emitJobStateChange(ctx, project, region, j, prev)
 
 	// Stop the executor (k8s mode). The cancel progression itself is lazy and
 	// settles on later reads / the operation poll, so finishJob cannot resurrect
@@ -344,11 +350,13 @@ func (s *Service) advanceSubmitOperation(ctx context.Context, op dpstore.Operati
 func (s *Service) finishJob(project, region string, j dpstore.Job, state, details string) {
 	now := clock.Now().UTC()
 	var transitioned bool
+	var prev dpstore.JobStatus
 	fresh, err := s.store.UpdateJobAtomic(context.Background(), project, region, j.JobID, func(fresh dpstore.Job) (dpstore.Job, error) {
 		if jobTerminal(fresh.Status.State) {
 			return fresh, nil // already terminal (e.g. cancelled) — first write wins
 		}
 		transitioned = true
+		prev = fresh.Status
 		fresh.StatusHistory = append(fresh.StatusHistory, fresh.Status)
 		if fresh.Status.State == jobStateCancelPending || fresh.Status.State == jobStateCancelStarted {
 			// A cancel request won the race: the job lands on CANCELLED, not
@@ -369,6 +377,7 @@ func (s *Service) finishJob(project, region string, j dpstore.Job, state, detail
 	if !transitioned {
 		return
 	}
+	s.emitJobStateChange(context.Background(), project, region, fresh, prev)
 	s.completeSubmitOperation(context.Background(), project, region, fresh)
 }
 

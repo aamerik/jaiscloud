@@ -24,7 +24,7 @@
 | Cloud Datastore mode | REST + gRPC | Entities, queries (structured + GQL), ID allocation, `ReserveIds`/`RunAggregationQuery`, transactions (read-set OCC) — see [Known Limitations](#known-limitations) |
 | Cloud Functions (v1 + v2) | REST + gRPC | Deploy (LRO), invoke via `:call` or the deployed HTTPS trigger URL (mock echo by default, Docker/K8s execution modes), locations, source URLs, v2 `serviceConfig` instance/concurrency config (`minInstanceCount`/`maxInstanceCount`/`maxInstanceRequestConcurrency`/`availableCpu`, validated, surfaced + admission-enforced) |
 | Cloud Workflows | REST + gRPC | Workflow definitions + executions, real YAML expression engine |
-| Cloud Dataproc | REST + gRPC | Clusters + jobs, **real Spark execution** in Docker/K8s executor mode (same model as AWS EMR) |
+| Cloud Dataproc | REST + gRPC | Clusters + jobs, **real Spark execution** in Docker/K8s executor mode (same model as AWS EMR); optional cluster/job lifecycle events on Pub/Sub |
 | Dataproc Metastore | REST + gRPC | Control-plane CRUD (services/backups/metadata-imports) + Hive Metastore Thrift serving plane (:9083); databases/tables/partitions/locks served (including the Hive-3.x `get_table_meta` and `alter_table_with_cascade` paths), see [Known Limitations](#known-limitations) |
 | BigLake Iceberg REST Catalog | REST | `org.apache.iceberg.rest.RESTCatalog` surface mounted at `/iceberg/` — namespaces, tables, atomic `CommitTableRequest` requirements/updates, see [Known Limitations](#known-limitations) |
 | Managed Kafka | REST + gRPC | Metadata-only clusters/topics — see [Known Limitations](#known-limitations) |
@@ -317,6 +317,17 @@ Cloud Workflows is implemented over a real YAML expression engine: workflow defi
 ### Dataproc Serverless: not implemented
 
 The Dataproc Serverless (Batch) API is not implemented. Dataproc is clusters + jobs with mock, Docker, or K8s executors only; serverless batches have no emulator surface.
+
+### Dataproc lifecycle events on Pub/Sub (emulator-defined)
+
+Every cluster and job state transition publishes one message to a configured Cloud Pub/Sub topic, so event-driven consumers can observe the Dataproc lifecycle without polling `operations.get`/`jobs.get`. **This is an emulator-defined contract** — real GCP has no native Dataproc Pub/Sub event source — so it is opt-in and off by default.
+
+- **Enable:** start the emulator with `JAISCLOUD_DATAPROC_EVENTS_TOPIC=<topic>` (a topic ID or full `projects/{p}/topics/{t}` name; a bare ID is scoped to the transition's project). Publishing is disabled unless that variable is set or a cluster carries the per-cluster label below.
+- **Per-cluster override:** set the cluster label `jaiscloud-events-topic` to route that cluster's — and its jobs' — events to a different topic. The label alone enables publishing for that cluster even when the env default is unset.
+- **Message body:** a structured [CloudEvents 1.0](https://cloudevents.io) JSON envelope (`specversion`, `id`, `source` `//dataproc.googleapis.com/projects/{p}/regions/{r}/clusters/{c}`, `type`, `datacontenttype`, `time`, `data`). Types are `google.cloud.dataproc.v1.job.v1.stateChange` and `google.cloud.dataproc.v1.cluster.v1.stateChange`; `data` carries `projectId`, `region`, `clusterName`, `jobId`/`clusterUuid`, `previousState`, `state`, `stateStartTime` (and `attempt` for jobs).
+- **Message attributes:** the same key fields are mirrored as string attributes (`eventType`, `projectId`, `region`, `clusterName`, `jobId`, `previousState`, `state`, `attempt`) so a subscription `filter` can select them.
+- **States:** jobs emit the full machine (`PENDING`, `SETUP_DONE`, `RUNNING`, `CANCEL_PENDING`, `CANCEL_STARTED`, `CANCELLED`, `DONE`, `ERROR`, `ATTEMPT_FAILURE`); clusters emit `CREATING`, `UPDATING`, `STARTING`, `STOPPING`, `RUNNING`, `STOPPED`, and a terminal `DELETED` when the record is removed (`DELETED` is emulator-only — `ClusterStatus` has no such state). A cluster reaches `ERROR` only through the failure-injection path the tests use (real provisioning failures are not observable), and `attempt` on a job event is `1` today because the Spark engine does not retry (the emulator never begins a second attempt).
+- **Best-effort:** a transition never fails because of eventing; a publish error (e.g. the topic does not exist) is logged and dropped. If Cloud Functions is enabled, each transition is also dispatched directly to any function whose event trigger names the matching Dataproc event type **and** the specific job/cluster resource (the trigger `resource` must match the event's `jobs/{id}` / `clusters/{name}`).
 
 ### Dataproc Metastore: control plane + Hive Thrift serving plane
 

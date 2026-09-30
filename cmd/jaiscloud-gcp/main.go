@@ -350,6 +350,13 @@ func startCmd() *cobra.Command {
 				dataprocOpts := []dataproccore.Option{
 					dataproccore.WithInstanceID(instanceID),
 					dataproccore.WithProjectID(cfg.ProjectID),
+					// Lifecycle events publish to the Pub/Sub provider (the
+					// core only sees the interface, so it never imports
+					// provider/pubsub). Empty topic (the default) disables
+					// publishing; a cluster may override per-cluster with the
+					// jaiscloud-events-topic label.
+					dataproccore.WithEventPublisher(pubsubP),
+					dataproccore.WithEventsTopic(os.Getenv("JAISCLOUD_DATAPROC_EVENTS_TOPIC")),
 				}
 				if cfg.K8sSparkSA != "" {
 					dataprocOpts = append(dataprocOpts, dataproccore.WithServiceAccountName(cfg.K8sSparkSA))
@@ -409,6 +416,12 @@ func startCmd() *cobra.Command {
 				}
 				slog.Info("dataproc executor", "mode", sparkMode, "source", sparkModeSrc)
 				dataprocCore = dataproccore.NewService(stores.dataproc, stores.resources, dataprocOpts...)
+				// Deliver lifecycle events directly to functions whose
+				// eventTrigger names a Dataproc state-change type (independent
+				// of the Pub/Sub topic). Only wire when functions is enabled.
+				if functionsCore != nil {
+					dataprocCore.SetEventDispatcher(functionsCore)
+				}
 				defer dataprocCore.Shutdown(context.Background())
 			}
 			dataprocP := restdataproc.NewProvider(dataprocCore, cfg.ProjectID)
