@@ -146,7 +146,7 @@ func TestListTimeSeriesLabelFilterAndAggregation(t *testing.T) {
 
 	iv := &TimeInterval{Start: end.Add(-10 * time.Minute), End: end}
 	filter := `metric.type = "` + typ + `" AND metric.labels.env = "production"`
-	page, _, err := s.ListTimeSeries(ctx, "proj", filter, iv, nil, false, 0, "")
+	page, _, err := s.ListTimeSeries(ctx, "proj", filter, iv, nil, nil, "", false, 0, "")
 	if err != nil {
 		t.Fatalf("ListTimeSeries: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestListTimeSeriesLabelFilterAndAggregation(t *testing.T) {
 		AlignmentPeriod:    time.Hour,
 		PerSeriesAligner:   AlignSum,
 		CrossSeriesReducer: ReduceSum,
-	}, false, 0, "")
+	}, nil, "", false, 0, "")
 	if err != nil {
 		t.Fatalf("aggregated ListTimeSeries: %v", err)
 	}
@@ -175,4 +175,53 @@ func TestListTimeSeriesLabelFilterAndAggregation(t *testing.T) {
 // point time.
 func clockNow() time.Time {
 	return time.Date(2026, 1, 1, 0, 30, 0, 0, time.UTC)
+}
+
+// TestListTimeSeriesSecondaryAggregation covers J43: a secondary aggregation is
+// applied after the primary one, and a non-blank order_by is rejected.
+func TestListTimeSeriesSecondaryAggregation(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	typ := "custom.googleapis.com/j43"
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Six one-minute points of 1 → primary sums per minute (1 each); the
+	// secondary sums ten-minute buckets, collapsing them to a single point of 6.
+	pts := make([]monitoringstore.Point, 0, 6)
+	for i := 0; i < 6; i++ {
+		pts = append(pts, pointAt(base.Add(time.Duration(i+1)*time.Minute), 1))
+	}
+	if err := s.CreateTimeSeries(ctx, "proj", []monitoringstore.TimeSeries{
+		testSeries(typ, "env", "a", pts...),
+	}); err != nil {
+		t.Fatalf("CreateTimeSeries: %v", err)
+	}
+	iv := &TimeInterval{Start: base, End: base.Add(time.Hour)}
+	filter := `metric.type = "` + typ + `"`
+	primary := &Aggregation{AlignmentPeriod: time.Minute, PerSeriesAligner: AlignSum}
+	secondary := &Aggregation{AlignmentPeriod: 10 * time.Minute, PerSeriesAligner: AlignSum, CrossSeriesReducer: ReduceSum}
+
+	page, _, err := s.ListTimeSeries(ctx, "proj", filter, iv, primary, secondary, "", false, 0, "")
+	if err != nil {
+		t.Fatalf("secondary aggregation: %v", err)
+	}
+	if len(page) != 1 || len(page[0].Points) != 1 {
+		t.Fatalf("secondary aggregation = %+v, want one 10-minute point", page)
+	}
+	if got := *page[0].Points[0].Value.DoubleValue; got != 6 {
+		t.Fatalf("secondary sum = %v, want 6", got)
+	}
+	// The output point interval is the secondary alignment window.
+	if d := page[0].Points[0].EndTime.Sub(page[0].Points[0].StartTime); d != 10*time.Minute {
+		t.Fatalf("secondary interval width = %s, want 10m", d)
+	}
+
+	// order_by is unsupported and must be blank.
+	if _, _, err := s.ListTimeSeries(ctx, "proj", filter, iv, primary, nil, "metric.type", false, 0, ""); err == nil {
+		t.Fatal("expected order_by to be rejected")
+	}
+	// secondaryAggregation requires the primary aggregation.
+	if _, _, err := s.ListTimeSeries(ctx, "proj", filter, iv, nil, secondary, "", false, 0, ""); err == nil {
+		t.Fatal("expected secondary aggregation without primary to be rejected")
+	}
 }

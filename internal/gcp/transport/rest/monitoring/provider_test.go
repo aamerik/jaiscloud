@@ -230,6 +230,27 @@ func TestRESTTimeSeriesLabelFilterAndAggregation(t *testing.T) {
 	if _, err := call(t, c, p, http.MethodGet, "/v3/projects/test/timeSeries?"+bad.Encode(), nil); err == nil {
 		t.Fatal("short alignment period should be rejected over REST")
 	}
+
+	// secondaryAggregation.* is parsed and applied after the primary (J43).
+	sec := url.Values{}
+	sec.Set("filter", `metric.type = "`+tstype+`"`)
+	sec.Set("aggregation.alignmentPeriod", "3600s")
+	sec.Set("aggregation.perSeriesAligner", "ALIGN_SUM")
+	sec.Set("aggregation.crossSeriesReducer", "REDUCE_SUM")
+	sec.Set("secondaryAggregation.alignmentPeriod", "7200s")
+	sec.Set("secondaryAggregation.perSeriesAligner", "ALIGN_SUM")
+	sec.Set("secondaryAggregation.crossSeriesReducer", "REDUCE_SUM")
+	if _, err := call(t, c, p, http.MethodGet, "/v3/projects/test/timeSeries?"+sec.Encode(), nil); err != nil {
+		t.Fatalf("secondary aggregation over REST: %v", err)
+	}
+
+	// order_by is unsupported by ListTimeSeries and must be rejected.
+	ob := url.Values{}
+	ob.Set("filter", `metric.type = "`+tstype+`"`)
+	ob.Set("orderBy", "metric.type")
+	if _, err := call(t, c, p, http.MethodGet, "/v3/projects/test/timeSeries?"+ob.Encode(), nil); err == nil {
+		t.Fatal("orderBy should be rejected over REST")
+	}
 }
 
 func TestRESTAlertPolicyRoundTrip(t *testing.T) {

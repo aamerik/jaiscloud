@@ -139,7 +139,7 @@ func (s *Service) DeleteMetricDescriptor(ctx context.Context, req *monitoringpb.
 func (s *Service) ListTimeSeries(ctx context.Context, req *monitoringpb.ListTimeSeriesRequest) (*monitoringpb.ListTimeSeriesResponse, error) {
 	project := s.project(ctx, req.GetName())
 	headersOnly := req.GetView() == monitoringpb.ListTimeSeriesRequest_HEADERS
-	page, next, err := s.core.ListTimeSeries(ctx, project, req.GetFilter(), timeIntervalFromProto(req.GetInterval()), aggregationFromProto(req.GetAggregation()), headersOnly, int(req.GetPageSize()), req.GetPageToken())
+	page, next, err := s.core.ListTimeSeries(ctx, project, req.GetFilter(), timeIntervalFromProto(req.GetInterval()), aggregationFromProto(req.GetAggregation()), aggregationFromProto(req.GetSecondaryAggregation()), req.GetOrderBy(), headersOnly, int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, mapError(err)
 	}

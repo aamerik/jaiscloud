@@ -148,7 +148,11 @@ func (p *Provider) ListTimeSeries(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	page, next, err := p.core.ListTimeSeries(ctx, project, strParam(nr, "filter"), interval, aggregation, headersOnly,
+	secondary, err := secondaryAggregationFromParams(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListTimeSeries(ctx, project, strParam(nr, "filter"), interval, aggregation, secondary, strParam(nr, "orderBy"), headersOnly,
 		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err

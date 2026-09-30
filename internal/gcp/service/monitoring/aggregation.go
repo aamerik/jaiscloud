@@ -136,15 +136,20 @@ func applyAggregation(series []monitoringstore.TimeSeries, agg *Aggregation) ([]
 }
 
 // alignedSeries is one series after per-series alignment: a set of buckets keyed
-// by bucket end time, plus the output metric kind/value type.
+// by bucket end time, plus the output metric kind/value type and the alignment
+// period (used to render each output point's [start, end) interval).
 type alignedSeries struct {
 	src     monitoringstore.TimeSeries
 	kind    int32
 	valueTy int32
+	period  time.Duration
 	buckets map[time.Time]float64
 }
 
-// output materialises the aligned buckets as a store TimeSeries.
+// output materialises the aligned buckets as a store TimeSeries. Each aligned
+// point's interval is the alignment window (startTime = endTime - period), which
+// is what the transport renders as Interval.startTime/endTime; a gauge aligned
+// over a period is no longer a point.
 func (a alignedSeries) output() monitoringstore.TimeSeries {
 	out := a.src
 	out.MetricKind = a.kind
@@ -152,7 +157,7 @@ func (a alignedSeries) output() monitoringstore.TimeSeries {
 	out.Points = make([]monitoringstore.Point, 0, len(a.buckets))
 	for _, end := range sortedBucketTimes(a.buckets) {
 		out.Points = append(out.Points, monitoringstore.Point{
-			StartTime: end,
+			StartTime: end.Add(-a.period),
 			EndTime:   end,
 			Value:     typedValueFor(a.valueTy, a.buckets[end]),
 		})
@@ -196,8 +201,9 @@ func alignSeries(ts monitoringstore.TimeSeries, aligner Aligner, period time.Dur
 	}
 	return &alignedSeries{
 		src:     ts,
-		kind:    ts.MetricKind,
+		kind:    metricKindGauge,
 		valueTy: alignerOutputType(aligner, ts.ValueType),
+		period:  period,
 		buckets: buckets,
 	}, nil
 }
@@ -295,7 +301,7 @@ func reduceSeries(aligned []alignedSeries, reducer Reducer, groupByFields []stri
 		}
 
 		outSeries := first.src
-		outSeries.MetricKind = first.kind
+		outSeries.MetricKind = metricKindGauge
 		outSeries.ValueType = reducerOutputType(reducer, first.valueTy)
 		outSeries.MetricLabels = map[string]string{}
 		outSeries.ResourceLabels = map[string]string{}
@@ -305,7 +311,7 @@ func reduceSeries(aligned []alignedSeries, reducer Reducer, groupByFields []stri
 		outSeries.Points = make([]monitoringstore.Point, 0, len(buckets))
 		for _, end := range sortedBucketTimes(buckets) {
 			outSeries.Points = append(outSeries.Points, monitoringstore.Point{
-				StartTime: end,
+				StartTime: end.Add(-first.period),
 				EndTime:   end,
 				Value:     typedValueFor(outSeries.ValueType, buckets[end]),
 			})
