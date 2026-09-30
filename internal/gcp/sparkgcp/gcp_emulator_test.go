@@ -76,6 +76,48 @@ func TestDriverSparkConfs_DefaultProject(t *testing.T) {
 	}
 }
 
+func TestProtectedSparkConf(t *testing.T) {
+	protected := []string{
+		"spark.hadoop.fs.gs.impl",
+		"spark.hadoop.fs.gs.project.id",
+		"spark.hadoop.fs.gs.storage.root.url",
+		"spark.hadoop.fs.AbstractFileSystem.gs.impl",
+		"spark.executorEnv.GOOGLE_CLOUD_PROJECT",
+		"spark.executorEnv.STORAGE_EMULATOR_HOST",
+		"spark.executorEnv.GOOGLE_APPLICATION_CREDENTIALS",
+	}
+	for _, k := range protected {
+		if !ProtectedSparkConf(k) {
+			t.Errorf("ProtectedSparkConf(%q) = false, want true", k)
+		}
+	}
+	for _, k := range []string{
+		"spark.hadoop.hive.metastore.uris",
+		"spark.executorEnv.MY_VAR",
+		"spark.some.other",
+		"fs.gs.impl",
+	} {
+		if ProtectedSparkConf(k) {
+			t.Errorf("ProtectedSparkConf(%q) = true, want false", k)
+		}
+	}
+}
+
+// every key DriverSparkConfsFromEnv emits must be reported protected, so a
+// caller can never strip the emulator's own connector wiring.
+func TestProtectedSparkConfCoversEmittedConfs(t *testing.T) {
+	cfg := &GCPEmulatorConfig{ProjectID: "p", Region: "r", GCSEndpoint: "http://emu", Credentials: "/k.json"}
+	for _, tok := range DriverSparkConfs(cfg) {
+		k, _, ok := strings.Cut(tok, "=")
+		if !ok {
+			continue // the "--conf" flag token
+		}
+		if !ProtectedSparkConf(k) {
+			t.Errorf("emitted conf %q is not protected", k)
+		}
+	}
+}
+
 func TestDriverSparkConfs_ExecutorEnvMirrorsDriverEnv(t *testing.T) {
 	cfg := &GCPEmulatorConfig{ProjectID: "p", Region: "r", GCSEndpoint: "http://emu"}
 	driver := envMap(DriverEnv(cfg))

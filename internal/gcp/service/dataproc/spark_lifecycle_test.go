@@ -427,7 +427,7 @@ func TestCancelJobVsFinishJobConcurrent_ResponseMatchesFinalState(t *testing.T) 
 	finishDone := make(chan struct{})
 	go func() {
 		defer close(finishDone)
-		p.finishJob(j.ProjectID, j.Region, j, "DONE", "")
+		p.finishJob(j.ProjectID, j.Region, j, "DONE", "", nil)
 	}()
 	cancelJob, cancelErr = p.CancelJob(ctx, j.ProjectID, j.Region, j.JobID)
 	<-finishDone

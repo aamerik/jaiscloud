@@ -99,6 +99,12 @@ type Service struct {
 	// topic). Nil disables direct delivery.
 	eventDispatcher eventing.Dispatcher
 
+	// blobSink stages a job's driver output/control files into the emulated
+	// GCS. Nil (unit tests / mock deployments) keeps the advertised URIs but
+	// does not materialize the objects. Satisfied by the GCS provider and wired
+	// in main.go, so the core never imports provider/storage.
+	blobSink BlobSink
+
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
