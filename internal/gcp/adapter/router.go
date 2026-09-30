@@ -154,14 +154,23 @@ func detectV1Service(path string) string {
 		return ""
 	}
 	rest := seg[pi+2:]
-	// Strip a trailing custom-method suffix (":commit", ":runQuery", ...) from
-	// the last segment so "documents:commit" detects as "documents" (mirrors the
-	// JSONCodec.Decode custom-method handling).
+	// Capture and strip a trailing custom-method suffix (":commit", ":runQuery",
+	// ...) from the last segment so "documents:commit" detects as "documents"
+	// (mirrors the JSONCodec.Decode custom-method handling).
+	custom := ""
 	if len(rest) > 0 {
 		last := rest[len(rest)-1]
 		if i := strings.IndexByte(last, ':'); i >= 0 {
+			custom = last[i+1:]
 			rest[len(rest)-1] = last[:i]
 		}
+	}
+	// IAM Service Account Credentials shares the serviceAccounts resource path
+	// with IAM on a single emulator origin; its unique custom verbs
+	// (generateAccessToken/generateIdToken) discriminate it. signBlob/signJwt
+	// are ambiguous with iam and remain owned by iam.
+	if custom == "generateAccessToken" || custom == "generateIdToken" {
+		return "iamcredentials"
 	}
 	// Service Usage v1: /v1/projects/{project}/services[/{service}][:verb]. The
 	// bare "services" resource segment is claimed here before the generic

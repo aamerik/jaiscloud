@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 802,
+    "total": 808,
     "by_state": {
-      "ga": 567,
+      "ga": 573,
       "limited": 97,
       "preview": 37,
       "unsupported": 101
     },
     "by_transport": {
       "grpc": {
-        "ga": 272,
+        "ga": 276,
         "limited": 11,
         "unsupported": 92
       },
       "rest": {
-        "ga": 295,
+        "ga": 297,
         "limited": 86,
         "preview": 37,
         "unsupported": 9
@@ -60,6 +60,9 @@
       },
       "iam": {
         "ga": 18
+      },
+      "iamcredentials": {
+        "ga": 6
       },
       "iceberg": {
         "preview": 14
@@ -3625,6 +3628,66 @@
       "evidence": [
         "postgres=yes",
         "transport=grpc (conformance=2/2 pass)"
+      ]
+    },
+    {
+      "service": "iamcredentials",
+      "operation": "GenerateAccessToken",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "iamcredentials",
+      "operation": "GenerateIdToken",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "iamcredentials",
+      "operation": "IAMCredentials.GenerateAccessToken",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=iamcredentials.projects.serviceAccounts.generateAccessToken",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "iamcredentials",
+      "operation": "IAMCredentials.GenerateIdToken",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=iamcredentials.projects.serviceAccounts.generateIdToken",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "iamcredentials",
+      "operation": "SignBlob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "iamcredentials",
+      "operation": "SignJwt",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

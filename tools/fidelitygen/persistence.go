@@ -62,6 +62,7 @@ var persistentBackends = map[string]bool{
 	"secretmanager":      true,
 	"kms":                true,
 	"iam":                true,
+	"iamcredentials":     true,
 	"pubsub":             true,
 	"firestore":          true,
 	"firestoreadmin":     true,

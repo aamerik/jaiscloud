@@ -16,6 +16,7 @@ import (
 	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
 	apiv2functionspb "cloud.google.com/go/functions/apiv2/functionspb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
+	credentialspb "cloud.google.com/go/iam/credentials/apiv1/credentialspb"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -42,6 +43,7 @@ import (
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpceventarc "jaiscloud/internal/gcp/transport/grpc/eventarc"
 	grpcfunctions "jaiscloud/internal/gcp/transport/grpc/functions"
+	grpciamcredentials "jaiscloud/internal/gcp/transport/grpc/iamcredentials"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
 	grpcmetastore "jaiscloud/internal/gcp/transport/grpc/metastore"
@@ -99,6 +101,7 @@ var grpcWireService = map[string]string{
 	"google.api.serviceusage.v1.ServiceUsage":            "serviceusage",
 	"google.cloud.resourcemanager.v3.Projects":           "resourcemanager",
 	"google.iam.v1.IAMPolicy":                            "iam",
+	"google.iam.credentials.v1.IAMCredentials":           "iamcredentials",
 	"google.longrunning.Operations":                      "operations",
 }
 
@@ -146,6 +149,7 @@ func EnumerateGRPC() []GRPCService {
 	dataprocpb.RegisterJobControllerServer(reg, &grpcdataproc.Service{})
 	functionspb.RegisterCloudFunctionsServiceServer(reg, &grpcfunctions.Service{})
 	apiv2functionspb.RegisterFunctionServiceServer(reg, &grpcfunctions.ServiceV2{})
+	credentialspb.RegisterIAMCredentialsServer(reg, &grpciamcredentials.Service{})
 	// Pub/Sub, KMS and Eventarc share one google.iam.v1.IAMPolicy registration.
 	iampb.RegisterIAMPolicyServer(reg, grpcserver.NewIAMRouter(&grpcpubsub.Service{}, &grpckms.Service{}, &grpceventarc.Service{}))
 	longrunningpb.RegisterOperationsServer(reg, grpcoperations.New())

@@ -86,6 +86,7 @@ func Registry() []Check {
 	checks = append(checks, dataprocChecks()...)
 	checks = append(checks, functionsChecks()...)
 	checks = append(checks, iamChecks()...)
+	checks = append(checks, iamCredentialsChecks()...)
 	return checks
 }
 

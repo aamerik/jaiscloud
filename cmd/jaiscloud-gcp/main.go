@@ -50,6 +50,7 @@ import (
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
 	eventarccore "jaiscloud/internal/gcp/service/eventarc"
 	functionscore "jaiscloud/internal/gcp/service/functions"
+	iamcredentialscore "jaiscloud/internal/gcp/service/iamcredentials"
 	loggingcore "jaiscloud/internal/gcp/service/logging"
 	managedkafkacore "jaiscloud/internal/gcp/service/managedkafka"
 	metastorecore "jaiscloud/internal/gcp/service/metastore"
@@ -81,6 +82,7 @@ import (
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpceventarc "jaiscloud/internal/gcp/transport/grpc/eventarc"
 	grpcfunctions "jaiscloud/internal/gcp/transport/grpc/functions"
+	grpciamcredentials "jaiscloud/internal/gcp/transport/grpc/iamcredentials"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
 	grpcmetastore "jaiscloud/internal/gcp/transport/grpc/metastore"
@@ -93,6 +95,7 @@ import (
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	resteventarc "jaiscloud/internal/gcp/transport/rest/eventarc"
 	restfunctions "jaiscloud/internal/gcp/transport/rest/functions"
+	restiamcredentials "jaiscloud/internal/gcp/transport/rest/iamcredentials"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
 	restmetastore "jaiscloud/internal/gcp/transport/rest/metastore"
@@ -119,6 +122,7 @@ import (
 	functionspb "cloud.google.com/go/functions/apiv1/functionspb"
 	apiv2functionspb "cloud.google.com/go/functions/apiv2/functionspb"
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
+	credentialspb "cloud.google.com/go/iam/credentials/apiv1/credentialspb"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -234,6 +238,12 @@ func startCmd() *cobra.Command {
 			secretP := secretmanagerprovider.New(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys))
 			kmsP := kmsprovider.New(stores.keys, stores.resources)
 			iamP := iamprovider.New(stores.resources)
+			// IAM Service Account Credentials (iamcredentials) shares its key
+			// material with iam (internal/gcp/serviceaccount). Its
+			// transport-neutral core is shared by the REST provider and the gRPC
+			// adapter below, so both transports mint identical credentials.
+			iamCredentialsCore := iamcredentialscore.New(stores.resources)
+			iamCredentialsP := restiamcredentials.NewProvider(iamCredentialsCore, cfg.ProjectID)
 			pubsubP := pubsubprovider.New(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys))
 			// GCS object notifications fan out through Pub/Sub; the storage
 			// provider only sees the interface, so it never imports the Pub/Sub
@@ -522,6 +532,7 @@ func startCmd() *cobra.Command {
 				{"secretmanager", secretP},
 				{"kms", kmsP},
 				{"iam", iamP},
+				{"iamcredentials", iamCredentialsP},
 				{"firestore", firestoreP},
 				{"functions", functionsP},
 				{"workflows", workflowsP},
@@ -575,6 +586,7 @@ func startCmd() *cobra.Command {
 			eventarcGRPC := grpceventarc.NewService(eventarcCore, cfg.ProjectID)
 			serviceUsageGRPC := grpcserviceusage.NewService(serviceUsageCore, cfg.ProjectID)
 			resourceManagerGRPC := grpcresourcemanager.NewService(resourceManagerCore, cfg.ProjectID)
+			iamCredentialsGRPC := grpciamcredentials.NewService(iamCredentialsCore, cfg.ProjectID)
 			dataprocGRPC := grpcdataproc.NewService(dataprocCore, cfg.ProjectID)
 			workflowsGRPC := grpcworkflows.NewService(workflowsCore, cfg.ProjectID)
 			functionsGRPC := grpcfunctions.NewService(functionsCore, cfg.ProjectID, functionsUploadBase)
@@ -614,6 +626,9 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("resourcemanager") {
 					resourcemanagerpb.RegisterProjectsServer(gserv.GRPC(), resourceManagerGRPC)
+				}
+				if transports.GRPCFor("iamcredentials") {
+					credentialspb.RegisterIAMCredentialsServer(gserv.GRPC(), iamCredentialsGRPC)
 				}
 				if transports.GRPCFor("dataproc") {
 					dataprocpb.RegisterClusterControllerServer(gserv.GRPC(), dataprocGRPC)

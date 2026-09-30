@@ -28,6 +28,7 @@ import (
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	resteventarc "jaiscloud/internal/gcp/transport/rest/eventarc"
 	restfunctions "jaiscloud/internal/gcp/transport/rest/functions"
+	restiamcredentials "jaiscloud/internal/gcp/transport/rest/iamcredentials"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
 	restmetastore "jaiscloud/internal/gcp/transport/rest/metastore"
@@ -56,6 +57,7 @@ var providerPrefixes = map[string]string{
 	"Secret":            "secretmanager",
 	"KMS":               "kms",
 	"IAM":               "iam",
+	"IAMCredentials":    "iamcredentials",
 	"PubSub":            "pubsub",
 	"Firestore":         "firestore",
 	"Function":          "functions",
@@ -89,6 +91,7 @@ func providers() []provider.Provider {
 		&pubsubprovider.Provider{},
 		&firestoreprovider.Provider{},
 		&restfunctions.Provider{},
+		&restiamcredentials.Provider{},
 		&restworkflows.Provider{},
 		&restworkflowexecutions.Provider{},
 		&restdataproc.Provider{},
