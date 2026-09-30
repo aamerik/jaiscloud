@@ -85,3 +85,16 @@ entries:
   - match: "J65"
     pr: 261
     note: "resolved: iamcredentials getAllowedLocations in #261"
+
+  # 263 — feat/gcp-operations-resolver (combined long-running operations PR).
+  - match: "J58"
+    pr: 263
+    note: "resolved: typed gRPC longrunning operations resolver in #263"
+  - match: "J60"
+    pr: 263
+    note: "resolved: v1 top-level function operation names in #263"
+
+  # 264 — fix/gcp-monitoring-aggregation-extras (monitoring aggregation PR).
+  - match: "J43"
+    pr: 264
+    note: "resolved: aggregation secondary pass/intervals/metric kind/orderBy in #264"
