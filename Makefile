@@ -612,7 +612,7 @@ test-integration-gcp: build-gcp ## Run GCP integration + SDK suites against an e
 test-lro-async-gcp: build-gcp ## Run the opt-in async-LRO live e2e gate (JAISCLOUD_LRO_MODE=async, delay 2s)
 	@echo "Starting jaiscloud-gcp (ephemeral, async LROs)..."
 	@set -e; \
-	  JAISCLOUD_LRO_MODE=async JAISCLOUD_LRO_DELAY=2s \
+	  JAISCLOUD_LRO_MODE=async JAISCLOUD_LRO_DELAY=2s JAISCLOUD_GCP_PROJECT_ID=proj \
 	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-lro.log 2>&1 & \
 	  pid=$$!; \
 	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \

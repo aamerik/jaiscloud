@@ -748,7 +748,13 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("managedkafka") && managedKafkaCore != nil {
 					opsResolvers = append(opsResolvers, managedKafkaGRPC)
 				}
-				longrunningpb.RegisterOperationsServer(gserv.GRPC(), grpcoperations.New(opsResolvers...))
+				opsService := grpcoperations.New(opsResolvers...)
+				// The opt-in async mode reports a name no resolver or registry
+				// owns as NotFound (real google.longrunning semantics); the
+				// default keeps the lenient terminal stub the synchronous SDK
+				// init paths rely on.
+				opsService.SetStrict(lroMode.Async())
+				longrunningpb.RegisterOperationsServer(gserv.GRPC(), opsService)
 			}
 
 			adminHandler := admin.NewHandler()

@@ -14,6 +14,7 @@ package serviceusage
 
 import (
 	"context"
+	"strings"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	serviceusagepb "cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
@@ -117,9 +118,87 @@ func (s *Service) ResolveOperation(ctx context.Context, name string) (*longrunni
 	return out, true, nil
 }
 
-// compile-time assertions: the generated server and the generic Operations
-// resolver.
+// isTopLevelOperationsParent reports whether a ListOperations parent names the
+// top-level operations collection Service Usage owns. Service Usage operations
+// are named operations/{id} with no parent, so only the empty root (or the
+// literal "operations" collection name) is claimed; a location- or region-scoped
+// parent belongs to another service and is declined.
+func isTopLevelOperationsParent(parent string) bool {
+	switch strings.Trim(parent, "/") {
+	case "", "operations":
+		return true
+	default:
+		return false
+	}
+}
+
+// ListOperations implements the generic google.longrunning.Operations registry
+// for Service Usage's top-level operations. It claims only the top-level parent;
+// a location-scoped parent is declined so the caller keeps its own (empty)
+// list. A top-level operations/{id} name carries no project segment, and the
+// generated longrunning client's routing metadata is `name=<parent>` (which
+// contains no project), so the project resolves from the bearer token or the
+// configured default — the same fallback ListServices uses — which is why
+// `make test-lro-async-gcp` starts the emulator with JAISCLOUD_GCP_PROJECT_ID
+// matching the create project.
+func (s *Service) ListOperations(ctx context.Context, parent string, pageSize int32, pageToken string) (*longrunningpb.ListOperationsResponse, bool, error) {
+	if !isTopLevelOperationsParent(parent) {
+		return nil, false, nil
+	}
+	ops, next, err := s.core.ListOperations(ctx, s.projectFor(ctx, ""), int(pageSize), pageToken)
+	if err != nil {
+		return nil, true, mapError(err)
+	}
+	out := &longrunningpb.ListOperationsResponse{NextPageToken: next}
+	for _, op := range ops {
+		p, err := operationToProto(op, operationResponseProto(op))
+		if err != nil {
+			return nil, true, err
+		}
+		out.Operations = append(out.Operations, p)
+	}
+	return out, true, nil
+}
+
+// CancelOperation implements the generic google.longrunning.Operations registry.
+// The emulator does not model cancellation, so a known Service Usage operation
+// is a no-op success; an id that is not a Service Usage operation is declined
+// (handled=false) so the shared service keeps its ownership handshake with
+// Cloud Functions v1 and the lenient terminal contract is unchanged.
+func (s *Service) CancelOperation(ctx context.Context, name string) (bool, error) {
+	if !core.IsTopLevelOperationName(name) {
+		return false, nil
+	}
+	if err := s.core.CancelOperation(ctx, s.projectFor(ctx, ""), name); err != nil {
+		if core.IsNotFound(err) {
+			return false, nil
+		}
+		return true, mapError(err)
+	}
+	return true, nil
+}
+
+// DeleteOperation implements the generic google.longrunning.Operations registry,
+// removing a persisted Service Usage operation. Like CancelOperation an id not
+// owned by Service Usage is declined rather than reported NotFound, so functions
+// keeps its namespace and the lenient contract is unchanged.
+func (s *Service) DeleteOperation(ctx context.Context, name string) (bool, error) {
+	if !core.IsTopLevelOperationName(name) {
+		return false, nil
+	}
+	if err := s.core.DeleteOperation(ctx, s.projectFor(ctx, ""), name); err != nil {
+		if core.IsNotFound(err) {
+			return false, nil
+		}
+		return true, mapError(err)
+	}
+	return true, nil
+}
+
+// compile-time assertions: the generated server, the generic Operations
+// resolver, and the richer registry surface.
 var (
 	_ serviceusagepb.ServiceUsageServer = (*Service)(nil)
 	_ grpcoperations.Resolver           = (*Service)(nil)
+	_ grpcoperations.Registry           = (*Service)(nil)
 )

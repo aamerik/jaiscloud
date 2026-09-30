@@ -110,8 +110,9 @@ entries:
   # 266/267/268/269 — the LRO async-timing wave. #269 is the closing PR (live e2e
   # + docs), so G2's row closes when it merges. G2's source doc
   # (gcp-future-work.md) is gitignored scratch, so this commits the closure.
-  # serviceusage + generic-operations async remain deferred (no shared registry).
+  # The deferred follow-ups landed separately: serviceusage (#270, LRO4) and the
+  # generic operations registry + strict async contract (#271, LRO5).
   - source: "gcp-future-work"
     match: "LROs complete synchronously"
     pr: 269
-    note: "resolved: opt-in async LRO timing (JAISCLOUD_LRO_MODE=async) for workflows/functions/metastore/managedkafka over REST+gRPC (#266/#267/#268/#269)"
+    note: "resolved: opt-in async LRO timing (JAISCLOUD_LRO_MODE=async) for workflows/functions/metastore/managedkafka over REST+gRPC (#266/#267/#268/#269); serviceusage (#270/LRO4) and generic operations (#271/LRO5) follow-ups"
