@@ -518,7 +518,7 @@ func startCmd() *cobra.Command {
 			// Service Usage v1's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports run
 			// against one store and cannot drift.
-			serviceUsageCore := serviceusagecore.NewService(stores.resources)
+			serviceUsageCore := serviceusagecore.NewService(stores.resources, serviceusagecore.WithLROMode(lroMode))
 			serviceusageP := restserviceusage.NewProvider(serviceUsageCore, cfg.ProjectID)
 
 			// Cloud Resource Manager's transport-neutral core is shared by the
@@ -539,6 +539,13 @@ func startCmd() *cobra.Command {
 			// REST contract is unchanged.
 			if lroMode.Async() {
 				workflowsP.SetOperationResolvers(metastoreP, managedkafkaP)
+				// The top-level /v1/operations/{id} route is decoded as a
+				// Functions v1 operation, so wire Service Usage (which shares
+				// the operations/{id} namespace) as a fallback resolver: a
+				// Service Usage poll 404s in Functions first, then resolves
+				// here. Sync mode returns every operation done inline, so
+				// nothing is wired and the REST contract is unchanged.
+				functionsP.SetOperationResolvers(serviceusageP)
 			}
 
 			// Register only services enabled on at least one transport, so a
@@ -705,6 +712,18 @@ func startCmd() *cobra.Command {
 				opsResolvers := []grpcoperations.Resolver{}
 				if transports.GRPCFor("dataproc") && dataprocCore != nil {
 					opsResolvers = append(opsResolvers, dataprocGRPC)
+				}
+				// Service Usage publishes top-level operations (operations/{id})
+				// and MUST be consulted BEFORE Cloud Functions v1, which claims
+				// the same namespace and answers an unknown top-level id with
+				// NotFound. The serviceusage resolver returns handled=false for
+				// ids it does not own, so functions keeps its own 404. It is
+				// registered only in the opt-in async mode: in sync mode every
+				// operation is returned done inline so nothing polls, and
+				// omitting it leaves Functions' existing top-level NotFound (the
+				// v1.1.0 contract) unchanged. Mirrors the REST fallback wiring.
+				if lroMode.Async() && transports.GRPCFor("serviceusage") && serviceUsageCore != nil {
+					opsResolvers = append(opsResolvers, serviceUsageGRPC)
 				}
 				// Cloud Functions publishes typed operations (J58); v1 names are
 				// top-level (operations/{id}) and v2 names are location-scoped.

@@ -19,6 +19,7 @@ import (
 	serviceusagepb "cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
+	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	core "jaiscloud/internal/gcp/service/serviceusage"
 )
 
@@ -67,34 +68,58 @@ func (s *Service) ListServices(ctx context.Context, req *serviceusagepb.ListServ
 
 func (s *Service) EnableService(ctx context.Context, req *serviceusagepb.EnableServiceRequest) (*longrunningpb.Operation, error) {
 	project, service := parseName(req.GetName())
-	api, op, err := s.core.EnableAPI(ctx, s.projectFor(ctx, project), service)
+	_, op, err := s.core.EnableAPI(ctx, s.projectFor(ctx, project), service)
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return operationToProto(op, &serviceusagepb.EnableServiceResponse{Service: apiToProto(api)})
+	return operationToProto(op, operationResponseProto(op))
 }
 
 func (s *Service) DisableService(ctx context.Context, req *serviceusagepb.DisableServiceRequest) (*longrunningpb.Operation, error) {
 	project, service := parseName(req.GetName())
-	api, op, err := s.core.DisableAPI(ctx, s.projectFor(ctx, project), service)
+	_, op, err := s.core.DisableAPI(ctx, s.projectFor(ctx, project), service)
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return operationToProto(op, &serviceusagepb.DisableServiceResponse{Service: apiToProto(api)})
+	return operationToProto(op, operationResponseProto(op))
 }
 
 func (s *Service) BatchEnableServices(ctx context.Context, req *serviceusagepb.BatchEnableServicesRequest) (*longrunningpb.Operation, error) {
 	project, _ := parseName(req.GetParent())
-	apis, op, err := s.core.BatchEnableAPIs(ctx, s.projectFor(ctx, project), req.GetServiceIds())
+	_, op, err := s.core.BatchEnableAPIs(ctx, s.projectFor(ctx, project), req.GetServiceIds())
 	if err != nil {
 		return nil, mapError(err)
 	}
-	resp := &serviceusagepb.BatchEnableServicesResponse{}
-	for _, a := range apis {
-		resp.Services = append(resp.Services, apiToProto(a))
-	}
-	return operationToProto(op, resp)
+	return operationToProto(op, operationResponseProto(op))
 }
 
-// compile-time assertion that Service implements the generated server.
-var _ serviceusagepb.ServiceUsageServer = (*Service)(nil)
+// ResolveOperation implements the generic google.longrunning.Operations
+// resolver for Service Usage's top-level operation names (operations/{id}). It
+// shares that namespace with Cloud Functions v1, so an id absent from the
+// serviceusage store returns handled=false — the caller then consults the next
+// resolver (functions), preserving functions' NotFound for its own unknown ids.
+// It must therefore be registered BEFORE the functions resolver in main.go.
+func (s *Service) ResolveOperation(ctx context.Context, name string) (*longrunningpb.Operation, bool, error) {
+	if !core.IsTopLevelOperationName(name) {
+		return nil, false, nil
+	}
+	op, err := s.core.GetOperation(ctx, s.projectFor(ctx, ""), name)
+	if err != nil {
+		if core.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, true, mapError(err)
+	}
+	out, err := operationToProto(op, operationResponseProto(op))
+	if err != nil {
+		return nil, true, err
+	}
+	return out, true, nil
+}
+
+// compile-time assertions: the generated server and the generic Operations
+// resolver.
+var (
+	_ serviceusagepb.ServiceUsageServer = (*Service)(nil)
+	_ grpcoperations.Resolver           = (*Service)(nil)
+)

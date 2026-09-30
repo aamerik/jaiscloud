@@ -103,3 +103,52 @@ func TestLROAsync(t *testing.T) {
 		})
 	}
 }
+
+// TestLROAsyncServiceUsage proves the top-level operations/{id} namespace is
+// pollable in async mode: a Service Usage enable returns an in-flight operation
+// named operations/{id}, and GET /v1/operations/{id} resolves it through the
+// Service Usage fallback wired into the Functions v1 REST route (which owns the
+// shared path) until it settles with the typed EnableServiceResponse.
+func TestLROAsyncServiceUsage(t *testing.T) {
+	if os.Getenv("JAISCLOUD_LRO_ASYNC") != "1" {
+		t.Skip("set JAISCLOUD_LRO_ASYNC=1 and start jaiscloud-gcp with JAISCLOUD_LRO_MODE=async")
+	}
+	resetState(t)
+
+	const service = "run.googleapis.com"
+	resp, body := do(t, "POST", "/v1/projects/"+lroProject+"/services/"+service+":enable", nil, lroJSONHeaders())
+	require.Equal(t, http.StatusOK, resp.StatusCode, "enable: %s", body)
+
+	op := jsonMap(t, body)
+	done, ok := op["done"].(bool)
+	require.True(t, ok, "enable operation has no boolean done: %s", body)
+	require.False(t, done, "async enable must return done:false: %s", body)
+
+	name, _ := op["name"].(string)
+	require.Regexp(t, regexp.MustCompile(`^operations/[^/]+$`), name,
+		"serviceusage operation name must be top-level: %s", body)
+	_, hasResponse := op["response"]
+	require.False(t, hasResponse, "in-flight operation must not carry response: %s", body)
+
+	pollPath := "/v1/" + name
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		presp, pbody := do(t, "GET", pollPath, nil, nil)
+		require.Equal(t, http.StatusOK, presp.StatusCode, "poll: %s", pbody)
+		settled := jsonMap(t, pbody)
+		if isDone, _ := settled["done"].(bool); isDone {
+			response, ok := settled["response"].(map[string]any)
+			require.True(t, ok, "settled operation must carry response: %s", pbody)
+			svc, ok := response["service"].(map[string]any)
+			require.True(t, ok, "settled response must carry service: %s", pbody)
+			require.Equal(t, "projects/"+lroProject+"/services/"+service, svc["name"],
+				"settled service name: %s", pbody)
+			require.Equal(t, "ENABLED", svc["state"], "settled service state: %s", pbody)
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("operation %s did not settle within 20s; last: %s", name, pbody)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}

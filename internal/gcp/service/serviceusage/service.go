@@ -15,9 +15,13 @@
 // ResourceStore (memory + PostgreSQL backends), so no provider-level Reset or
 // Snapshotter is needed.
 //
-// Mutations return a done google.longrunning.Operation (jaiscloud completes
-// operations synchronously), so SDK/terraform operation futures resolve
-// immediately.
+// Mutations return a google.longrunning.Operation. By default it is done
+// inline (jaiscloud completes operations synchronously), so SDK/terraform
+// operation futures resolve immediately. The LRO timing is opt-in via
+// WithLROMode: when enabled, operations are persisted done=false and settle
+// lazily on read (see settle); the default remains synchronous. The operation
+// is always persisted under the shared ResourceStore so Operations.Get can read
+// it back over both transports.
 package serviceusage
 
 import (
@@ -28,7 +32,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -38,6 +45,13 @@ import (
 // the bare service name (e.g. "run.googleapis.com"); the account scope is the
 // project.
 const rtService = "gcp_serviceusage_service"
+
+// rtOperation is the resource type for a persisted google.longrunning.Operation.
+// The entry id is the bare operation id (without the "operations/" prefix); the
+// account scope is the project. Operations live in the same shared store as the
+// service states, so memory + PostgreSQL backends behave identically and a
+// poll survives a restart under --dsn.
+const rtOperation = "gcp_serviceusage_operation"
 
 // maxBatchEnable mirrors real GCP's per-request batchEnable cap.
 const maxBatchEnable = 20
@@ -84,29 +98,57 @@ type API struct {
 	State State
 }
 
-// Operation is a completed google.longrunning.Operation. The emulator completes
-// every mutation synchronously, so Done is always true and the operation is not
-// persisted (its name is not addressable). The transport attaches the verb-
-// appropriate response payload; the metadata carries the affected resource
-// names, matching google.api.serviceusage.v1.OperationMetadata.
+// Operation is a persisted google.longrunning.Operation. In the default
+// synchronous mode it is stored done=true with EndTime set; in async mode it is
+// stored done=false and settles lazily on read. The transport renders the
+// verb-appropriate response payload from Services; the metadata carries the
+// affected resource names, matching google.api.serviceusage.v1.OperationMetadata.
 type Operation struct {
 	// Name is the operation resource name: operations/{id}.
 	Name string
+	// Verb is the mutation that produced the operation: "enable", "disable",
+	// or "batchEnable".
+	Verb string
 	// ResourceNames are the full names of the services the operation touched.
 	ResourceNames []string
-	// Done is always true.
+	// Done reports whether the operation has completed.
 	Done bool
+	// CreateTime is when the operation was created.
+	CreateTime time.Time
+	// EndTime is when the operation completed (zero while in flight).
+	EndTime time.Time
+	// Services is the transport-neutral snapshot of the affected services, used
+	// to reconstruct the typed response on a poll.
+	Services []API
 }
 
 // Service is the transport-neutral Service Usage v1 service over the shared
 // ResourceStore.
 type Service struct {
 	resources store.ResourceStore
+	// lroMode controls operation timing. The zero value is synchronous: every
+	// operation is stored done=true inline, matching the v1.1.0 contract. An
+	// enabled mode stores operations done=false and settles them lazily on read.
+	lroMode lro.Mode
+}
+
+// Option configures Service.
+type Option func(*Service)
+
+// WithLROMode sets the long-running-operation timing mode. The zero value is
+// synchronous; Mode{Enabled: true, Delay: d} stores mutation operations
+// done=false and settles them on read once d has elapsed.
+func WithLROMode(m lro.Mode) Option {
+	return func(s *Service) { s.lroMode = m }
 }
 
 // NewService returns a Service Usage core backed by the shared ResourceStore.
-func NewService(resources store.ResourceStore) *Service {
-	return &Service{resources: resources}
+func NewService(resources store.ResourceStore, opts ...Option) *Service {
+	s := &Service{resources: resources}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // ParseFilter maps a wire filter string ("state:ENABLED", "state:DISABLED", or
@@ -173,7 +215,7 @@ func (s *Service) GetAPI(ctx context.Context, project, service string) (API, err
 	return buildAPI(project, service, st), nil
 }
 
-// EnableAPI flips a service to ENABLED and returns it with the done operation.
+// EnableAPI flips a service to ENABLED and returns it with the operation.
 func (s *Service) EnableAPI(ctx context.Context, project, service string) (API, Operation, error) {
 	if project == "" || service == "" {
 		return API{}, Operation{}, invalidArgument("missing project or service")
@@ -182,7 +224,11 @@ func (s *Service) EnableAPI(ctx context.Context, project, service string) (API, 
 	if err != nil {
 		return API{}, Operation{}, err
 	}
-	return api, operation([]string{api.Name}), nil
+	op, err := s.newOperation(ctx, project, "enable", []API{api})
+	if err != nil {
+		return API{}, Operation{}, err
+	}
+	return api, op, nil
 }
 
 // DisableAPI flips an ENABLED service to DISABLED and returns it with the done
@@ -204,11 +250,15 @@ func (s *Service) DisableAPI(ctx context.Context, project, service string) (API,
 	if err != nil {
 		return API{}, Operation{}, err
 	}
-	return api, operation([]string{api.Name}), nil
+	op, err := s.newOperation(ctx, project, "disable", []API{api})
+	if err != nil {
+		return API{}, Operation{}, err
+	}
+	return api, op, nil
 }
 
 // BatchEnableAPIs enables up to maxBatchEnable services and returns them with
-// the done operation. An empty or oversized batch is an InvalidArgument.
+// the operation. An empty or oversized batch is an InvalidArgument.
 func (s *Service) BatchEnableAPIs(ctx context.Context, project string, serviceIDs []string) ([]API, Operation, error) {
 	if project == "" {
 		return nil, Operation{}, invalidArgument("missing project")
@@ -221,7 +271,6 @@ func (s *Service) BatchEnableAPIs(ctx context.Context, project string, serviceID
 			"A single request can enable a maximum of %d services at a time.", maxBatchEnable))
 	}
 	apis := make([]API, 0, len(serviceIDs))
-	names := make([]string, 0, len(serviceIDs))
 	for _, id := range serviceIDs {
 		// serviceIds are bare DNS identifiers (e.g. "run.googleapis.com"), not
 		// resource names. A slash or an empty id is a malformed request; reject
@@ -234,9 +283,12 @@ func (s *Service) BatchEnableAPIs(ctx context.Context, project string, serviceID
 			return nil, Operation{}, err
 		}
 		apis = append(apis, api)
-		names = append(names, api.Name)
 	}
-	return apis, operation(names), nil
+	op, err := s.newOperation(ctx, project, "batchEnable", apis)
+	if err != nil {
+		return nil, Operation{}, err
+	}
+	return apis, op, nil
 }
 
 // setServiceState persists a service's state and returns its typed form. A
@@ -270,13 +322,232 @@ func (s *Service) readState(ctx context.Context, project, service string) (State
 	return StateDisabled, nil
 }
 
-// operation builds the completed operation descriptor for a mutation.
-func operation(resourceNames []string) Operation {
-	return Operation{
-		Name:          OperationName(randomHex(12)),
-		ResourceNames: resourceNames,
-		Done:          true,
+// newOperation builds and persists the operation descriptor for a mutation. In
+// the default synchronous mode it is stored done=true with EndTime=now, exactly
+// as before; in async mode it is stored done=false with a zero EndTime and
+// settles lazily on read.
+func (s *Service) newOperation(ctx context.Context, project, verb string, services []API) (Operation, error) {
+	now := clock.Now().UTC()
+	names := make([]string, 0, len(services))
+	for _, a := range services {
+		names = append(names, a.Name)
 	}
+	id := randomHex(12)
+	op := Operation{
+		Name:          OperationName(id),
+		Verb:          verb,
+		ResourceNames: names,
+		CreateTime:    now,
+		Services:      services,
+	}
+	if s.lroMode.Async() {
+		op.Done = false
+	} else {
+		op.Done = true
+		op.EndTime = now
+	}
+	if err := s.persistOperation(ctx, project, id, op); err != nil {
+		return Operation{}, err
+	}
+	return op, nil
+}
+
+// persistOperation records a mutation operation so operations.get/list and REST
+// :wait can read it back after the mutation returns (and across a restart under
+// --dsn). The transport-neutral service snapshot is stored and rendered on read.
+func (s *Service) persistOperation(ctx context.Context, project, id string, op Operation) error {
+	data, err := json.Marshal(operationRecord{
+		Verb:          op.Verb,
+		ResourceNames: op.ResourceNames,
+		Done:          op.Done,
+		CreateTime:    op.CreateTime,
+		EndTime:       op.EndTime,
+		Services:      op.Services,
+	})
+	if err != nil {
+		return err
+	}
+	return s.resources.Upsert(ctx, project, store.GlobalRegion,
+		store.ResourceEntry{Type: rtOperation, ID: id, Data: data})
+}
+
+// GetOperation returns a persisted operation by its full name (operations/{id}).
+// An unknown id is NotFound. This is the read side both transports poll: done
+// inline in the default synchronous mode, or settled lazily once the async delay
+// has elapsed.
+func (s *Service) GetOperation(ctx context.Context, project, name string) (Operation, error) {
+	id, err := operationIDFromName(name)
+	if err != nil {
+		return Operation{}, err
+	}
+	return s.loadOperation(ctx, project, id)
+}
+
+// loadOperation reads and settles a persisted operation by its bare id.
+func (s *Service) loadOperation(ctx context.Context, project, id string) (Operation, error) {
+	e, err := s.lookupOperation(ctx, project, id)
+	if err != nil {
+		return Operation{}, err
+	}
+	op, err := operationFromEntry(e)
+	if err != nil {
+		return Operation{}, err
+	}
+	return s.settle(op), nil
+}
+
+// lookupOperation finds a persisted operation by its globally unique id. A
+// top-level operations/{id} name is polled without a project segment, so after
+// the project-scoped lookup misses it scans across scopes (the shared
+// ResourceStore supports account=""+region="" scans on both the memory and
+// PostgreSQL backends). This mirrors Cloud Functions v1's GetOperationByID.
+func (s *Service) lookupOperation(ctx context.Context, project, id string) (store.ResourceEntry, error) {
+	if project != "" {
+		e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtOperation, id)
+		if err == nil {
+			return e, nil
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return store.ResourceEntry{}, err
+		}
+	}
+	entries, err := s.resources.List(ctx, "", "", rtOperation, id)
+	if err != nil {
+		return store.ResourceEntry{}, err
+	}
+	for _, e := range entries {
+		if e.ID == id {
+			return e, nil
+		}
+	}
+	return store.ResourceEntry{}, notFound(fmt.Sprintf("Operation %s not found.", OperationName(id)))
+}
+
+// operationFromEntry decodes a persisted ResourceEntry into an Operation. A
+// malformed record is an error rather than a silently settled empty operation.
+func operationFromEntry(e store.ResourceEntry) (Operation, error) {
+	var rec operationRecord
+	if err := json.Unmarshal(e.Data, &rec); err != nil {
+		return Operation{}, err
+	}
+	return Operation{
+		Name:          OperationName(e.ID),
+		Verb:          rec.Verb,
+		ResourceNames: rec.ResourceNames,
+		Done:          rec.Done,
+		CreateTime:    rec.CreateTime,
+		EndTime:       rec.EndTime,
+		Services:      rec.Services,
+	}, nil
+}
+
+// ListOperations returns a cursor page of the persisted operations for the
+// project, plus the next-page token (empty when exhausted).
+func (s *Service) ListOperations(ctx context.Context, project string, pageSize int, pageToken string) ([]Operation, string, error) {
+	if project == "" {
+		return nil, "", invalidArgument("missing project")
+	}
+	entries, err := s.resources.List(ctx, project, store.GlobalRegion, rtOperation, "")
+	if err != nil {
+		return nil, "", err
+	}
+	ops := make([]Operation, 0, len(entries))
+	for _, e := range entries {
+		op, err := operationFromEntry(e)
+		if err != nil {
+			return nil, "", err
+		}
+		ops = append(ops, s.settle(op))
+	}
+	params := map[string]any{"pageSize": pageSize}
+	if pageToken != "" {
+		params["pageToken"] = pageToken
+	}
+	page, next := paging.Page(ops, func(op Operation) string { return op.Name }, params)
+	return page, next, nil
+}
+
+// CancelOperation validates that the operation exists. The emulator does not
+// model cancellation, so a known operation is a no-op success and an unknown one
+// is NotFound.
+func (s *Service) CancelOperation(ctx context.Context, project, name string) error {
+	_, err := s.GetOperation(ctx, project, name)
+	return err
+}
+
+// DeleteOperation removes a persisted operation. An unknown operation is
+// NotFound, matching real google.longrunning.Operations.DeleteOperation.
+func (s *Service) DeleteOperation(ctx context.Context, project, name string) error {
+	id, err := operationIDFromName(name)
+	if err != nil {
+		return err
+	}
+	if project != "" {
+		if err := s.resources.Delete(ctx, project, store.GlobalRegion, rtOperation, id); err == nil {
+			return nil
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+	}
+	// Not in the caller's project scope: a top-level operation is stored under
+	// its creating project, so resolve it across scopes and delete it there.
+	e, err := s.lookupOperation(ctx, "", id)
+	if err != nil {
+		return err
+	}
+	return s.resources.Delete(ctx, e.Account, store.GlobalRegion, rtOperation, id)
+}
+
+// settle derives the rendered state of a persisted operation from its stored
+// done flag and the configured timing mode. An in-flight operation (done=false)
+// becomes done once the delay has elapsed, with a deterministic EndTime of
+// createTime+delay (a zero delay yields createTime). The flip is derived on read
+// rather than written back; the persisted flag is an input while the settled
+// state is a pure function of it and the clock. This mirrors the workflows and
+// functions cores.
+func (s *Service) settle(op Operation) Operation {
+	if op.Done || s.lroMode.Pending(op.CreateTime) {
+		return op
+	}
+	op.Done = true
+	op.EndTime = op.CreateTime.Add(s.lroMode.Delay)
+	return op
+}
+
+// IsNotFound reports whether err is the canonical NotFound provider error (as
+// returned by GetOperation for an absent operation).
+func IsNotFound(err error) bool {
+	var perr *model.ProviderError
+	return errors.As(err, &perr) && perr.Code == "NotFound"
+}
+
+// operationIDFromName validates an operation resource name (operations/{id})
+// and returns the bare id.
+func operationIDFromName(name string) (string, error) {
+	parts := strings.Split(strings.Trim(name, "/"), "/")
+	if len(parts) == 2 && parts[0] == "operations" && parts[1] != "" {
+		return parts[1], nil
+	}
+	return "", invalidArgument("invalid operation name")
+}
+
+// IsTopLevelOperationName reports whether name is the top-level
+// "operations/{id}" shape Service Usage shares with Cloud Functions v1. Both
+// transports use it to scope their cross-service operation resolvers, so the
+// ownership rule lives in one place.
+func IsTopLevelOperationName(name string) bool {
+	_, err := operationIDFromName(name)
+	return err == nil
+}
+
+// operationRecord is the persisted per-operation state.
+type operationRecord struct {
+	Verb          string    `json:"verb"`
+	ResourceNames []string  `json:"resourceNames"`
+	Done          bool      `json:"done"`
+	CreateTime    time.Time `json:"createTime"`
+	EndTime       time.Time `json:"endTime,omitempty"`
+	Services      []API     `json:"services,omitempty"`
 }
 
 // matches reports whether a state passes the filter.
@@ -306,6 +577,11 @@ func decodeRecord(data json.RawMessage) record {
 // transports map onto their wire status.
 func invalidArgument(msg string) error {
 	return model.NewProviderError("InvalidArgument", msg, 400)
+}
+
+// notFound builds the canonical NotFound provider error.
+func notFound(msg string) error {
+	return model.NewProviderError("NotFound", msg, 404)
 }
 
 // randomHex returns n random hexadecimal characters (zero-filled on RNG

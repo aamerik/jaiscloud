@@ -75,32 +75,45 @@ func (p *Provider) GetService(ctx context.Context, nr *model.NormalizedRequest) 
 }
 
 func (p *Provider) EnableService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	api, op, err := p.core.EnableAPI(ctx, p.project(nr), strParam(nr, "service"))
+	_, op, err := p.core.EnableAPI(ctx, p.project(nr), strParam(nr, "service"))
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(operationToJSON(op, typedResponse(enableResponseType,
-		map[string]any{"service": serviceToJSON(api)}))), nil
+	return provider.OK(operationToJSON(op, operationResponse(op))), nil
 }
 
 func (p *Provider) DisableService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	api, op, err := p.core.DisableAPI(ctx, p.project(nr), strParam(nr, "service"))
+	_, op, err := p.core.DisableAPI(ctx, p.project(nr), strParam(nr, "service"))
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(operationToJSON(op, typedResponse(disableResponseType,
-		map[string]any{"service": serviceToJSON(api)}))), nil
+	return provider.OK(operationToJSON(op, operationResponse(op))), nil
 }
 
 func (p *Provider) BatchEnableServices(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	apis, op, err := p.core.BatchEnableAPIs(ctx, p.project(nr), stringSlice(bodyOf(nr)["serviceIds"]))
+	_, op, err := p.core.BatchEnableAPIs(ctx, p.project(nr), stringSlice(bodyOf(nr)["serviceIds"]))
 	if err != nil {
 		return nil, err
 	}
-	services := make([]any, 0, len(apis))
-	for _, a := range apis {
-		services = append(services, serviceToJSON(a))
+	return provider.OK(operationToJSON(op, operationResponse(op))), nil
+}
+
+// ResolveOperation resolves a top-level google.longrunning operation name
+// (operations/{id}) owned by Service Usage. It is consulted by the Functions
+// REST provider, which owns the /v1/operations/{id} route the two services
+// share. It returns handled=false for names outside the top-level shape and for
+// ids that are not Service Usage operations, so a genuine Functions unknown id
+// still 404s through that provider.
+func (p *Provider) ResolveOperation(ctx context.Context, project, name string) (map[string]any, bool, error) {
+	if !core.IsTopLevelOperationName(name) {
+		return nil, false, nil
 	}
-	return provider.OK(operationToJSON(op, typedResponse(batchEnableRespType,
-		map[string]any{"services": services}))), nil
+	op, err := p.core.GetOperation(ctx, project, name)
+	if err != nil {
+		if core.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, true, err
+	}
+	return operationToJSON(op, operationResponse(op)), true, nil
 }
