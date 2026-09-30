@@ -125,3 +125,32 @@ func TestInferBoolExpressionValues(t *testing.T) {
 		t.Fatalf("bool expression rows = %v", res.Rows)
 	}
 }
+
+// TestNumericExprTypeAcceptsDiscoveryTypeNames locks in the wire-name aliases:
+// a table schema read back from the store uses the Discovery/TableFieldSchema
+// names (FLOAT, INTEGER), so arithmetic over a FLOAT column must still promote
+// to FLOAT64 rather than fall through to the INT64 default.
+func TestNumericExprTypeAcceptsDiscoveryTypeNames(t *testing.T) {
+	fields := map[string]Field{
+		"score": {Name: "score", Type: "FLOAT"},
+		"id":    {Name: "id", Type: "INTEGER"},
+	}
+	for _, tc := range []struct {
+		expr string
+		want string
+	}{
+		{"score * 2", "FLOAT64"},
+		{"score + id", "FLOAT64"},
+		{"id + 1", "INT64"},
+		{"SUM(score)", "FLOAT64"},
+		{"SUM(id)", "INT64"},
+	} {
+		toks, err := tokenize("SELECT " + tc.expr)
+		if err != nil {
+			t.Fatalf("tokenize %q: %v", tc.expr, err)
+		}
+		if got := inferExprType(toks[1:], fields); got != tc.want {
+			t.Errorf("inferExprType(%q) = %q, want %q", tc.expr, got, tc.want)
+		}
+	}
+}

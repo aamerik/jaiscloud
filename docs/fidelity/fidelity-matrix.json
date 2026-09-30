@@ -4,9 +4,9 @@
     "total": 808,
     "by_state": {
       "ga": 573,
-      "limited": 97,
-      "preview": 37,
-      "unsupported": 101
+      "limited": 117,
+      "preview": 14,
+      "unsupported": 104
     },
     "by_transport": {
       "grpc": {
@@ -16,14 +16,15 @@
       },
       "rest": {
         "ga": 297,
-        "limited": 86,
-        "preview": 37,
-        "unsupported": 9
+        "limited": 106,
+        "preview": 14,
+        "unsupported": 12
       }
     },
     "by_service": {
       "bigquery": {
-        "preview": 23
+        "limited": 20,
+        "unsupported": 3
       },
       "clouddns": {
         "limited": 15,
@@ -130,8 +131,8 @@
       "service": "bigquery",
       "operation": "BigQuery.CancelJob",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.jobs.cancel",
         "mutating",
@@ -142,8 +143,8 @@
       "service": "bigquery",
       "operation": "BigQuery.CreateDataset",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.datasets.insert",
         "mutating",
@@ -154,8 +155,8 @@
       "service": "bigquery",
       "operation": "BigQuery.CreateTable",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.tables.insert",
         "mutating",
@@ -166,8 +167,8 @@
       "service": "bigquery",
       "operation": "BigQuery.DeleteDataset",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.datasets.delete",
         "mutating",
@@ -178,8 +179,8 @@
       "service": "bigquery",
       "operation": "BigQuery.DeleteJob",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.jobs.delete",
         "mutating",
@@ -190,8 +191,8 @@
       "service": "bigquery",
       "operation": "BigQuery.DeleteTable",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.tables.delete",
         "mutating",
@@ -202,8 +203,8 @@
       "service": "bigquery",
       "operation": "BigQuery.GetDataset",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.datasets.get",
         "postgres=yes"
@@ -213,8 +214,8 @@
       "service": "bigquery",
       "operation": "BigQuery.GetJob",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.jobs.get",
         "postgres=yes"
@@ -224,8 +225,8 @@
       "service": "bigquery",
       "operation": "BigQuery.GetQueryResults",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.jobs.getQueryResults",
         "postgres=yes"
@@ -235,8 +236,8 @@
       "service": "bigquery",
       "operation": "BigQuery.GetServiceAccount",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.projects.getServiceAccount",
         "postgres=yes"
@@ -246,8 +247,8 @@
       "service": "bigquery",
       "operation": "BigQuery.GetTable",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.tables.get",
         "postgres=yes"
@@ -257,8 +258,8 @@
       "service": "bigquery",
       "operation": "BigQuery.InsertAll",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.tabledata.insertAll",
         "mutating",
@@ -269,8 +270,8 @@
       "service": "bigquery",
       "operation": "BigQuery.InsertJob",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.jobs.insert",
         "mutating",
@@ -281,8 +282,8 @@
       "service": "bigquery",
       "operation": "BigQuery.ListDatasets",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.datasets.list",
         "postgres=yes"
@@ -292,8 +293,8 @@
       "service": "bigquery",
       "operation": "BigQuery.ListJobs",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.jobs.list",
         "postgres=yes"
@@ -303,8 +304,8 @@
       "service": "bigquery",
       "operation": "BigQuery.ListRows",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.tabledata.list",
         "postgres=yes"
@@ -314,8 +315,8 @@
       "service": "bigquery",
       "operation": "BigQuery.ListTables",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.tables.list",
         "postgres=yes"
@@ -325,8 +326,8 @@
       "service": "bigquery",
       "operation": "BigQuery.Models",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "unsupported",
+      "reason": "models are not modelled; explicit Unimplemented (501) stub",
       "evidence": [
         "postgres=yes"
       ]
@@ -335,8 +336,8 @@
       "service": "bigquery",
       "operation": "BigQuery.Query",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.jobs.query",
         "postgres=yes"
@@ -346,8 +347,8 @@
       "service": "bigquery",
       "operation": "BigQuery.Routines",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "unsupported",
+      "reason": "dataset routines are not modelled; explicit Unimplemented (501) stub",
       "evidence": [
         "postgres=yes"
       ]
@@ -356,8 +357,8 @@
       "service": "bigquery",
       "operation": "BigQuery.RowAccessPolicies",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "unsupported",
+      "reason": "row access policies are not modelled; explicit Unimplemented (501) stub",
       "evidence": [
         "postgres=yes"
       ]
@@ -366,8 +367,8 @@
       "service": "bigquery",
       "operation": "BigQuery.UpdateDataset",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.datasets.update",
         "mutating",
@@ -378,8 +379,8 @@
       "service": "bigquery",
       "operation": "BigQuery.UpdateTable",
       "transport": "rest",
-      "state": "preview",
-      "reason": "no SQL engine; metadata + stored rows only",
+      "state": "limited",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified",
       "evidence": [
         "discovery=bigquery.tables.update",
         "mutating",

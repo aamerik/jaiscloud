@@ -1,27 +1,27 @@
 service,operation,transport,state,reason
-bigquery,BigQuery.CancelJob,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.CreateDataset,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.CreateTable,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.DeleteDataset,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.DeleteJob,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.DeleteTable,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.GetDataset,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.GetJob,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.GetQueryResults,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.GetServiceAccount,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.GetTable,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.InsertAll,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.InsertJob,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.ListDatasets,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.ListJobs,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.ListRows,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.ListTables,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.Models,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.Query,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.Routines,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.RowAccessPolicies,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.UpdateDataset,rest,preview,no SQL engine; metadata + stored rows only
-bigquery,BigQuery.UpdateTable,rest,preview,no SQL engine; metadata + stored rows only
+bigquery,BigQuery.CancelJob,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.CreateDataset,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.CreateTable,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.DeleteDataset,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.DeleteJob,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.DeleteTable,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.GetDataset,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.GetJob,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.GetQueryResults,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.GetServiceAccount,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.GetTable,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.InsertAll,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.InsertJob,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.ListDatasets,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.ListJobs,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.ListRows,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.ListTables,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.Models,rest,unsupported,models are not modelled; explicit Unimplemented (501) stub
+bigquery,BigQuery.Query,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.Routines,rest,unsupported,dataset routines are not modelled; explicit Unimplemented (501) stub
+bigquery,BigQuery.RowAccessPolicies,rest,unsupported,row access policies are not modelled; explicit Unimplemented (501) stub
+bigquery,BigQuery.UpdateDataset,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
+bigquery,BigQuery.UpdateTable,rest,limited,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified"
 clouddns,CloudDNS.ChangeCreate,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
 clouddns,CloudDNS.ChangeGet,rest,limited,metadata-only over ResourceStore (no private DNS resolution)
 clouddns,CloudDNS.ChangeList,rest,limited,metadata-only over ResourceStore (no private DNS resolution)

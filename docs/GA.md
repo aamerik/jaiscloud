@@ -33,9 +33,9 @@ mapping, and what must be tested against real GCP — see
 - Unsupported surfaces fail loud — HTTP `501 UNIMPLEMENTED` on REST, `codes.Unimplemented` on
   gRPC — rather than silently succeeding or fabricating data.
 
-In short: a client written against the official SDKs will interoperate; a workload that needs the
-real backend (a SQL engine, a VM, event delivery) will not get one, and the matrix says so up
-front.
+In short: a client written against the official SDKs will interoperate; a workload that needs a real
+backend the emulator does not model (a VM, event delivery, a full analytics engine) will not get
+one, and the matrix says so up front.
 
 ---
 
@@ -55,16 +55,16 @@ fails CI if the committed matrix drifts.
 | state | cells |
 | --- | ---: |
 | ga | 573 |
-| limited | 97 |
-| preview | 37 |
-| unsupported | 101 |
+| limited | 117 |
+| preview | 14 |
+| unsupported | 104 |
 | **total** | **808** |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | ---: | ---: | ---: | ---: |
-| REST (JSON, Discovery-backed) | 297 | 86 | 37 | 9 |
+| REST (JSON, Discovery-backed) | 297 | 106 | 14 | 12 |
 | gRPC (proto descriptors + official-client conformance) | 276 | 11 | 0 | 92 |
 
 gRPC-only services (no REST transport): **Firestore Admin, Operations (long-running)**.
@@ -197,8 +197,13 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 
 ## 7. Explicitly non-GA at launch
 
-- **BigQuery** — 23 cells `preview`: metadata + stored rows only, **no SQL engine**
-  (`jobs.query` does not evaluate SQL).
+- **BigQuery** — 20 cells `limited` + 3 `unsupported`. `jobs.query`/`jobs.insert` (query
+  configuration) evaluate a documented Standard SQL subset — `SELECT` plus DDL/DML — on an
+  in-process pure-Go SQLite engine in both memory and `--dsn` modes
+  (`docs/gcp-bigquery-sql-engine.md`); `tabledata.*` reads and writes the stored rows;
+  `routines`/`models`/`rowAccessPolicies` are explicit `501` stubs. Simplifications
+  (synchronous DDL/DML jobs, no result paging, degraded `getQueryResults` snapshot,
+  documented divergences) are the cell reasons.
 - **Metadata-only services** — `limited` REST cells: **Cloud SQL** (23 + 1 `unsupported` stub),
   **Compute Engine** (32 + 1), **Cloud DNS** (15 + 1), **Memorystore** (8). No control plane,
   VM/disk/network data plane, authoritative DNS server, or Redis data plane.

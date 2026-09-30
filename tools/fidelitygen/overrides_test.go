@@ -86,8 +86,8 @@ func TestLoadOverridesSeed(t *testing.T) {
 		t.Errorf("clouddns default override = %+v, want limited", got)
 	}
 	// Service default applies to an operation with no explicit entry.
-	if got := ov.For("bigquery", "BigQuery.Query"); got == nil || got.State != StatePreview {
-		t.Errorf("bigquery default override = %+v, want preview", got)
+	if got := ov.For("bigquery", "BigQuery.Query"); got == nil || got.State != StateLimited {
+		t.Errorf("bigquery default override = %+v, want limited", got)
 	}
 	if got := ov.For("storage", "Storage.ObjectsGet"); got != nil {
 		t.Errorf("storage should have no override, got %+v", got)

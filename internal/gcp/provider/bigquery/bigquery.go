@@ -1,8 +1,11 @@
 // Package bigquery implements the BigQuery v2 provider
-// (bigquery.googleapis.com/bigquery/v2). BigQuery is metadata-not-engine:
-// datasets/tables/jobs are logical records only, jobs.query never evaluates
-// SQL (it stores the query and reports jobComplete=true with empty results),
-// and tabledata.insertAll stores streamed rows that tabledata.list reads back.
+// (bigquery.googleapis.com/bigquery/v2). Datasets, tables, jobs and streamed
+// rows are stored records, and jobs.query / jobs.insert (query configuration)
+// evaluate a bounded Standard SQL subset on an in-process pure-Go SQLite engine
+// in both memory and --dsn modes: SELECTs return real rows and DDL/DML mutate
+// the store (the source of truth; SQLite is disposable per-query scratch).
+// Constructs outside the frozen subset fail loud with 400 invalidQuery.
+// tabledata.insertAll stores streamed rows that tabledata.list reads back;
 // tabledata.list honors startIndex as an offset into the row set but does not
 // echo it in the response (startIndex is a request-only parameter in the
 // Discovery TableDataList schema). routines/models/rowAccessPolicies are

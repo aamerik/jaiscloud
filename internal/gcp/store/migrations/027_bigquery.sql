@@ -1,11 +1,12 @@
--- BigQuery (metadata-not-engine). Resources are project-scoped; datasets
+-- BigQuery resources. Resources are project-scoped; datasets
 -- (projects/{project}/datasets/{id}), tables (…/datasets/{id}/tables/{tid}),
--- and jobs (projects/{project}/jobs/{id}) are logical records only — the
--- emulator never evaluates SQL. The full wire request body is stored verbatim
--- as JSONB (config), with dataset/table labels and the table schema extracted
--- as structured JSONB. tabledata.insertAll streams rows into jc_bq_rows
--- (one row per JSONB object, ordered by a per-table seq); tabledata.list reads
--- them back. Jobs are always reported DONE with empty results.
+-- and jobs (projects/{project}/jobs/{id}) are stored records. The full wire
+-- request body is stored verbatim as JSONB (config), with dataset/table labels
+-- and the table schema extracted as structured JSONB. tabledata.insertAll
+-- streams rows into jc_bq_rows (one row per JSONB object, ordered by a
+-- per-table seq); tabledata.list reads them back. Query jobs are evaluated by
+-- the in-process SQL engine (internal/gcp/queryengine, BQ1/BQ2) and persist
+-- their statement statistics; jobs are reported DONE inline (synchronous LROs).
 
 CREATE TABLE IF NOT EXISTS jc_bq_datasets (
     project_id  TEXT        NOT NULL,
