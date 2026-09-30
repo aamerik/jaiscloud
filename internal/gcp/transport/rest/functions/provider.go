@@ -389,9 +389,9 @@ func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest
 }
 
 // WaitOperation serves the google.longrunning.Operations.WaitOperation custom
-// method (POST /v2/projects/{p}/locations/{l}/operations/{id}:wait). Every
-// emulated operation completes synchronously, so it returns the persisted, done
-// operation immediately.
+// method (POST /v2/projects/{p}/locations/{l}/operations/{id}:wait). It returns
+// the persisted operation immediately: done inline by default, or settled once
+// the async delay has elapsed.
 func (p *Provider) WaitOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {

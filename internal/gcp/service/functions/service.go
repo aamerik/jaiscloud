@@ -30,6 +30,7 @@ import (
 	"jaiscloud/internal/clock"
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/gcp/eventing"
+	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/resource"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
@@ -118,6 +119,11 @@ type Service struct {
 	// gate enforces per-function and per-project admission (FP1). It is always
 	// non-nil after NewService.
 	gate *concurrencyGate
+	// lroMode controls long-running-operation timing. The zero value is
+	// synchronous: every mutation operation is stored done=true inline,
+	// matching the v1.1.0 contract. An enabled mode stores operations
+	// done=false and settles them lazily on read (see settle).
+	lroMode lro.Mode
 }
 
 // Option configures Service.
@@ -181,6 +187,14 @@ func WithSubscriptions(p eventing.SubscriptionProvisioner) Option {
 // unlimited.
 func WithAccountConcurrencyLimit(limit int64) Option {
 	return func(s *Service) { s.accountConcurrency = limit }
+}
+
+// WithLROMode sets the long-running-operation timing mode. The zero value is
+// synchronous; Mode{Enabled: true, Delay: d} stores create/update/delete (and
+// the v2 upgrade/traffic) operations done=false and settles them on read once d
+// has elapsed.
+func WithLROMode(m lro.Mode) Option {
+	return func(s *Service) { s.lroMode = m }
 }
 
 // NewService returns a Functions core backed by the given store. resources backs

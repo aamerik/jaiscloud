@@ -217,26 +217,38 @@ func functionJSONV2(project string, f functionsstore.Function) map[string]any {
 	return out
 }
 
-// Operation is a completed Cloud Functions long-running operation. Function
-// mutations complete synchronously, so Done is always true; the operation is
-// persisted (see store/functions) so operations.get/list and REST :wait can read
-// it back. Function is the create/update response; it is nil for a delete (whose
-// response is a google.protobuf.Empty Any).
+// Operation is a Cloud Functions long-running operation. By default (lroMode
+// disabled) a mutation completes synchronously and Done is true; when async
+// timing is enabled it is stored done=false and settled lazily on read (see
+// Service.settle). The operation is persisted (see store/functions) so
+// operations.get/list and REST :wait can read it back. Function is the
+// create/update response snapshot; it is nil for a delete (whose response is a
+// google.protobuf.Empty Any).
 type Operation struct {
 	ID         string
 	Location   string
 	Verb       string // "create" | "update" | "delete" | a v2 upgrade/traffic method name
 	Target     string // full function resource name
 	Function   *functionsstore.Function
+	Done       bool
 	CreateTime time.Time
 	EndTime    time.Time
 }
 
-// NewOperation builds a completed operation for a function mutation. The
-// timestamps default to the business clock and are stable once stored.
-func NewOperation(location, verb, target string, f *functionsstore.Function) Operation {
+// newOperation builds the operation for a function mutation. In the default
+// synchronous mode it is done with EndTime == CreateTime, exactly as before;
+// in async mode it is in flight with a zero EndTime and settle derives
+// completion on read. The timestamps use the business clock and are stable once
+// stored.
+func (s *Service) newOperation(location, verb, target string, f *functionsstore.Function) Operation {
 	t := now()
-	return Operation{ID: newUUID(), Location: location, Verb: verb, Target: target, Function: f, CreateTime: t, EndTime: t}
+	op := Operation{ID: newUUID(), Location: location, Verb: verb, Target: target, Function: f, CreateTime: t}
+	if s.lroMode.Async() {
+		return op
+	}
+	op.Done = true
+	op.EndTime = t
+	return op
 }
 
 // OperationName returns the full long-running-operation resource name for op.
@@ -253,18 +265,24 @@ func OperationName(v Version, project string, op Operation) string {
 // OperationJSON renders a mutation Operation as a google.longrunning.Operation
 // wire map. The response is a typed Any carrying the @type discriminator gax
 // clients require to unpack it: the Function for create/update, or
-// google.protobuf.Empty for a delete.
+// google.protobuf.Empty for a delete. The response and the metadata completion
+// timestamp are only present once the operation is done; real GCP omits them
+// while an async operation is in flight. A done operation keeps the original
+// shape exactly.
 func OperationJSON(v Version, project string, op Operation) map[string]any {
-	response := anyResponse(emptyTypeURL, nil)
-	if op.Function != nil {
-		response = anyResponse(functionTypeFor(v), FunctionJSON(v, project, *op.Function))
-	}
-	return map[string]any{
+	out := map[string]any{
 		"name":     OperationName(v, project, op),
 		"metadata": operationMetadataMap(v, op),
-		"done":     true,
-		"response": response,
+		"done":     op.Done,
 	}
+	if op.Done {
+		response := anyResponse(emptyTypeURL, nil)
+		if op.Function != nil {
+			response = anyResponse(functionTypeFor(v), FunctionJSON(v, project, *op.Function))
+		}
+		out["response"] = response
+	}
+	return out
 }
 
 // functionTypeFor returns the google.protobuf.Any type URL of the Function
@@ -293,8 +311,9 @@ func anyResponse(typeURL string, body map[string]any) map[string]any {
 // operationMetadataMap renders the version-specific OperationMetadata carried
 // on a function operation. v1 uses OperationMetadataV1 ({target, type,
 // updateTime}); v2 uses OperationMetadata ({target, verb, operationType,
-// apiVersion, createTime, endTime}). Both timestamps are the operation's stored
-// values (falling back to the business clock when unset).
+// apiVersion, createTime, endTime}). The completion timestamp (v1 updateTime,
+// v2 endTime) is only present once the operation is done: an in-flight async
+// operation does not fabricate one. The done shape is unchanged.
 func operationMetadataMap(v Version, op Operation) map[string]any {
 	start := op.CreateTime
 	if start.IsZero() {
@@ -305,22 +324,28 @@ func operationMetadataMap(v Version, op Operation) map[string]any {
 		end = start
 	}
 	if v == V2 {
-		return map[string]any{
+		md := map[string]any{
 			"@type":         operationMetadataTypeV2,
 			"createTime":    formatTimestamp(start),
-			"endTime":       formatTimestamp(end),
 			"target":        op.Target,
 			"verb":          op.Verb,
 			"operationType": operationTypeFor(op.Verb),
 			"apiVersion":    string(V2),
 		}
+		if op.Done {
+			md["endTime"] = formatTimestamp(end)
+		}
+		return md
 	}
-	return map[string]any{
-		"@type":      operationMetadataType,
-		"target":     op.Target,
-		"type":       operationTypeFor(op.Verb),
-		"updateTime": formatTimestamp(end),
+	md := map[string]any{
+		"@type":  operationMetadataType,
+		"target": op.Target,
+		"type":   operationTypeFor(op.Verb),
 	}
+	if op.Done {
+		md["updateTime"] = formatTimestamp(end)
+	}
+	return md
 }
 
 // operationTypeFor maps an operation verb to the OperationMetadata
