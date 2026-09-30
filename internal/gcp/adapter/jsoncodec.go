@@ -408,6 +408,13 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "ServiceAccountSignBlob"
 			case "signJwt":
 				return "ServiceAccountSignJwt"
+			// IAM Service Account Credentials (iamcredentials) custom verbs.
+			// detectV1Service routes these to the iamcredentials service, whose
+			// provider registers "IAMCredentials.<action>".
+			case "generateAccessToken":
+				return "GenerateAccessToken"
+			case "generateIdToken":
+				return "GenerateIdToken"
 			}
 		case "documents":
 			// Custom methods POSTed to the "documents" collection marker:

@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **802**
+Cells: **808**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 567 |
+| ga | 573 |
 | limited | 97 |
 | preview | 37 |
 | unsupported | 101 |
@@ -21,8 +21,8 @@ Cells: **802**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 295 | 86 | 37 | 9 |
-| grpc | 272 | 11 | 0 | 92 |
+| rest | 297 | 86 | 37 | 9 |
+| grpc | 276 | 11 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -423,6 +423,19 @@ _18 cell(s): ga=18 limited=0 preview=0 unsupported=0_
 | IAM.ServiceAccountUpdate | rest | ga | — |
 | SetIamPolicy | grpc | ga | — |
 | TestIamPermissions | grpc | ga | — |
+
+## iamcredentials
+
+_6 cell(s): ga=6 limited=0 preview=0 unsupported=0_
+
+| operation | transport | state | reason |
+| --- | --- | --- | --- |
+| GenerateAccessToken | grpc | ga | — |
+| GenerateIdToken | grpc | ga | — |
+| IAMCredentials.GenerateAccessToken | rest | ga | — |
+| IAMCredentials.GenerateIdToken | rest | ga | — |
+| SignBlob | grpc | ga | — |
+| SignJwt | grpc | ga | — |
 
 ## iceberg
 

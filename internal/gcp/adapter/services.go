@@ -66,6 +66,16 @@ var gcpServices = []ServiceDescriptor{
 		Codec:          func() adapter.Codec { return &JSONCodec{Service: "iam"} },
 	},
 	{
+		// IAM Service Account Credentials shares the /v1/ prefix and the
+		// /v1/projects/{p}/serviceAccounts/{email} resource path with IAM, so
+		// it is claimed by segment detection (detectV1Service) on its unique
+		// custom verbs (generateAccessToken / generateIdToken). signBlob and
+		// signJwt collide with iam on a single host and stay routed to iam.
+		ServiceName:    "iamcredentials",
+		ProviderPrefix: "IAMCredentials",
+		Codec:          func() adapter.Codec { return &JSONCodec{Service: "iamcredentials"} },
+	},
+	{
 		ServiceName:    "firestore",
 		ProviderPrefix: "Firestore",
 		Codec:          func() adapter.Codec { return &JSONCodec{Service: "firestore"} },

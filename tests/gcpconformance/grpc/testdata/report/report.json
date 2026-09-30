@@ -1,14 +1,14 @@
 {
-  "endpoint": "localhost:8081",
-  "project": "jaiscloud-project",
-  "total": 299,
-  "passed": 299,
+  "endpoint": "localhost:18081",
+  "project": "test-project",
+  "total": 303,
+  "passed": 303,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 20,
-    "checks": 299,
-    "passed": 299,
+    "services": 21,
+    "checks": 303,
+    "passed": 303,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -60,6 +60,13 @@
       "service": "iam",
       "total": 6,
       "passed": 6,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "iamcredentials",
+      "total": 4,
+      "passed": 4,
       "failed": 0,
       "unimplemented": 0
     },
@@ -2248,6 +2255,34 @@
       "method": "TestIamPermissions",
       "status": "pass",
       "key_field": "requested permissions echoed back"
+    },
+    {
+      "service": "iamcredentials",
+      "rpc": "GenerateAccessToken",
+      "method": "GenerateAccessToken",
+      "status": "pass",
+      "key_field": "accessToken carries the emulator prefix; expireTime is in the future"
+    },
+    {
+      "service": "iamcredentials",
+      "rpc": "GenerateIdToken",
+      "method": "GenerateIdToken",
+      "status": "pass",
+      "key_field": "token is a well-formed JWT"
+    },
+    {
+      "service": "iamcredentials",
+      "rpc": "SignBlob",
+      "method": "SignBlob",
+      "status": "pass",
+      "key_field": "keyId + non-empty signedBlob"
+    },
+    {
+      "service": "iamcredentials",
+      "rpc": "SignJwt",
+      "method": "SignJwt",
+      "status": "pass",
+      "key_field": "keyId + well-formed signedJwt"
     }
   ]
 }

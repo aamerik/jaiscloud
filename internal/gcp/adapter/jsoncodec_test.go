@@ -79,6 +79,9 @@ func TestJSONCodecDecode(t *testing.T) {
 		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:testIamPermissions", "ServiceAccountTestIamPermissions"},
 		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:signBlob", "ServiceAccountSignBlob"},
 		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:signJwt", "ServiceAccountSignJwt"},
+		// IAM Credentials (iamcredentials) unique custom verbs.
+		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:generateAccessToken", "GenerateAccessToken"},
+		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com:generateIdToken", "GenerateIdToken"},
 		{"POST", "/v1/projects/p/serviceAccounts/sa@example.com/keys", "ServiceAccountKeyCreate"},
 		{"GET", "/v1/projects/p/serviceAccounts/sa@example.com/keys", "ServiceAccountKeyList"},
 		{"GET", "/v1/projects/p/serviceAccounts/sa@example.com/keys/kid1", "ServiceAccountKeyGet"},
@@ -191,7 +194,12 @@ func TestDetectV1Service(t *testing.T) {
 		"/v1/projects/p/locations/us/keyRings/kr":                                  "kms",
 		"/v1/projects/p/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/3": "kms",
 		"/v1/projects/p/serviceAccounts/sa@x.com":                                  "iam",
-		"/v1/projects/p/locations/us-central1/functions/f":                         "functions",
+		// IAM Credentials owns the unique generate* verbs; signBlob/signJwt stay
+		// on iam (shared path, single origin).
+		"/v1/projects/p/serviceAccounts/sa@x.com:generateAccessToken": "iamcredentials",
+		"/v1/projects/p/serviceAccounts/sa@x.com:generateIdToken":     "iamcredentials",
+		"/v1/projects/p/serviceAccounts/sa@x.com:signBlob":            "iam",
+		"/v1/projects/p/locations/us-central1/functions/f":            "functions",
 		// The v2 runtime catalog is not a v1 surface.
 		"/v1/projects/p/locations/us-central1/runtimes": "",
 		// Cloud Workflows management + executions share the path shape; the

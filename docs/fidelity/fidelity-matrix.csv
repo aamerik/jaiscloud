@@ -320,6 +320,12 @@ iam,IAM.ServiceAccountTestIamPermissions,rest,ga,
 iam,IAM.ServiceAccountUpdate,rest,ga,
 iam,SetIamPolicy,grpc,ga,
 iam,TestIamPermissions,grpc,ga,
+iamcredentials,GenerateAccessToken,grpc,ga,
+iamcredentials,GenerateIdToken,grpc,ga,
+iamcredentials,IAMCredentials.GenerateAccessToken,rest,ga,
+iamcredentials,IAMCredentials.GenerateIdToken,rest,ga,
+iamcredentials,SignBlob,grpc,ga,
+iamcredentials,SignJwt,grpc,ga,
 iceberg,Iceberg.CommitTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
 iceberg,Iceberg.CreateNamespace,rest,preview,BigLake Iceberg REST catalog; no official Discovery document
 iceberg,Iceberg.CreateTable,rest,preview,BigLake Iceberg REST catalog; no official Discovery document

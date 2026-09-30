@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"jaiscloud/internal/gcp/resource"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
 
@@ -80,7 +82,7 @@ func TestServiceAccountKeysAndSign(t *testing.T) {
 	e, _ := p.resources.Get(ctx, "proj", store.GlobalRegion, rtServiceAccountKey, keyID)
 	var m serviceAccountKeyMeta
 	json.Unmarshal(e.Data, &m)
-	privDER, _ := m.privDER()
+	privDER, _ := m.PrivDER()
 	priv, _ := x509.ParsePKCS8PrivateKey(privDER)
 	digest := sha256.Sum256([]byte("hello"))
 	if err := rsa.VerifyPKCS1v15(priv.(*rsa.PrivateKey).Public().(*rsa.PublicKey), crypto.SHA256, digest[:], sig); err != nil {
@@ -117,5 +119,53 @@ func TestServiceAccountKeysAndSign(t *testing.T) {
 	}
 	if _, err := p.ServiceAccountKeyGet(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email + "/keys/" + keyID})); err == nil {
 		t.Fatal("expected 404 on deleted key")
+	}
+}
+
+// TestServiceAccountSignValidation covers the shared iamcredentials validation
+// applied to the IAM signBlob/signJwt wire methods: empty blobs and
+// out-of-bounds JWT claims fail loud, and the projects/- wildcard signs lazily.
+func TestServiceAccountSignValidation(t *testing.T) {
+	ctx := context.Background()
+	p := New(store.NewMemoryResourceStore())
+	email := "sa@proj.iam.gserviceaccount.com"
+	if _, err := p.Create(ctx, newNR(map[string]any{"body": map[string]any{"accountId": "sa"}})); err != nil {
+		t.Fatalf("create SA: %v", err)
+	}
+
+	badRequest := func(name string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: expected an error", name)
+		}
+		pe, ok := err.(*model.ProviderError)
+		if !ok || pe.HTTPStatus != 400 {
+			t.Fatalf("%s: error = %v, want 400 ProviderError", name, err)
+		}
+	}
+
+	// Empty blob.
+	_, err := p.ServiceAccountSignBlob(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email, "body": map[string]any{}}))
+	badRequest("empty signBlob", err)
+
+	// JWT payload that is not JSON, and one with an exp in the past.
+	if _, err := p.ServiceAccountSignJwt(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email, "body": map[string]any{"payload": "nope"}})); err == nil {
+		t.Fatal("non-JSON signJwt: expected an error")
+	}
+	_, err = p.ServiceAccountSignJwt(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email, "body": map[string]any{"payload": `{"exp":1}`}}))
+	badRequest("past-exp signJwt", err)
+
+	// The projects/- wildcard signs lazily for an account that does not exist.
+	wild := &model.NormalizedRequest{
+		AccountID:  "-",
+		Params:     map[string]any{"name": "serviceAccounts/ghost@proj.iam.gserviceaccount.com", "body": map[string]any{"payload": base64.StdEncoding.EncodeToString([]byte("hi"))}},
+		ResourceID: resource.ResourceID("proj"),
+	}
+	if _, err := p.ServiceAccountSignBlob(ctx, wild); err != nil {
+		t.Fatalf("wildcard signBlob: %v", err)
+	}
+	wild.Params["body"] = map[string]any{"payload": `{"iss":"proj"}`}
+	if _, err := p.ServiceAccountSignJwt(ctx, wild); err != nil {
+		t.Fatalf("wildcard signJwt: %v", err)
 	}
 }

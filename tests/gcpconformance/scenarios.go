@@ -150,6 +150,18 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "iam", Method: "DELETE", Path: saBase + "/" + saEmail},
 	)
 
+	// ─── IAM Service Account Credentials ──────────────────────────────────────
+	// The unique iamcredentials verbs. signBlob/signJwt share their path with
+	// iam and are exercised by the IAM block above.
+	sc = append(sc,
+		Scenario{Service: "iamcredentials", Method: "POST",
+			Path: "/v1/projects/-/serviceAccounts/" + saEmail + ":generateAccessToken",
+			Body: `{"scope":["https://www.googleapis.com/auth/cloud-platform"],"lifetime":"3600s"}`},
+		Scenario{Service: "iamcredentials", Method: "POST",
+			Path: "/v1/projects/-/serviceAccounts/" + saEmail + ":generateIdToken",
+			Body: `{"audience":"https://example.com","includeEmail":true}`},
+	)
+
 	// ─── Cloud DNS ────────────────────────────────────────────────────────────
 	dnsBase := "/dns/v1/projects/" + p + "/managedZones"
 	sc = append(sc,
