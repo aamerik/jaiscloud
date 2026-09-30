@@ -74,4 +74,11 @@ const (
 	// param present). The provider validates parameter format and expiry; the
 	// cryptographic signature itself is deliberately not verified.
 	SignedURLKey = "jaiscloud:signedURL"
+	// XMLAPIKey carries a bool in NormalizedRequest.Params (codec → provider and
+	// codec → codec) marking a request that arrived on the XML API raw path
+	// /{bucket}/{object} rather than the JSON API. The storage provider uses it to
+	// answer object reads/writes in the XML wire shape (quoted hex-MD5 ETag), and
+	// the codec uses it to emit an XML object upload as 200 + empty body + object
+	// headers instead of the JSON `storage#object`.
+	XMLAPIKey = "jaiscloud:xmlAPI"
 )

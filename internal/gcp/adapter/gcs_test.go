@@ -12,6 +12,106 @@ import (
 	"jaiscloud/internal/model"
 )
 
+// TestGCSCodecRawMediaMarksXMLAPI verifies requests on the raw XML path
+// /{bucket}/{object} carry wire.XMLAPIKey (so reads/writes answer in the XML
+// wire shape) while JSON API uploads do not.
+func TestGCSCodecRawMediaMarksXMLAPI(t *testing.T) {
+	c := &GCSCodec{}
+	for _, method := range []string{"PUT", "GET", "HEAD"} {
+		r := httptest.NewRequest(method, "/bkt/obj.txt", nil)
+		nr, err := c.Decode(r, nil)
+		if err != nil {
+			t.Fatalf("%s decode: %v", method, err)
+		}
+		if v, _ := nr.Params[wire.XMLAPIKey].(bool); !v {
+			t.Errorf("%s: expected wire.XMLAPIKey set", method)
+		}
+	}
+	// A signed-URL raw PUT is likewise an XML API request (and carries the
+	// signed-URL marker).
+	sr := httptest.NewRequest("PUT", "/bkt/obj.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=x&X-Goog-Date=20260930T160000Z&X-Goog-Expires=3600&X-Goog-Signature=abc", nil)
+	snr, err := c.Decode(sr, nil)
+	if err != nil {
+		t.Fatalf("signed decode: %v", err)
+	}
+	if v, _ := snr.Params[wire.XMLAPIKey].(bool); !v {
+		t.Error("signed PUT: expected wire.XMLAPIKey set")
+	}
+	if v, _ := snr.Params[wire.SignedURLKey].(bool); !v {
+		t.Error("signed PUT: expected wire.SignedURLKey set")
+	}
+	// A JSON API media insert must NOT be marked as an XML request.
+	r := httptest.NewRequest("POST", "/upload/storage/v1/b/bkt/o?uploadType=media&name=obj", strings.NewReader("x"))
+	nr, err := c.Decode(r, []byte("x"))
+	if err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if v, _ := nr.Params[wire.XMLAPIKey].(bool); v {
+		t.Error("JSON API insert must not be marked XML")
+	}
+}
+
+// TestGCSCodecEncodeXMLPutEmptyBody verifies an XML API PUT Object response is
+// 200 with an empty body plus the object's ETag/generation/hash headers the
+// provider attached — never the JSON storage#object body.
+func TestGCSCodecEncodeXMLPutEmptyBody(t *testing.T) {
+	c := &GCSCodec{}
+	nr := &model.NormalizedRequest{Action: "ObjectsInsert", Params: map[string]any{wire.XMLAPIKey: true}}
+	resp := &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data: map[string]any{
+			"kind": "storage#object",
+			"name": "obj.txt",
+			wire.HeadersKey: map[string]string{
+				"ETag":                  `"881f7881ac1bc144a2672e45babb8839"`,
+				"x-goog-generation":     "123",
+				"x-goog-metageneration": "1",
+				"x-goog-hash":           "crc32c=abc,md5=def",
+			},
+		},
+	}
+	status, hdr, body := c.Encode(nr, resp)
+	if status != 200 {
+		t.Fatalf("expected 200, got %d", status)
+	}
+	if len(body) != 0 {
+		t.Fatalf("expected empty body, got %q", body)
+	}
+	if got := hdr.Get("ETag"); got != `"881f7881ac1bc144a2672e45babb8839"` {
+		t.Errorf("ETag = %q", got)
+	}
+	if got := hdr.Get("x-goog-generation"); got != "123" {
+		t.Errorf("x-goog-generation = %q", got)
+	}
+	if got := hdr.Get("x-goog-hash"); got != "crc32c=abc,md5=def" {
+		t.Errorf("x-goog-hash = %q", got)
+	}
+	if ct := hdr.Get("Content-Type"); !strings.HasPrefix(ct, "application/xml") {
+		t.Errorf("Content-Type = %q, want application/xml", ct)
+	}
+}
+
+// TestGCSCodecEncodeJSONInsertKeepsObject verifies the JSON API insert path still
+// returns the storage#object body — only the XML path is reshaped.
+func TestGCSCodecEncodeJSONInsertKeepsObject(t *testing.T) {
+	c := &GCSCodec{}
+	nr := &model.NormalizedRequest{Action: "ObjectsInsert", Params: map[string]any{}}
+	resp := &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data:       map[string]any{"kind": "storage#object", "name": "obj.txt"},
+	}
+	status, hdr, body := c.Encode(nr, resp)
+	if status != 200 {
+		t.Fatalf("expected 200, got %d", status)
+	}
+	if !strings.Contains(string(body), "storage#object") {
+		t.Errorf("JSON insert should keep the object body, got %q", body)
+	}
+	if ct := hdr.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+}
+
 func TestGCSCodecDownloadForcesMedia(t *testing.T) {
 	c := &GCSCodec{}
 	r := httptest.NewRequest("GET", "/download/storage/v1/b/bkt/o/obj", nil)

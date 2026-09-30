@@ -54,6 +54,10 @@ func (c *GCSCodec) decodeRawMedia(r *http.Request, body []byte) (*model.Normaliz
 	metadataFromHeaders(r, nr.Params)
 	nr.Params["bucket"] = seg[0]
 	nr.Params["object"] = strings.Join(seg[1:], "/")
+	// This request arrived on the XML API raw path (not the JSON API), so the
+	// provider/encoder answer it in the XML wire shape: media downloads carry a
+	// quoted hex-MD5 ETag and an XML PUT Object returns 200 + an empty body.
+	nr.Params[wire.XMLAPIKey] = true
 	signed := hasSignedSignature(r)
 	if signed {
 		nr.Params[wire.SignedURLKey] = true
@@ -586,6 +590,16 @@ func (c *GCSCodec) Encode(nr *model.NormalizedRequest, resp *model.ProviderRespo
 			headers.Set("Content-Type", ct)
 		}
 		return status, headers, b
+	}
+
+	// XML API object upload (PUT /{bucket}/{object}): real GCS replies 200 with an
+	// empty body and the object's ETag/generation/hash as response headers, which
+	// the provider attached under wire.HeadersKey. The JSON API upload paths
+	// (/upload/storage/v1, /storage/v1) never set wire.XMLAPIKey, so they keep the
+	// storage#object body produced below.
+	if xmlAPI, _ := nr.Params[wire.XMLAPIKey].(bool); xmlAPI && nr.Action == "ObjectsInsert" {
+		headers.Set("Content-Type", "application/xml; charset=UTF-8")
+		return status, headers, nil
 	}
 
 	out, err := json.Marshal(resp.Data)
