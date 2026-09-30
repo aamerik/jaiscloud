@@ -26,6 +26,31 @@ func pointAt(t time.Time, v float64) monitoringstore.Point {
 	return monitoringstore.Point{EndTime: t, Value: floatValue(v)}
 }
 
+func TestApplyAggregationIntervalAndMetricKind(t *testing.T) {
+	end := time.Date(2026, 1, 1, 0, 30, 0, 0, time.UTC)
+	// A DELTA series aligned to a period becomes a per-period GAUGE.
+	delta := testSeries("custom.googleapis.com/delta", "env", "a", pointAt(end, 9))
+	delta.MetricKind = 2 // DELTA
+	out, err := applyAggregation([]monitoringstore.TimeSeries{delta}, &Aggregation{
+		AlignmentPeriod:  time.Minute,
+		PerSeriesAligner: AlignMean,
+	})
+	if err != nil {
+		t.Fatalf("applyAggregation: %v", err)
+	}
+	if out[0].MetricKind != metricKindGauge {
+		t.Fatalf("aligned metric kind = %d, want GAUGE(%d)", out[0].MetricKind, metricKindGauge)
+	}
+	p := out[0].Points[0]
+	wantEnd := time.Date(2026, 1, 1, 0, 30, 0, 0, time.UTC)
+	if !p.EndTime.Equal(wantEnd) {
+		t.Fatalf("aligned end = %s, want %s", p.EndTime, wantEnd)
+	}
+	if !p.StartTime.Equal(wantEnd.Add(-time.Minute)) {
+		t.Fatalf("aligned start = %s, want %s (end - alignment period)", p.StartTime, wantEnd.Add(-time.Minute))
+	}
+}
+
 func TestApplyAggregationSumReduce(t *testing.T) {
 	// The request interval ends at an off-grid time (:30); the aligned bucket
 	// must still land on the epoch grid (top of the hour), not at :30.

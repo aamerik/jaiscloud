@@ -106,7 +106,16 @@ func (s *Service) DeleteMetricDescriptor(ctx context.Context, project, typ strin
 
 // ─── MetricService: time series ───────────────────────────────────────────────
 
-func (s *Service) ListTimeSeries(ctx context.Context, project, filter string, interval *TimeInterval, aggregation *Aggregation, headersOnly bool, pageSize int, pageToken string) ([]monitoringstore.TimeSeries, string, error) {
+func (s *Service) ListTimeSeries(ctx context.Context, project, filter string, interval *TimeInterval, aggregation *Aggregation, secondaryAggregation *Aggregation, orderBy string, headersOnly bool, pageSize int, pageToken string) ([]monitoringstore.TimeSeries, string, error) {
+	// order_by is documented as unsupported by ListTimeSeries (points are
+	// returned most-recent-first); real Cloud Monitoring requires it blank, so a
+	// non-blank value is rejected rather than silently ignored (J43).
+	if strings.TrimSpace(orderBy) != "" {
+		return nil, "", invalidArgument("order_by is not supported and must be left blank")
+	}
+	if secondaryAggregation != nil && aggregation == nil {
+		return nil, "", invalidArgument("secondary_aggregation requires aggregation to be specified")
+	}
 	f, err := compileTSFilter(filter)
 	if err != nil {
 		return nil, "", invalidArgument("invalid filter: " + err.Error())
@@ -128,6 +137,12 @@ func (s *Service) ListTimeSeries(ctx context.Context, project, filter string, in
 	}
 	if aggregation != nil {
 		matching, err = applyAggregation(matching, aggregation)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	if secondaryAggregation != nil {
+		matching, err = applyAggregation(matching, secondaryAggregation)
 		if err != nil {
 			return nil, "", err
 		}

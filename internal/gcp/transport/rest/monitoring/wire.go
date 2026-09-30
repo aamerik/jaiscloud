@@ -832,15 +832,16 @@ func parseTime(s string) time.Time {
 }
 
 // aggregationFromParams parses the REST query parameters that mirror the proto
-// google.monitoring.v3.Aggregation: aggregation.alignmentPeriod,
-// aggregation.perSeriesAligner, aggregation.crossSeriesReducer, and the
-// repeated aggregation.groupByFields. It returns nil when no aggregation
-// parameter is present.
-func aggregationFromParams(nr *model.NormalizedRequest) (*core.Aggregation, error) {
-	period := strParam(nr, "aggregation.alignmentPeriod")
-	aligner := strParam(nr, "aggregation.perSeriesAligner")
-	reducer := strParam(nr, "aggregation.crossSeriesReducer")
-	groupBy := strListFrom(nr.Params["aggregation.groupByFields"])
+// google.monitoring.v3.Aggregation: {prefix}.alignmentPeriod,
+// {prefix}.perSeriesAligner, {prefix}.crossSeriesReducer, and the repeated
+// {prefix}.groupByFields. It returns nil when no such parameter is present.
+// prefix is "aggregation" for the primary aggregation or "secondaryAggregation"
+// for the second pass (J43).
+func aggregationFromParamsPrefix(nr *model.NormalizedRequest, prefix string) (*core.Aggregation, error) {
+	period := strParam(nr, prefix+".alignmentPeriod")
+	aligner := strParam(nr, prefix+".perSeriesAligner")
+	reducer := strParam(nr, prefix+".crossSeriesReducer")
+	groupBy := strListFrom(nr.Params[prefix+".groupByFields"])
 	if period == "" && aligner == "" && reducer == "" && len(groupBy) == 0 {
 		return nil, nil
 	}
@@ -852,11 +853,22 @@ func aggregationFromParams(nr *model.NormalizedRequest) (*core.Aggregation, erro
 	if period != "" {
 		d, err := time.ParseDuration(period)
 		if err != nil {
-			return nil, invalidArgument("invalid aggregation.alignmentPeriod: " + period)
+			return nil, invalidArgument("invalid " + prefix + ".alignmentPeriod: " + period)
 		}
 		agg.AlignmentPeriod = d
 	}
 	return agg, nil
+}
+
+// aggregationFromParams parses the primary aggregation.* query parameters.
+func aggregationFromParams(nr *model.NormalizedRequest) (*core.Aggregation, error) {
+	return aggregationFromParamsPrefix(nr, "aggregation")
+}
+
+// secondaryAggregationFromParams parses the secondaryAggregation.* query
+// parameters (the second aggregation applied after the primary one).
+func secondaryAggregationFromParams(nr *model.NormalizedRequest) (*core.Aggregation, error) {
+	return aggregationFromParamsPrefix(nr, "secondaryAggregation")
 }
 
 // updateMaskFromQuery parses the repeated/comma-separated updateMask query
