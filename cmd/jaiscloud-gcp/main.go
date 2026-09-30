@@ -334,6 +334,13 @@ func startCmd() *cobra.Command {
 			workflowExecutionsCore := workflowexecutionscore.NewService(stores.workflows, workflowsEngine)
 			workflowExecutionsP := restworkflowexecutions.NewProvider(workflowExecutionsCore, cfg.ProjectID)
 
+			// Dataproc Metastore's transport-neutral core is shared by the REST
+			// provider and the gRPC adapter below, so both transports run against
+			// one store and cannot drift. It is built before Dataproc because the
+			// Dataproc core resolves a cluster's metastore attachment through it.
+			metastoreCore := metastorecore.NewService(stores.metastore)
+			metastoreP := restmetastore.NewProvider(metastoreCore, cfg.ProjectID)
+
 			// Cloud Dataproc reuses the Spark client-mode executor: mock by
 			// default, K8s under JAISCLOUD_SPARK_EXECUTOR_MODE. Docker executor
 			// for Spark is out of scope (Phase A) — mock only. The core (and its
@@ -361,6 +368,14 @@ func startCmd() *cobra.Command {
 					// emulated GCS. The core only sees the BlobSink interface,
 					// so it never imports provider/storage.
 					dataproccore.WithBlobSink(storageP),
+					// Resolve a cluster's metastoreConfig attachment through the
+					// Metastore core (validated at cluster create, formatted at
+					// job submit). The core only sees the interface, so it never
+					// imports service/metastore.
+					dataproccore.WithMetastoreResolver(metastoreCore),
+					// The synthesized per-service endpoint is not resolvable from
+					// Spark pods; a deployment points this at the reachable HMS.
+					dataproccore.WithHMSEndpointOverride(os.Getenv("JAISCLOUD_DATAPROC_HMS_ENDPOINT")),
 				}
 				if cfg.K8sSparkSA != "" {
 					dataprocOpts = append(dataprocOpts, dataproccore.WithServiceAccountName(cfg.K8sSparkSA))
@@ -435,12 +450,6 @@ func startCmd() *cobra.Command {
 			// against one store and cannot drift.
 			managedKafkaCore := managedkafkacore.NewService(stores.managedkafka)
 			managedkafkaP := restmanagedkafka.NewProvider(managedKafkaCore, cfg.ProjectID)
-
-			// Dataproc Metastore's transport-neutral core is shared by the REST
-			// provider and the gRPC adapter below, so both transports run against
-			// one store and cannot drift.
-			metastoreCore := metastorecore.NewService(stores.metastore)
-			metastoreP := restmetastore.NewProvider(metastoreCore, cfg.ProjectID)
 
 			icebergP := icebergprovider.New(stores.iceberg)
 

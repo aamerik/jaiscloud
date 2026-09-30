@@ -41,6 +41,15 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 	// being deleted before the job reaches a terminal state.
 	s.prepareDriverOutput(ctx, cluster, &j)
 
+	// Derive the cluster's Hive Metastore attachment endpoint, if any. The
+	// reference was validated when the cluster was created; here it is only
+	// formatted, so the job inherits the attachment fixed at cluster creation
+	// (matching real Dataproc, which does not re-check the metastore per job).
+	metastoreEndpoint, err := s.clusterMetastoreEndpoint(project, region, cluster)
+	if err != nil {
+		return dpstore.Job{}, err
+	}
+
 	// Fail-loud on unsupported job types — never silently succeed.
 	if unsupportedJobTypes[j.Type] {
 		now := clock.Now().UTC()
@@ -84,7 +93,7 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		s.runJob(s.ctx, project, region, j)
+		s.runJob(s.ctx, project, region, j, metastoreEndpoint)
 	}()
 	return j, nil
 }

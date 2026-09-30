@@ -50,8 +50,10 @@ func cancelKey(project, region, jobID string) string {
 // runJob executes a stored job via sparkhelpers.SubmitClientMode. Runs in a
 // goroutine; the terminal state is written back to the jobs store (first-write
 // wins via the store UpdateJob) and a terminal snapshot is persisted for
-// post-GC rehydration parity.
-func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.Job) {
+// post-GC rehydration parity. metastoreEndpoint is the cluster's Hive Metastore
+// thrift endpoint ("" when the cluster has no attachment); it is injected as a
+// spark-submit conf so driver and executor pods share the attachment.
+func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint string) {
 	jobID := j.JobID
 
 	runCtx, runCancel := context.WithCancel(ctx)
@@ -109,6 +111,9 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 	}
 	driverEnv := sparkgcp.DriverEnv(jobEmulator)
 
+	sparkConfs := sparkgcp.DriverSparkConfsFromEnv(jobEmulator, driverEnv)
+	sparkConfs = append(sparkConfs, metastoreSparkConfs(metastoreEndpoint)...)
+
 	clientJob := sparkhelpers.ClientModeJob{
 		JobID:              jobID,
 		Namespace:          ns,
@@ -121,7 +126,7 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 		IdentityMutator:    identityMutator,
 		ServiceAccountName: s.serviceAccountName,
 		ExtraDriverEnv:     driverEnv,
-		ExtraSparkConfs:    sparkgcp.DriverSparkConfsFromEnv(jobEmulator, driverEnv),
+		ExtraSparkConfs:    sparkConfs,
 		Labels:             labels,
 	}
 
