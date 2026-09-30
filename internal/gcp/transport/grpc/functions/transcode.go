@@ -81,50 +81,64 @@ func runtimeToProto(rt core.Runtime) *apiv2functionspb.ListRuntimesResponse_Runt
 	return out
 }
 
-// operationToProtoV1 packs a done v1 operation with typed Any metadata
-// (OperationMetadataV1) and a typed Any response (CloudFunction, or Empty for a
-// delete).
+// operationToProtoV1 packs a v1 operation with typed Any metadata
+// (OperationMetadataV1) and — only once it is done — a typed Any response
+// (CloudFunction, or Empty for a delete). While an async operation is in flight
+// the response and the metadata completion timestamp are omitted, matching real
+// GCP; a done operation keeps the original output exactly.
 func operationToProtoV1(project string, op core.Operation) (*longrunningpb.Operation, error) {
 	ts := timestamppb.New(clock.Now().UTC())
-	metaAny, err := anypb.New(&functionspb.OperationMetadataV1{
-		Target:     op.Target,
-		Type:       operationTypeV1(op.Verb),
-		UpdateTime: ts,
-	})
+	meta := &functionspb.OperationMetadataV1{
+		Target: op.Target,
+		Type:   operationTypeV1(op.Verb),
+	}
+	if op.Done {
+		meta.UpdateTime = ts
+	}
+	metaAny, err := anypb.New(meta)
 	if err != nil {
 		return nil, err
 	}
-	out := &longrunningpb.Operation{Name: core.OperationName(core.V1, project, op), Metadata: metaAny, Done: true}
-	respAny, err := operationResponseProtoV1(project, op)
-	if err != nil {
-		return nil, err
+	out := &longrunningpb.Operation{Name: core.OperationName(core.V1, project, op), Metadata: metaAny, Done: op.Done}
+	if op.Done {
+		respAny, err := operationResponseProtoV1(project, op)
+		if err != nil {
+			return nil, err
+		}
+		out.Result = &longrunningpb.Operation_Response{Response: respAny}
 	}
-	out.Result = &longrunningpb.Operation_Response{Response: respAny}
 	return out, nil
 }
 
-// operationToProtoV2 packs a done v2 operation with typed Any metadata
-// (OperationMetadata) and a typed Any response (Function, or Empty for a
-// delete).
+// operationToProtoV2 packs a v2 operation with typed Any metadata
+// (OperationMetadata) and — only once it is done — a typed Any response
+// (Function, or Empty for a delete). While an async operation is in flight the
+// response and metadata.endTime are omitted, matching real GCP; a done operation
+// keeps the original output exactly.
 func operationToProtoV2(project string, op core.Operation) (*longrunningpb.Operation, error) {
 	ts := timestamppb.New(clock.Now().UTC())
-	metaAny, err := anypb.New(&apiv2functionspb.OperationMetadata{
+	meta := &apiv2functionspb.OperationMetadata{
 		Target:        op.Target,
 		Verb:          op.Verb,
 		ApiVersion:    "v2",
 		CreateTime:    ts,
-		EndTime:       ts,
 		OperationType: operationTypeV2(op.Verb),
-	})
+	}
+	if op.Done {
+		meta.EndTime = ts
+	}
+	metaAny, err := anypb.New(meta)
 	if err != nil {
 		return nil, err
 	}
-	out := &longrunningpb.Operation{Name: core.OperationName(core.V2, project, op), Metadata: metaAny, Done: true}
-	respAny, err := operationResponseProtoV2(project, op)
-	if err != nil {
-		return nil, err
+	out := &longrunningpb.Operation{Name: core.OperationName(core.V2, project, op), Metadata: metaAny, Done: op.Done}
+	if op.Done {
+		respAny, err := operationResponseProtoV2(project, op)
+		if err != nil {
+			return nil, err
+		}
+		out.Result = &longrunningpb.Operation_Response{Response: respAny}
 	}
-	out.Result = &longrunningpb.Operation_Response{Response: respAny}
 	return out, nil
 }
 

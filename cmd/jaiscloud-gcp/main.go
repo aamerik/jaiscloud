@@ -313,6 +313,9 @@ func startCmd() *cobra.Command {
 					functionscore.WithBlobs(stores.blobs),
 					functionscore.WithSourceFetcher(storageP),
 					functionscore.WithSourceBuckets(storageP),
+					// Long-running-operation timing (LRO2): opt-in async mode,
+					// default sync, reusing the cross-service mode parsed above.
+					functionscore.WithLROMode(lroMode),
 					// The executor is the shared concurrency resource, so its
 					// account-level cap is also the project-wide admission cap
 					// (FP1). JAISCLOUD_LAMBDA_CONCURRENCY_LIMIT, default 1000.

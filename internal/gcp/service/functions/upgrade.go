@@ -78,8 +78,9 @@ func displayUpgradeState(s string) string {
 }
 
 // applyUpgrade runs mutate against the stored function under the store's atomic
-// update and returns the persisted function plus its done operation. verb names
-// the upgrade method (recorded as the operation's verb/target metadata).
+// update and returns the persisted function plus its operation (done inline by
+// default, in flight under async LRO timing). verb names the upgrade method
+// (recorded as the operation's verb/target metadata).
 func (s *Service) applyUpgrade(ctx context.Context, project, location, id, verb string, mutate func(functionsstore.Function) (functionsstore.Function, error)) (Operation, error) {
 	if location == "" || id == "" {
 		return Operation{}, invalidArgument("missing location or function name")
@@ -91,7 +92,7 @@ func (s *Service) applyUpgrade(ctx context.Context, project, location, id, verb 
 		return Operation{}, mapErr(err)
 	}
 	target := resourceID(project)("cloud-function", location+"/"+id)
-	op := NewOperation(location, verb, target, &f)
+	op := s.newOperation(location, verb, target, &f)
 	if err := s.persistOperation(ctx, project, op); err != nil {
 		return Operation{}, err
 	}

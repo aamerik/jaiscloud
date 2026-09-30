@@ -11,9 +11,10 @@ import (
 	"jaiscloud/internal/model"
 )
 
-// CreateFunction creates a function and returns it with its done create
-// operation. project/location scope the store; id is the explicit functionId
-// parameter (which wins over any name in the input). The runtime is required.
+// CreateFunction creates a function and returns it with its create operation
+// (done inline by default, in flight under async LRO timing).
+// project/location scope the store; id is the explicit functionId parameter
+// (which wins over any name in the input). The runtime is required.
 func (s *Service) CreateFunction(ctx context.Context, project, location, id string, in FunctionInput, v Version) (functionsstore.Function, Operation, error) {
 	if location == "" {
 		return functionsstore.Function{}, Operation{}, invalidArgument("missing location")
@@ -64,7 +65,7 @@ func (s *Service) CreateFunction(ctx context.Context, project, location, id stri
 		s.persistTriggerFields(ctx, project, location, id, f)
 	}
 	target := resourceID(project)("cloud-function", location+"/"+id)
-	op := NewOperation(location, "create", target, &f)
+	op := s.newOperation(location, "create", target, &f)
 	if err := s.persistOperation(ctx, project, op); err != nil {
 		return functionsstore.Function{}, Operation{}, err
 	}
@@ -109,7 +110,8 @@ func (s *Service) ListFunctions(ctx context.Context, project, location string, p
 }
 
 // UpdateFunction merges the input into the stored function under the given mask
-// and returns it with its done update operation.
+// and returns it with its update operation (done inline by default, in flight
+// under async LRO timing).
 func (s *Service) UpdateFunction(ctx context.Context, project, location, id string, in FunctionInput, mask []string, v Version) (functionsstore.Function, Operation, error) {
 	if location == "" || id == "" {
 		return functionsstore.Function{}, Operation{}, invalidArgument("missing location or function name")
@@ -170,15 +172,15 @@ func (s *Service) UpdateFunction(ctx context.Context, project, location, id stri
 		}
 	}
 	target := resourceID(project)("cloud-function", location+"/"+id)
-	op := NewOperation(location, "update", target, &f)
+	op := s.newOperation(location, "update", target, &f)
 	if err := s.persistOperation(ctx, project, op); err != nil {
 		return functionsstore.Function{}, Operation{}, err
 	}
 	return f, op, nil
 }
 
-// DeleteFunction deletes a function and returns its done delete operation (whose
-// response is empty).
+// DeleteFunction deletes a function and returns its delete operation (done
+// inline by default, in flight under async LRO timing; its response is empty).
 func (s *Service) DeleteFunction(ctx context.Context, project, location, id string) (Operation, error) {
 	if location == "" || id == "" {
 		return Operation{}, invalidArgument("missing location or function name")
@@ -193,7 +195,7 @@ func (s *Service) DeleteFunction(ctx context.Context, project, location, id stri
 	s.discardSource(ctx, f.SourceBlobKey)
 	s.deleteTrigger(ctx, project, location, id)
 	target := resourceID(project)("cloud-function", location+"/"+id)
-	op := NewOperation(location, "delete", target, nil)
+	op := s.newOperation(location, "delete", target, nil)
 	if err := s.persistOperation(ctx, project, op); err != nil {
 		return Operation{}, err
 	}
