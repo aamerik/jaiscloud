@@ -98,3 +98,11 @@ entries:
   - match: "J43"
     pr: 264
     note: "resolved: aggregation secondary pass/intervals/metric kind/orderBy in #264"
+
+  # 265 — feat/gcp-kms-key-policy (KMS cryptoKey resource-policy hook + the
+  # "authz accepted, not enforced" posture decision). G1's source doc
+  # (gcp-future-work.md) is gitignored scratch, so this commits the closure.
+  - source: "gcp-future-work"
+    match: "Authz not enforced"
+    pr: 265
+    note: "resolved: authz accepted, not enforced, matching AWS; KMS cryptoKey resource policy enforced default-permissively (#265)"

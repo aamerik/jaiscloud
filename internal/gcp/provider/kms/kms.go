@@ -36,6 +36,16 @@ func New(keys kmsstore.Store, resources store.ResourceStore) *Provider {
 	return &Provider{keys: keys, resources: resources}
 }
 
+// authorizeCryptoKey enforces the cryptoKey's IAM policy for one crypto-use
+// permission. It is default-permissive: a key with no policy (or no bindings)
+// allows every operation, so existing callers are unaffected; only a policy
+// scoped to roles that omit permission denies. Mirrors the AWS KMS emulator's
+// resource-policy hook (internal/aws/key/provider.go checkKeyPolicy).
+func (p *Provider) authorizeCryptoKey(ctx context.Context, nr *model.NormalizedRequest, loc, kr, key, permission string) error {
+	return policy.AuthorizeKMS(ctx, p.resources, nr.AccountID, rtCryptoKeyPolicy,
+		loc+"/"+kr+"/"+key, permission, cryptoKeyName(nr, loc, kr, key))
+}
+
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		"KMS.KeyRingCreate":                     p.KeyRingCreate,
@@ -428,6 +438,9 @@ func (p *Provider) CryptoKeyEncrypt(ctx context.Context, nr *model.NormalizedReq
 		return nil, err
 	}
 	loc, kr, key := parseCryptoKey(name)
+	if err := p.authorizeCryptoKey(ctx, nr, loc, kr, key, policy.PermCryptoKeyUseToEncrypt); err != nil {
+		return nil, err
+	}
 	kmsstore.RotateIfDue(ctx, p.keys, nr.AccountID, loc, kr, key, clock.Now())
 	ck, err := p.keys.GetCryptoKey(ctx, nr.AccountID, loc, kr, key)
 	if err != nil {
@@ -467,6 +480,9 @@ func (p *Provider) CryptoKeyDecrypt(ctx context.Context, nr *model.NormalizedReq
 		return nil, err
 	}
 	loc, kr, key := parseCryptoKey(name)
+	if err := p.authorizeCryptoKey(ctx, nr, loc, kr, key, policy.PermCryptoKeyUseToDecrypt); err != nil {
+		return nil, err
+	}
 	ck, err := p.keys.GetCryptoKey(ctx, nr.AccountID, loc, kr, key)
 	if err != nil {
 		return nil, p.keyErr(err)
@@ -676,6 +692,9 @@ func (p *Provider) CryptoKeyVersionAsymmetricSign(ctx context.Context, nr *model
 		return nil, err
 	}
 	loc, kr, key, version := parseVersion(name)
+	if err := p.authorizeCryptoKey(ctx, nr, loc, kr, key, policy.PermCryptoKeyUseToSign); err != nil {
+		return nil, err
+	}
 	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
 	v, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
@@ -734,6 +753,9 @@ func (p *Provider) CryptoKeyVersionAsymmetricDecrypt(ctx context.Context, nr *mo
 		return nil, err
 	}
 	loc, kr, key, version := parseVersion(name)
+	if err := p.authorizeCryptoKey(ctx, nr, loc, kr, key, policy.PermCryptoKeyUseToDecrypt); err != nil {
+		return nil, err
+	}
 	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
 	v, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
@@ -772,6 +794,9 @@ func (p *Provider) CryptoKeyVersionMacSign(ctx context.Context, nr *model.Normal
 		return nil, err
 	}
 	loc, kr, key, version := parseVersion(name)
+	if err := p.authorizeCryptoKey(ctx, nr, loc, kr, key, policy.PermCryptoKeyUseToSign); err != nil {
+		return nil, err
+	}
 	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
 	v, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
@@ -811,6 +836,9 @@ func (p *Provider) CryptoKeyVersionMacVerify(ctx context.Context, nr *model.Norm
 		return nil, err
 	}
 	loc, kr, key, version := parseVersion(name)
+	if err := p.authorizeCryptoKey(ctx, nr, loc, kr, key, policy.PermCryptoKeyUseToVerify); err != nil {
+		return nil, err
+	}
 	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
 	v, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
@@ -851,6 +879,9 @@ func (p *Provider) CryptoKeyVersionGetPublicKey(ctx context.Context, nr *model.N
 	// name may be ".../cryptoKeyVersions/{v}/publicKey" — strip the suffix.
 	name = strings.TrimSuffix(name, "/publicKey")
 	loc, kr, key, version := parseVersion(name)
+	if err := p.authorizeCryptoKey(ctx, nr, loc, kr, key, policy.PermCryptoKeyViewPublicKey); err != nil {
+		return nil, err
+	}
 	p.promoteDestroyed(ctx, nr.AccountID, loc, kr, key)
 	v, err := p.keys.GetVersion(ctx, nr.AccountID, loc, kr, key, version)
 	if err != nil {
