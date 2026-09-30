@@ -10,6 +10,11 @@
 // That is the dual-protocol invariant: one core, one piece of state, so the
 // transports cannot drift.
 //
+// Create/Update/Delete return a done google.longrunning.Operation inline by
+// default. The LRO timing is opt-in via WithLROMode: when enabled, operations
+// are stored done=false and settle lazily on read (see settle); the default
+// remains synchronous.
+//
 // This is control-plane only: the emulator never stands up a Hive Thrift /
 // Iceberg metadata endpoint per service (the single global Hive Metastore
 // Thrift plane in internal/gcp/hms is separate). Deferred operations
@@ -28,6 +33,7 @@ import (
 	"strings"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/paging"
 	metastorestore "jaiscloud/internal/gcp/store/metastore"
 	"jaiscloud/internal/model"
@@ -36,11 +42,29 @@ import (
 // Service is the transport-neutral Dataproc Metastore v1 service.
 type Service struct {
 	store metastorestore.Store
+	// lroMode controls operation timing. The zero value is synchronous: every
+	// operation is stored done=true inline, matching the v1.1.0 contract. An
+	// enabled mode stores operations done=false and settles them lazily on read.
+	lroMode lro.Mode
+}
+
+// Option configures Service.
+type Option func(*Service)
+
+// WithLROMode sets the long-running-operation timing mode. The zero value is
+// synchronous; Mode{Enabled: true, Delay: d} stores create/update/delete
+// operations done=false and settles them on read once d has elapsed.
+func WithLROMode(m lro.Mode) Option {
+	return func(s *Service) { s.lroMode = m }
 }
 
 // NewService returns a Dataproc Metastore core backed by the given store.
-func NewService(s metastorestore.Store) *Service {
-	return &Service{store: s}
+func NewService(s metastorestore.Store, opts ...Option) *Service {
+	svc := &Service{store: s}
+	for _, o := range opts {
+		o(svc)
+	}
+	return svc
 }
 
 // Reset wipes the store.
@@ -447,7 +471,7 @@ func (s *Service) GetOperation(ctx context.Context, project, location, opID stri
 	if err != nil {
 		return metastorestore.Operation{}, mapErr(err)
 	}
-	return op, nil
+	return s.settle(op), nil
 }
 
 // ListOperations returns a cursor page of the persisted operations for a
@@ -461,7 +485,18 @@ func (s *Service) ListOperations(ctx context.Context, project, location string, 
 		return nil, "", err
 	}
 	page, next := paging.Page(ops, func(op metastorestore.Operation) string { return op.ID }, pageParams(pageSize, pageToken))
+	for i := range page {
+		page[i] = s.settle(page[i])
+	}
 	return page, next, nil
+}
+
+// IsNotFound reports whether err is the canonical NotFound provider error (as
+// returned by GetOperation for an absent operation), so a transport's
+// ResolveOperation can decline an unknown name instead of surfacing an error.
+func IsNotFound(err error) bool {
+	var perr *model.ProviderError
+	return errors.As(err, &perr) && perr.Code == "NotFound"
 }
 
 // --- errors ---

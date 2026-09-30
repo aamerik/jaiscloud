@@ -8,17 +8,22 @@
 //
 // Cluster create/update/delete return a done google.longrunning.Operation with
 // the response (a Cluster, or Empty for delete) packed inline, so the generated
-// client's Wait observes it without polling. The separate
+// client's Wait observes it without polling. In the opt-in async mode the
+// operation is returned in flight and the client's poll resolves it through
+// ResolveOperation (registered with the shared google.longrunning.Operations
+// service in main.go). The separate
 // google.cloud.managedkafka.v1.ManagedKafkaConnect service is not registered.
 package managedkafka
 
 import (
 	"context"
+	"strings"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	managedkafkapb "cloud.google.com/go/managedkafka/apiv1/managedkafkapb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
+	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	core "jaiscloud/internal/gcp/service/managedkafka"
 
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -283,5 +288,47 @@ func (s *Service) RemoveAclEntry(ctx context.Context, req *managedkafkapb.Remove
 	}, nil
 }
 
-// compile-time assertion that Service implements the generated server.
-var _ managedkafkapb.ManagedKafkaServer = (*Service)(nil)
+// ResolveOperation implements the google.longrunning.Operations resolver for
+// Managed Kafka. Names are location-scoped
+// (projects/{p}/locations/{l}/operations/{id}); a name outside that shape — or
+// an id the managedkafka store does not know, since a location-scoped name is
+// shared with other services — is not ours (handled=false) so the generic
+// terminal stub keeps serving it done=true.
+func (s *Service) ResolveOperation(ctx context.Context, name string) (*longrunningpb.Operation, bool, error) {
+	project, location, id, ok := parseOperationName(name)
+	if !ok {
+		return nil, false, nil
+	}
+	op, err := s.core.GetOperation(ctx, project, location, id)
+	if err != nil {
+		if core.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, true, mapError(err)
+	}
+	out, err := operationToProto(op, project, operationResponse(op))
+	if err != nil {
+		return nil, true, err
+	}
+	return out, true, nil
+}
+
+// parseOperationName parses a Managed Kafka location operation name
+// projects/{project}/locations/{location}/operations/{id}.
+func parseOperationName(name string) (project, location, id string, ok bool) {
+	parts := strings.Split(strings.TrimPrefix(name, "/"), "/")
+	if len(parts) != 6 || parts[0] != "projects" || parts[2] != "locations" || parts[4] != "operations" {
+		return "", "", "", false
+	}
+	if parts[1] == "" || parts[3] == "" || parts[5] == "" {
+		return "", "", "", false
+	}
+	return parts[1], parts[3], parts[5], true
+}
+
+// compile-time assertions that Service implements the generated server and the
+// operations resolver.
+var (
+	_ managedkafkapb.ManagedKafkaServer = (*Service)(nil)
+	_ grpcoperations.Resolver           = (*Service)(nil)
+)

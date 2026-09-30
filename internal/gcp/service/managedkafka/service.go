@@ -14,10 +14,12 @@
 // broker. Cluster create/update/delete return a done google.longrunning.Operation
 // inline so official clients that read done+response from the body succeed
 // without polling; the operation is also persisted under
-// projects/{project}/locations/{location}/operations/{id}. Topic and ACL CRUD
-// are fully synchronous. Consumer groups are not tracked: there is no create
-// RPC and no broker, so a list is always the empty set and get/update/delete
-// report NOT_FOUND, matching real GCP for an absent group.
+// projects/{project}/locations/{location}/operations/{id}. The LRO timing is
+// opt-in via WithLROMode: when enabled, operations are stored done=false and
+// settle lazily on read (see settle); the default remains synchronous. Topic and
+// ACL CRUD are fully synchronous. Consumer groups are not tracked: there is no
+// create RPC and no broker, so a list is always the empty set and
+// get/update/delete report NOT_FOUND, matching real GCP for an absent group.
 package managedkafka
 
 import (
@@ -28,6 +30,7 @@ import (
 	"errors"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/paging"
 	mkstore "jaiscloud/internal/gcp/store/managedkafka"
 	"jaiscloud/internal/model"
@@ -36,11 +39,29 @@ import (
 // Service is the transport-neutral Managed Kafka v1 service.
 type Service struct {
 	store mkstore.Store
+	// lroMode controls operation timing. The zero value is synchronous: every
+	// operation is stored done=true inline, matching the v1.1.0 contract. An
+	// enabled mode stores operations done=false and settles them lazily on read.
+	lroMode lro.Mode
+}
+
+// Option configures Service.
+type Option func(*Service)
+
+// WithLROMode sets the long-running-operation timing mode. The zero value is
+// synchronous; Mode{Enabled: true, Delay: d} stores create/update/delete
+// operations done=false and settles them on read once d has elapsed.
+func WithLROMode(m lro.Mode) Option {
+	return func(s *Service) { s.lroMode = m }
 }
 
 // NewService returns a Managed Kafka core backed by the given store.
-func NewService(s mkstore.Store) *Service {
-	return &Service{store: s}
+func NewService(s mkstore.Store, opts ...Option) *Service {
+	svc := &Service{store: s}
+	for _, o := range opts {
+		o(svc)
+	}
+	return svc
 }
 
 // Reset wipes the store.
@@ -199,7 +220,7 @@ func (s *Service) GetOperation(ctx context.Context, project, location, opID stri
 	if err != nil {
 		return mkstore.Operation{}, mapStoreError(err)
 	}
-	return op, nil
+	return s.settle(op), nil
 }
 
 // ListOperations returns a cursor page of the persisted operations for a
@@ -213,6 +234,9 @@ func (s *Service) ListOperations(ctx context.Context, project, location string, 
 		return nil, "", err
 	}
 	page, next := paging.Page(ops, func(op mkstore.Operation) string { return op.ID }, pageParams(pageSize, pageToken))
+	for i := range page {
+		page[i] = s.settle(page[i])
+	}
 	return page, next, nil
 }
 
@@ -353,6 +377,14 @@ func (s *Service) DeleteConsumerGroup(_ context.Context, _, _, _, _ string) erro
 
 func consumerGroupNotFound() error {
 	return model.NewProviderError("NotFound", "consumer group not found", 404)
+}
+
+// IsNotFound reports whether err is the canonical NotFound provider error (as
+// returned by GetOperation for an absent operation), so a transport's
+// ResolveOperation can decline an unknown name instead of surfacing an error.
+func IsNotFound(err error) bool {
+	var perr *model.ProviderError
+	return errors.As(err, &perr) && perr.Code == "NotFound"
 }
 
 // --- errors ---

@@ -59,24 +59,29 @@ func metadataImportToProto(mi metastorestore.MetadataImport, project string) *me
 // operationToProto renders a stored operation as the proto
 // google.longrunning.Operation, packing the typed metadata and the
 // caller-supplied response message (a Service/Backup/MetadataImport, or Empty
-// for delete).
+// for delete). The result and metadata.endTime are only attached once the
+// operation is done: real GCP omits them while in flight, and a done operation
+// keeps the original output exactly.
 func operationToProto(op metastorestore.Operation, project string, response proto.Message) (*longrunningpb.Operation, error) {
-	metadata, err := anypb.New(&metastorepb.OperationMetadata{
+	meta := &metastorepb.OperationMetadata{
 		CreateTime: timestamppb.New(op.CreateTime),
-		EndTime:    timestamppb.New(op.EndTime),
 		Target:     op.Target,
 		Verb:       op.Verb,
 		ApiVersion: "v1",
-	})
+	}
+	if op.Done {
+		meta.EndTime = timestamppb.New(op.EndTime)
+	}
+	metadata, err := anypb.New(meta)
 	if err != nil {
 		return nil, err
 	}
 	out := &longrunningpb.Operation{
 		Name:     core.OperationName(project, op.Location, op.ID),
 		Metadata: metadata,
-		Done:     true,
+		Done:     op.Done,
 	}
-	if response != nil {
+	if op.Done && response != nil {
 		resp, err := anypb.New(response)
 		if err != nil {
 			return nil, err
@@ -84,6 +89,40 @@ func operationToProto(op metastorestore.Operation, project string, response prot
 		out.Result = &longrunningpb.Operation_Response{Response: resp}
 	}
 	return out, nil
+}
+
+// operationResponse reconstructs the typed result message for a settled
+// operation from its stored Discovery-shape JSON. A create/update carries the
+// mutated resource tagged with its Any @type; a delete carries an empty body.
+// An unknown @type or an undecodable body falls back to Empty so a poll never
+// fails on a malformed record.
+func operationResponse(op metastorestore.Operation) proto.Message {
+	if op.Response == "" {
+		return emptyResponse()
+	}
+	var body map[string]any
+	if json.Unmarshal([]byte(op.Response), &body) != nil {
+		return emptyResponse()
+	}
+	var out proto.Message
+	switch body["@type"] {
+	case core.ServiceTypeURL:
+		out = &metastorepb.Service{}
+	case core.BackupTypeURL:
+		out = &metastorepb.Backup{}
+	case core.MetadataImportTypeURL:
+		out = &metastorepb.MetadataImport{}
+	default:
+		return emptyResponse()
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return emptyResponse()
+	}
+	if err := protojsonOpts.Unmarshal(data, out); err != nil {
+		return emptyResponse()
+	}
+	return out
 }
 
 // emptyResponse builds the google.protobuf.Empty result a delete operation

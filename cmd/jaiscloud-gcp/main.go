@@ -360,7 +360,7 @@ func startCmd() *cobra.Command {
 			// provider and the gRPC adapter below, so both transports run against
 			// one store and cannot drift. It is built before Dataproc because the
 			// Dataproc core resolves a cluster's metastore attachment through it.
-			metastoreCore := metastorecore.NewService(stores.metastore)
+			metastoreCore := metastorecore.NewService(stores.metastore, metastorecore.WithLROMode(lroMode))
 			metastoreP := restmetastore.NewProvider(metastoreCore, cfg.ProjectID)
 
 			// Cloud Dataproc reuses the Spark client-mode executor: mock by
@@ -470,7 +470,7 @@ func startCmd() *cobra.Command {
 			// Managed Kafka's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports run
 			// against one store and cannot drift.
-			managedKafkaCore := managedkafkacore.NewService(stores.managedkafka)
+			managedKafkaCore := managedkafkacore.NewService(stores.managedkafka, managedkafkacore.WithLROMode(lroMode))
 			managedkafkaP := restmanagedkafka.NewProvider(managedKafkaCore, cfg.ProjectID)
 
 			icebergP := icebergprovider.New(stores.iceberg)
@@ -707,6 +707,17 @@ func startCmd() *cobra.Command {
 				// through to the terminal stub, so registering it is safe.
 				if transports.GRPCFor("workflows") && workflowsCore != nil {
 					opsResolvers = append(opsResolvers, workflowsGRPC)
+				}
+				// Dataproc Metastore and Managed Kafka publish location-scoped
+				// operations. In the default sync mode a done operation never
+				// reaches the resolver (the create response is already done) and
+				// unknown names fall through to the terminal stub, so registering
+				// them is safe; in async mode the resolver settles a poll.
+				if transports.GRPCFor("metastore") && metastoreCore != nil {
+					opsResolvers = append(opsResolvers, metastoreGRPC)
+				}
+				if transports.GRPCFor("managedkafka") && managedKafkaCore != nil {
+					opsResolvers = append(opsResolvers, managedKafkaGRPC)
 				}
 				longrunningpb.RegisterOperationsServer(gserv.GRPC(), grpcoperations.New(opsResolvers...))
 			}
