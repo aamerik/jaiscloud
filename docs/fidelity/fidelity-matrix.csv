@@ -109,7 +109,7 @@ dataproc,Dataproc.ListClusters,rest,ga,
 dataproc,Dataproc.ListJobs,rest,ga,
 dataproc,Dataproc.StartCluster,rest,ga,
 dataproc,Dataproc.StopCluster,rest,ga,
-dataproc,Dataproc.SubmitJob,rest,ga,covered by the k3d Lakehouse e2e (real Spark on Kubernetes)
+dataproc,Dataproc.SubmitJob,rest,ga,"covered by the k3d Lakehouse e2e (real Spark on Kubernetes, GKE virtualClusterConfig + driver output in GCS)"
 dataproc,Dataproc.SubmitJobAsOperation,rest,ga,
 dataproc,Dataproc.UpdateCluster,rest,ga,
 dataproc,DeleteCluster,grpc,ga,

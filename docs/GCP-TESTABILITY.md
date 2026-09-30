@@ -68,13 +68,13 @@ of writing:
 
 | Layer | Cells | `ga` | `limited` | `preview` | `unsupported` | `ga` share |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 716 | 498 | 100 | 37 | 81 | 70% |
-| **gRPC** (official clients) | 328 | 245 | 11 | 0 | 72 | 75% |
-| **REST** (Discovery-backed) | 388 | 253 | 89 | 37 | 9 | 65% |
+| **Overall** | 802 | 567 | 97 | 37 | 101 | 71% |
+| **gRPC** (official clients) | 375 | 272 | 11 | 0 | 92 | 73% |
+| **REST** (Discovery-backed) | 427 | 295 | 86 | 37 | 9 | 69% |
 
 - gRPC-only services (no REST transport): **Firestore Admin, Operations (long-running)**.
-- gRPC split = 245 `ga` + 11 `limited` + 72 `unsupported` = 328. REST split = 253 + 89 + 37 + 9 = 388.
-  Overall = 328 + 388 = 716.
+- gRPC split = 272 `ga` + 11 `limited` + 92 `unsupported` = 375. REST split = 295 + 86 + 37 + 9 = 427.
+  Overall = 375 + 427 = 802.
 
 **How to refresh.** The matrix is generated, not hand-edited. Run
 `make gen-gcp-fidelity-matrix`, then re-read
@@ -104,7 +104,7 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `eventarc` | grpc, rest | 30/57 | 🟢 | Shape only | Shape only | Trigger/channel/provider CRUD over one core (gRPC + REST); a Pub/Sub-sourced trigger whose `destination.cloudFunction` names an existing function delivers matching events to it and provisions a backing Pub/Sub subscription (`transport.pubsub.subscription`, output-only) as its dead-letter surface (the other destinations are metadata only). The other 27 Eventarc RPCs are `unsupported` stubs. |
 | `managedkafka` | grpc, rest | 34/44 | 🟢 | Shape only | Shape only | Metadata only; no real broker. Consumer-group `list` returns an empty set and `get`/`update`/`delete` report `NOT_FOUND`. |
 | `metastore` | grpc, rest | 26/38 | 🟢 | Shape only | Shape only | Control plane only; the Hive Thrift serving plane (:9083) is a separate surface (a single global catalog shared by all Services, not per-service — matching the AWS Glue Data Catalog's one-catalog-per-account+region model) that serves databases/tables/partitions/locks, the client-connect identity RPC (`set_ugi`), and the request-struct table reads (`get_table_req`/`get_table_objects_by_name_req`) Hive 2.3+/3.x clients use. An off-the-shelf Go HMS client drives it end-to-end (with Postgres restart) in `tests/persistent_mode/gcp/hms/`. The 5 deferred RPCs (export/restore/query/move/alter) are `unsupported` stubs by decision (admin/DR operations off the Spark job path, with no AWS Glue analogue); the shared `operations` path routes to workflows, so `operations.get`/`list` are `limited`. |
-| `dataproc` | grpc, rest | 28/30 | 🟢 | Shape only | Shape only | Cluster/job metadata + real Spark on Docker/K8s executors; `DiagnoseCluster` is an unsupported stub. |
+| `dataproc` | grpc, rest | 28/30 | 🟢 | Shape only | Shape only | Cluster/job metadata (GCE- or GKE-`virtualClusterConfig`-shaped) + real Spark on Docker/K8s executors; pollable async cluster/job LROs; real driver output/control files in GCS; optional Metastore attachment; `DiagnoseCluster` is an unsupported stub. |
 | `operations` | grpc | 5/5 | 🟢 | Shape only | Shape only | Synchronous operation stub. |
 | `serviceusage` | grpc, rest | 10/11 | 🟢 | Shape only | Shape only | Accept-and-succeed enable/disable; no real API gating. `BatchGetServices` is an unsupported stub. |
 | `resourcemanager` | grpc, rest | 8/15 | 🟢 | Shape only | Shape only | v1 REST + v3 gRPC project surfaces over one core: project lookup + project IAM (etag OCC); the 7 project lifecycle/lookup gRPC RPCs are unsupported stubs; authz not enforced. |

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -223,21 +224,70 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 	const errJob = "exp-job-error"
 	base := "/v1/projects/" + project + "/regions/" + region
 
-	// ── Create cluster ────────────────────────────────────────────────────────
+	// ── Create cluster (async LRO: the create returns with done=false and the
+	// lazy state machine settles it to RUNNING when the operation is polled) ──
 	code, body := doRequest(t, host, "POST", base+"/clusters",
 		[]byte(`{"projectId":"`+project+`","clusterName":"`+clusterName+`","config":{"gceClusterConfig":{"zoneUri":"us-central1-a"}}}`),
 		"application/json")
 	if code != http.StatusOK {
 		t.Fatalf("create cluster: got HTTP %d body %s", code, body)
 	}
+	createOp := jsonObj(t, body)
+	if done, _ := createOp["done"].(bool); done {
+		t.Fatalf("create cluster completed inline; want an in-flight LRO: %s", body)
+	}
+	if cl := pollOperationDone(t, host, createOp); cl == nil {
+		t.Fatalf("create operation packed no cluster response: %s", body)
+	} else if state := strField(cl, "status", "state"); state != "RUNNING" {
+		t.Fatalf("cluster state after create LRO = %q, want RUNNING", state)
+	}
 
-	// ── Create a GKE-backed cluster (virtualClusterConfig) ───────────────────
-	const gkeClusterName = "exp-gke"
+	// Delete is asynchronous too: create a throwaway cluster and poll its delete
+	// operation to completion, then assert the record is gone (NotFound).
+	const delClusterName = "exp-del"
 	code, body = doRequest(t, host, "POST", base+"/clusters",
-		[]byte(`{"projectId":"`+project+`","clusterName":"`+gkeClusterName+`","virtualClusterConfig":{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/proj/locations/us-central1/clusters/gke-1"}}}}`),
+		[]byte(`{"projectId":"`+project+`","clusterName":"`+delClusterName+`","config":{}}`),
 		"application/json")
 	if code != http.StatusOK {
+		t.Fatalf("create delete-target cluster: got HTTP %d body %s", code, body)
+	}
+	pollOperationDone(t, host, jsonObj(t, body))
+	code, body = doRequest(t, host, "DELETE", base+"/clusters/"+delClusterName, nil, "")
+	if code != http.StatusOK {
+		t.Fatalf("delete cluster: got HTTP %d body %s", code, body)
+	}
+	delOp := jsonObj(t, body)
+	if done, _ := delOp["done"].(bool); done {
+		t.Fatalf("delete cluster completed inline; want an in-flight LRO: %s", body)
+	}
+	pollOperationDone(t, host, delOp)
+	if code, body = doRequest(t, host, "GET", base+"/clusters/"+delClusterName, nil, ""); code != http.StatusNotFound {
+		t.Fatalf("get deleted cluster: got HTTP %d body %s, want 404", code, body)
+	}
+
+	// ── Create the Metastore service, then a GKE-backed cluster
+	// (virtualClusterConfig) that attaches it ────────────────────────────────
+	const metastoreService = "exp-hms"
+	msName := "projects/" + project + "/locations/" + region + "/services/" + metastoreService
+	code, body = doRequest(t, host, "POST",
+		"/v1/projects/"+project+"/locations/"+region+"/services?serviceId="+metastoreService,
+		[]byte(`{"hiveMetastoreConfig":{"endpointProtocol":"THRIFT"}}`), "application/json")
+	if code != http.StatusOK {
+		t.Fatalf("create metastore service: got HTTP %d body %s", code, body)
+	}
+
+	const gkeClusterName = "exp-gke"
+	vccBody := `{"projectId":"` + project + `","clusterName":"` + gkeClusterName + `",` +
+		`"virtualClusterConfig":{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/proj/locations/us-central1/clusters/gke-1"}},` +
+		`"auxiliaryServicesConfig":{"metastoreConfig":{"dataprocMetastoreService":"` + msName + `"}}}}`
+	code, body = doRequest(t, host, "POST", base+"/clusters", []byte(vccBody), "application/json")
+	if code != http.StatusOK {
 		t.Fatalf("create GKE cluster: got HTTP %d body %s", code, body)
+	}
+	if cl := pollOperationDone(t, host, jsonObj(t, body)); cl == nil {
+		t.Fatalf("GKE create operation packed no cluster response")
+	} else if state := strField(cl, "status", "state"); state != "RUNNING" {
+		t.Fatalf("GKE cluster state after create LRO = %q, want RUNNING", state)
 	}
 
 	// ── Submit a mock-mode Spark job (walks to DONE as it is polled) ─────────
@@ -253,6 +303,17 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 	if state := strField(pollJobTerminal(t, host, base, doneJob), "status", "state"); state != "DONE" {
 		t.Fatalf("expected DONE spark job, got state %q", state)
 	}
+
+	// ── The terminal job's driver output resolves to a real GCS object ───────
+	code, body = doRequest(t, host, "GET", base+"/jobs/"+doneJob, nil, "")
+	if code != http.StatusOK {
+		t.Fatalf("get done job: got HTTP %d body %s", code, body)
+	}
+	doneObj := jsonObj(t, body)
+	if uri := strField(doneObj, "driverControlFilesUri"); uri == "" {
+		t.Fatalf("done job has no driverControlFilesUri: %s", body)
+	}
+	driverOutputObject(t, host, strField(doneObj, "driverOutputResourceUri"), doneJob)
 
 	// ── Submit an unsupported job type → ERROR with terminal details ─────────
 	code, body = doRequest(t, host, "POST", base+"/jobs:submit",
@@ -314,6 +375,11 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 	if target := strField(gkeVCC, "kubernetesClusterConfig", "gkeClusterConfig", "gkeClusterTarget"); target != "projects/proj/locations/us-central1/clusters/gke-1" {
 		t.Fatalf("gkeClusterTarget lost after import: got %q body %s", target, body)
 	}
+	// The Metastore attachment round-trips too.
+	msRef := strField(gkeVCC, "auxiliaryServicesConfig", "metastoreConfig", "dataprocMetastoreService")
+	if msRef != msName {
+		t.Fatalf("metastore attachment lost after import: got %q want %q body %s", msRef, msName, body)
+	}
 
 	// ── Verify restored jobs ──────────────────────────────────────────────────
 	code, body = doRequest(t, host, "GET", base+"/jobs/"+doneJob, nil, "")
@@ -373,6 +439,54 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 	jobs, _ := jsonObj(t, body)["jobs"].([]any)
 	if len(jobs) != 2 {
 		t.Fatalf("list jobs after import: expected 2 jobs, got %d", len(jobs))
+	}
+}
+
+// pollOperationDone polls a Dataproc long-running operation (by its resource
+// name) until it reports done, driving the emulator's lazy cluster state
+// machine, and returns the packed response object (nil when the operation packs
+// none, e.g. a delete's Empty response).
+func pollOperationDone(t *testing.T, host string, op map[string]any) map[string]any {
+	t.Helper()
+	name, _ := op["name"].(string)
+	if name == "" {
+		t.Fatalf("operation has no name: %v", op)
+	}
+	deadline := clock.RealNow().Add(15 * time.Second)
+	for clock.RealNow().Before(deadline) {
+		code, body := doRequest(t, host, "GET", "/v1/"+name, nil, "")
+		if code != http.StatusOK {
+			t.Fatalf("get operation %s: got HTTP %d body %s", name, code, body)
+		}
+		cur := jsonObj(t, body)
+		if done, _ := cur["done"].(bool); done {
+			resp, _ := cur["response"].(map[string]any)
+			return resp
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("operation %s did not complete", name)
+	return nil
+}
+
+// driverOutputObject fetches a terminal job's driver-output object from the
+// emulated GCS, proving the advertised driverOutputResourceUri resolves.
+func driverOutputObject(t *testing.T, host, uri, jobID string) {
+	t.Helper()
+	if !strings.HasPrefix(uri, "gs://") {
+		t.Fatalf("job %s driverOutputResourceUri = %q, want a gs:// URI", jobID, uri)
+	}
+	rest := strings.TrimPrefix(uri, "gs://")
+	slash := strings.IndexByte(rest, '/')
+	if slash < 0 {
+		t.Fatalf("job %s driverOutputResourceUri = %q, want a gs://bucket/object URI", jobID, uri)
+	}
+	bucket, object := rest[:slash], rest[slash+1:]
+	// The advertised URI is a prefix; readers fetch <uri>.000000000.
+	path := "/storage/v1/b/" + bucket + "/o/" + url.PathEscape(object+".000000000") + "?alt=media"
+	code, body := doRequest(t, host, "GET", path, nil, "")
+	if code != http.StatusOK || len(body) == 0 {
+		t.Fatalf("read driver output %s: got HTTP %d with %d byte(s) body %q", path, code, len(body), body)
 	}
 }
 

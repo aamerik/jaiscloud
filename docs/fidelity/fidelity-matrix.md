@@ -170,7 +170,7 @@ _30 cell(s): ga=28 limited=0 preview=0 unsupported=2_
 | Dataproc.ListJobs | rest | ga | — |
 | Dataproc.StartCluster | rest | ga | — |
 | Dataproc.StopCluster | rest | ga | — |
-| Dataproc.SubmitJob | rest | ga | covered by the k3d Lakehouse e2e (real Spark on Kubernetes) |
+| Dataproc.SubmitJob | rest | ga | covered by the k3d Lakehouse e2e (real Spark on Kubernetes, GKE virtualClusterConfig + driver output in GCS) |
 | Dataproc.SubmitJobAsOperation | rest | ga | — |
 | Dataproc.UpdateCluster | rest | ga | — |
 | DeleteCluster | grpc | ga | — |

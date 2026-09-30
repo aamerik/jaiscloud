@@ -66,9 +66,36 @@ func TestLakehousePipelineK3d(t *testing.T) {
 		t.Errorf("published %d object(s), want %d (one per curated part)",
 			len(sum.PublishedObjects), len(sum.CuratedObjects))
 	}
+	// The cluster is GKE-backed (virtualClusterConfig) and metastore-attached.
+	if sum.Cluster == "" {
+		t.Fatalf("summary has no cluster: %+v", sum)
+	}
+	if !strings.Contains(sum.MetastoreService, "/services/") {
+		t.Errorf("metastore_service = %q, want a projects/.../services/... name", sum.MetastoreService)
+	}
+	// Both Spark jobs must have staged a real, non-empty driver-output object.
+	if len(sum.DriverOutputs) != 2 {
+		t.Errorf("driver_outputs = %v, want one per Spark job", sum.DriverOutputs)
+	}
+	for id, out := range sum.DriverOutputs {
+		if !strings.HasPrefix(out.URI, "gs://") || out.Bytes == 0 {
+			t.Errorf("driver output %s = %+v, want a non-empty gs:// object", id, out)
+		}
+	}
 
 	base, stop := startPortForward(t)
 	defer stop()
+
+	// Independently confirm against the live emulator that the cluster the
+	// pipeline used is GKE-backed and RUNNING (the summary is pipeline-asserted;
+	// this reads the resource directly).
+	cl := getJSON(t, base, "/v1/projects/"+testProject+"/regions/"+testRegion+"/clusters/"+sum.Cluster)
+	if _, ok := cl["virtualClusterConfig"].(map[string]any); !ok {
+		t.Errorf("cluster %s has no virtualClusterConfig: %v", sum.Cluster, cl)
+	}
+	if st, _ := cl["status"].(map[string]any); st == nil || st["state"] != "RUNNING" {
+		t.Errorf("cluster %s status = %v, want RUNNING", sum.Cluster, cl["status"])
+	}
 
 	// The serving manifest is the pipeline's published contract.
 	manifestRaw := getObject(t, base, publishedBucket, "manifest.json")
