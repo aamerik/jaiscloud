@@ -79,6 +79,7 @@ import (
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
+	"jaiscloud/internal/gcp/throttle"
 	grpcdataproc "jaiscloud/internal/gcp/transport/grpc/dataproc"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpceventarc "jaiscloud/internal/gcp/transport/grpc/eventarc"
@@ -212,6 +213,20 @@ func startCmd() *cobra.Command {
 			// them lazily when a client polls Operations.GetOperation.
 			lroMode := lro.FromEnv()
 			slog.Info("gcp lro mode", "async", lroMode.Async(), "delay", lroMode.Delay)
+
+			// Throttle/quota fault injection is an opt-in, cross-service,
+			// emulator-only testing affordance (default OFF). The same injector
+			// backs both the REST gateway RequestFilter and the gRPC
+			// interceptors, so the two transports cannot drift.
+			throttleCfg := throttle.FromEnv()
+			throttleInj := throttle.New(throttleCfg)
+			slog.Info("gcp throttle injection",
+				"enabled", throttleCfg.Enabled(),
+				"rate", throttleCfg.Rate,
+				"fault", throttleCfg.Fault,
+				"status", throttleCfg.Status,
+				"services", throttleCfg.Services,
+			)
 
 			// serviceEnabled reports whether a wire service is exposed on at
 			// least one transport. Disabled services are neither constructed
@@ -628,7 +643,7 @@ func startCmd() *cobra.Command {
 			// socket is opened.
 			var gserv *grpcserver.Server
 			if transports.GRPC() {
-				gserv = grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort))
+				gserv = grpcserver.NewServer(fmt.Sprintf(":%d", grpcPort), grpcserver.ThrottleServerOptions(throttleInj)...)
 				if transports.GRPCFor("firestore") {
 					firestorepb.RegisterFirestoreServer(gserv.GRPC(), firestoreGRPC)
 				}
@@ -872,6 +887,13 @@ func startCmd() *cobra.Command {
 			}
 
 			cloudAdapter := gcpadapter.NewAdapter(cfg.GCPServiceAccount)
+			if throttleCfg.Enabled() {
+				// The adapter exposes the injector to the gateway as the
+				// optional RequestFilter capability; registering it as a
+				// Resetter clears counters/buckets on /_jaiscloud/reset.
+				cloudAdapter.SetThrottle(throttleInj)
+				adminHandler.RegisterResetter(throttleInj)
+			}
 
 			var certs certstore.CertStore
 			if fsCS, err := certstore.NewFilesystemCertStore(stateDir); err == nil {

@@ -160,6 +160,35 @@ func TestGCPAdapterServeBatchGetDeleteMissingAndEncodedName(t *testing.T) {
 	}
 }
 
+// TestGCPAdapterServeBatchForwardsRetryAfter proves a throttled sub-response
+// keeps its Retry-After header in the multiplexed batch part.
+func TestGCPAdapterServeBatchForwardsRetryAfter(t *testing.T) {
+	const boundary = "b"
+	body := buildBatchBody(t, boundary,
+		"GET http://localhost:8080/storage/v1/b/bkt/o/x?alt=json HTTP/1.1\r\n\r\n",
+	)
+	process := func(context.Context, *http.Request, []byte) (int, http.Header, []byte) {
+		h := http.Header{}
+		h.Set("Content-Type", "application/json; charset=UTF-8")
+		h.Set("Retry-After", "7")
+		return http.StatusTooManyRequests, h, []byte(`{"error":{"code":429,"message":"throttled"}}`)
+	}
+
+	a := New()
+	req := httptest.NewRequest(http.MethodPost, "/batch/storage/v1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "multipart/mixed; boundary="+boundary)
+	rec := httptest.NewRecorder()
+	a.ServeBatch(context.Background(), rec, req, body, process)
+
+	if !strings.Contains(rec.Body.String(), "Retry-After: 7") {
+		t.Fatalf("batch part must carry Retry-After: %s", rec.Body.String())
+	}
+	parts := parseBatchResponse(t, rec.Result(), rec.Body.Bytes())
+	if len(parts) != 1 || parts[0].status != http.StatusTooManyRequests {
+		t.Fatalf("parts = %+v, want one 429", parts)
+	}
+}
+
 func TestGCPAdapterServeBatchForwardsOuterAuthorization(t *testing.T) {
 	const boundary = "b"
 	body := buildBatchBody(t, boundary, "GET http://localhost:8080/storage/v1/b/bkt/o/x HTTP/1.1\r\n\r\n")

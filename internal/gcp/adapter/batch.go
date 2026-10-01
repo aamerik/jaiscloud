@@ -128,6 +128,11 @@ func (a *GCPAdapter) ServeBatch(ctx context.Context, w http.ResponseWriter, r *h
 			if ct := res.headers.Get("Content-Type"); ct != "" {
 				fmt.Fprintf(&buf, "Content-Type: %s\r\n", ct)
 			}
+			// Preserve retry hints on throttled sub-responses so a client
+			// handling a batch can still back off per part.
+			if ra := res.headers.Get("Retry-After"); ra != "" {
+				fmt.Fprintf(&buf, "Retry-After: %s\r\n", ra)
+			}
 		}
 		fmt.Fprintf(&buf, "Content-Length: %d\r\n", len(res.body))
 		buf.WriteString("\r\n")

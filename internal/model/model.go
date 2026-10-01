@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"jaiscloud/internal/clock"
 )
@@ -127,6 +128,10 @@ type ProviderError struct {
 	// Data carries additional structured fields merged into the error body by
 	// codecs (e.g. Reason, Type, LimitType for throttle errors). nil is safe.
 	Data map[string]any
+	// RetryAfter, when > 0, is the suggested client backoff for a retryable
+	// error. The GCP transport surfaces it as a google.rpc.RetryInfo detail and
+	// a Retry-After header (see internal/gcp/throttle); AWS/Azure ignore it.
+	RetryAfter time.Duration
 }
 
 func (e *ProviderError) Error() string {

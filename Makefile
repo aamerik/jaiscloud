@@ -104,7 +104,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         stop-server up-docker down-docker up-k8s down-k8s \
         postgres-up postgres-reset postgres-down \
-        test-integration test-integration-gcp test-lro-async-gcp \
+        test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
         test-e2e-lambda-docker test-e2e-lambda-k8s \
@@ -626,6 +626,20 @@ test-lro-async-gcp: build-gcp ## Run the opt-in async-LRO live e2e gate (JAISCLO
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-lro.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080, gRPC :8081, async LRO delay 2s)"; \
 	  JAISCLOUD_LRO_ASYNC=1 go test -race -count=1 -timeout 120s ./tests/integration/gcp/ -run TestLROAsync
+
+test-throttle-gcp: build-gcp ## Run the opt-in throttle/quota injection live e2e gate (fault mode, storage-scoped)
+	@echo "Starting jaiscloud-gcp (ephemeral, throttle fault injection)..."
+	@set -e; \
+	  JAISCLOUD_GCP_THROTTLE=fault JAISCLOUD_GCP_THROTTLE_FAIL_FIRST=1 \
+	  JAISCLOUD_GCP_THROTTLE_SERVICES=storage JAISCLOUD_GCP_PROJECT_ID=throttle-proj \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-throttle.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-throttle.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080, gRPC :8081, throttle fault injection scoped to storage)"; \
+	  JAISCLOUD_THROTTLE=1 go test -race -count=1 -timeout 120s ./tests/integration/gcp/ -run TestThrottle
 
 test-gcp-wire-conformance: ## Offline GCP wire-conformance harness (Discovery snapshots + recorder; tag: gcp_conformance)
 	go test -count=1 -tags gcp_conformance ./tests/gcpconformance/

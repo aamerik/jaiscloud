@@ -398,6 +398,25 @@ func (s *Server) processCloudRequest(ctx context.Context, r *http.Request, body 
 	// Attach labels for Prometheus metrics middleware.
 	ctx = middleware.WithRequestLabels(ctx, string(nr.Cloud), nr.Service, nr.Action)
 
+	// Opt-in request filter (e.g. GCP throttle/quota injection). Type-asserted
+	// off the adapter like BatchHandler, so clouds that do not implement it are
+	// unaffected. The service's own codec encodes the error, so the envelope
+	// matches the service; DecorateError then adds transport retry hints.
+	if filter, ok := s.cloudAdapter.(RequestFilter); ok {
+		if pe := filter.FilterRequest(nr); pe != nil {
+			slog.Warn("request filtered before dispatch",
+				"code", pe.Code,
+				"status", pe.HTTPStatus,
+				"service", nr.Service,
+				"action", nr.Action,
+				"request_id", middleware.GetRequestID(ctx),
+			)
+			status, headers, respBody = codec.EncodeError(nr, pe)
+			status, headers, respBody = filter.DecorateError(nr, pe, status, headers, respBody)
+			return status, headers, respBody, nil
+		}
+	}
+
 	providerKey := s.cloudAdapter.ServiceToProvider(nr.Service) + "." + nr.Action
 
 	resp, dispatchErr := s.registry.Dispatch(ctx, providerKey, nr)

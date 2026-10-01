@@ -169,6 +169,15 @@ The most common flags — all have an equivalent `JAISCLOUD_*` env var.
 | `--log-level` | `JAISCLOUD_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | — | `JAISCLOUD_LRO_MODE` | `sync` | Long-running-operation timing: `sync` (default) completes every operation inline with `done: true`; `async` returns operations in flight and settles them lazily when a client polls `operations.get`, the generic `operations` service serves registry-backed `list`/`cancel`/`delete`, and an operation name no service owns is `NOT_FOUND` (local testing only — see [Known Limitations](#known-limitations)) |
 | — | `JAISCLOUD_LRO_DELAY` | `250ms` | In-flight window before an operation settles in `JAISCLOUD_LRO_MODE=async`; a Go duration (`0` settles on the first read) |
+| — | `JAISCLOUD_GCP_THROTTLE` | `off` | Opt-in throttle/quota fault injection for backoff testing: `off` (default), `rate`, `fault`, or `both`. Matching REST **and** gRPC requests are refused before dispatch with a retryable `429 RESOURCE_EXHAUSTED` (or `503 UNAVAILABLE` via `_STATUS`), a `Retry-After` header, and a `google.rpc.RetryInfo` detail (local testing only — see [Known Limitations](#known-limitations)) |
+| — | `JAISCLOUD_GCP_THROTTLE_RPS` | `10` | Token-bucket refill rate (requests/second) for `rate`/`both` |
+| — | `JAISCLOUD_GCP_THROTTLE_BURST` | `ceil(RPS)` | Token-bucket capacity for `rate`/`both` |
+| — | `JAISCLOUD_GCP_THROTTLE_SERVICES` | all | Comma-separated allow-list of wire services / gRPC methods to throttle (case-insensitive substring; `all` matches everything) |
+| — | `JAISCLOUD_GCP_THROTTLE_FAIL_FIRST` | `0` | Fail the first N matching requests |
+| — | `JAISCLOUD_GCP_THROTTLE_FAIL_EVERY` | `0` | After the first N, fail every Mth matching request |
+| — | `JAISCLOUD_GCP_THROTTLE_FAIL_COUNT` | `0` | Fail K consecutive matching requests then recover (applies when the two above are `0`) |
+| — | `JAISCLOUD_GCP_THROTTLE_STATUS` | `429` | Injected HTTP status: `429` (`RESOURCE_EXHAUSTED`) or `503` (`UNAVAILABLE`) |
+| — | `JAISCLOUD_GCP_THROTTLE_RETRY_DELAY` | `1s` | Advertised retry delay (Go duration), surfaced as `Retry-After` + `RetryInfo` |
 | `--metrics` | — | `false` | Expose Prometheus metrics at `/metrics` |
 
 **Transport selection.** `--transports` sets the global default and `--transport-overrides` refines it per service (an override wins). A service is constructed and registered only when at least one transport is selected for it, and only the selected listeners bind — `--transports=rest` opens no `:8081`, while `--transports=grpc` serves the GCP REST API nowhere but keeps the always-on `/_jaiscloud/*` admin plane (and `/metrics`) on `--port`. Per-service selection gates construction and which gRPC services register; `none` removes a service from both transports (a later request for it fails with a registry `no handler` error). The REST API is mounted as one route set, so it is gated by the global `--transports` setting rather than per service. Per-service override names are the **wire** names: `storage`, `pubsub`, `secretmanager`, `kms`, `iam`, `firestore`, `firestoreadmin`, `datastore`, `logging`, `monitoring`, `functions`, `workflows`, `workflowexecutions`, `dataproc`, `managedkafka`, `metastore`, `eventarc`, `serviceusage`, `resourcemanager`, `bigquery`, `dns`, `sqladmin`, `compute`, `iceberg`, `redis` (Memorystore). An unknown service or transport token fails startup loudly.
@@ -220,6 +229,10 @@ curl -X POST http://localhost:8080/_jaiscloud/reset
 ## Known Limitations
 
 This section documents deliberate simplifications and known correctness edge cases — distinct from ordinary bugs, these are behaviours a developer relying on this emulator should know about up front.
+
+### Throttle/quota: injected failures, not real quota values
+
+No real quota plane is modelled. With `JAISCLOUD_GCP_THROTTLE` unset (the default), no path is ever throttled and backoff/quota-exhaustion handling never runs locally — that is the normal state, and production code must not depend on the injector. When the injector is armed it refuses matching REST and gRPC requests before dispatch with a synthetic `429 RESOURCE_EXHAUSTED` or `503 UNAVAILABLE`, together with a `Retry-After` header and a `google.rpc.RetryInfo` detail, so a client's retry/backoff/idempotency path can be exercised deterministically (`fault` mode is counter-based and needs no timing; `rate` mode is a per-project token bucket refilled on the real clock). It injects **configured** limits, never real per-project/per-metric quota values; quota behaviour must still be verified on real GCP. `make test-throttle-gcp` exercises the fault mode end-to-end.
 
 ### OAuth2: the service-account assertion signature and audience are not verified
 

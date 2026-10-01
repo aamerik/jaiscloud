@@ -17,6 +17,7 @@ import (
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/gcp/identity"
 	"jaiscloud/internal/gcp/resource"
+	"jaiscloud/internal/gcp/throttle"
 	restfunctions "jaiscloud/internal/gcp/transport/rest/functions"
 	"jaiscloud/internal/model"
 )
@@ -29,6 +30,10 @@ type GCPAdapter struct {
 	// functionTrigger is the codec for a deployed function's HTTPS-trigger URL.
 	// It is selected by request host (SourceHost), not by the service map.
 	functionTrigger adapter.Codec
+	// throttle is the optional opt-in throttle/quota injector. The adapter
+	// always implements gateway.RequestFilter, but FilterRequest returns nil
+	// while this is nil, so the default run is unaffected.
+	throttle *throttle.Injector
 }
 
 // New returns a GCPAdapter with the default codec set and a blank default
