@@ -132,3 +132,12 @@ entries:
     match: "BigLake"
     pr: 273
     note: "resolved: BigLake set-statistics/remove-statistics + metrics report (ICE1/ICE2) in #273"
+
+  # 274/275 — the Dataproc WorkflowTemplateService wave (DPW1 CRUD over REST+gRPC
+  # in #274, DPW2 instantiate/inline instantiate in #275). The debt-plan §3.4 and
+  # §7 rows live in gitignored scratch, so this commits the closure; #275 is the
+  # completing PR. DPW3 (workflowTemplates IAM) remains an optional deferral.
+  - source: "gcp-deferred-debt-plan"
+    match: "Dataproc WorkflowTemplateService"
+    pr: 275
+    note: "resolved: WorkflowTemplateService CRUD + instantiate/inline instantiate over the job core (#274/#275); IAM trio deferred (DPW3, optional)"
