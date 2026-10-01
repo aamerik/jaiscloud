@@ -320,7 +320,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   and has no subworkflows/`listRevisions`/IAM/CMEK; Dataproc Serverless (Batch) is not implemented;
   a GKE-backed cluster's `virtualClusterConfig` is metadata only (no GKE control plane or
   node-pool CRUD), Dataproc cluster/job mutations return pollable long-running operations
-  (`operations.get` walks CREATING/DELETING/… to terminal via a lazy, clock-driven state machine),
+  (`operations.get` walks CREATING/DELETING/… to terminal via a lazy, clock-driven state machine);
+  Dataproc runs only the Spark family (`sparkJob`/`pysparkJob`/`sparkRJob`), and every other job type
+  (`hadoopJob`, `hiveJob`, `pigJob`, `sparkSqlJob`, `prestoJob`, `trinoJob`, `flinkJob`) is fail-loud —
+  the job is created and immediately set to `ERROR` with a "not supported by the emulator" detail;
   and `driverOutputResourceUri`/`driverControlFilesUri` resolve to real GCS objects captured from
   the client-mode driver (stdout/stderr, byte-capped); Dataproc `ListClusters` ignores
   `filter`/`clusterName`, while `ListJobs` honors `clusterName`,
