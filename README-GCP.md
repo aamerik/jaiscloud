@@ -167,7 +167,7 @@ The most common flags — all have an equivalent `JAISCLOUD_*` env var.
 | `--gcp-metadata` | `JAISCLOUD_GCP_METADATA_ENABLED` | `false` | Enable the GCP metadata-server emulator |
 | `--kms-master-key` | `JAISCLOUD_KMS_MASTER_KEY` | — | 32-byte hex KEK wrapping the KMS DEK at rest |
 | `--log-level` | `JAISCLOUD_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| — | `JAISCLOUD_LRO_MODE` | `sync` | Long-running-operation timing: `sync` (default) completes every operation inline with `done: true`; `async` returns operations in flight and settles them lazily when a client polls `operations.get` (local testing only — see [Known Limitations](#known-limitations)) |
+| — | `JAISCLOUD_LRO_MODE` | `sync` | Long-running-operation timing: `sync` (default) completes every operation inline with `done: true`; `async` returns operations in flight and settles them lazily when a client polls `operations.get`, the generic `operations` service serves registry-backed `list`/`cancel`/`delete`, and an operation name no service owns is `NOT_FOUND` (local testing only — see [Known Limitations](#known-limitations)) |
 | — | `JAISCLOUD_LRO_DELAY` | `250ms` | In-flight window before an operation settles in `JAISCLOUD_LRO_MODE=async`; a Go duration (`0` settles on the first read) |
 | `--metrics` | — | `false` | Expose Prometheus metrics at `/metrics` |
 

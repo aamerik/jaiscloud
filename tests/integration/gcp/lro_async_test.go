@@ -1,13 +1,19 @@
 package gcp_test
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"regexp"
 	"testing"
 	"time"
 
+	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 // This file is the live end-to-end gate for the opt-in async long-running
@@ -19,6 +25,10 @@ import (
 const (
 	lroProject  = "proj"
 	lroLocation = "us-central1"
+	// lroGRPCEndpoint is the gRPC listener `make test-lro-async-gcp` starts the
+	// emulator on. The generic google.longrunning.Operations service is
+	// gRPC-only, so the registry e2e dials it here.
+	lroGRPCEndpoint = "localhost:8081"
 )
 
 // lroJSONHeaders is the create-content type every LRO create expects.
@@ -151,4 +161,68 @@ func TestLROAsyncServiceUsage(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// TestLROAsyncOperationsRegistry proves the generic google.longrunning.Operations
+// gRPC service is registry-backed in the opt-in async mode: a Service Usage
+// enable's top-level operations/{id} is Get- and List-able through the official
+// longrunning client, an operation name no service owns is NotFound (real GCP
+// semantics, not the lenient terminal stub), and the operation is deletable
+// (after which a get is NotFound).
+func TestLROAsyncOperationsRegistry(t *testing.T) {
+	if os.Getenv("JAISCLOUD_LRO_ASYNC") != "1" {
+		t.Skip("set JAISCLOUD_LRO_ASYNC=1 and start jaiscloud-gcp with JAISCLOUD_LRO_MODE=async")
+	}
+	resetState(t)
+
+	// Create an in-flight Service Usage operation through the REST surface.
+	const service = "registry-test.googleapis.com"
+	resp, body := do(t, "POST", "/v1/projects/"+lroProject+"/services/"+service+":enable", nil, lroJSONHeaders())
+	require.Equal(t, http.StatusOK, resp.StatusCode, "enable: %s", body)
+	op := jsonMap(t, body)
+	name, _ := op["name"].(string)
+	require.Regexp(t, regexp.MustCompile(`^operations/[^/]+$`), name,
+		"serviceusage operation name must be top-level: %s", body)
+
+	conn, err := grpc.NewClient(lroGRPCEndpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err, "dial gRPC")
+	t.Cleanup(func() { _ = conn.Close() })
+	client := longrunningpb.NewOperationsClient(conn)
+	ctx := context.Background()
+
+	// Get resolves the Service Usage operation.
+	got, err := client.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: name})
+	require.NoError(t, err, "GetOperation(owned)")
+	require.Equal(t, name, got.GetName())
+
+	// An unowned name is NotFound: the strict contract replaces the lenient
+	// terminal stub in async mode.
+	_, err = client.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: "operations/does-not-exist"})
+	require.Equal(t, codes.NotFound, status.Code(err), "GetOperation(unknown)")
+
+	// The top-level parent lists the persisted operation. The make target sets
+	// JAISCLOUD_GCP_PROJECT_ID=proj so the registry resolves the same project
+	// the REST create used.
+	list, err := client.ListOperations(ctx, &longrunningpb.ListOperationsRequest{Name: "operations"})
+	require.NoError(t, err, "ListOperations")
+	found := false
+	for _, listed := range list.GetOperations() {
+		if listed.GetName() == name {
+			found = true
+		}
+	}
+	require.True(t, found, "ListOperations must include %s: %+v", name, list.GetOperations())
+
+	// Cancel validates the operation without removing it (the emulator does not
+	// model cancellation); it must stay resolvable afterwards.
+	_, err = client.CancelOperation(ctx, &longrunningpb.CancelOperationRequest{Name: name})
+	require.NoError(t, err, "CancelOperation(owned)")
+	_, err = client.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: name})
+	require.NoError(t, err, "GetOperation(after cancel)")
+
+	// Delete removes it; a subsequent get is NotFound.
+	_, err = client.DeleteOperation(ctx, &longrunningpb.DeleteOperationRequest{Name: name})
+	require.NoError(t, err, "DeleteOperation(owned)")
+	_, err = client.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: name})
+	require.Equal(t, codes.NotFound, status.Code(err), "GetOperation(deleted)")
 }
