@@ -11,24 +11,26 @@ import (
 func (s *MemoryStore) IsEmpty(_ context.Context) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.clusters) == 0 && len(s.jobs) == 0 && len(s.operations) == 0, nil
+	return len(s.clusters) == 0 && len(s.jobs) == 0 && len(s.operations) == 0 && len(s.templates) == 0, nil
 }
 
 func (s *MemoryStore) Snapshot(_ context.Context, w io.Writer) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return json.NewEncoder(w).Encode(map[string]any{
-		"clusters":   s.clusters,
-		"jobs":       s.jobs,
-		"operations": s.operations,
+		"clusters":          s.clusters,
+		"jobs":              s.jobs,
+		"operations":        s.operations,
+		"workflowTemplates": s.templates,
 	})
 }
 
 func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 	var snap struct {
-		Clusters   map[string]map[string]Cluster   `json:"clusters"`
-		Jobs       map[string]map[string]Job       `json:"jobs"`
-		Operations map[string]map[string]Operation `json:"operations"`
+		Clusters          map[string]map[string]Cluster          `json:"clusters"`
+		Jobs              map[string]map[string]Job              `json:"jobs"`
+		Operations        map[string]map[string]Operation        `json:"operations"`
+		WorkflowTemplates map[string]map[string]WorkflowTemplate `json:"workflowTemplates"`
 	}
 	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
@@ -42,11 +44,15 @@ func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 	if snap.Operations == nil {
 		snap.Operations = map[string]map[string]Operation{}
 	}
+	if snap.WorkflowTemplates == nil {
+		snap.WorkflowTemplates = map[string]map[string]WorkflowTemplate{}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clusters = snap.Clusters
 	s.jobs = snap.Jobs
 	s.operations = snap.Operations
+	s.templates = snap.WorkflowTemplates
 	return nil
 }
 
@@ -69,6 +75,12 @@ func (s *PostgresStore) IsEmpty(ctx context.Context) (bool, error) {
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM jc_dataproc_operations`).Scan(&n); err != nil {
 		return false, err
 	}
+	if n > 0 {
+		return false, nil
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM jc_dataproc_workflow_templates`).Scan(&n); err != nil {
+		return false, err
+	}
 	return n == 0, nil
 }
 
@@ -85,10 +97,15 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		ProjectID string    `json:"projectId"`
 		Operation Operation `json:"operation"`
 	}
+	type templateRow struct {
+		ProjectID string           `json:"projectId"`
+		Template  WorkflowTemplate `json:"template"`
+	}
 
 	clusters := make([]clusterRow, 0)
 	jobs := make([]jobRow, 0)
 	operations := make([]operationRow, 0)
+	templates := make([]templateRow, 0)
 
 	crows, err := s.pool.Query(ctx, `
 		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, create_time, update_time
@@ -166,10 +183,37 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		return err
 	}
 
+	trows, err := s.pool.Query(ctx, `
+		SELECT project_id, region, template_id, version, definition, create_time, update_time
+		FROM jc_dataproc_workflow_templates ORDER BY project_id, region, template_id
+	`)
+	if err != nil {
+		return err
+	}
+	for trows.Next() {
+		var r templateRow
+		var definition []byte
+		if err := trows.Scan(&r.ProjectID, &r.Template.Region, &r.Template.TemplateID, &r.Template.Version,
+			&definition, &r.Template.CreateTime, &r.Template.UpdateTime); err != nil {
+			trows.Close()
+			return err
+		}
+		r.Template.Definition = normalizeOptionalJSON(definition)
+		if r.Template.Definition == nil {
+			r.Template.Definition = json.RawMessage("{}")
+		}
+		templates = append(templates, r)
+	}
+	trows.Close()
+	if err := trows.Err(); err != nil {
+		return err
+	}
+
 	return json.NewEncoder(w).Encode(map[string]any{
-		"clusters":   clusters,
-		"jobs":       jobs,
-		"operations": operations,
+		"clusters":          clusters,
+		"jobs":              jobs,
+		"operations":        operations,
+		"workflowTemplates": templates,
 	})
 }
 
@@ -187,6 +231,10 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			ProjectID string    `json:"projectId"`
 			Operation Operation `json:"operation"`
 		} `json:"operations"`
+		WorkflowTemplates []struct {
+			ProjectID string           `json:"projectId"`
+			Template  WorkflowTemplate `json:"template"`
+		} `json:"workflowTemplates"`
 	}
 	if err := json.NewDecoder(r).Decode(&snap); err != nil {
 		return err
@@ -196,7 +244,7 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	for _, tbl := range []string{"jc_dataproc_clusters", "jc_dataproc_jobs", "jc_dataproc_operations"} {
+	for _, tbl := range []string{"jc_dataproc_clusters", "jc_dataproc_jobs", "jc_dataproc_operations", "jc_dataproc_workflow_templates"} {
 		if _, err := tx.Exec(ctx, `DELETE FROM `+tbl); err != nil {
 			return err
 		}
@@ -236,6 +284,16 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		`, r.ProjectID, r.Operation.Region, r.Operation.ID, r.Operation.Done, r.Operation.Metadata, r.Operation.Response,
 			r.Operation.Verb, r.Operation.Target, r.Operation.CreateTime, r.Operation.EndTime); err != nil {
+			return err
+		}
+	}
+	for _, r := range snap.WorkflowTemplates {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO jc_dataproc_workflow_templates
+				(project_id, region, template_id, version, definition, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)
+		`, r.ProjectID, r.Template.Region, r.Template.TemplateID, r.Template.Version,
+			nullableJSONRaw(r.Template.Definition, "{}"), r.Template.CreateTime, r.Template.UpdateTime); err != nil {
 			return err
 		}
 	}

@@ -298,6 +298,8 @@ func mapErr(err error) error {
 		return model.NewProviderError("NotFound", "job not found", 404)
 	case errors.Is(err, dpstore.ErrNoSuchOperation):
 		return model.NewProviderError("NotFound", "operation not found", 404)
+	case errors.Is(err, dpstore.ErrNoSuchWorkflowTemplate):
+		return model.NewProviderError("NotFound", "workflow template not found", 404)
 	case errors.Is(err, dpstore.ErrAlreadyExists):
 		return model.NewProviderError("AlreadyExists", "resource already exists", 409)
 	}

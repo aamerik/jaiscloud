@@ -19,3 +19,9 @@ func JobName(project, region, jobID string) string {
 func OperationName(project, region, id string) string {
 	return resource.ResourceID(project)("dataproc-operation", region+"/"+id)
 }
+
+// WorkflowTemplateName is the Dataproc workflow template resource name
+// (projects/{p}/regions/{r}/workflowTemplates/{id}).
+func WorkflowTemplateName(project, region, id string) string {
+	return resource.ResourceID(project)("dataproc-workflowTemplate", region+"/"+id)
+}

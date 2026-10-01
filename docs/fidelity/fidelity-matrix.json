@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 814,
+    "total": 826,
     "by_state": {
-      "ga": 579,
-      "limited": 117,
+      "ga": 589,
+      "limited": 119,
       "preview": 14,
       "unsupported": 104
     },
     "by_transport": {
       "grpc": {
-        "ga": 276,
-        "limited": 11,
+        "ga": 281,
+        "limited": 13,
         "unsupported": 92
       },
       "rest": {
-        "ga": 303,
+        "ga": 308,
         "limited": 106,
         "preview": 14,
         "unsupported": 12
@@ -39,7 +39,8 @@
         "unsupported": 1
       },
       "dataproc": {
-        "ga": 28,
+        "ga": 38,
+        "limited": 2,
         "unsupported": 2
       },
       "datastore": {
@@ -1244,6 +1245,17 @@
     },
     {
       "service": "dataproc",
+      "operation": "CreateWorkflowTemplate",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
       "operation": "Dataproc.CancelJob",
       "transport": "rest",
       "state": "ga",
@@ -1266,6 +1278,17 @@
     },
     {
       "service": "dataproc",
+      "operation": "Dataproc.CreateWorkflowTemplate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=dataproc.projects.regions.workflowTemplates.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "dataproc",
       "operation": "Dataproc.DeleteCluster",
       "transport": "rest",
       "state": "ga",
@@ -1282,6 +1305,17 @@
       "state": "ga",
       "evidence": [
         "discovery=dataproc.projects.regions.jobs.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.DeleteWorkflowTemplate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=dataproc.projects.regions.workflowTemplates.delete",
         "mutating",
         "postgres=yes"
       ]
@@ -1329,6 +1363,16 @@
     },
     {
       "service": "dataproc",
+      "operation": "Dataproc.GetWorkflowTemplate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=dataproc.projects.regions.workflowTemplates.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "dataproc",
       "operation": "Dataproc.ListClusters",
       "transport": "rest",
       "state": "ga",
@@ -1344,6 +1388,16 @@
       "state": "ga",
       "evidence": [
         "discovery=dataproc.projects.regions.jobs.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.ListWorkflowTemplates",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=dataproc.projects.regions.workflowTemplates.list",
         "postgres=yes"
       ]
     },
@@ -1405,6 +1459,17 @@
     },
     {
       "service": "dataproc",
+      "operation": "Dataproc.UpdateWorkflowTemplate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=dataproc.projects.regions.workflowTemplates.update",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "dataproc",
       "operation": "DeleteCluster",
       "transport": "grpc",
       "state": "ga",
@@ -1417,6 +1482,17 @@
     {
       "service": "dataproc",
       "operation": "DeleteJob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "DeleteWorkflowTemplate",
       "transport": "grpc",
       "state": "ga",
       "evidence": [
@@ -1458,6 +1534,38 @@
     },
     {
       "service": "dataproc",
+      "operation": "GetWorkflowTemplate",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "InstantiateInlineWorkflowTemplate",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "InstantiateWorkflowTemplate",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "dataproc",
       "operation": "ListClusters",
       "transport": "grpc",
       "state": "ga",
@@ -1474,6 +1582,16 @@
       "evidence": [
         "postgres=yes",
         "transport=grpc (conformance=2/2 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "ListWorkflowTemplates",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -1534,6 +1652,17 @@
     {
       "service": "dataproc",
       "operation": "UpdateJob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "UpdateWorkflowTemplate",
       "transport": "grpc",
       "state": "ga",
       "evidence": [

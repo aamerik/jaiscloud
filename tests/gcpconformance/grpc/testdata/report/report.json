@@ -1,14 +1,14 @@
 {
-  "endpoint": "localhost:18081",
-  "project": "test-project",
-  "total": 303,
-  "passed": 303,
+  "endpoint": "localhost:8081",
+  "project": "jaiscloud-project",
+  "total": 308,
+  "passed": 308,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 21,
-    "checks": 303,
-    "passed": 303,
+    "checks": 308,
+    "passed": 308,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -16,8 +16,8 @@
   "services": [
     {
       "service": "dataproc",
-      "total": 19,
-      "passed": 19,
+      "total": 24,
+      "passed": 24,
       "failed": 0,
       "unimplemented": 0
     },
@@ -2094,6 +2094,41 @@
       "method": "SubmitJob",
       "status": "pass",
       "key_field": "driver output/control URIs present"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateWorkflowTemplate",
+      "method": "CreateWorkflowTemplate",
+      "status": "pass",
+      "key_field": "name/version round-trip"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "GetWorkflowTemplate",
+      "method": "GetWorkflowTemplate",
+      "status": "pass",
+      "key_field": "job stepId round-trip"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "ListWorkflowTemplates",
+      "method": "ListWorkflowTemplates",
+      "status": "pass",
+      "key_field": "created template present"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "UpdateWorkflowTemplate",
+      "method": "UpdateWorkflowTemplate",
+      "status": "pass",
+      "key_field": "version bumped"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "DeleteWorkflowTemplate",
+      "method": "DeleteWorkflowTemplate",
+      "status": "pass",
+      "key_field": "NotFound after delete"
     },
     {
       "service": "functions",

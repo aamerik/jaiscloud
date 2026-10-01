@@ -356,6 +356,133 @@ func (s *PostgresStore) ListJobs(ctx context.Context, projectID, region string) 
 	return result, rows.Err()
 }
 
+// --- Workflow templates ---
+
+func (s *PostgresStore) CreateWorkflowTemplate(ctx context.Context, projectID, region string, t WorkflowTemplate) error {
+	if t.CreateTime.IsZero() {
+		t.CreateTime = clock.Now()
+	}
+	if t.UpdateTime.IsZero() {
+		t.UpdateTime = t.CreateTime
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_dataproc_workflow_templates
+			(project_id, region, template_id, version, definition, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+	`, projectID, region, t.TemplateID, t.Version, nullableJSONRaw(t.Definition, "{}"), t.CreateTime, t.UpdateTime)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrAlreadyExists
+		}
+		return err
+	}
+	return nil
+}
+
+func scanWorkflowTemplate(row pgx.Row) (WorkflowTemplate, error) {
+	var t WorkflowTemplate
+	var definition []byte
+	err := row.Scan(&t.ProjectID, &t.Region, &t.TemplateID, &t.Version, &definition, &t.CreateTime, &t.UpdateTime)
+	if err != nil {
+		return WorkflowTemplate{}, err
+	}
+	t.Definition = normalizeOptionalJSON(definition)
+	if t.Definition == nil {
+		t.Definition = json.RawMessage("{}")
+	}
+	return t, nil
+}
+
+func (s *PostgresStore) GetWorkflowTemplate(ctx context.Context, projectID, region, templateID string) (WorkflowTemplate, error) {
+	t, err := scanWorkflowTemplate(s.pool.QueryRow(ctx, `
+		SELECT project_id, region, template_id, version, definition, create_time, update_time
+		FROM jc_dataproc_workflow_templates WHERE project_id=$1 AND region=$2 AND template_id=$3
+	`, projectID, region, templateID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkflowTemplate{}, ErrNoSuchWorkflowTemplate
+	}
+	return t, err
+}
+
+// UpdateWorkflowTemplateAtomic mirrors MemoryStore's version: a Serializable
+// transaction with SELECT ... FOR UPDATE row-locks the template for the
+// duration of mutate, so concurrent version bumps serialize.
+func (s *PostgresStore) UpdateWorkflowTemplateAtomic(ctx context.Context, projectID, region, templateID string, mutate func(WorkflowTemplate) (WorkflowTemplate, error)) (WorkflowTemplate, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return WorkflowTemplate{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanWorkflowTemplate(tx.QueryRow(ctx, `
+		SELECT project_id, region, template_id, version, definition, create_time, update_time
+		FROM jc_dataproc_workflow_templates WHERE project_id=$1 AND region=$2 AND template_id=$3 FOR UPDATE
+	`, projectID, region, templateID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkflowTemplate{}, ErrNoSuchWorkflowTemplate
+	}
+	if err != nil {
+		return WorkflowTemplate{}, err
+	}
+
+	next, err := mutate(current)
+	if err != nil {
+		return WorkflowTemplate{}, err
+	}
+	if next.UpdateTime.IsZero() {
+		next.UpdateTime = clock.Now()
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE jc_dataproc_workflow_templates SET version=$4, definition=$5, update_time=$6
+		WHERE project_id=$1 AND region=$2 AND template_id=$3
+	`, projectID, region, templateID, next.Version, nullableJSONRaw(next.Definition, "{}"), next.UpdateTime)
+	if err != nil {
+		return WorkflowTemplate{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return WorkflowTemplate{}, ErrNoSuchWorkflowTemplate
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return WorkflowTemplate{}, err
+	}
+	next.ProjectID = projectID
+	next.Region = region
+	return next, nil
+}
+
+func (s *PostgresStore) DeleteWorkflowTemplate(ctx context.Context, projectID, region, templateID string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_dataproc_workflow_templates WHERE project_id=$1 AND region=$2 AND template_id=$3`, projectID, region, templateID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchWorkflowTemplate
+	}
+	return nil
+}
+
+func (s *PostgresStore) ListWorkflowTemplates(ctx context.Context, projectID, region string) ([]WorkflowTemplate, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, region, template_id, version, definition, create_time, update_time
+		FROM jc_dataproc_workflow_templates WHERE project_id=$1 AND region=$2 ORDER BY template_id
+	`, projectID, region)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []WorkflowTemplate
+	for rows.Next() {
+		t, err := scanWorkflowTemplate(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, t)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].TemplateID < result[j].TemplateID })
+	return result, rows.Err()
+}
+
 // --- Operations ---
 
 func (s *PostgresStore) CreateOperation(ctx context.Context, projectID, region string, op Operation) error {
@@ -469,6 +596,7 @@ func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_dataproc_clusters`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_dataproc_jobs`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_dataproc_operations`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_dataproc_workflow_templates`)
 }
 
 // nullableJSONRaw renders nil config/type_job as SQL NULL, otherwise the raw

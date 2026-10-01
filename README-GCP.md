@@ -24,7 +24,7 @@
 | Cloud Datastore mode | REST + gRPC | Entities, queries (structured + GQL), ID allocation, `ReserveIds`/`RunAggregationQuery`, transactions (read-set OCC) — see [Known Limitations](#known-limitations) |
 | Cloud Functions (v1 + v2) | REST + gRPC | Deploy (LRO), invoke via `:call` or the deployed HTTPS trigger URL (mock echo by default, Docker/K8s execution modes), locations, source URLs, v2 `serviceConfig` instance/concurrency config (`minInstanceCount`/`maxInstanceCount`/`maxInstanceRequestConcurrency`/`availableCpu`, validated, surfaced + admission-enforced) |
 | Cloud Workflows | REST + gRPC | Workflow definitions + executions, real YAML expression engine; LROs complete synchronously by default, with an opt-in async mode (`JAISCLOUD_LRO_MODE=async`) |
-| Cloud Dataproc | REST + gRPC | Clusters (GCE- or GKE-`virtualClusterConfig`-shaped) + jobs, **real Spark execution** in Docker/K8s executor mode (same model as AWS EMR); pollable async cluster/job long-running operations; real driver output/control files in GCS; optional Metastore attachment; optional cluster/job lifecycle events on Pub/Sub |
+| Cloud Dataproc | REST + gRPC | Clusters (GCE- or GKE-`virtualClusterConfig`-shaped) + jobs + workflow templates (`WorkflowTemplate` CRUD; `instantiate`/`instantiateInline` execute the inline DAG over the job core), **real Spark execution** in Docker/K8s executor mode (same model as AWS EMR); pollable async cluster/job long-running operations; real driver output/control files in GCS; optional Metastore attachment; optional cluster/job lifecycle events on Pub/Sub |
 | Dataproc Metastore | REST + gRPC | Control-plane CRUD (services/backups/metadata-imports) + Hive Metastore Thrift serving plane (:9083); databases/tables/partitions/locks served (including the Hive-3.x `get_table_meta` and `alter_table_with_cascade` paths), see [Known Limitations](#known-limitations) |
 | BigLake Iceberg REST Catalog | REST | `org.apache.iceberg.rest.RESTCatalog` surface mounted at `/iceberg/` — namespaces, tables, atomic `CommitTableRequest` requirements/updates, see [Known Limitations](#known-limitations) |
 | Managed Kafka | REST + gRPC | Metadata-only clusters/topics — see [Known Limitations](#known-limitations) |
@@ -343,6 +343,10 @@ A job's `driverOutputResourceUri`/`driverControlFilesUri` are allocated at submi
 ### Dataproc Serverless: not implemented
 
 The Dataproc Serverless (Batch) API is not implemented. Dataproc is clusters + jobs with mock, Docker, or K8s executors only; serverless batches have no emulator surface.
+
+### Dataproc WorkflowTemplates: only the latest version is retained
+
+`WorkflowTemplateService` is served over REST + gRPC (`create`/`get`/`list`/`update`/`delete`, plus `instantiate`/`instantiateInline`). Only the **latest** version of a template is stored: `create` stores version 1, `update` requires the request version to match the current one (`ABORTED` on mismatch) and bumps it, and a `get`/`delete` naming a non-current explicit version returns `NotFound` (real GCP keeps a version history). Instantiation runs the template's `OrderedJob` DAG through the same job core, so only the Spark-family job types (`sparkJob`/`pysparkJob`/`sparkRJob`) execute; other job types fail loud exactly as `SubmitJob` already does. The `workflowTemplates` IAM trio (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`) is not served.
 
 ### Dataproc lifecycle events on Pub/Sub (emulator-defined)
 

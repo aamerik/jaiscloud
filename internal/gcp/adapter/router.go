@@ -383,15 +383,22 @@ func isLoggingMetricsPath(seg []string) bool {
 	return seg[3] == "metrics"
 }
 
-// detectDataprocResourceType returns "clusters", "jobs", or "operations" when
-// the segments after projects/{project} form regions/{region}/{type}, else "".
+// detectDataprocResourceType returns "clusters", "jobs", "operations", or
+// "workflowTemplates" when the segments after projects/{project} form
+// regions/{region}/{type}, else "".
 func detectDataprocResourceType(seg []string) string {
 	if len(seg) < 3 || seg[0] != "regions" {
 		return ""
 	}
-	switch seg[2] {
-	case "clusters", "jobs", "operations":
-		return seg[2]
+	// A custom-method suffix ("workflowTemplates:instantiateInline") is still
+	// the workflowTemplates resource type.
+	resource := seg[2]
+	if i := strings.IndexByte(resource, ':'); i >= 0 {
+		resource = resource[:i]
+	}
+	switch resource {
+	case "clusters", "jobs", "operations", "workflowTemplates":
+		return resource
 	}
 	return ""
 }
