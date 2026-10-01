@@ -11,6 +11,21 @@ A plan that does not use this shape is invisible to `make gcp-status-next`,
 
 ---
 
+## 0. Local execution environment (available — plan against it)
+
+The dev box has the following set up and verified working, so a plan may specify
+cluster- or image-build-based gates without provisioning prerequisites:
+
+| capability | how to use it |
+|---|---|
+| **k3d Kubernetes cluster** | the local `kubectl` talks to it via the `k3d-jaiscloud` context (namespace `jaiscloud`). Use `kubectl --context k3d-jaiscloud -n jaiscloud …`. |
+| **Remote Docker daemon** | the local `docker` binary's `remote` context (SSH endpoint to the build host) — it is the active context, so a plain `docker …` builds/pushes against the remote daemon. Use `docker --context default …` for the local daemon. |
+
+Cluster-based e2e targets (e.g. `*-k3d`, k8s executor modes) are therefore
+runnable, not aspirational — write them as real gates.
+
+---
+
 ## 1. Index — drives priority
 
 `make gcp-status-next` orders by plan family (`Series`) first, then `Session`
