@@ -158,7 +158,7 @@ func TestFunctionsLROAsyncListSettles(t *testing.T) {
 	if _, _, err := s.CreateFunction(ctx, "proj", "us-central1", "hello", lroCreateInput(), V1); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	page, _, err := s.ListOperations(ctx, "proj", "us-central1", 0, "")
+	page, _, err := s.ListOperations(ctx, "proj", "us-central1", V1, "", 0, "")
 	if err != nil {
 		t.Fatalf("list before delay: %v", err)
 	}
@@ -167,12 +167,46 @@ func TestFunctionsLROAsyncListSettles(t *testing.T) {
 	}
 
 	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(30 * time.Second)})
-	page, _, err = s.ListOperations(ctx, "proj", "us-central1", 0, "")
+	page, _, err = s.ListOperations(ctx, "proj", "us-central1", V1, "", 0, "")
 	if err != nil {
 		t.Fatalf("list past delay: %v", err)
 	}
 	if len(page) != 1 || !page[0].Done || page[0].EndTime.IsZero() {
 		t.Fatalf("list past delay = %+v, want one settled operation", page)
+	}
+}
+
+// TestFunctionsLROAsyncListFilterSettles verifies the `done` filter is evaluated
+// against the settled operation: an in-flight async operation is not reported
+// by done=true until its delay elapses, then it is.
+func TestFunctionsLROAsyncListFilterSettles(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	freezeClock(t, t0)
+	ctx := context.Background()
+	s := NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+		WithLROMode(lro.Mode{Enabled: true, Delay: 30 * time.Second}))
+
+	if _, _, err := s.CreateFunction(ctx, "proj", "us-central1", "hello", lroCreateInput(), V1); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	before, _, err := s.ListOperations(ctx, "proj", "us-central1", V2, "done=true", 0, "")
+	if err != nil {
+		t.Fatalf("filter before delay: %v", err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("done=true before delay = %+v, want empty", before)
+	}
+	if inflight, _, err := s.ListOperations(ctx, "proj", "us-central1", V2, "done=false", 0, ""); err != nil || len(inflight) != 1 {
+		t.Fatalf("done=false before delay = %+v err=%v, want one in-flight op", inflight, err)
+	}
+
+	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(30 * time.Second)})
+	after, _, err := s.ListOperations(ctx, "proj", "us-central1", V2, "done=true", 0, "")
+	if err != nil {
+		t.Fatalf("filter past delay: %v", err)
+	}
+	if len(after) != 1 || !after[0].Done {
+		t.Fatalf("done=true past delay = %+v, want one settled op", after)
 	}
 }
 

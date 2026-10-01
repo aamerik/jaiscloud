@@ -40,7 +40,7 @@ func TestRegistryListOperations(t *testing.T) {
 	s, op := newAsyncRegistryService(t)
 	ctx := context.Background()
 
-	resp, handled, err := s.ListOperations(ctx, "operations", 0, "")
+	resp, handled, err := s.ListOperations(ctx, "operations", 0, "", "")
 	if err != nil || !handled {
 		t.Fatalf("ListOperations: handled=%v err=%v", handled, err)
 	}
@@ -52,7 +52,7 @@ func TestRegistryListOperations(t *testing.T) {
 	}
 
 	clock.SetGlobalClock(clock.FixedClock{T: time.Date(2026, 5, 1, 12, 0, 30, 0, time.UTC)})
-	resp, handled, err = s.ListOperations(ctx, "", 0, "")
+	resp, handled, err = s.ListOperations(ctx, "", 0, "", "")
 	if err != nil || !handled {
 		t.Fatalf("ListOperations after delay: handled=%v err=%v", handled, err)
 	}
@@ -65,8 +65,18 @@ func TestRegistryListOperations(t *testing.T) {
 // parent is not claimed by Service Usage (its operations have no parent).
 func TestRegistryListOperationsDeclinesForeignParent(t *testing.T) {
 	s, _ := newAsyncRegistryService(t)
-	if _, handled, err := s.ListOperations(context.Background(), "projects/p/locations/us/operations", 0, ""); handled || err != nil {
+	if _, handled, err := s.ListOperations(context.Background(), "projects/p/locations/us/operations", 0, "", ""); handled || err != nil {
 		t.Fatalf("foreign parent: handled=%v err=%v, want declined", handled, err)
+	}
+}
+
+// TestRegistryListOperationsFilterFailsLoud verifies Service Usage does not
+// silently ignore a filter the emulator cannot evaluate for its operations.
+func TestRegistryListOperationsFilterFailsLoud(t *testing.T) {
+	s, _ := newAsyncRegistryService(t)
+	_, handled, err := s.ListOperations(context.Background(), "operations", 0, "", "done=true")
+	if !handled || status.Code(err) != codes.Unimplemented {
+		t.Fatalf("filtered ListOperations: handled=%v err=%v, want handled Unimplemented", handled, err)
 	}
 }
 

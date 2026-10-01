@@ -31,6 +31,7 @@ import (
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
+	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	"jaiscloud/internal/gcp/policy"
 	core "jaiscloud/internal/gcp/service/functions"
 )
@@ -449,8 +450,66 @@ func (s *ServiceV2) ResolveOperation(ctx context.Context, name string) (*longrun
 	return out, true, nil
 }
 
-// compile-time assertions that the servers implement both generated interfaces.
+// ListOperations implements the shared google.longrunning.Operations
+// ListRegistry surface for v2 function operations. The parent must be a
+// location parent (projects/{p}/locations/{l}); any other parent is declined
+// (handled=false) so the empty page answers. The `filter` parameter is
+// forwarded to the core, which evaluates the AIP-160 subset (or returns
+// InvalidArgument for one it cannot parse); returnPartialSuccess is rejected
+// once by the shared Operations service. v1 operations are top-level (J60) and
+// deliberately do not implement this surface, so a location-scoped parent is
+// owned by v2.
+//
+// A location parent is shared with other location-scoped services (Workflows,
+// Metastore, Managed Kafka), so v2 claims it only when the location actually
+// holds function operations — otherwise it declines and those services' list
+// calls are not shadowed by an unrelated page.
+func (s *ServiceV2) ListOperations(ctx context.Context, parent string, pageSize int32, pageToken, filter string) (*longrunningpb.ListOperationsResponse, bool, error) {
+	project, location, ok := parseLocationParent(parent)
+	if !ok {
+		return nil, false, nil
+	}
+	project = resolveProject(ctx, project, s.defaultProj)
+	owned, _, err := s.core.ListOperations(ctx, project, location, core.V2, "", 1, "")
+	if err != nil {
+		return nil, true, mapError(err)
+	}
+	if len(owned) == 0 {
+		return nil, false, nil
+	}
+	ops, next, err := s.core.ListOperations(ctx, project, location, core.V2, filter, int(pageSize), pageToken)
+	if err != nil {
+		return nil, true, mapError(err)
+	}
+	out := &longrunningpb.ListOperationsResponse{NextPageToken: next}
+	for _, op := range ops {
+		p, err := operationToProtoV2(project, op)
+		if err != nil {
+			return nil, true, err
+		}
+		out.Operations = append(out.Operations, p)
+	}
+	return out, true, nil
+}
+
+// parseLocationParent validates a location parent
+// ("projects/{p}/locations/{l}") and returns its project and location. Service
+// Usage shares the top-level operations namespace, but a location-scoped
+// collection (".../operations") is not a location parent and is declined.
+func parseLocationParent(parent string) (project, location string, ok bool) {
+	parts := strings.Split(strings.Trim(parent, "/"), "/")
+	if len(parts) != 4 || parts[0] != "projects" || parts[2] != "locations" || parts[1] == "" || parts[3] == "" {
+		return "", "", false
+	}
+	return parts[1], parts[3], true
+}
+
+// compile-time assertions that the servers implement the generated interfaces
+// and the shared google.longrunning.Operations surfaces they register.
 var (
 	_ functionspb.CloudFunctionsServiceServer = (*Service)(nil)
 	_ apiv2functionspb.FunctionServiceServer  = (*ServiceV2)(nil)
+	_ grpcoperations.Resolver                 = (*Service)(nil)
+	_ grpcoperations.Resolver                 = (*ServiceV2)(nil)
+	_ grpcoperations.ListRegistry             = (*ServiceV2)(nil)
 )

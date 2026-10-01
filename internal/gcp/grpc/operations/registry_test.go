@@ -13,11 +13,12 @@ import (
 // optionally claims every List parent. It records the delete/cancel calls so a
 // test can assert the shared service delegated to it.
 type fakeRegistry struct {
-	ops       map[string]*longrunningpb.Operation
-	listPage  *longrunningpb.ListOperationsResponse
-	listAck   bool
-	cancelled []string
-	deleted   []string
+	ops        map[string]*longrunningpb.Operation
+	listPage   *longrunningpb.ListOperationsResponse
+	listAck    bool
+	listFilter string
+	cancelled  []string
+	deleted    []string
 }
 
 func (f *fakeRegistry) ResolveOperation(_ context.Context, name string) (*longrunningpb.Operation, bool, error) {
@@ -28,10 +29,11 @@ func (f *fakeRegistry) ResolveOperation(_ context.Context, name string) (*longru
 	return op, true, nil
 }
 
-func (f *fakeRegistry) ListOperations(_ context.Context, _ string, _ int32, _ string) (*longrunningpb.ListOperationsResponse, bool, error) {
+func (f *fakeRegistry) ListOperations(_ context.Context, _ string, _ int32, _, filter string) (*longrunningpb.ListOperationsResponse, bool, error) {
 	if !f.listAck {
 		return nil, false, nil
 	}
+	f.listFilter = filter
 	return f.listPage, true, nil
 }
 
@@ -201,15 +203,62 @@ func TestLenientCancelDeleteResolverOwnedAbsentStaysNoOp(t *testing.T) {
 	}
 }
 
-// TestListOperationsFilterUnimplemented verifies a filtered request fails loud
-// rather than silently returning unfiltered results.
-func TestListOperationsFilterUnimplemented(t *testing.T) {
+// TestListOperationsForwardsFilter verifies the shared service forwards the
+// standard filter request parameter to the owning ListRegistry instead of
+// blanket-rejecting it: the registry decides whether it can evaluate it.
+func TestListOperationsForwardsFilter(t *testing.T) {
+	reg := &fakeRegistry{listAck: true, listPage: &longrunningpb.ListOperationsResponse{}}
+	svc := New(reg)
+
+	if _, err := svc.ListOperations(context.Background(), &longrunningpb.ListOperationsRequest{
+		Name:   "operations",
+		Filter: "done=true",
+	}); err != nil {
+		t.Fatalf("ListOperations(filter): %v", err)
+	}
+	if reg.listFilter != "done=true" {
+		t.Fatalf("registry filter = %q, want done=true", reg.listFilter)
+	}
+}
+
+// TestListOperationsReturnPartialSuccessUnimplemented verifies the unsupported
+// returnPartialSuccess request parameter fails loud for every parent, matching
+// the canonical Operations.List proto ("UNIMPLEMENTED if set unless explicitly
+// documented otherwise").
+func TestListOperationsReturnPartialSuccessUnimplemented(t *testing.T) {
 	svc := New(&fakeRegistry{listAck: true, listPage: &longrunningpb.ListOperationsResponse{}})
+
+	_, err := svc.ListOperations(context.Background(), &longrunningpb.ListOperationsRequest{
+		Name:                 "operations",
+		ReturnPartialSuccess: true,
+	})
+	if status.Code(err) != codes.Unimplemented {
+		t.Fatalf("ListOperations(returnPartialSuccess) = %v, want Unimplemented", err)
+	}
+}
+
+// TestListOperationsRegistryErrorPropagates verifies a ListRegistry that owns
+// the parent and fails loud (e.g. Service Usage given a filter it cannot
+// evaluate) surfaces its error rather than being swallowed.
+func TestListOperationsRegistryErrorPropagates(t *testing.T) {
+	svc := New(errorListRegistry{err: status.Error(codes.Unimplemented, "filter not supported")})
 
 	_, err := svc.ListOperations(context.Background(), &longrunningpb.ListOperationsRequest{Name: "operations", Filter: "done=true"})
 	if status.Code(err) != codes.Unimplemented {
 		t.Fatalf("ListOperations(filter) = %v, want Unimplemented", err)
 	}
+}
+
+// errorListRegistry is a ListRegistry that claims its parent and always returns
+// the configured error.
+type errorListRegistry struct{ err error }
+
+func (errorListRegistry) ResolveOperation(context.Context, string) (*longrunningpb.Operation, bool, error) {
+	return nil, false, nil
+}
+
+func (e errorListRegistry) ListOperations(context.Context, string, int32, string, string) (*longrunningpb.ListOperationsResponse, bool, error) {
+	return nil, true, e.err
 }
 
 // TestDeleteOperationDelegatesToRegistry verifies a registry-owned operation is

@@ -492,6 +492,65 @@ func TestOperationsV2(t *testing.T) {
 	}
 }
 
+// TestListOperationsFilter covers the REST ListOperations filter and
+// returnPartialSuccess parameters end to end: the handler threads them to the
+// core, which evaluates the AIP-160 subset and rejects a filter it cannot parse.
+func TestListOperationsFilter(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
+
+	var firstName string
+	for _, id := range []string{"f-one", "f-two"} {
+		op, err := p.CreateFunction(ctx, newNRv2(map[string]any{
+			"location":   "us-central1",
+			"functionId": id,
+			"body":       map[string]any{"buildConfig": map[string]any{"runtime": "nodejs20", "entryPoint": "handler"}},
+		}))
+		if err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+		if firstName == "" {
+			firstName, _ = op.Data["name"].(string)
+		}
+	}
+	id := firstName[strings.LastIndex(firstName, "/")+1:]
+
+	cases := []struct {
+		name   string
+		params map[string]any
+		want   int
+	}{
+		{"all", map[string]any{"location": "us-central1"}, 2},
+		{"done true", map[string]any{"location": "us-central1", "filter": "done=true"}, 2},
+		{"done false", map[string]any{"location": "us-central1", "filter": "done=false"}, 0},
+		{"name exact", map[string]any{"location": "us-central1", "filter": `name="` + firstName + `"`}, 1},
+		{"name contains", map[string]any{"location": "us-central1", "filter": `name:"` + id + `"`}, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := p.ListOperations(ctx, newNRv2(tc.params))
+			if err != nil {
+				t.Fatalf("list: %v", err)
+			}
+			ops, _ := resp.Data["operations"].([]any)
+			if len(ops) != tc.want {
+				t.Fatalf("list = %d ops, want %d: %v", len(ops), tc.want, ops)
+			}
+		})
+	}
+
+	// A filter the emulator cannot evaluate is InvalidArgument, never a silent
+	// unfiltered (or empty) page.
+	if _, err := p.ListOperations(ctx, newNRv2(map[string]any{"location": "us-central1", "filter": "bogus=1"})); err == nil {
+		t.Errorf("expected InvalidArgument for an unsupported filter field")
+	}
+
+	// returnPartialSuccess is not supported by Cloud Functions operations.list.
+	if _, err := p.ListOperations(ctx, newNRv2(map[string]any{"location": "us-central1", "returnPartialSuccess": "true"})); err == nil {
+		t.Errorf("expected Unimplemented for returnPartialSuccess")
+	}
+}
+
 // delayedGetStore wraps a functionsstore.Store, delaying every GetFunction
 // call to widen a TOCTOU race window in tests.
 type delayedGetStore struct {
