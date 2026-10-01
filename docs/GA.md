@@ -147,7 +147,7 @@ surface and durability.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **308/308 checks pass** (Dataproc 24,
+- **gRPC** — official `cloud.google.com/go` clients: **310/310 checks pass** (Dataproc 26,
   Datastore 15, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 20, IAM 6, IAM Credentials 4, KMS 31, Logging 21,
   Managed Kafka 18, Metastore 13, Monitoring 34, Operations 5, Pub/Sub 25, Resource Manager 4,
   Secret Manager 16, Service Usage 5, Storage 24, Workflow Executions 4, Workflows 5) against `:8081`. The IAM probes
@@ -231,10 +231,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `google.cloud.functions.v2.FunctionService` over one shared core/store; create/update/delete
   return inline `done:true` operations with typed `Any` metadata/response. v1 `CallFunction`
   (runtime invocation) is served over the shared core's Lambda executor on both transports.
-- **gRPC** — **13** of **386** cells remain `limited`: verified against proto descriptors only.
-  The other **281** are `ga` and **92** are explicit `unsupported` stubs (see the `Unimplemented`
+- **gRPC** — **11** of **386** cells remain `limited`: verified against proto descriptors only.
+  The other **283** are `ga` and **92** are explicit `unsupported` stubs (see the `Unimplemented`
   list below), verified with the official `cloud.google.com/go` clients against a live emulator.
-  The conformance harness exercises **304** checks over those `ga` proto methods (Dataproc 24,
+  The conformance harness exercises **306** checks over those `ga` proto methods (Dataproc 26,
   Datastore 15, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 20, IAM 6, KMS 31, Logging 21,
   Managed Kafka 18, Metastore 13, Monitoring 34, Operations 5, Pub/Sub 25, Resource Manager 4,
   Secret Manager 16, Service Usage 5, Storage 24, Workflow Executions 4, Workflows 5, the rest one

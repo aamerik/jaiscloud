@@ -49,16 +49,18 @@ var actionOverrides = map[string]string{
 	"KMS.CryptoKeyVersionGetPublicKey": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.getPublicKey",
 
 	// Remaining resource/verb naming differences across services.
-	"CloudSQL.ConnectGet":                     "sql.connect.get",
-	"Compute.OperationsGet":                   "compute.globalOperations.get",
-	"Compute.OperationsList":                  "compute.globalOperations.list",
-	"Dataproc.SubmitJobAsOperation":           "dataproc.projects.regions.jobs.submitAsOperation",
-	"Dataproc.CreateWorkflowTemplate":         "dataproc.projects.regions.workflowTemplates.create",
-	"Dataproc.GetWorkflowTemplate":            "dataproc.projects.regions.workflowTemplates.get",
-	"Dataproc.ListWorkflowTemplates":          "dataproc.projects.regions.workflowTemplates.list",
-	"Dataproc.UpdateWorkflowTemplate":         "dataproc.projects.regions.workflowTemplates.update",
-	"Dataproc.DeleteWorkflowTemplate":         "dataproc.projects.regions.workflowTemplates.delete",
-	"Metastore.AlterMetadataResourceLocation": "metastore.projects.locations.services.alterLocation",
+	"CloudSQL.ConnectGet":                        "sql.connect.get",
+	"Compute.OperationsGet":                      "compute.globalOperations.get",
+	"Compute.OperationsList":                     "compute.globalOperations.list",
+	"Dataproc.SubmitJobAsOperation":              "dataproc.projects.regions.jobs.submitAsOperation",
+	"Dataproc.CreateWorkflowTemplate":            "dataproc.projects.regions.workflowTemplates.create",
+	"Dataproc.GetWorkflowTemplate":               "dataproc.projects.regions.workflowTemplates.get",
+	"Dataproc.ListWorkflowTemplates":             "dataproc.projects.regions.workflowTemplates.list",
+	"Dataproc.UpdateWorkflowTemplate":            "dataproc.projects.regions.workflowTemplates.update",
+	"Dataproc.DeleteWorkflowTemplate":            "dataproc.projects.regions.workflowTemplates.delete",
+	"Dataproc.InstantiateWorkflowTemplate":       "dataproc.projects.regions.workflowTemplates.instantiate",
+	"Dataproc.InstantiateInlineWorkflowTemplate": "dataproc.projects.regions.workflowTemplates.instantiateInline",
+	"Metastore.AlterMetadataResourceLocation":    "metastore.projects.locations.services.alterLocation",
 
 	// BigQuery's tabledata/jobs/projects surfaces use different method names
 	// than the emulator's registry actions.

@@ -34,6 +34,8 @@ func TestCodecDeriveWorkflowTemplate(t *testing.T) {
 		{http.MethodGet, "/v1/projects/proj/regions/us-central1/workflowTemplates/t1", "GetWorkflowTemplate"},
 		{http.MethodPut, "/v1/projects/proj/regions/us-central1/workflowTemplates/t1", "UpdateWorkflowTemplate"},
 		{http.MethodDelete, "/v1/projects/proj/regions/us-central1/workflowTemplates/t1", "DeleteWorkflowTemplate"},
+		{http.MethodPost, "/v1/projects/proj/regions/us-central1/workflowTemplates:instantiateInline", "InstantiateInlineWorkflowTemplate"},
+		{http.MethodPost, "/v1/projects/proj/regions/us-central1/workflowTemplates/t1:instantiate", "InstantiateWorkflowTemplate"},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader("{}"))
@@ -103,5 +105,47 @@ func TestWorkflowTemplateRESTSurface(t *testing.T) {
 	}
 	if _, err := p.GetWorkflowTemplate(ctx, nr); err == nil {
 		t.Fatal("expected NotFound after delete")
+	}
+}
+
+func TestInstantiateInlineWorkflowREST(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	nr := testNR(map[string]any{"region": "us-central1", "body": map[string]any{
+		"placement": map[string]any{"managedCluster": map[string]any{"clusterName": "wf-rest"}},
+		"jobs":      []any{map[string]any{"stepId": "a", "pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/a.py"}}},
+	}})
+	resp, err := p.InstantiateInlineWorkflowTemplate(ctx, nr)
+	if err != nil {
+		t.Fatalf("InstantiateInlineWorkflowTemplate: %v", err)
+	}
+	if resp.Data["done"] != false {
+		t.Fatalf("done = %v, want false", resp.Data["done"])
+	}
+	name, _ := resp.Data["name"].(string)
+	idx := strings.LastIndex(name, "/operations/")
+	if idx < 0 {
+		t.Fatalf("operation name malformed: %q", name)
+	}
+	opID := name[idx+len("/operations/"):]
+
+	var done bool
+	for i := 0; i < 32; i++ {
+		opNR := testNR(map[string]any{"region": "us-central1", "operationId": opID})
+		opResp, err := p.GetOperation(ctx, opNR)
+		if err != nil {
+			t.Fatalf("GetOperation: %v", err)
+		}
+		if opResp.Data["done"] == true {
+			done = true
+			meta, _ := opResp.Data["metadata"].(map[string]any)
+			if meta["state"] != "DONE" {
+				t.Fatalf("workflow state = %v, want DONE", meta["state"])
+			}
+			break
+		}
+	}
+	if !done {
+		t.Fatal("workflow operation did not complete")
 	}
 }

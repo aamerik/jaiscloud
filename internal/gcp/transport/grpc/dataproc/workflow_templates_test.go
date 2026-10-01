@@ -73,3 +73,48 @@ func TestWorkflowTemplateGRPCRoundTrip(t *testing.T) {
 		t.Fatalf("Get after delete = %v, want NotFound", err)
 	}
 }
+
+func TestInstantiateInlineWorkflowGRPC(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	op, err := s.InstantiateInlineWorkflowTemplate(ctx, &dataprocpb.InstantiateInlineWorkflowTemplateRequest{
+		Parent:   "projects/proj/regions/us-central1",
+		Template: wfTemplateProto("ignored"),
+	})
+	if err != nil {
+		t.Fatalf("InstantiateInlineWorkflowTemplate: %v", err)
+	}
+	if op.GetDone() {
+		t.Fatal("instantiate returned a done operation; want in-flight")
+	}
+	var meta dataprocpb.WorkflowMetadata
+	if err := op.GetMetadata().UnmarshalTo(&meta); err != nil {
+		t.Fatalf("metadata UnmarshalTo: %v", err)
+	}
+	if meta.GetState() != dataprocpb.WorkflowMetadata_RUNNING {
+		t.Fatalf("workflow state = %v, want RUNNING", meta.GetState())
+	}
+
+	for i := 0; i < 32; i++ {
+		polled, handled, err := s.ResolveOperation(ctx, op.GetName())
+		if err != nil || !handled {
+			t.Fatalf("ResolveOperation: handled=%v err=%v", handled, err)
+		}
+		if !polled.GetDone() {
+			continue
+		}
+		var done dataprocpb.WorkflowMetadata
+		if err := polled.GetMetadata().UnmarshalTo(&done); err != nil {
+			t.Fatalf("done metadata: %v", err)
+		}
+		if done.GetState() != dataprocpb.WorkflowMetadata_DONE {
+			t.Fatalf("workflow state = %v, want DONE", done.GetState())
+		}
+		nodes := done.GetGraph().GetNodes()
+		if len(nodes) != 1 || nodes[0].GetState() != dataprocpb.WorkflowNode_COMPLETED {
+			t.Fatalf("nodes = %+v", nodes)
+		}
+		return
+	}
+	t.Fatal("workflow operation did not complete")
+}

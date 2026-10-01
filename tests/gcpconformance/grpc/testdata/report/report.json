@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 308,
-  "passed": 308,
+  "total": 310,
+  "passed": 310,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 21,
-    "checks": 308,
-    "passed": 308,
+    "checks": 310,
+    "passed": 310,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -16,8 +16,8 @@
   "services": [
     {
       "service": "dataproc",
-      "total": 24,
-      "passed": 24,
+      "total": 26,
+      "passed": 26,
       "failed": 0,
       "unimplemented": 0
     },
@@ -2129,6 +2129,20 @@
       "method": "DeleteWorkflowTemplate",
       "status": "pass",
       "key_field": "NotFound after delete"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "InstantiateInlineWorkflowTemplate",
+      "method": "InstantiateInlineWorkflowTemplate",
+      "status": "pass",
+      "key_field": "LRO completes with DONE WorkflowMetadata"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "InstantiateWorkflowTemplate",
+      "method": "InstantiateWorkflowTemplate",
+      "status": "pass",
+      "key_field": "stored template + parameters run to DONE"
     },
     {
       "service": "functions",

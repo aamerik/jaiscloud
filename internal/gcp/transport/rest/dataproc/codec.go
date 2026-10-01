@@ -140,9 +140,14 @@ func deriveDataprocAction(resourceType string, isCollection bool, method, custom
 				return "CancelJob"
 			}
 		case "workflowTemplates":
-			// instantiate/instantiateInline and the workflowTemplates IAM verbs
-			// are not routed yet; an unhandled custom verb must not fall through
-			// to the create/patch method switch.
+			switch custom {
+			case "instantiate":
+				return "InstantiateWorkflowTemplate"
+			case "instantiateInline":
+				return "InstantiateInlineWorkflowTemplate"
+			}
+			// The workflowTemplates IAM verbs are not routed yet; an unhandled
+			// custom verb must not fall through to the create/patch method switch.
 			return ""
 		}
 	}

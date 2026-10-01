@@ -47,6 +47,9 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Dataproc.ListWorkflowTemplates":  p.ListWorkflowTemplates,
 		"Dataproc.UpdateWorkflowTemplate": p.UpdateWorkflowTemplate,
 		"Dataproc.DeleteWorkflowTemplate": p.DeleteWorkflowTemplate,
+
+		"Dataproc.InstantiateWorkflowTemplate":       p.InstantiateWorkflowTemplate,
+		"Dataproc.InstantiateInlineWorkflowTemplate": p.InstantiateInlineWorkflowTemplate,
 	}
 }
 
@@ -294,4 +297,26 @@ func (p *Provider) DeleteWorkflowTemplate(ctx context.Context, nr *model.Normali
 		return nil, err
 	}
 	return provider.OK(map[string]any{}), nil
+}
+
+// InstantiateWorkflowTemplate runs a stored template. The Discovery request body
+// is an InstantiateWorkflowTemplateRequest ({version, parameters, requestId}).
+func (p *Provider) InstantiateWorkflowTemplate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	body := bodyOf(nr)
+	op, err := p.core.InstantiateWorkflowTemplate(ctx, p.project(nr), strParam(nr, "region"),
+		strParam(nr, "workflowTemplateId"), int32(intFrom(body["version"])), stringMap(body["parameters"]))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(op)), nil
+}
+
+// InstantiateInlineWorkflowTemplate runs an inline template. The Discovery
+// request body is the WorkflowTemplate itself.
+func (p *Provider) InstantiateInlineWorkflowTemplate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	op, err := p.core.InstantiateInlineWorkflowTemplate(ctx, p.project(nr), strParam(nr, "region"), bodyOf(nr))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(op)), nil
 }

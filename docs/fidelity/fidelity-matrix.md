@@ -6,14 +6,14 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **826**
+Cells: **828**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 589 |
-| limited | 119 |
+| ga | 593 |
+| limited | 117 |
 | preview | 14 |
 | unsupported | 104 |
 
@@ -21,8 +21,8 @@ Cells: **826**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 308 | 106 | 14 | 12 |
-| grpc | 281 | 13 | 0 | 92 |
+| rest | 310 | 106 | 14 | 12 |
+| grpc | 283 | 11 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -152,7 +152,7 @@ _33 cell(s): ga=0 limited=32 preview=0 unsupported=1_
 
 ## dataproc
 
-_42 cell(s): ga=38 limited=2 preview=0 unsupported=2_
+_44 cell(s): ga=42 limited=0 preview=0 unsupported=2_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -170,6 +170,8 @@ _42 cell(s): ga=38 limited=2 preview=0 unsupported=2_
 | Dataproc.GetJob | rest | ga | — |
 | Dataproc.GetOperation | rest | ga | — |
 | Dataproc.GetWorkflowTemplate | rest | ga | — |
+| Dataproc.InstantiateInlineWorkflowTemplate | rest | ga | — |
+| Dataproc.InstantiateWorkflowTemplate | rest | ga | — |
 | Dataproc.ListClusters | rest | ga | — |
 | Dataproc.ListJobs | rest | ga | — |
 | Dataproc.ListWorkflowTemplates | rest | ga | — |
@@ -186,8 +188,8 @@ _42 cell(s): ga=38 limited=2 preview=0 unsupported=2_
 | GetCluster | grpc | ga | — |
 | GetJob | grpc | ga | — |
 | GetWorkflowTemplate | grpc | ga | — |
-| InstantiateInlineWorkflowTemplate | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
-| InstantiateWorkflowTemplate | grpc | limited | gRPC verified against proto descriptors only (pending proto-conformance) |
+| InstantiateInlineWorkflowTemplate | grpc | ga | — |
+| InstantiateWorkflowTemplate | grpc | ga | — |
 | ListClusters | grpc | ga | — |
 | ListJobs | grpc | ga | — |
 | ListWorkflowTemplates | grpc | ga | — |

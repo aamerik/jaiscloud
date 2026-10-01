@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
+	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	core "jaiscloud/internal/gcp/service/dataproc"
@@ -112,4 +113,22 @@ func (s *Service) DeleteWorkflowTemplate(ctx context.Context, req *dataprocpb.De
 		return nil, mapError(err)
 	}
 	return &emptypb.Empty{}, nil
+}
+
+func (s *Service) InstantiateWorkflowTemplate(ctx context.Context, req *dataprocpb.InstantiateWorkflowTemplateRequest) (*longrunningpb.Operation, error) {
+	project, region, id := s.resolveTemplateScope(ctx, req.GetName())
+	op, err := s.core.InstantiateWorkflowTemplate(ctx, project, region, id, req.GetVersion(), req.GetParameters())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return operationToProto(op)
+}
+
+func (s *Service) InstantiateInlineWorkflowTemplate(ctx context.Context, req *dataprocpb.InstantiateInlineWorkflowTemplateRequest) (*longrunningpb.Operation, error) {
+	project, region, _ := s.resolveTemplateScope(ctx, req.GetParent())
+	op, err := s.core.InstantiateInlineWorkflowTemplate(ctx, project, region, protojsonToMap(req.GetTemplate()))
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return operationToProto(op)
 }

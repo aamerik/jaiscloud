@@ -82,3 +82,18 @@ func intFrom(v any) int {
 		return 0
 	}
 }
+
+// stringMap coerces a decoded JSON object of strings; nil for any other shape.
+func stringMap(v any) map[string]string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, e := range m {
+		if s, ok := e.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
+}
