@@ -656,6 +656,12 @@ func parseStatusCell(status string, row []string) (state, disp string) {
 	}
 }
 
+// remainderNoFixRe detects a no-fix decision declared inline in a remainder
+// bullet. The enclosing header may be a plain priority label ("**P1 — fidelity**")
+// rather than "out of scope"/"large", so the bullet text itself is authoritative
+// when it records a decision to keep the behaviour (e.g. "decision: keep 501").
+var remainderNoFixRe = regexp.MustCompile(`(?i)(decision:\s*keep|\bno fix\b|keep documented|keep fail-loud|keep as-is|out of scope|by design|by-design|not planned)`)
+
 // parseRemainder extracts the debt-plan "What's actually left (authoritative)"
 // bullet list (strikethrough + DONE #N = closed; out-of-scope scope = deferred).
 func parseRemainder(content, source string) []*Item {
@@ -701,7 +707,7 @@ func parseRemainder(content, source string) []*Item {
 		switch {
 		case done:
 			it.DocState, it.Disposition = "done", "unknown"
-		case scopeDeferred:
+		case scopeDeferred || remainderNoFixRe.MatchString(low):
 			it.DocState, it.Disposition = "deferred", "no-fix"
 		default:
 			it.DocState, it.Disposition = "open", "fix"
