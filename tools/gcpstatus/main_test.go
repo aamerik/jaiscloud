@@ -76,6 +76,41 @@ func TestParseDocState(t *testing.T) {
 	}
 }
 
+func TestParseRemainderInlineNoFix(t *testing.T) {
+	md := "# Doc\n\n" +
+		"### What's actually left (authoritative)\n\n" +
+		"**P1 — fidelity (medium unless noted):**\n" +
+		"- BigQuery `routines`/`models`/`rowAccessPolicies` explicit 501s (§3.8) — **decision: keep 501** (stays `preview`).\n" +
+		"- A genuinely open gap (§9) with no decision recorded.\n\n" +
+		"**P2 — large / out of scope for v1.0:**\n" +
+		"- A header-scoped deferral.\n\n" +
+		"## Next\n"
+	items := parseRemainder(md, "test")
+	var inline, open, header *Item
+	for _, it := range items {
+		switch {
+		case strings.Contains(it.Gap, "rowAccessPolicies"):
+			inline = it
+		case strings.Contains(it.Gap, "genuinely open"):
+			open = it
+		case strings.Contains(it.Gap, "header-scoped"):
+			header = it
+		}
+	}
+	if inline == nil || open == nil || header == nil {
+		t.Fatalf("missing items (inline=%v open=%v header=%v): %+v", inline, open, header, items)
+	}
+	if inline.DocState != "deferred" || inline.Disposition != "no-fix" {
+		t.Fatalf("inline decision = (%q,%q), want (deferred,no-fix)", inline.DocState, inline.Disposition)
+	}
+	if open.DocState != "open" || open.Disposition != "fix" {
+		t.Fatalf("open bullet = (%q,%q), want (open,fix)", open.DocState, open.Disposition)
+	}
+	if header.DocState != "deferred" || header.Disposition != "no-fix" {
+		t.Fatalf("header scope = (%q,%q), want (deferred,no-fix)", header.DocState, header.Disposition)
+	}
+}
+
 func TestDispositionFrom(t *testing.T) {
 	cases := []struct {
 		verdict, section, want string
