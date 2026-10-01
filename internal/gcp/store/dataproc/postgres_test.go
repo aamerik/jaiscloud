@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"reflect"
 	"testing"
@@ -92,6 +93,64 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 	}
 	if gotJob.PlacementClusterUUID != "uuid-9" {
 		t.Fatalf("placement_cluster_uuid not preserved: %q", gotJob.PlacementClusterUUID)
+	}
+}
+
+// TestPostgresStoreWorkflowTemplateRoundTrip verifies the workflow template
+// table (create/get/version-bump/delete) and the snapshot round trip.
+func TestPostgresStoreWorkflowTemplateRoundTrip(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres workflow template test")
+	}
+	ctx := context.Background()
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	s := NewPostgresStore(pg.Pool())
+	s.Reset(ctx)
+
+	const def = `{"placement":{"managedCluster":{"clusterName":"c"}},"jobs":[{"stepId":"a","pysparkJob":{"mainPythonFileUri":"gs://b/a.py"}}]}`
+	if err := s.CreateWorkflowTemplate(ctx, "proj", "us-central1", WorkflowTemplate{TemplateID: "wf", Version: 1, Definition: []byte(def)}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := s.GetWorkflowTemplate(ctx, "proj", "us-central1", "wf")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Version != 1 || !jsonEqual(string(got.Definition), def) {
+		t.Fatalf("template = %+v", got)
+	}
+	updated, err := s.UpdateWorkflowTemplateAtomic(ctx, "proj", "us-central1", "wf", func(cur WorkflowTemplate) (WorkflowTemplate, error) {
+		cur.Version++
+		return cur, nil
+	})
+	if err != nil || updated.Version != 2 {
+		t.Fatalf("update = %+v (%v)", updated, err)
+	}
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if err := s.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got2, err := s.GetWorkflowTemplate(ctx, "proj", "us-central1", "wf")
+	if err != nil || got2.Version != 2 || !jsonEqual(string(got2.Definition), def) {
+		t.Fatalf("after snapshot = %+v (%v)", got2, err)
+	}
+
+	if err := s.DeleteWorkflowTemplate(ctx, "proj", "us-central1", "wf"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := s.GetWorkflowTemplate(ctx, "proj", "us-central1", "wf"); !errors.Is(err, ErrNoSuchWorkflowTemplate) {
+		t.Fatalf("get after delete = %v, want ErrNoSuchWorkflowTemplate", err)
 	}
 }
 
