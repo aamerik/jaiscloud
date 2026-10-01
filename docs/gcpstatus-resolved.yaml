@@ -160,3 +160,20 @@ entries:
     match: "Functions v2 deploy"
     pr: 216
     note: "resolved: v2 deploy end-to-end (GCS source upload + storageSource + build/stage + revisions) in #216; v2 ListRuntimes in #212"
+
+  # #291 implemented Cloud Scheduler v1 (SCH1) and explicitly documented the
+  # remaining unimplemented services — Cloud Tasks, Firebase Auth, GKE — as out
+  # of scope (SCH2). The floci compat report (historical/superseded) still
+  # carries these prose findings verbatim.
+  - source: "gcp-floci-compat-results"
+    match: "implement-or-explicitly-document-the-rem"
+    pr: 291
+    note: "resolved: Cloud Scheduler v1 shipped; Cloud Tasks/Firebase Auth/GKE documented out of scope in #291 (SCH1/SCH2)"
+  - source: "gcp-floci-compat-results"
+    match: "scheduler-4-cloud-scheduler-not-implemen"
+    pr: 291
+    note: "resolved: Cloud Scheduler v1 shipped in #291 (SCH1)"
+  - source: "gcp-floci-compat-results"
+    match: "not-implemented-cloud-tasks-cloud-schedu"
+    pr: 291
+    note: "resolved: Cloud Scheduler implemented; Cloud Tasks/Firebase Auth/GKE documented out of scope in #291 (SCH2)"
