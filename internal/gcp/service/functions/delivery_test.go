@@ -30,14 +30,19 @@ func (f fakeTargets) TargetsForEvent(context.Context, eventing.Event) []eventing
 	return f.targets
 }
 
-// fakeProvisioner records backing-Eventarc-trigger provisioning calls.
+// fakeProvisioner records backing-Eventarc-trigger provisioning calls. A
+// non-nil err makes EnsureFunctionTrigger fail, to exercise re-provision paths.
 type fakeProvisioner struct {
 	specs   []eventing.FunctionTriggerSpec
 	deleted []string
+	err     error
 }
 
 func (f *fakeProvisioner) EnsureFunctionTrigger(_ context.Context, spec eventing.FunctionTriggerSpec) (string, string, error) {
 	f.specs = append(f.specs, spec)
+	if f.err != nil {
+		return "", "", f.err
+	}
 	trigger := "projects/" + spec.Project + "/locations/" + spec.Location + "/triggers/functions-" + spec.FunctionID
 	sub := eventing.EventarcSubscriptionID(spec.Location, "functions-"+spec.FunctionID)
 	return trigger, sub, nil
@@ -323,6 +328,73 @@ func TestCreateFunctionProvisionsStorageTrigger(t *testing.T) {
 	}
 	if stored.EventTrigger == nil || stored.EventTrigger.Trigger == "" || stored.EventTrigger.Subscription == "" {
 		t.Fatalf("backing trigger not persisted: %+v", stored.EventTrigger)
+	}
+}
+
+// TestUpdateFailedReprovisionPreservesBackingTrigger covers FP10: a PATCH that
+// re-materializes an event trigger must not clear the previously provisioned
+// backing trigger/subscription when the re-provision fails — otherwise the
+// delivery engine loses the dead-letter surface of the still-existing backing
+// subscription.
+func TestUpdateFailedReprovisionPreservesBackingTrigger(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvisioner{}
+	fail := &failingExecutor{}
+	subs := &fakeSubs{dlqTopic: "dlq", maxAttempts: 2, ok: true}
+	s, fs := newDeliveryService(t, WithTriggerProvisioner(prov), WithExecutor(fail), WithSubscriptions(subs))
+	createEventFunction(t, s, "fn", map[string]any{
+		"eventType": "google.pubsub.topic.publish", "resource": "projects/proj/topics/t",
+		"failurePolicy": map[string]any{"retry": map[string]any{}},
+	})
+	before, err := fs.GetFunction(ctx, "proj", "us-central1", "fn")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if before.EventTrigger == nil || before.EventTrigger.Trigger == "" || before.EventTrigger.Subscription == "" {
+		t.Fatalf("initial backing trigger not persisted: %+v", before.EventTrigger)
+	}
+
+	// A later PATCH changes the source resource while the provisioner is down.
+	prov.err = errors.New("provisioner unavailable")
+	in := FunctionInputFromMap(map[string]any{
+		"runtime": "nodejs20", "entryPoint": "handler",
+		"eventTrigger": map[string]any{
+			"eventType": "google.pubsub.topic.publish", "resource": "projects/proj/topics/t2",
+			"failurePolicy": map[string]any{"retry": map[string]any{}},
+		},
+	}, V1)
+	if _, _, err := s.UpdateFunction(ctx, "proj", "us-central1", "fn", in, nil, V1); err != nil {
+		t.Fatalf("UpdateFunction: %v", err)
+	}
+
+	after, err := fs.GetFunction(ctx, "proj", "us-central1", "fn")
+	if err != nil {
+		t.Fatalf("get after: %v", err)
+	}
+	if after.EventTrigger == nil {
+		t.Fatal("event trigger lost on update")
+	}
+	if after.EventTrigger.Resource != "projects/proj/topics/t2" {
+		t.Fatalf("event trigger metadata not updated: %+v", after.EventTrigger)
+	}
+	if after.EventTrigger.Trigger != before.EventTrigger.Trigger || after.EventTrigger.Subscription != before.EventTrigger.Subscription {
+		t.Fatalf("failed re-provision cleared the backing trigger: before=%+v after=%+v",
+			before.EventTrigger, after.EventTrigger)
+	}
+
+	// The preserved backing subscription still resolves its dead-letter surface:
+	// an exhausted delivery on the updated source still forwards to the topic.
+	s.DispatchEvent(ctx, eventing.Event{
+		Project: "proj", EventType: eventing.TypePubSubPublish,
+		Resource: "projects/proj/topics/t2", Source: eventing.SourcePubSub,
+		EventID: "m1", Data: []byte("payload"),
+	})
+	got := deliveries(t, s)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 delivery, got %d", len(got))
+	}
+	if got[0].Status != functionsstore.DeliveryDeadLetter || got[0].DeadLetterTopic != "dlq" {
+		t.Fatalf("preserved subscription did not resolve its dead-letter surface: %+v", got[0])
 	}
 }
 
