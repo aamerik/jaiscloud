@@ -60,31 +60,53 @@ func cancelKey(project, region, jobID string) string {
 // error on its own).
 var waitTerminalFn = sparkhelpers.WaitTerminalWith
 
-// runJob executes a stored job via sparkhelpers.SubmitClientMode. Runs in a
-// goroutine; the terminal state is written back to the jobs store (first-write
-// wins via the store UpdateJob) and a terminal snapshot is persisted for
-// post-GC rehydration parity. metastoreEndpoint is the cluster's Hive Metastore
-// thrift endpoint ("" when the cluster has no attachment); it is injected as a
-// spark-submit conf so driver and executor pods share the attachment.
+// runJob registers the job's cancel func and executes it. Registration happens
+// synchronously before runJobWithCtx blocks (or, when called from submitJob,
+// before the executor goroutine is launched), so a CancelJob racing job
+// submission always finds the cancel func.
+func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint string) {
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+	key := cancelKey(project, region, j.JobID)
+	s.registerCancel(key, runCancel)
+	defer s.unregisterCancel(key)
+	s.runJobWithCtx(runCtx, project, region, j, metastoreEndpoint)
+}
+
+// registerCancel records a running job's cancel func so a racing CancelJob
+// finds it. unregisterCancel removes it once the executor has stopped.
+func (s *Service) registerCancel(key string, cancel context.CancelFunc) {
+	s.cancelsMu.Lock()
+	s.cancels[key] = cancel
+	s.cancelsMu.Unlock()
+}
+
+func (s *Service) unregisterCancel(key string) {
+	s.cancelsMu.Lock()
+	delete(s.cancels, key)
+	s.cancelsMu.Unlock()
+}
+
+// runJobWithCtx executes a stored job via sparkhelpers.SubmitClientMode. Runs
+// in a goroutine; the terminal state is written back to the jobs store
+// (first-write wins via the store UpdateJob) and a terminal snapshot is
+// persisted for post-GC rehydration parity. metastoreEndpoint is the cluster's
+// Hive Metastore thrift endpoint ("" when the cluster has no attachment); it is
+// injected as a spark-submit conf so driver and executor pods share the
+// attachment.
+//
+// The caller owns ctx's cancel func and its registration in s.cancels. submitJob
+// registers before launching the goroutine so a CancelJob landing in the
+// submit/launch window cancels the driver instead of leaving it running.
 //
 // When the job carries a restart policy (Job.scheduling) a non-zero driver exit
 // restarts the driver within maxFailuresPerHour/maxFailuresTotal and the
 // documented thrash rule (>4 non-zero exits in a 10-minute window). Success is
 // strictly driver exit 0. Only k8s mode runs here; mock mode has no executor.
-func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint string) {
+func (s *Service) runJobWithCtx(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint string) {
 	jobID := j.JobID
+	runCtx := ctx
 
-	runCtx, runCancel := context.WithCancel(ctx)
-	defer runCancel()
-	key := cancelKey(project, region, jobID)
-	s.cancelsMu.Lock()
-	s.cancels[key] = runCancel
-	s.cancelsMu.Unlock()
-	defer func() {
-		s.cancelsMu.Lock()
-		delete(s.cancels, key)
-		s.cancelsMu.Unlock()
-	}()
 	// Safety net: if the executor goroutine exits while the job is still
 	// ATTEMPT_FAILURE (service shutdown, crash, a lost goroutine) and no read
 	// will ever settle it, move it to ERROR so a poller cannot hang on a

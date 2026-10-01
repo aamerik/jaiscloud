@@ -553,3 +553,49 @@ func TestRunJob_WaitError_ReapsDriverAndFails(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, jobs.Items, "driver k8s Job must be reaped on a non-cancel wait error")
 }
+
+// TestSubmitJob_RegistersCancelBeforeReturn pins STR5: submitJob used to spawn
+// the executor goroutine and return, while runJob registered its cancel func
+// inside the goroutine a moment later. A CancelJob landing in that window moved
+// the job to CANCEL_PENDING but found no cancel func, so the driver started and
+// kept running (STR3's reap never fired because the context was never
+// cancelled). Registration must therefore be synchronous with submission.
+func TestSubmitJob_RegistersCancelBeforeReturn(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	p := newK8sProvider(t, client)
+	ctx := context.Background()
+	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", ClusterInput{}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	// A watcher that never emits keeps the executor in its terminal wait, so
+	// the job cannot finish before we inspect the cancel map.
+	fw := prependPodWatch(t, client)
+	defer fw.Stop()
+
+	j, err := p.SubmitJob(ctx, "proj", "us-central1", JobInputFromMap(map[string]any{
+		"reference":  map[string]any{"jobId": "j-cancel-reg"},
+		"placement":  map[string]any{"clusterName": "c1"},
+		"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
+	}))
+	require.NoError(t, err)
+
+	// Registration must already be visible when SubmitJob returns.
+	key := cancelKey("proj", "us-central1", j.JobID)
+	p.cancelsMu.Lock()
+	_, ok := p.cancels[key]
+	p.cancelsMu.Unlock()
+	require.True(t, ok, "cancel func must be registered before SubmitJob returns")
+
+	// A cancel issued immediately after submit must reach the executor: the
+	// driver k8s Job is reaped (submit -> cancel -> reap), and the job settles
+	// CANCELLED.
+	_, err = p.CancelJob(ctx, "proj", "us-central1", j.JobID)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		jobs, listErr := client.BatchV1().Jobs("jaiscloud").List(ctx, metav1.ListOptions{})
+		return listErr == nil && len(jobs.Items) == 0
+	}, 5*time.Second, 10*time.Millisecond, "an immediate CancelJob must stop and reap the driver")
+
+	final := advanceJobToTerminal(t, p, "proj", "us-central1", j.JobID)
+	require.Equal(t, "CANCELLED", final.Status.State)
+}
