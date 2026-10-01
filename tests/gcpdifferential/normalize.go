@@ -73,6 +73,11 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		// the longest-first sort makes the collection win.
 		{names.FSCollection, "<fsCollection>"},
 		{names.FSDoc, "<fsDoc>"},
+		// Metadata-only control-plane probes (G6): always-absent resources whose
+		// names carry the run suffix; fold them so a golden is stable.
+		{names.ComputeInstance, "<computeInstance>"},
+		{names.SQLInstance, "<sqlInstance>"},
+		{names.RedisInstance, "<redisInstance>"},
 		// A missing service-account probe is an email-shaped 404 path; fold it
 		// too so a golden never carries an "@" or the gserviceaccount domain.
 		{"missing-" + suffix + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
@@ -94,6 +99,20 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 	// shorter substring of it.
 	sort.SliceStable(repls, func(i, j int) bool { return len(repls[i][0]) > len(repls[j][0]) })
 	return &Normalizer{repls: repls}
+}
+
+// operationIDSuffix matches a trailing long-running-operation id in a request
+// path (e.g. ".../operations/operation-1789941434240-..."). Real GCP mints a
+// fresh id per operation, so an LRO poll path would otherwise churn the golden
+// on every recording.
+var operationIDSuffix = regexp.MustCompile(`/operations/[^/]+$`)
+
+// Path normalizes a request path: textual resource substitution plus folding a
+// trailing long-running-operation id. Exchange.Path is a report label (matching
+// is by Service/Op), so folding only removes per-run churn from committed
+// goldens.
+func (n *Normalizer) Path(p string) string {
+	return operationIDSuffix.ReplaceAllString(n.substitute(p), "/operations/<operation>")
 }
 
 // substitute applies textual replacements.
@@ -296,6 +315,9 @@ var scopedListPlaceholders = map[string]string{
 	"accounts": "<serviceAccount>",
 	// Firestore: scoped to this run's collection.
 	"documents": "<fsCollection>",
+	// Memorystore: scoped to this run's (always-absent) instance, so unrelated
+	// real-project instances cannot pollute the empty-list golden.
+	"instances": "<redisInstance>",
 }
 
 // value normalizes a decoded JSON value, rewriting volatile fields and sorting

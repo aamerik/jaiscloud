@@ -188,6 +188,55 @@ var triageRules = []TriageRule{
 		Location: "primary.protectionLevel",
 		Reason:   "protection level is SOFTWARE (the default) and the same key's versionTemplate.protectionLevel already returns it, so absence loses no information",
 	},
+
+	// ── Compute: cosmetic list-response metadata ─────────────────────────────
+	// A compute list response carries its own synthetic id and selfLink; the
+	// emulator returns the items (each with its resource name) but omits those
+	// two output-only fields, exactly as the BigQuery selfLink rule accepts.
+	// Scoped to the op so a genuine missing id/selfLink on a compute *resource*
+	// still surfaces as open.
+	{
+		Service:  "compute",
+		Op:       "compute_instances_list",
+		Kind:     "missing_field",
+		Location: "response.id",
+		Reason:   "the list response's own id is an output-only synthetic identifier reconstructed from the request path; items carry the resource names and no official client requires it",
+	},
+	{
+		Service:  "compute",
+		Op:       "compute_instances_list",
+		Kind:     "missing_field",
+		Location: "response.selfLink",
+		Reason:   "cosmetic output-only list URL; no official client requires it",
+	},
+
+	// ── Authz paths: not enforced by design (G1, docs/GA.md §10) ─────────────
+	// Each *_noauth scenario is sent without an Authorization header. Real GCP
+	// rejects it (401 UNAUTHENTICATED) while the emulator serves the request, so
+	// the status and the whole body differ. This is the documented accepted
+	// risk, recorded (not silently dropped) with an explicit reason. The rules
+	// are scoped to the *_noauth op so a genuine authz divergence elsewhere
+	// still surfaces as open.
+	{
+		Service: "storage",
+		Op:      "storage_buckets_list_noauth",
+		Reason:  "authz is not enforced by design (G1, docs/GA.md §10): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
+	},
+	{
+		Service: "compute",
+		Op:      "compute_instances_list_noauth",
+		Reason:  "authz is not enforced by design (G1, docs/GA.md §10): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
+	},
+	{
+		Service: "sqladmin",
+		Op:      "sql_instances_list_noauth",
+		Reason:  "authz is not enforced by design (G1, docs/GA.md §10): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
+	},
+	{
+		Service: "redis",
+		Op:      "redis_instances_list_noauth",
+		Reason:  "authz is not enforced by design (G1, docs/GA.md §10): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
+	},
 }
 
 // bigQueryQueryStatFields are the output-only job-statistics/timing members of a
@@ -207,6 +256,7 @@ var bigQueryQueryStatFields = []string{
 	"response.startTime",
 	"response.totalBytesBilled",
 	"response.totalBytesProcessed",
+	"response.totalSlotMs",
 }
 
 func init() {

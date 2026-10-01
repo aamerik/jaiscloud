@@ -60,6 +60,12 @@ type Scenario struct {
 	Path        string
 	Body        string
 	ContentType string
+	// NoAuth, when true, sends the scenario without an Authorization header.
+	// Record mode then captures real GCP's unauthenticated (UNAUTHENTICATED /
+	// PERMISSION_DENIED) response while replay captures the emulator's — whose
+	// authz is not enforced by design (docs/GA.md §10). The resulting
+	// divergence is accepted by a triage rule, making the authz gap explicit.
+	NoAuth bool
 	// Save maps a variable name to a dotted path into the response JSON whose
 	// scalar value is captured for use by later scenarios (e.g. the ciphertext
 	// returned by KMS encrypt feeding KMS decrypt).
@@ -107,6 +113,11 @@ var serviceBaseURL = map[string]string{
 	// Firestore's REST surface is served under
 	// /v1/projects/{project}/databases/{database}/documents on this origin.
 	"firestore": "https://firestore.googleapis.com",
+	// Synthetic/metadata-only control planes. Their method paths embed the
+	// service prefix (compute/v1, sql/v1beta4) or the shared /v1/ shape (redis).
+	"compute":  "https://compute.googleapis.com",
+	"sqladmin": "https://sqladmin.googleapis.com",
+	"redis":    "https://redis.googleapis.com",
 }
 
 // runSuffix returns a per-run unique, resource-name-safe suffix. Record and
@@ -138,6 +149,12 @@ type ResourceNames struct {
 	// Firestore: one collection and one document in the (default) database.
 	FSCollection string
 	FSDoc        string
+	// Metadata-only control planes: one probed (always-absent) resource each,
+	// used by the read-only smoke to capture the 404/error envelope without
+	// creating a real VM / Cloud SQL / Memorystore instance.
+	ComputeInstance string
+	SQLInstance     string
+	RedisInstance   string
 }
 
 // Names derives the run's resource identifiers from suffix.
@@ -159,6 +176,10 @@ func Names(suffix string) ResourceNames {
 
 		FSCollection: "conf_docs_" + suffix,
 		FSDoc:        "doc_" + suffix,
+
+		ComputeInstance: "conf-vm-" + suffix,
+		SQLInstance:     "conf-sql-" + suffix,
+		RedisInstance:   "conf-redis-" + suffix,
 	}
 }
 
@@ -351,6 +372,50 @@ func Scenarios(project, suffix string) []Scenario {
 		Scenario{Op: "fs_docs_list", Service: "firestore", Method: "GET", Path: fsBase},
 		Scenario{Op: "fs_doc_get_missing", Service: "firestore", Method: "GET", Path: fsBase + "/missing-" + suffix},
 		Scenario{Op: "fs_doc_delete", Service: "firestore", Method: "DELETE", Path: fsDoc},
+	)
+
+	// ─── Metadata-only control planes (G6 / G4) ──────────────────────────────
+	// Read-only smoke: the emulator's compute/cloudsql/memorystore surfaces are
+	// control-plane/metadata only (G4 = declared no fix), so the differential
+	// validates routing, the empty-list shape and the 404 error envelope —
+	// never a data plane. No resource is created, so no cleanup is needed.
+	// Compute's zone is a stable, always-present geography.
+	computeZone := "us-central1-a"
+	sc = append(sc,
+		Scenario{Op: "compute_instances_list", Service: "compute", Method: "GET",
+			Path: "/compute/v1/projects/" + project + "/zones/" + computeZone + "/instances"},
+		Scenario{Op: "compute_instance_get_missing", Service: "compute", Method: "GET",
+			Path: "/compute/v1/projects/" + project + "/zones/" + computeZone + "/instances/" + n.ComputeInstance},
+	)
+	sc = append(sc,
+		Scenario{Op: "sql_instances_list", Service: "sqladmin", Method: "GET",
+			Path: "/sql/v1beta4/projects/" + project + "/instances"},
+		Scenario{Op: "sql_instance_get_missing", Service: "sqladmin", Method: "GET",
+			Path: "/sql/v1beta4/projects/" + project + "/instances/" + n.SQLInstance},
+	)
+	sc = append(sc,
+		Scenario{Op: "redis_instances_list", Service: "redis", Method: "GET",
+			Path: "/v1/projects/" + project + "/locations/us-central1/instances"},
+		Scenario{Op: "redis_instance_get_missing", Service: "redis", Method: "GET",
+			Path: "/v1/projects/" + project + "/locations/us-central1/instances/" + n.RedisInstance},
+	)
+
+	// ─── Authz paths (G6 / G1) ────────────────────────────────────────────────
+	// The recorder authenticates as the parity-project owner, so a low-privilege
+	// principal is unavailable; the only authz differential it can capture is an
+	// unauthenticated call. Real GCP rejects it (401 UNAUTHENTICATED) while the
+	// emulator serves it — authz is documented as not enforced (G1,
+	// docs/GA.md §10). The divergences are accepted, with that reason, by the
+	// triage rules in triage.go, making the accepted risk explicit and gated.
+	sc = append(sc,
+		Scenario{Op: "storage_buckets_list_noauth", Service: "storage", Method: "GET",
+			Path: "/storage/v1/b?project=" + project, NoAuth: true},
+		Scenario{Op: "compute_instances_list_noauth", Service: "compute", Method: "GET",
+			Path: "/compute/v1/projects/" + project + "/zones/" + computeZone + "/instances", NoAuth: true},
+		Scenario{Op: "sql_instances_list_noauth", Service: "sqladmin", Method: "GET",
+			Path: "/sql/v1beta4/projects/" + project + "/instances", NoAuth: true},
+		Scenario{Op: "redis_instances_list_noauth", Service: "redis", Method: "GET",
+			Path: "/v1/projects/" + project + "/locations/us-central1/instances", NoAuth: true},
 	)
 
 	return sc
