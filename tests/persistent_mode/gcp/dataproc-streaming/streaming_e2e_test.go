@@ -358,6 +358,7 @@ func submitStreamingJob(t *testing.T, base, bucket, cluster, jobID string) {
 					"spark.driver.memory":                    "512m",
 					"spark.executor.memory":                  "512m",
 					"spark.executor.instances":               "1",
+					"spark.sql.shuffle.partitions":           "1",
 				},
 			},
 		},
@@ -398,7 +399,9 @@ func TestDataprocStreamingK3d(t *testing.T) {
 	requireK3d(t)
 
 	base, stop := startPortForward(t)
-	defer stop()
+	// Register the port-forward teardown first so it runs last (t.Cleanup is
+	// LIFO): the resource cleanups below still need the forward.
+	t.Cleanup(stop)
 
 	// Unique per run so re-runs never collide with a prior run's bucket,
 	// cluster or job id in the shared Postgres-backed store.
