@@ -212,7 +212,11 @@ evidence for any of them.
       upgrade/traffic control plane (setup/redirect/rollback/commit/abort/detach) is modelled over
       REST, but build failures and a real Gen2 build pipeline must be exercised on real GCP.
 - [ ] **Quotas, throttling, and retry/backoff.** No general rate-limit or quota plane is
-      modelled, so most backoff and quota-exhaustion paths are never exercised locally. Cloud
+      modelled, so most backoff and quota-exhaustion paths are never exercised locally. An
+      **opt-in** injector (`JAISCLOUD_GCP_THROTTLE`, default `off`) refuses matching REST + gRPC
+      requests before dispatch with a retryable `429 RESOURCE_EXHAUSTED`/`503 UNAVAILABLE`, a
+      `Retry-After` header and a `google.rpc.RetryInfo` detail (`make test-throttle-gcp` exercises
+      it end-to-end); it injects **synthetic** failures, not real quota values. Cloud
       Functions instance/concurrency configuration (`minInstanceCount`/`maxInstanceCount`/
       `maxInstanceRequestConcurrency`/`availableCpu`) is stored, range-validated, and surfaced,
       and a configured `maxInstanceCount` (× `maxInstanceRequestConcurrency`) plus a
@@ -254,6 +258,9 @@ These are fixed by policy, not by the fidelity matrix:
   IAM decision as unverified until tested on real GCP.
 - **Frozen clock** — deterministic-time mode is a test affordance. Business logic must not
   depend on a frozen/offset clock.
+- **Throttle/quota injection** — `JAISCLOUD_GCP_THROTTLE` is an emulator-only failure injector
+  (default `off`) that injects synthetic retryable failures, never real quota values. Production
+  code must not depend on its presence or its limits; quota behaviour must be verified on real GCP.
 
 A useful guard is a lint/test that rejects references to `/_jaiscloud/` and clock control
 in production packages.
