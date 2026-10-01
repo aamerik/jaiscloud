@@ -16,6 +16,11 @@ import (
 
 const tailLogsTimeout = 60 * time.Second
 
+// driverReapTimeout bounds the best-effort deletion of a cancelled job's
+// client-mode k8s Job. CancelJob's context is already cancelled, so the reap
+// runs on a fresh bounded context and must not block job shutdown.
+const driverReapTimeout = 30 * time.Second
+
 // driverLogLimit caps how many driver stdout/stderr bytes the emulator buffers
 // in memory (and stages into GCS). A chatty or looping driver must not exhaust
 // emulator memory; the cap is a fidelity tradeoff (the tail beyond the limit is
@@ -196,7 +201,12 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 		final, err := sparkhelpers.WaitTerminalWith(runCtx, s.k8sClient, handle, sparkhelpers.TerminalOptions{StrictExitCode: strict})
 		if err != nil {
 			if runCtx.Err() != nil {
-				return // cancelled by CancelJob
+				// Cancelled (CancelJob, or service shutdown): the driver is
+				// still running, so delete its client-mode k8s Job (and pod)
+				// before returning — otherwise the driver keeps executing after
+				// the job reports CANCELLED.
+				s.reapCancelledDriver(handle)
+				return
 			}
 			slog.Warn("dataproc: WaitTerminal failed", "job", jobID, "attempt", attempt, "err", err)
 			s.persistSnapshot(runCtx, project, region, jobID, k8shelpers.BuildSnapshotFromError(err))
@@ -250,6 +260,22 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 		if cancelErr := k8shelpers.Cancel(runCtx, s.k8sClient, handle); cancelErr != nil {
 			slog.Warn("dataproc: failed to reap restart attempt", "job", jobID, "attempt", attempt, "err", cancelErr)
 		}
+	}
+}
+
+// reapCancelledDriver deletes the client-mode k8s Job (and, via cascade, the
+// driver pod) when a running job's context is cancelled (CancelJob, or service
+// shutdown). runCtx is already cancelled at this point, so a bounded background
+// context is used; the reaping is best-effort and logged, matching the EMR-on-EKS
+// cancel path.
+func (s *Service) reapCancelledDriver(handle k8shelpers.JobHandle) {
+	if handle.JobName == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), driverReapTimeout)
+	defer cancel()
+	if err := k8shelpers.Cancel(ctx, s.k8sClient, handle); err != nil {
+		slog.Warn("dataproc: failed to delete cancelled driver job", "job", handle.JobName, "err", err)
 	}
 }
 

@@ -177,7 +177,8 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   blob PVC; runs the emulator with a Postgres DSN on REST `:8080` / gRPC `:8081`, and wires the
   Dataproc Spark executor to the in-cluster GCS endpoint) and
   [`deploy/k8s/lakehouse/pipeline.yaml`](../deploy/k8s/lakehouse/pipeline.yaml) (the Medallion
-  ELT Job that drives GCS + Dataproc). k3d e2e: `make test-e2e-lakehouse-k3d`.
+  ELT Job that drives GCS + Dataproc). k3d e2e: `make test-e2e-lakehouse-k3d` and the
+  Structured Streaming smoke `make test-dataproc-streaming-k8s`.
 - **Ports** — REST `:8080`, gRPC `:8081` (h2c, plaintext).
 - **Config surface** — flags with `JAISCLOUD_*` env equivalents: `--port`/`JAISCLOUD_PORT`
   (`8080`), `--grpc-port` (`8081`), `--transports`/`JAISCLOUD_TRANSPORTS` (`rest,grpc`; also
