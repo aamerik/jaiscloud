@@ -13,10 +13,11 @@ import (
 // pipeline entirely inside the k3d cluster and verifies the published data
 // product.
 //
-// Ingest seeds raw events into the emulator's GCS; Transform and Derive are
-// real Spark jobs submitted through the emulator's Dataproc API and executed as
-// client-mode pods in the cluster; Publish copies the curated output to the
-// serving bucket and writes a manifest.
+// Ingest seeds raw events into the emulator's GCS; Transform is a real PySpark
+// job and Derive a real Spark SQL (sparkSqlJob) job, both submitted through the
+// emulator's Dataproc API and executed as client-mode pods in the cluster (so
+// the SQL hop exercises the real `spark-sql` engine); Publish copies the curated
+// output to the serving bucket and writes a manifest.
 //
 // The test asserts both halves of the contract: the in-cluster Job's own
 // success summary, and the actual bytes in the emulator's GCS (read back
@@ -52,6 +53,14 @@ func TestLakehousePipelineK3d(t *testing.T) {
 	}
 	if got, want := strings.Join(sum.Stages, ","), "ingest,transform,derive,publish"; got != want {
 		t.Errorf("stages = %q, want %q", got, want)
+	}
+	// The Derive hop must have run as a sparkSqlJob (this e2e's purpose: the real
+	// spark-sql engine, not just the job API), with Transform still a pysparkJob.
+	if got := sum.JobTypes["derive"]; got != "sparkSqlJob" {
+		t.Errorf("derive job type = %q, want sparkSqlJob (job_types=%v)", got, sum.JobTypes)
+	}
+	if got := sum.JobTypes["transform"]; got != "pysparkJob" {
+		t.Errorf("transform job type = %q, want pysparkJob (job_types=%v)", got, sum.JobTypes)
 	}
 	if sum.InputRows != wantRecords {
 		t.Errorf("input_rows = %d, want %d", sum.InputRows, wantRecords)
