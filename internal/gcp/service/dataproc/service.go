@@ -50,6 +50,7 @@ type Service struct {
 	gcpEmulator *sparkgcp.GCPEmulatorConfig
 
 	sparkSubmitPath string
+	sparkSqlPath    string
 
 	instanceID         string
 	serviceAccountName string
@@ -151,6 +152,13 @@ func WithSparkImage(image string) Option {
 // /opt/spark/bin/spark-submit, off PATH).
 func WithSparkSubmitPath(path string) Option {
 	return func(s *Service) { s.sparkSubmitPath = path }
+}
+
+// WithSparkSqlPath overrides the spark-sql binary path used for sparkSqlJob
+// driver pods (default: a "spark-sql" sibling of the spark-submit path, or
+// "spark-sql" when that is unset).
+func WithSparkSqlPath(path string) Option {
+	return func(s *Service) { s.sparkSqlPath = path }
 }
 
 // WithGCPEmulator wires GCP emulator endpoint config into Spark driver pods.

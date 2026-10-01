@@ -15,7 +15,7 @@ import (
 // (unsupportedJobTypes). Kept as an explicit list so the wire-level matrix is
 // pinned independently of the service's own lookup table.
 var unsupportedJobTypesAtSubmit = []string{
-	"hadoopJob", "hiveJob", "pigJob", "sparkSqlJob",
+	"hadoopJob", "hiveJob", "pigJob",
 	"prestoJob", "trinoJob", "flinkJob",
 }
 
@@ -69,6 +69,7 @@ func TestSubmitJob_JobTypeMatrix(t *testing.T) {
 		{"sparkJob", `{"mainJarFileUri":"gs://b/a.jar"}`},
 		{"pysparkJob", `{"mainPythonFileUri":"gs://b/main.py"}`},
 		{"sparkRJob", `{"mainRFileUri":"gs://b/main.R"}`},
+		{"sparkSqlJob", `{"queryList":{"queries":["SELECT 1"]}}`},
 	}
 	for _, tc := range supported {
 		tc := tc

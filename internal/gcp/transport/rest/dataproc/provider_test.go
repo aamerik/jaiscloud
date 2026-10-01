@@ -403,7 +403,7 @@ func TestSubmitJob_MissingPlacement(t *testing.T) {
 	}
 }
 
-func TestSubmitJob_UnsupportedSparkSqlAndExtraTypes(t *testing.T) {
+func TestSubmitJob_UnsupportedExtraTypes(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
@@ -411,14 +411,12 @@ func TestSubmitJob_UnsupportedSparkSqlAndExtraTypes(t *testing.T) {
 		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
 	}))
 
-	for _, typ := range []string{"sparkSqlJob", "prestoJob", "trinoJob", "flinkJob"} {
+	for _, typ := range []string{"prestoJob", "trinoJob", "flinkJob"} {
 		job := map[string]any{
 			"reference": map[string]any{"jobId": "j-" + typ},
 			"placement": map[string]any{"clusterName": "c1"},
 		}
 		switch typ {
-		case "sparkSqlJob":
-			job["sparkSqlJob"] = map[string]any{"queryFileUri": "gs://b/q.sql"}
 		case "prestoJob":
 			job["prestoJob"] = map[string]any{"queryFileUri": "gs://b/q.sql"}
 		case "trinoJob":
@@ -440,6 +438,36 @@ func TestSubmitJob_UnsupportedSparkSqlAndExtraTypes(t *testing.T) {
 		if details == "" || !strings.Contains(details, typ) {
 			t.Fatalf("%s: expected details naming the type, got %q", typ, details)
 		}
+	}
+}
+
+// TestSubmitJob_SparkSqlJobAccepted pins that sparkSqlJob is no longer
+// fail-loud: it is accepted and left non-terminal by the mock executor, and the
+// type-job body is echoed back.
+func TestSubmitJob_SparkSqlJobAccepted(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+	}))
+
+	resp, err := p.SubmitJob(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{"job": map[string]any{
+			"reference":   map[string]any{"jobId": "j-sql"},
+			"placement":   map[string]any{"clusterName": "c1"},
+			"sparkSqlJob": map[string]any{"queryList": map[string]any{"queries": []any{"SELECT 1"}}},
+		}},
+	}))
+	if err != nil {
+		t.Fatalf("SubmitJob: %v", err)
+	}
+	if got := resp.Data["status"].(map[string]any)["state"]; got == "ERROR" {
+		t.Fatalf("sparkSqlJob must not fail loud, got %v", resp.Data["status"])
+	}
+	if resp.Data["sparkSqlJob"] == nil {
+		t.Fatalf("expected sparkSqlJob echoed in response, got %v", resp.Data)
 	}
 }
 

@@ -103,6 +103,22 @@ func TestSDKDataproc(t *testing.T) {
 	require.Equal(t, "DONE", got.Status.State)
 	require.Equal(t, clusterName, got.Placement.ClusterName)
 
+	// Submit a sparkSqlJob. It runs the Spark SQL CLI in k8s mode (simulated
+	// to DONE in mock mode); either way it must not fail loud.
+	sqlID := unique("sql")
+	sqlJob, err := svc.Projects.Regions.Jobs.Submit(project, region, &dataproc.SubmitJobRequest{
+		Job: &dataproc.Job{
+			Reference: &dataproc.JobReference{ProjectId: project, JobId: sqlID},
+			Placement: &dataproc.JobPlacement{ClusterName: clusterName},
+			SparkSqlJob: &dataproc.SparkSqlJob{
+				QueryList: &dataproc.QueryList{Queries: []string{"SELECT 1"}},
+			},
+		},
+	}).Do()
+	require.NoError(t, err)
+	require.Equal(t, "PENDING", sqlJob.Status.State)
+	require.Equal(t, "DONE", pollJob(t, svc, project, region, sqlID).Status.State)
+
 	// Submit an unsupported hadoop job → ERROR (fail-loud, never silent).
 	hadoopID := unique("hadoop")
 	hadoop, err := svc.Projects.Regions.Jobs.Submit(project, region, &dataproc.SubmitJobRequest{

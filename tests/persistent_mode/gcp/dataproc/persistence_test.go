@@ -221,6 +221,7 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 	const region = "us-central1"
 	const clusterName = "exp-cluster"
 	const doneJob = "exp-job-done"
+	const sqlJob = "exp-job-sql"
 	const errJob = "exp-job-error"
 	base := "/v1/projects/" + project + "/regions/" + region
 
@@ -314,6 +315,20 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("done job has no driverControlFilesUri: %s", body)
 	}
 	driverOutputObject(t, host, strField(doneObj, "driverOutputResourceUri"), doneJob)
+
+	// ── Submit a mock-mode sparkSqlJob (now supported; walks to DONE) ─────────
+	code, body = doRequest(t, host, "POST", base+"/jobs:submit",
+		[]byte(`{"job":{"reference":{"projectId":"`+project+`","jobId":"`+sqlJob+`"},"placement":{"clusterName":"`+clusterName+`"},"sparkSqlJob":{"queryList":{"queries":["SELECT 1"]}}}}`),
+		"application/json")
+	if code != http.StatusOK {
+		t.Fatalf("submit sparkSql job: got HTTP %d body %s", code, body)
+	}
+	if state := strField(jsonObj(t, body), "status", "state"); state != "PENDING" {
+		t.Fatalf("expected PENDING sparkSql job, got state %q body %s", state, body)
+	}
+	if state := strField(pollJobTerminal(t, host, base, sqlJob), "status", "state"); state != "DONE" {
+		t.Fatalf("expected DONE sparkSql job, got state %q", state)
+	}
 
 	// ── Submit an unsupported job type → ERROR with terminal details ─────────
 	code, body = doRequest(t, host, "POST", base+"/jobs:submit",
