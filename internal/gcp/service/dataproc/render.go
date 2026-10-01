@@ -96,6 +96,20 @@ func jobStatusMap(s dpstore.JobStatus) map[string]any {
 	return out
 }
 
+// jobSchedulingMap renders a job's restart policy. Zero-valued counters are
+// omitted (protojson omits zero int32 fields), so an explicitly-present but
+// zero policy renders as an empty object.
+func jobSchedulingMap(s *dpstore.JobScheduling) map[string]any {
+	out := map[string]any{}
+	if s.MaxFailuresPerHour != 0 {
+		out["maxFailuresPerHour"] = s.MaxFailuresPerHour
+	}
+	if s.MaxFailuresTotal != 0 {
+		out["maxFailuresTotal"] = s.MaxFailuresTotal
+	}
+	return out
+}
+
 // JobJSON renders a stored Job as a dataproc.v1.Job wire map.
 func JobJSON(j dpstore.Job) map[string]any {
 	placement := map[string]any{"clusterName": j.PlacementClusterName}
@@ -127,6 +141,9 @@ func JobJSON(j dpstore.Job) map[string]any {
 	}
 	if j.Labels != nil {
 		out["labels"] = j.Labels
+	}
+	if j.Scheduling != nil {
+		out["scheduling"] = jobSchedulingMap(j.Scheduling)
 	}
 	if len(j.StatusHistory) > 0 {
 		history := make([]any, 0, len(j.StatusHistory))

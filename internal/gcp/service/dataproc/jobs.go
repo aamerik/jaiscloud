@@ -30,6 +30,11 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 	if in.PlacementClusterName == "" {
 		return dpstore.Job{}, invalidArgument("missing placement.clusterName")
 	}
+	// scheduling is optional; when present its counters must be within the API
+	// maxima (0 = the default "no restarts").
+	if err := validateScheduling(in.Scheduling); err != nil {
+		return dpstore.Job{}, err
+	}
 
 	j := jobToStore(project, region, in)
 	cluster, err := s.store.GetCluster(ctx, project, region, j.PlacementClusterName)

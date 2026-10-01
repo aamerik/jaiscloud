@@ -256,9 +256,10 @@ func eventsTopicFromLabels(labels map[string]string, fallback string) string {
 // jobAttemptNumber reports the 1-based ordinal of the attempt a job transition
 // belongs to. An ATTEMPT_FAILURE history entry starts a new attempt, except
 // when it is the last entry and the job is already terminal: there the failure
-// ends the current attempt rather than starting one (the emulator does not
-// retry — see DPG10 — so a terminal ERROR keeps the same attempt number as the
-// ATTEMPT_FAILURE it followed).
+// ends the current attempt rather than starting one. A non-restartable job (or
+// one whose restarts are exhausted) therefore keeps the same attempt number on
+// its terminal ERROR as the ATTEMPT_FAILURE it followed; a restartable job that
+// retries continues to the next attempt (the ATTEMPT_FAILURE is mid-history).
 func jobAttemptNumber(j dpstore.Job) int {
 	n := 0
 	for i, h := range j.StatusHistory {

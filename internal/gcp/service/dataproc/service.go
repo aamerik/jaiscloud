@@ -79,10 +79,10 @@ type Service struct {
 	// goroutine). Zero means the first read settles the next hop.
 	jobStateDelay time.Duration
 
-	// jobAttemptFailureHook, when set, forces the next RUNNING -> DONE hop to
-	// ATTEMPT_FAILURE (the state then settles to ERROR). It is a test hook: the
-	// emulator's Spark engine does not retry, so a transient failure has no
-	// natural producer. nil disables it.
+	// jobAttemptFailureHook, when set, forces the next mock-mode RUNNING -> DONE
+	// hop to ATTEMPT_FAILURE (which then settles to ERROR). It is a test hook for
+	// the mock executor, which does not run or retry a driver; the k8s executor
+	// produces ATTEMPT_FAILURE naturally via its restart loop. nil disables it.
 	jobAttemptFailureHook func(project, region, jobID string) bool
 
 	// eventPublisher publishes lifecycle events (cluster/job state changes) to a

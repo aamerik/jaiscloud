@@ -73,6 +73,15 @@ type JobStatus struct {
 	Substate string `json:"substate,omitempty"`
 }
 
+// JobScheduling mirrors dataproc.v1.JobScheduling: the restart policy for a
+// job's driver. Both fields are optional; 0 (the documented default) means
+// "no restarts after a failure". The API documents maxima of 10 (per hour)
+// and 240 (total).
+type JobScheduling struct {
+	MaxFailuresPerHour int32 `json:"maxFailuresPerHour,omitempty"`
+	MaxFailuresTotal   int32 `json:"maxFailuresTotal,omitempty"`
+}
+
 // Job is a Dataproc job. Type is the oneof field name (sparkJob, pysparkJob,
 // sparkSqlJob, sparkRJob, hadoopJob, hiveJob, pigJob) and TypeJob holds the
 // per-type job body verbatim.
@@ -84,7 +93,18 @@ type Job struct {
 	// PlacementClusterUUID is the UUID of the cluster the job was submitted to
 	// (dataproc.v1.JobPlacement.cluster_uuid, output-only). Captured at submit so
 	// it survives the cluster being deleted before the job is terminal.
-	PlacementClusterUUID    string            `json:"placementClusterUuid,omitempty"`
+	PlacementClusterUUID string `json:"placementClusterUuid,omitempty"`
+	// Scheduling is the job's restart policy (dataproc.v1.Job.scheduling). A nil
+	// value or zero counters means the driver is not restarted (the API
+	// default).
+	Scheduling *JobScheduling `json:"scheduling,omitempty"`
+	// LongRunning marks an emulator-detected long-running (streaming) job. Real
+	// GCP has no such field: a streaming job is simply one whose driver never
+	// exits, so real Dataproc reports it RUNNING until the driver terminates.
+	// The marker only affects the mock-mode state machine (which must not
+	// auto-settle such a job); k8s mode already stays RUNNING while the driver
+	// pod lives. See plan_docs/gcp-dataproc-streaming-wave-plan.md §5.
+	LongRunning             bool              `json:"longRunning,omitempty"`
 	Type                    string            `json:"type"`
 	TypeJob                 json.RawMessage   `json:"typeJob,omitempty"`
 	Labels                  map[string]string `json:"labels,omitempty"`

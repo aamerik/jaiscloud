@@ -110,6 +110,12 @@ func jobScalarsToProto(j dpstore.Job) *dataprocpb.Job {
 	for _, s := range j.StatusHistory {
 		out.StatusHistory = append(out.StatusHistory, jobStatusToProto(s))
 	}
+	if j.Scheduling != nil {
+		out.Scheduling = &dataprocpb.JobScheduling{
+			MaxFailuresPerHour: j.Scheduling.MaxFailuresPerHour,
+			MaxFailuresTotal:   j.Scheduling.MaxFailuresTotal,
+		}
+	}
 	return out
 }
 

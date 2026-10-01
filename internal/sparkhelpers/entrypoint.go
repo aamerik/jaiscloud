@@ -7,8 +7,10 @@ import (
 
 // EntryPointArgs returns (preJarArgs []string, jarOrScript string) for spark-submit.
 //
-//   - JAR:    preJarArgs=["--class", MainClass] (empty if no MainClass), jarOrScript=JarURI
-//   - Python: preJarArgs=["--py-files", joined(PyFiles)] if PyFiles non-empty, jarOrScript=MainPythonFile
+//   - JAR:    preJarArgs=["--class", MainClass] (empty if no MainClass) then
+//     ["--jars", joined(JarFileURIs)] if any, jarOrScript=JarURI
+//   - Python: preJarArgs=["--py-files", joined(PyFiles)] if PyFiles non-empty
+//     then ["--jars", joined(JarFileURIs)] if any, jarOrScript=MainPythonFile
 //   - R:      preJarArgs=nil, jarOrScript=MainRFile
 //   - SQL:    preJarArgs=["--jars", …]["--hivevar", …] then "-e"/"-f", jarOrScript=""
 //     (spark-sql is a spark-submit wrapper; the SQL flags are passed through to
@@ -19,10 +21,16 @@ func EntryPointArgs(ep EntryPoint) (preJarArgs []string, jarOrScript string) {
 		if e.MainClass != "" {
 			preJarArgs = []string{"--class", e.MainClass}
 		}
+		if len(e.JarFileURIs) > 0 {
+			preJarArgs = append(preJarArgs, "--jars", strings.Join(e.JarFileURIs, ","))
+		}
 		jarOrScript = e.JarURI
 	case PythonEntryPoint:
 		if len(e.PyFiles) > 0 {
-			preJarArgs = []string{"--py-files", strings.Join(e.PyFiles, ",")}
+			preJarArgs = append(preJarArgs, "--py-files", strings.Join(e.PyFiles, ","))
+		}
+		if len(e.JarFileURIs) > 0 {
+			preJarArgs = append(preJarArgs, "--jars", strings.Join(e.JarFileURIs, ","))
 		}
 		jarOrScript = e.MainPythonFile
 	case REntryPoint:

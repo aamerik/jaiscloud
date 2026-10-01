@@ -330,7 +330,14 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   a user who needs Hive attaches their own HiveServer2/Spark to the Hive Metastore Thrift plane `:9083`,
   which serves the catalog while the emulator remains metadata-not-engine);
   and `driverOutputResourceUri`/`driverControlFilesUri` resolve to real GCS objects captured from
-  the client-mode driver (stdout/stderr, byte-capped); Dataproc `ListClusters` ignores
+  the client-mode driver (stdout/stderr, byte-capped — staged only at termination, so a long-running
+  job's URI resolves to nothing until it is cancelled or the driver exits);
+  a long-running/streaming job (detected from `spark.sql.streaming.*`/`spark.streaming.*` `properties`
+  — an emulator approximation, since real GCP has no streaming marker) stays `RUNNING` in mock mode
+  until cancelled, and `Job.scheduling` (`maxFailuresPerHour`/`maxFailuresTotal`, k8s executor mode)
+  restarts a failed driver while within both limits and not thrashing, with success strictly driver
+  exit `0` (restart counters are per-process and the per-hour window is a fixed-window approximation);
+  Dataproc `ListClusters` ignores
   `filter`/`clusterName`, while `ListJobs` honors `clusterName`,
   `jobStateMatcher` and a bounded `filter` subset (`status.state`, `labels.<key>`, `insertTime`),
   and

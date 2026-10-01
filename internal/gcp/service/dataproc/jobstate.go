@@ -51,16 +51,17 @@ func jobTransitional(state string) bool { return jobTransitionalStates[state] }
 // (PENDING -> SETUP_DONE -> RUNNING -> terminal) with real driver signals, so
 // advanceJob only settles the cancel progression; in mock mode there is no
 // executor goroutine, so it walks the whole forward schedule on the clock.
-func jobNextState(state string, mock bool) string {
+func jobNextState(state string, longRunning, mock bool) string {
 	switch state {
 	case jobStateCancelPending:
 		return jobStateCancelStarted
 	case jobStateCancelStarted:
 		return jobStateCancelled
-	case jobStateAttemptFail:
-		return jobStateError
 	}
 	if !mock {
+		// k8s mode: the executor goroutine drives the forward schedule with real
+		// driver signals. In particular ATTEMPT_FAILURE is left in place for a
+		// restartable job to retry; only exhaustion reaches ERROR.
 		return state
 	}
 	switch state {
@@ -69,7 +70,15 @@ func jobNextState(state string, mock bool) string {
 	case jobStateSetupDone:
 		return jobStateRunning
 	case jobStateRunning:
+		// A long-running (streaming) job's driver never exits, so a mock-mode
+		// job stays RUNNING until it is cancelled. See store.Job.LongRunning.
+		if longRunning {
+			return jobStateRunning
+		}
 		return jobStateDone
+	case jobStateAttemptFail:
+		// Mock mode does not restart, so a failed attempt is terminal ERROR.
+		return jobStateError
 	}
 	return state
 }
@@ -97,7 +106,7 @@ func (s *Service) advanceJob(ctx context.Context, project, region, jobID string)
 		if !jobTransitional(cur.Status.State) || clock.Now().UTC().Before(cur.Status.StateStartTime.Add(s.jobStateDelay)) {
 			return cur, nil
 		}
-		next := jobNextState(cur.Status.State, s.k8sClient == nil)
+		next := jobNextState(cur.Status.State, cur.LongRunning, s.k8sClient == nil)
 		if next == cur.Status.State {
 			return cur, nil
 		}

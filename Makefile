@@ -215,6 +215,10 @@ test-aws: ## Run AWS + shared unit tests (excludes internal/gcp — mirrors CI t
 test-gcp: ## Run GCP unit tests incl. the shared Spark/K8s engine (mirrors CI test-gcp)
 	go test -race ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
 
+test-dataproc-streaming: ## Dataproc streaming/restart contract tests (scheduling, long-running lifecycle, restart loop, jarFileUris)
+	go test -race -count=1 -timeout 120s -run '(?i)(Scheduling|LongRunning|RestartPolicy|Restartable|NonRestartable|JarFileUri)' \
+	  ./internal/gcp/service/dataproc/ ./internal/sparkhelpers/ ./internal/gcp/transport/rest/dataproc/ ./internal/gcp/transport/grpc/dataproc/
+
 test-gcp-tools: ## Unit tests for the GCP dev tools (gcpstatus, paginationcheck)
 	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/...
 
