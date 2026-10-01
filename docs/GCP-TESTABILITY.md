@@ -179,7 +179,10 @@ evidence for any of them.
 - [ ] **Authz / IAM enforcement.** Identity permissions are not checked; Cloud IAM is
       shape-only across all services. The single exception is Cloud KMS, whose crypto
       operations honor a **default-permissive** cryptoKey resource policy. Any
-      permission-sensitive path must be smoke-tested on real GCP.
+      permission-sensitive path must be smoke-tested on real GCP. The differential
+      harness's `*_noauth` scenarios record real GCP's unauthenticated response (401
+      `UNAUTHENTICATED`) against the emulator's served response; those divergences are
+      accepted by design so the gap is explicit and gated.
 - [ ] **Async long-running-operation (LRO) timing.** Operations complete synchronously by
       default (`done: true` inline). An opt-in async mode (`JAISCLOUD_LRO_MODE=async`, in-flight
       window via `JAISCLOUD_LRO_DELAY`, default `250ms`) makes `workflows`, `functions`,
@@ -190,7 +193,10 @@ evidence for any of them.
       **local-testing affordance, not real-GCP timing**: code that assumes immediate readiness
       must still be tested on real, eventually-consistent GCP.
 - [ ] **Metadata-only services.** `compute`, `cloudsql`, `clouddns`, `memorystore` have
-      no control/data plane locally — only resource records. Test the real data plane.
+      no control/data plane locally — only resource records. Test the real data plane. The
+      differential harness records read-only control-plane smoke for `compute`/`cloudsql`/
+      `memorystore` (list + 404 get-missing), which validates routing, the empty-list shape
+      and the error envelope — not a data plane.
 - [ ] **BigQuery.** Only the documented Standard SQL subset executes locally — `SELECT`
       plus DDL/DML on an in-process SQLite engine. `ARRAY`/`STRUCT`/`UNNEST`, `GEOGRAPHY`,
       wildcard/`TABLE_SUFFIX` tables, `INFORMATION_SCHEMA`, scripting, `MERGE`, and legacy SQL

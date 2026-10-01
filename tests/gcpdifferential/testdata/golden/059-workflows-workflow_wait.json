@@ -3,7 +3,7 @@
   "service": "workflows",
   "op": "workflow_wait",
   "method": "GET",
-  "path": "/v1/projects/<project>/locations/us-central1/operations/operation-1789941434240-65bf1375b4c07-c34d9e4c-f9804c57",
+  "path": "/v1/projects/<project>/locations/us-central1/operations/<operation>",
   "status": 200,
   "response": {
     "done": true,

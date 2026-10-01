@@ -57,7 +57,7 @@ func (t *Target) Run(scenarios []Scenario) ([]Exchange, error) {
 				}
 				req.Header.Set("Content-Type", ct)
 			}
-			if t.Token != "" {
+			if t.Token != "" && !sc.NoAuth {
 				req.Header.Set("Authorization", "Bearer "+t.Token)
 			}
 			req.Header.Set("User-Agent", "jaiscloud-gcp-differential/1")
@@ -92,7 +92,7 @@ func (t *Target) Run(scenarios []Scenario) ([]Exchange, error) {
 			Service: sc.Service,
 			Op:      sc.Op,
 			Method:  sc.Method,
-			Path:    norm.substitute(path),
+			Path:    norm.Path(path),
 			Status:  status,
 		}
 		if len(bytes.TrimSpace(respBody)) > 0 {

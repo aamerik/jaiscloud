@@ -85,6 +85,9 @@ func TestNormalizerCoversResources(t *testing.T) {
 		{names.Workflow, "<workflow>"},
 		{names.FSCollection, "<fsCollection>"},
 		{names.FSDoc, "<fsDoc>"},
+		{names.ComputeInstance, "<computeInstance>"},
+		{names.SQLInstance, "<sqlInstance>"},
+		{names.RedisInstance, "<redisInstance>"},
 		{names.ServiceAccount + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
 		{names.ServiceAccount, "<serviceAccountId>"},
 		{"missing-" + suffix + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
@@ -123,6 +126,18 @@ func TestNormalizerFoldsOpaqueIDs(t *testing.T) {
 	}
 }
 
+// TestNormalizerFoldsOperationPath verifies an LRO poll path's volatile
+// operation id is folded, so an operation-poll golden is stable across runs.
+func TestNormalizerFoldsOperationPath(t *testing.T) {
+	names := Names("abc123")
+	norm := NewNormalizer("differential-proj", "998877665544", "abc123", names)
+	got := norm.Path("/v1/projects/differential-proj/locations/us-central1/operations/operation-123-abc")
+	want := "/v1/projects/<project>/locations/us-central1/operations/<operation>"
+	if got != want {
+		t.Errorf("Path() = %q, want %q", got, want)
+	}
+}
+
 // TestMatchScenariosToGoldens pins the (Service, Op) matcher contract that lets
 // TestReplay run with unrecorded scenarios in the tree: a scenario without a
 // golden is pending (not fatal), while a golden without a scenario is an orphan
@@ -158,6 +173,42 @@ func TestMatchScenariosToGoldens(t *testing.T) {
 	)
 	if len(duplicates) != 1 || duplicates[0] != "dns/zone_get" {
 		t.Fatalf("duplicates = %v, want [dns/zone_get]", duplicates)
+	}
+}
+
+// TestNoAuthOmitsAuthorization verifies a NoAuth scenario is sent without a
+// bearer token (the authz probe) while an ordinary scenario carries it.
+func TestNoAuthOmitsAuthorization(t *testing.T) {
+	var auth []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = append(auth, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+
+	tr := &Target{
+		Name:    "test",
+		Project: "proj",
+		Token:   "secret-token",
+		HTTP:    srv.Client(),
+		URLFor:  func(_, path string) string { return srv.URL + path },
+	}
+	_, err := tr.Run([]Scenario{
+		{Op: "with_auth", Service: "storage", Method: http.MethodGet, Path: "/a"},
+		{Op: "no_auth", Service: "storage", Method: http.MethodGet, Path: "/b", NoAuth: true},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(auth) != 2 {
+		t.Fatalf("got %d requests, want 2", len(auth))
+	}
+	if auth[0] != "Bearer secret-token" {
+		t.Errorf("authenticated scenario Authorization = %q, want bearer token", auth[0])
+	}
+	if auth[1] != "" {
+		t.Errorf("NoAuth scenario Authorization = %q, want empty", auth[1])
 	}
 }
 

@@ -1,15 +1,18 @@
 {
   "version": 1,
   "project": "<project>",
-  "ops": 75,
+  "ops": 85,
   "services": [
     "bigquery",
+    "compute",
     "dns",
     "firestore",
     "iam",
     "kms",
     "pubsub",
+    "redis",
     "secretmanager",
+    "sqladmin",
     "storage",
     "workflows"
   ],
@@ -371,7 +374,7 @@
     {
       "file": "059-workflows-workflow_wait.json",
       "op": "workflow_wait",
-      "sha256": "9cf7a369e195293037a05f360cd1c9cb35878dfb8d74b34ac654eb50b6da4b46",
+      "sha256": "3fe3aa585b14604df1413a1e29d3a37d4d85e6d28ae534f3f5002a2d9aa05681",
       "status": 200
     },
     {
@@ -463,6 +466,66 @@
       "op": "fs_doc_delete",
       "sha256": "4193d621c27c5ec2a0fc4ed43374e5746d9d803e9e9a69b01a12257db14f6196",
       "status": 200
+    },
+    {
+      "file": "075-compute-compute_instances_list.json",
+      "op": "compute_instances_list",
+      "sha256": "ac0cc21f1f29ca65b80a3b695224b2b60ffdb1ad1b158d4e05534d90882eff79",
+      "status": 200
+    },
+    {
+      "file": "076-compute-compute_instance_get_missing.json",
+      "op": "compute_instance_get_missing",
+      "sha256": "70fdeb624f804c2c6e76bc68d7a5d158d395d4235c68162373fe8fe88fd9b8c1",
+      "status": 404
+    },
+    {
+      "file": "077-sqladmin-sql_instances_list.json",
+      "op": "sql_instances_list",
+      "sha256": "d1c2aaf4e0784c3e2443d0465febaa392ba32f05a799e93371c94f0dc11a992f",
+      "status": 200
+    },
+    {
+      "file": "078-sqladmin-sql_instance_get_missing.json",
+      "op": "sql_instance_get_missing",
+      "sha256": "78dabb6196ab0136cd3cf9288bf4493196fc778ce128b6a38b6204038ac4a821",
+      "status": 404
+    },
+    {
+      "file": "079-redis-redis_instances_list.json",
+      "op": "redis_instances_list",
+      "sha256": "bc1b9a0ca7e4f8bbdb093f8f896860b5baa95ddd3b5b2c0fdd4259a1ae5237e6",
+      "status": 200
+    },
+    {
+      "file": "080-redis-redis_instance_get_missing.json",
+      "op": "redis_instance_get_missing",
+      "sha256": "a151911fb0f081062e467fd2c72ce5cfd9a12a429013f96e8eba82da455f2a1f",
+      "status": 404
+    },
+    {
+      "file": "081-storage-storage_buckets_list_noauth.json",
+      "op": "storage_buckets_list_noauth",
+      "sha256": "b6eb395d8405bb95ffe70b83d42db98e2df1ec64c9ba3d951b682ec44e8a7a2b",
+      "status": 401
+    },
+    {
+      "file": "082-compute-compute_instances_list_noauth.json",
+      "op": "compute_instances_list_noauth",
+      "sha256": "4c610e116dba560b347d9536e1f9ef13ed8bd9381e542f8a5ed416fa41c35594",
+      "status": 401
+    },
+    {
+      "file": "083-sqladmin-sql_instances_list_noauth.json",
+      "op": "sql_instances_list_noauth",
+      "sha256": "66a180e08b56b7db2b2ffea00eefe157116cd31781964642dbac34bafd4aa18b",
+      "status": 401
+    },
+    {
+      "file": "084-redis-redis_instances_list_noauth.json",
+      "op": "redis_instances_list_noauth",
+      "sha256": "aac982731e697c75d447a29736a4f98efc3f07d86d4abb5137fe8cb398defa5f",
+      "status": 401
     }
   ]
 }
