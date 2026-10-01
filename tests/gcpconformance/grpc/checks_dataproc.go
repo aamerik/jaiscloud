@@ -51,6 +51,8 @@ func dataprocChecks() []Check {
 		{Service: "dataproc", RPC: "ListWorkflowTemplates", Method: "ListWorkflowTemplates", KeyField: "created template present", Run: checkDPListWorkflowTemplates},
 		{Service: "dataproc", RPC: "UpdateWorkflowTemplate", Method: "UpdateWorkflowTemplate", KeyField: "version bumped", Run: checkDPUpdateWorkflowTemplate},
 		{Service: "dataproc", RPC: "DeleteWorkflowTemplate", Method: "DeleteWorkflowTemplate", KeyField: "NotFound after delete", Run: checkDPDeleteWorkflowTemplate},
+		{Service: "dataproc", RPC: "InstantiateInlineWorkflowTemplate", Method: "InstantiateInlineWorkflowTemplate", KeyField: "LRO completes with DONE WorkflowMetadata", Run: checkDPInstantiateInlineWorkflowTemplate},
+		{Service: "dataproc", RPC: "InstantiateWorkflowTemplate", Method: "InstantiateWorkflowTemplate", KeyField: "stored template + parameters run to DONE", Run: checkDPInstantiateWorkflowTemplate},
 	}
 }
 
@@ -976,6 +978,105 @@ func checkDPDeleteWorkflowTemplate(ctx context.Context, cfg Config) error {
 	}
 	if _, err := client.GetWorkflowTemplate(ctx, &dataprocpb.GetWorkflowTemplateRequest{Name: name}); status.Code(err) != codes.NotFound {
 		return fmt.Errorf("GetWorkflowTemplate after delete = %v, want NotFound", err)
+	}
+	return nil
+}
+
+// managedClusterPlacement builds a workflow placement that owns a managed
+// cluster of the given name.
+func managedClusterPlacement(cluster string) *dataprocpb.WorkflowTemplatePlacement {
+	return &dataprocpb.WorkflowTemplatePlacement{
+		Placement: &dataprocpb.WorkflowTemplatePlacement_ManagedCluster{
+			ManagedCluster: &dataprocpb.ManagedCluster{ClusterName: cluster},
+		},
+	}
+}
+
+// Check 24: InstantiateInlineWorkflowTemplate runs an inline DAG to DONE.
+func checkDPInstantiateInlineWorkflowTemplate(ctx context.Context, cfg Config) error {
+	client, err := newDataprocWorkflowTemplateClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	tmpl := &dataprocpb.WorkflowTemplate{
+		Placement: managedClusterPlacement(cfg.ResourceName("gcpc-grpc-dpwf-inline-cluster")),
+		Jobs: []*dataprocpb.OrderedJob{{
+			StepId:  "a",
+			JobType: &dataprocpb.OrderedJob_PysparkJob{PysparkJob: &dataprocpb.PySparkJob{MainPythonFileUri: "gs://bucket/main.py"}},
+		}},
+	}
+	op, err := client.InstantiateInlineWorkflowTemplate(ctx, &dataprocpb.InstantiateInlineWorkflowTemplateRequest{
+		Parent: dataprocWorkflowParent(cfg), Template: tmpl,
+	})
+	if err != nil {
+		return fmt.Errorf("InstantiateInlineWorkflowTemplate: %w", err)
+	}
+	if op.Done() {
+		return fmt.Errorf("instantiate completed inline; want an in-flight LRO")
+	}
+	for i := 0; i < 40 && !op.Done(); i++ {
+		if err := op.Poll(ctx); err != nil {
+			return fmt.Errorf("poll workflow: %w", err)
+		}
+	}
+	if !op.Done() {
+		return fmt.Errorf("inline workflow did not complete")
+	}
+	meta, err := op.Metadata()
+	if err != nil {
+		return fmt.Errorf("workflow metadata: %w", err)
+	}
+	if meta.GetState() != dataprocpb.WorkflowMetadata_DONE {
+		return fmt.Errorf("workflow state = %v, want DONE", meta.GetState())
+	}
+	nodes := meta.GetGraph().GetNodes()
+	if len(nodes) != 1 || nodes[0].GetState() != dataprocpb.WorkflowNode_COMPLETED {
+		return fmt.Errorf("workflow nodes = %+v", nodes)
+	}
+	return nil
+}
+
+// Check 25: InstantiateWorkflowTemplate runs a stored template with parameters.
+func checkDPInstantiateWorkflowTemplate(ctx context.Context, cfg Config) error {
+	client, err := newDataprocWorkflowTemplateClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	id := cfg.ResourceName("gcpc-grpc-dpwf-inst")
+	name := dataprocWorkflowParent(cfg) + "/workflowTemplates/" + id
+	tmpl := dataprocWorkflowTemplate(id)
+	tmpl.Placement = managedClusterPlacement(cfg.ResourceName("gcpc-grpc-dpwf-inst-cluster"))
+	tmpl.Parameters = []*dataprocpb.TemplateParameter{{Name: "bucket", Fields: []string{"jobs[*].pysparkJob.mainPythonFileUri"}}}
+	tmpl.Jobs[0].JobType = &dataprocpb.OrderedJob_PysparkJob{PysparkJob: &dataprocpb.PySparkJob{MainPythonFileUri: "gs://{bucket}/main.py"}}
+	if _, err := client.CreateWorkflowTemplate(ctx, &dataprocpb.CreateWorkflowTemplateRequest{Parent: dataprocWorkflowParent(cfg), Template: tmpl}); err != nil {
+		return fmt.Errorf("CreateWorkflowTemplate: %w", err)
+	}
+	op, err := client.InstantiateWorkflowTemplate(ctx, &dataprocpb.InstantiateWorkflowTemplateRequest{
+		Name: name, Parameters: map[string]string{"bucket": "probe-bucket"},
+	})
+	if err != nil {
+		return fmt.Errorf("InstantiateWorkflowTemplate: %w", err)
+	}
+	for i := 0; i < 40 && !op.Done(); i++ {
+		if err := op.Poll(ctx); err != nil {
+			return fmt.Errorf("poll workflow: %w", err)
+		}
+	}
+	if !op.Done() {
+		return fmt.Errorf("stored workflow did not complete")
+	}
+	meta, err := op.Metadata()
+	if err != nil {
+		return fmt.Errorf("workflow metadata: %w", err)
+	}
+	if meta.GetTemplate() != name {
+		return fmt.Errorf("workflow template = %q, want %q", meta.GetTemplate(), name)
+	}
+	nodes := meta.GetGraph().GetNodes()
+	if len(nodes) != 1 || nodes[0].GetState() != dataprocpb.WorkflowNode_COMPLETED {
+		return fmt.Errorf("workflow nodes = %+v", nodes)
 	}
 	return nil
 }

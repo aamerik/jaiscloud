@@ -182,15 +182,19 @@ func operationToProto(op dpstore.Operation) (*longrunningpb.Operation, error) {
 }
 
 func operationMetadataProto(op dpstore.Operation) proto.Message {
-	if op.Verb == "submit" {
+	switch op.Verb {
+	case "submit":
 		return &dataprocpb.JobMetadata{}
+	case "workflow":
+		return &dataprocpb.WorkflowMetadata{}
+	default:
+		return &dataprocpb.ClusterOperationMetadata{}
 	}
-	return &dataprocpb.ClusterOperationMetadata{}
 }
 
 func operationResponseProto(op dpstore.Operation) proto.Message {
 	switch op.Verb {
-	case "delete":
+	case "delete", "workflow":
 		return &emptypb.Empty{}
 	case "submit":
 		return &dataprocpb.Job{}

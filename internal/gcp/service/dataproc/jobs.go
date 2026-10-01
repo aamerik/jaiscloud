@@ -317,6 +317,14 @@ func (s *Service) GetOperation(ctx context.Context, project, region, opID string
 		}
 		return advanced, nil
 	}
+	// A workflow operation drives its inline/stored DAG through the job core.
+	if op.Verb == "workflow" {
+		advanced, advErr := s.advanceWorkflowOperation(ctx, op)
+		if advErr != nil {
+			return dpstore.Operation{}, mapErr(advErr)
+		}
+		return advanced, nil
+	}
 	if !op.Done {
 		advanced, advErr := s.advanceClusterOperation(ctx, op)
 		if advErr != nil {

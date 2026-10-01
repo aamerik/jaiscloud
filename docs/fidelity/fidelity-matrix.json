@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 826,
+    "total": 828,
     "by_state": {
-      "ga": 589,
-      "limited": 119,
+      "ga": 593,
+      "limited": 117,
       "preview": 14,
       "unsupported": 104
     },
     "by_transport": {
       "grpc": {
-        "ga": 281,
-        "limited": 13,
+        "ga": 283,
+        "limited": 11,
         "unsupported": 92
       },
       "rest": {
-        "ga": 308,
+        "ga": 310,
         "limited": 106,
         "preview": 14,
         "unsupported": 12
@@ -39,8 +39,7 @@
         "unsupported": 1
       },
       "dataproc": {
-        "ga": 38,
-        "limited": 2,
+        "ga": 42,
         "unsupported": 2
       },
       "datastore": {
@@ -1373,6 +1372,26 @@
     },
     {
       "service": "dataproc",
+      "operation": "Dataproc.InstantiateInlineWorkflowTemplate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=dataproc.projects.regions.workflowTemplates.instantiateInline",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "dataproc",
+      "operation": "Dataproc.InstantiateWorkflowTemplate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=dataproc.projects.regions.workflowTemplates.instantiate",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "dataproc",
       "operation": "Dataproc.ListClusters",
       "transport": "rest",
       "state": "ga",
@@ -1546,22 +1565,20 @@
       "service": "dataproc",
       "operation": "InstantiateInlineWorkflowTemplate",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "dataproc",
       "operation": "InstantiateWorkflowTemplate",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "gRPC verified against proto descriptors only (pending proto-conformance)",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
