@@ -144,9 +144,10 @@ func (c *IcebergCodec) decodeNamespaceRoute(r *http.Request, seg []string, param
 		return "", model.NewProviderError("BadRequestException", "unsupported namespaces operation", 404)
 	}
 
-	// metrics: .../tables/{table}/metrics
+	// metrics: POST .../tables/{table}/metrics (the Iceberg REST reportMetrics
+	// endpoint; the spec defines only POST, returning 204).
 	if len(seg) >= 3 && seg[len(seg)-1] == "metrics" && seg[len(seg)-3] == "tables" {
-		if r.Method == http.MethodGet {
+		if r.Method == http.MethodPost {
 			params["namespace"] = strings.Join(seg[:len(seg)-3], "/")
 			params["table"] = seg[len(seg)-2]
 			return "TableMetrics", nil

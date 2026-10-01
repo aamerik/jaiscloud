@@ -378,6 +378,8 @@ func (p *Provider) CreateTable(ctx context.Context, nr *model.NormalizedRequest)
 		"metadata-log":          []any{},
 		"sort-orders":           []any{normalizedOrder},
 		"default-sort-order-id": 0,
+		"statistics":            []any{},
+		"partition-statistics":  []any{},
 		"refs":                  map[string]any{},
 	}
 
@@ -431,8 +433,22 @@ func (p *Provider) RenameTable(ctx context.Context, nr *model.NormalizedRequest)
 	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
+// TableMetrics implements the Iceberg REST reportMetrics endpoint:
+// POST .../namespaces/{namespace}/tables/{table}/metrics with a
+// ReportMetricsRequest body. The catalog validates the target table and the
+// report type and acknowledges the report with 204. The spec exposes no
+// read-back for reports, so they are not persisted — aggregating them is a
+// backend concern, not catalog state.
 func (p *Provider) TableMetrics(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return nil, model.NewProviderError("NotImplementedException", "table metrics reporting is not implemented", 501)
+	ns := strParam(nr, "namespace")
+	name := strParam(nr, "table")
+	if _, err := p.store.GetTable(ctx, ns, name); err != nil {
+		return nil, mapErr(err)
+	}
+	if asString(bodyObj(nr)["report-type"]) == "" {
+		return nil, badRequest("missing report-type")
+	}
+	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
 }
 
 // --- commit ---
@@ -650,14 +666,56 @@ func applyUpdates(meta map[string]any, updates any) error {
 			removeProperties(meta, asList(m["removals"]))
 		case "set-location":
 			meta["location"] = asString(m["location"])
-		case "set-statistics", "remove-statistics", "remove-partition-statistics":
-			// Statistics are optional metadata; the emulator accepts and drops
-			// them (they are never rendered back as catalog state).
+		case "set-statistics":
+			stats := asMap(m["statistics"])
+			if stats == nil {
+				return commitFailed("set-statistics missing statistics")
+			}
+			snapID := asInt64(stats["snapshot-id"])
+			if _, ok := stats["snapshot-id"]; !ok {
+				// snapshot-id is DEPRECATED for removal in the update wrapper;
+				// the authoritative value is statistics.snapshot-id. Fall back to
+				// the wrapper field for older clients that only send it there.
+				snapID = asInt64(m["snapshot-id"])
+				stats["snapshot-id"] = snapID
+			}
+			meta["statistics"] = upsertStatisticsFile(listOf(meta, "statistics"), stats, snapID)
+		case "remove-statistics":
+			meta["statistics"] = removeStatisticsFile(listOf(meta, "statistics"), asInt64(m["snapshot-id"]))
+		case "set-partition-statistics":
+			stats := asMap(m["partition-statistics"])
+			if stats == nil {
+				return commitFailed("set-partition-statistics missing partition-statistics")
+			}
+			snapID := asInt64(stats["snapshot-id"])
+			meta["partition-statistics"] = upsertStatisticsFile(listOf(meta, "partition-statistics"), stats, snapID)
+		case "remove-partition-statistics":
+			meta["partition-statistics"] = removeStatisticsFile(listOf(meta, "partition-statistics"), asInt64(m["snapshot-id"]))
 		default:
 			return commitFailed("unsupported update action: " + asString(m["action"]))
 		}
 	}
 	return nil
+}
+
+// upsertStatisticsFile replaces any existing entry with the same snapshot id and
+// appends the new statistics/partition-statistics file — matching Iceberg's
+// TableMetadata.setStatistics / setPartitionStatistics upsert semantics.
+func upsertStatisticsFile(list []any, stats map[string]any, snapshotID int64) []any {
+	out := removeStatisticsFile(list, snapshotID)
+	return append(out, stats)
+}
+
+// removeStatisticsFile drops the entry whose snapshot-id matches, preserving the
+// order of the remaining entries.
+func removeStatisticsFile(list []any, snapshotID int64) []any {
+	out := make([]any, 0, len(list))
+	for _, e := range list {
+		if asInt64(asMap(e)["snapshot-id"]) != snapshotID {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func removeSnapshots(meta map[string]any, ids []any) {
