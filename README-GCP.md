@@ -338,10 +338,12 @@ Cluster create/update/start/stop/delete return a pollable `google.longrunning.Op
 
 | Type-job | Behaviour |
 |---|---|
-| `sparkJob` / `pysparkJob` / `sparkRJob` | Run via the Spark executor (mock, Docker, or K8s mode). |
+| `sparkJob` / `pysparkJob` / `sparkRJob` | Run via the Spark executor (mock or K8s mode; the Docker Spark executor is not wired, so `docker` mode falls back to mock). |
 | `hadoopJob`, `hiveJob`, `pigJob`, `sparkSqlJob`, `prestoJob`, `trinoJob`, `flinkJob` | Fail loud (see below). |
 
 Submitting an unsupported type does **not** return an RPC error: the job is created and immediately lands in `ERROR` with details `job type <X> is not supported by the emulator`, so the client observes a terminal job rather than a transport failure. In particular **hiveJob** and **sparkSqlJob** are fail-loud because execution is engine-bearing (a Hive/Pig/Spark-SQL/Presto/Trino/Flink runtime or query engine) while the emulator is metadata-not-engine; the Hive Metastore plane is a separate surface (see the Metastore subsection below).
+
+Because the emulator is metadata-not-engine, **hiveJob** stays fail-loud rather than being silently approximated: HiveQL is a superset of Spark SQL, so running it on Spark would diverge on Hive-specific constructs. If you need Hive execution, point your own engine at the emulator: the Hive Metastore Thrift plane on `:9083` serves the catalog (a single global catalog, see the Metastore subsection below), so a HiveServer2 or Spark deployment attached to it can execute queries while the emulator stores the table metadata.
 
 ### Dataproc: driver output is captured from the client-mode driver
 
