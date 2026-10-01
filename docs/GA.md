@@ -254,9 +254,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   [README-GCP Known Limitations](../README-GCP.md#known-limitations)): Firestore `ExecutePipeline` implements the read-only
   relational subset (`collection`/`collection_group`/`database`/`documents`/`literals` sources
   plus `where`, `sort`, `select`, `distinct`, `limit`/`offset`) and rejects other pipeline
-  stages and unsupported expressions with `Unimplemented`; Firestore's `UpdateTime`
-  optimistic-concurrency token is kept strictly monotonic per document even under a frozen
-  clock; Datastore transactions are single entity-group with read-set
+  stages and unsupported expressions with `Unimplemented`; Firestore's `UpdateTime` and
+  Datastore's entity `update_time` optimistic-concurrency tokens are kept strictly monotonic
+  (per document / per entity) even under a frozen clock; Datastore transactions are single
+  entity-group with read-set
   approximations, and its query engine models only kind/filter/offset/limit, so GQL projection,
   `ORDER BY`, and cursor bindings are parsed/ignored and `HAS ANCESTOR`/`CONTAINS`/`NOT` are
   rejected (the same limits the structured query surface has); **KMS destruction timing** — `DestroyCryptoKeyVersion` moves the version to

@@ -216,10 +216,11 @@ evidence for any of them.
       (real GCP exposes quotas only through the separate Cloud Quotas / Service Usage APIs), so
       Lambda's `GetAccountSettings` has no Cloud Functions analogue and is deliberately not faked.
 - [ ] **Frozen-clock OCC / TTL.** With the clock frozen (`POST /_jaiscloud/clock`),
-      Datastore optimistic-concurrency conflict detection and DynamoDB-style TTL edge cases can
-      behave differently. (Firestore's `UpdateTime` OCC token is kept strictly monotonic per
-      document even under a frozen clock.) Do not rely on frozen-clock results as production
-      evidence.
+      clock-derived TTLs (Datastore transaction expiry) and DynamoDB-style TTL edge cases can
+      behave differently. (Firestore's per-document `UpdateTime` and Datastore's per-entity
+      `update_time` OCC tokens are kept strictly monotonic even under a frozen clock, so
+      concurrent writes still conflict correctly.) Do not rely on frozen-clock results as
+      production evidence.
 - [ ] **Per-language SDK wire paths.** Different official SDKs exercise different wire
       paths. Add each client SDK/language in use to the conformance matrix rather
       than assuming one client's pass transfers.

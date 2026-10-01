@@ -241,6 +241,12 @@ func resolveWrite(current Entity, exists bool, w Write) (Entity, error) {
 	if !preconditionMatches(current, exists, w.Precondition) {
 		return Entity{}, ErrConflict
 	}
+	// Derive the stamp from the stored value so it is strictly monotonic per
+	// entity even under a frozen clock (the optimistic-concurrency token a
+	// Mutation.update_time precondition compares against) — see nextUpdateTime.
+	// For an insert the current entity is absent (zero UpdateTime), so the
+	// stamp is plain clock.Now().
+	stamp := nextUpdateTime(current.UpdateTime, clock.Now())
 	switch w.Op {
 	case WriteInsert:
 		if exists {
@@ -248,7 +254,7 @@ func resolveWrite(current Entity, exists bool, w Write) (Entity, error) {
 		}
 		e := w.Entity
 		e.Version = 1
-		e.UpdateTime = clock.Now()
+		e.UpdateTime = stamp
 		return e, nil
 	case WriteUpdate:
 		if !exists {
@@ -256,18 +262,46 @@ func resolveWrite(current Entity, exists bool, w Write) (Entity, error) {
 		}
 		e := w.Entity
 		e.Version = current.Version + 1
-		e.UpdateTime = clock.Now()
+		e.UpdateTime = stamp
 		return e, nil
 	case WriteUpsert:
 		e := w.Entity
 		e.Version = current.Version + 1
-		e.UpdateTime = clock.Now()
+		e.UpdateTime = stamp
 		return e, nil
 	case WriteDelete:
 		return Entity{Key: w.Key}, nil
 	default:
 		return Entity{}, ErrInvalidKey
 	}
+}
+
+// nextUpdateTime returns the update timestamp to stamp on a write, guaranteed
+// to be strictly greater than the entity's current update time.
+//
+// Datastore uses update_time as one of its optimistic-concurrency tokens: a
+// mutation only succeeds if the stored update_time still equals the one the
+// writer observed (a Mutation.update_time precondition). The emulator derives
+// update_time from clock.Now(), which a frozen clock (time control,
+// deterministic tests) can return unchanged for every write. Without a guard,
+// two concurrent writers would both observe T, both compute T, and both pass
+// the check — a silent lost update.
+//
+// Both stamps are truncated to microseconds (the granularity of the Postgres
+// TIMESTAMPTZ column, so the token survives a round-trip through the persistent
+// backend and matches the value a later read returns) and a microsecond is
+// added whenever the clock does not advance. That keeps update_time strictly
+// monotonic per entity, so the second writer's observed value no longer matches
+// and its mutation is flagged conflict_detected instead of overwriting. Under a
+// live clock now is almost always after prev, making the conditional advance a
+// no-op.
+func nextUpdateTime(prev, now time.Time) time.Time {
+	prev = prev.Truncate(time.Microsecond)
+	now = now.Truncate(time.Microsecond)
+	if prev.IsZero() || now.After(prev) {
+		return now
+	}
+	return prev.Add(time.Microsecond)
 }
 
 // keyVersionPrefix marks the canonical key encoding. Every canonical key is

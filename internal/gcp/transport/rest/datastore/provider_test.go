@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"strconv"
 	"testing"
+	"time"
 
+	"jaiscloud/internal/clock"
 	core "jaiscloud/internal/gcp/service/datastore"
 	dsstore "jaiscloud/internal/gcp/store/datastore"
 	"jaiscloud/internal/model"
@@ -425,6 +427,96 @@ func TestRESTAncestorNamespaceDatabaseRoundTrip(t *testing.T) {
 	batch, _ := rq.Data["batch"].(map[string]any)
 	if ers, _ := batch["entityResults"].([]any); len(ers) != 1 {
 		t.Fatalf("ancestor query results = %v, want 1", batch["entityResults"])
+	}
+}
+
+// TestRESTOccUpdateTimeToken locks the REST encoding of the update_time
+// optimistic-concurrency token: it is emitted on commit and lookup, is strictly
+// monotonic under a frozen clock, and a stale precondition is reported as
+// conflictDetected while still echoing the current entity's updateTime.
+func TestRESTOccUpdateTimeToken(t *testing.T) {
+	c, p := newTestProvider(t)
+	frozen := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: frozen})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	parse := func(s string) time.Time {
+		t.Helper()
+		tt, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			t.Fatalf("parse updateTime %q: %v", s, err)
+		}
+		return tt
+	}
+
+	insert, err := call(t, c, p, "test", "commit", map[string]any{
+		"mode": "NON_TRANSACTIONAL",
+		"mutations": []any{map[string]any{"insert": map[string]any{
+			"key":        nameKey("Task", "occ"),
+			"properties": map[string]any{"n": map[string]any{"integerValue": "1"}},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	token, _ := insert.Data["mutationResults"].([]any)[0].(map[string]any)["updateTime"].(string)
+	if token == "" {
+		t.Fatal("commit mutationResults[].updateTime must be set")
+	}
+
+	lookup, err := call(t, c, p, "test", "lookup", map[string]any{"keys": []any{nameKey("Task", "occ")}})
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if got := lookup.Data["found"].([]any)[0].(map[string]any)["updateTime"]; got != token {
+		t.Fatalf("lookup updateTime = %v, want %v (the commit token)", got, token)
+	}
+
+	updateBody := func(n int, ut string) map[string]any {
+		return map[string]any{
+			"mode": "NON_TRANSACTIONAL",
+			"mutations": []any{map[string]any{
+				"update": map[string]any{
+					"key":        nameKey("Task", "occ"),
+					"properties": map[string]any{"n": map[string]any{"integerValue": strconv.Itoa(n)}},
+				},
+				"updateTime": ut,
+			}},
+		}
+	}
+
+	applied, err := call(t, c, p, "test", "commit", updateBody(2, token))
+	if err != nil {
+		t.Fatalf("update with token: %v", err)
+	}
+	res0 := applied.Data["mutationResults"].([]any)[0].(map[string]any)
+	if cd, _ := res0["conflictDetected"].(bool); cd {
+		t.Fatal("a matching updateTime precondition must not conflict")
+	}
+	advanced, _ := res0["updateTime"].(string)
+	if advanced == "" || !parse(advanced).After(parse(token)) {
+		t.Fatalf("applied updateTime = %q, want strictly after %q", advanced, token)
+	}
+
+	stale, err := call(t, c, p, "test", "commit", updateBody(3, token))
+	if err != nil {
+		t.Fatalf("stale update: %v", err)
+	}
+	res1 := stale.Data["mutationResults"].([]any)[0].(map[string]any)
+	if cd, _ := res1["conflictDetected"].(bool); !cd {
+		t.Fatal("a stale updateTime precondition must set conflictDetected")
+	}
+	if got, _ := res1["updateTime"].(string); got != advanced {
+		t.Fatalf("conflict updateTime = %q, want %q (the current entity's)", got, advanced)
+	}
+
+	after, err := call(t, c, p, "test", "lookup", map[string]any{"keys": []any{nameKey("Task", "occ")}})
+	if err != nil {
+		t.Fatalf("lookup after conflict: %v", err)
+	}
+	props := after.Data["found"].([]any)[0].(map[string]any)["entity"].(map[string]any)["properties"].(map[string]any)
+	if got := props["n"].(map[string]any)["integerValue"]; got != "2" {
+		t.Fatalf("n = %v after the rejected stale write, want \"2\"", got)
 	}
 }
 

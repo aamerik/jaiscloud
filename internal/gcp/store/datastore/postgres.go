@@ -210,7 +210,7 @@ func (s *PostgresStore) ApplyMutation(ctx context.Context, project string, kind 
 	case MutationUpsert:
 		e.Version = current.Version + 1
 	}
-	e.UpdateTime = clock.Now()
+	e.UpdateTime = nextUpdateTime(current.UpdateTime, clock.Now())
 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, update_time)

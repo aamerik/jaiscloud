@@ -98,7 +98,7 @@ func (s *MemoryStore) ApplyMutation(_ context.Context, project string, kind Muta
 			case MutationUpsert:
 				e.Version = current.Version + 1
 			}
-			e.UpdateTime = clock.Now()
+			e.UpdateTime = nextUpdateTime(current.UpdateTime, clock.Now())
 			return e, nil
 		},
 		func(ent Entity) {
