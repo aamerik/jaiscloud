@@ -2,6 +2,7 @@ package dataproc
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -11,12 +12,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
 	"jaiscloud/internal/clock"
 	dataprocstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/k8shelpers"
+	"jaiscloud/internal/sparkhelpers"
 	"jaiscloud/internal/store"
 )
 
@@ -507,4 +510,46 @@ func TestCancelJob_ConcurrentCancels_SingleTerminal(t *testing.T) {
 	// then settle it to a single terminal CANCELLED.
 	final := advanceJobToTerminal(t, p, j.ProjectID, j.Region, j.JobID)
 	require.Equal(t, "CANCELLED", final.Status.State)
+}
+
+// TestRunJob_WaitError_ReapsDriverAndFails pins STR4: when the terminal wait
+// fails with a non-context error while the job context is still live, the
+// driver may still be running, so it must be reaped before the job is reported
+// ERROR — the same leak class STR3 fixed on the cancel path. The real fallback
+// poll never returns a non-context error on its own, so the wait is injected.
+func TestRunJob_WaitError_ReapsDriverAndFails(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	p := newK8sProvider(t, client)
+	j := newTestJob()
+	j.JobID = "j-lc-wait-error"
+	require.NoError(t, p.store.CreateJob(context.Background(), j.ProjectID, j.Region, j))
+
+	orig := waitTerminalFn
+	waitTerminalFn = func(context.Context, kubernetes.Interface, k8shelpers.JobHandle, sparkhelpers.TerminalOptions) (sparkhelpers.Final, error) {
+		return sparkhelpers.Final{}, errors.New("synthetic wait failure")
+	}
+	defer func() { waitTerminalFn = orig }()
+
+	ctx := context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.runJob(ctx, j.ProjectID, j.Region, j, "")
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("runJob did not complete")
+	}
+
+	got, err := p.GetJob(ctx, j.ProjectID, j.Region, j.JobID)
+	require.NoError(t, err)
+	status, _ := JobJSON(got)["status"].(map[string]any)
+	require.Equal(t, "ERROR", status["state"])
+
+	// The driver k8s Job created by SubmitClientMode must not be leaked.
+	jobs, err := client.BatchV1().Jobs("jaiscloud").List(ctx, metav1.ListOptions{})
+	require.NoError(t, err)
+	require.Empty(t, jobs.Items, "driver k8s Job must be reaped on a non-cancel wait error")
 }

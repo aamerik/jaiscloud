@@ -54,6 +54,12 @@ func cancelKey(project, region, jobID string) string {
 	return project + "/" + region + "/" + jobID
 }
 
+// waitTerminalFn waits for the driver pod's terminal state. It is a package
+// var so tests can inject a synthetic non-context error and exercise the
+// reap-on-error branch (the real fallback poll never returns a non-context
+// error on its own).
+var waitTerminalFn = sparkhelpers.WaitTerminalWith
+
 // runJob executes a stored job via sparkhelpers.SubmitClientMode. Runs in a
 // goroutine; the terminal state is written back to the jobs store (first-write
 // wins via the store UpdateJob) and a terminal snapshot is persisted for
@@ -198,16 +204,21 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 			s.setJobState(runCtx, project, region, jobID, map[string]bool{jobStateAttemptFail: true}, jobStateRunning, "")
 		}
 
-		final, err := sparkhelpers.WaitTerminalWith(runCtx, s.k8sClient, handle, sparkhelpers.TerminalOptions{StrictExitCode: strict})
+		final, err := waitTerminalFn(runCtx, s.k8sClient, handle, sparkhelpers.TerminalOptions{StrictExitCode: strict})
 		if err != nil {
 			if runCtx.Err() != nil {
 				// Cancelled (CancelJob, or service shutdown): the driver is
 				// still running, so delete its client-mode k8s Job (and pod)
 				// before returning — otherwise the driver keeps executing after
 				// the job reports CANCELLED.
-				s.reapCancelledDriver(handle)
+				s.reapDriver(handle)
 				return
 			}
+			// The wait itself failed (e.g. the pod watch could not be
+			// established) while the context is still live: the driver may
+			// still be running, so reap it before reporting ERROR rather than
+			// leaking it — the same class of leak STR3 fixed on the cancel path.
+			s.reapDriver(handle)
 			slog.Warn("dataproc: WaitTerminal failed", "job", jobID, "attempt", attempt, "err", err)
 			s.persistSnapshot(runCtx, project, region, jobID, k8shelpers.BuildSnapshotFromError(err))
 			s.finishJob(project, region, j, jobStateError, err.Error(), driverLog.Bytes())
@@ -263,12 +274,14 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 	}
 }
 
-// reapCancelledDriver deletes the client-mode k8s Job (and, via cascade, the
-// driver pod) when a running job's context is cancelled (CancelJob, or service
-// shutdown). runCtx is already cancelled at this point, so a bounded background
-// context is used; the reaping is best-effort and logged, matching the EMR-on-EKS
+// reapDriver deletes the client-mode k8s Job (and, via cascade, the driver
+// pod). It is called when a running job's context is cancelled (CancelJob, or
+// service shutdown) and when the wait itself fails while the context is still
+// live; in both cases the driver may still be executing and must be stopped.
+// The reap runs on a fresh bounded background context (the job context may
+// already be cancelled) and is best-effort and logged, matching the EMR-on-EKS
 // cancel path.
-func (s *Service) reapCancelledDriver(handle k8shelpers.JobHandle) {
+func (s *Service) reapDriver(handle k8shelpers.JobHandle) {
 	if handle.JobName == "" {
 		return
 	}
