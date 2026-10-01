@@ -321,8 +321,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   a GKE-backed cluster's `virtualClusterConfig` is metadata only (no GKE control plane or
   node-pool CRUD), Dataproc cluster/job mutations return pollable long-running operations
   (`operations.get` walks CREATING/DELETING/… to terminal via a lazy, clock-driven state machine);
-  Dataproc runs only the Spark family (`sparkJob`/`pysparkJob`/`sparkRJob`), and every other job type
-  (`hadoopJob`, `hiveJob`, `pigJob`, `sparkSqlJob`, `prestoJob`, `trinoJob`, `flinkJob`) is fail-loud —
+  Dataproc runs the Spark family (`sparkJob`/`pysparkJob`/`sparkSqlJob`/`sparkRJob`; `sparkSqlJob` executes
+  the real Spark SQL CLI, with `queryFileUri`/`queryList.queries`/`jarFileUris`/`properties`/`scriptVariables`
+  mapped to `-f`/`-e`/`--jars`/`--conf`/`--hivevar`), and every other job type
+  (`hadoopJob`, `hiveJob`, `pigJob`, `prestoJob`, `trinoJob`, `flinkJob`) is fail-loud —
   the job is created and immediately set to `ERROR` with a "not supported by the emulator" detail
   (`hiveJob` in particular is not approximated over Spark, since HiveQL is a superset of Spark SQL;
   a user who needs Hive attaches their own HiveServer2/Spark to the Hive Metastore Thrift plane `:9083`,

@@ -334,14 +334,15 @@ Cluster create/update/start/stop/delete return a pollable `google.longrunning.Op
 
 ### Dataproc: job-type support matrix
 
-`jobs.submit` runs only the Spark family; every other type-job is fail-loud. The emulator is metadata-not-engine for the non-Spark engines — the Hive Metastore plane is served separately (see [Dataproc Metastore: control plane + Hive Thrift serving plane](#dataproc-metastore-control-plane--hive-thrift-serving-plane)) — so it does not attempt to execute Hive/Pig/Spark-SQL/Presto/Trino/Flink work.
+`jobs.submit` runs the Spark family (including Spark SQL); every other type-job is fail-loud. The emulator is metadata-not-engine for the non-Spark engines — the Hive Metastore plane is served separately (see [Dataproc Metastore: control plane + Hive Thrift serving plane](#dataproc-metastore-control-plane--hive-thrift-serving-plane)) — so it does not attempt to execute Hive/Pig/Presto/Trino/Flink work.
 
 | Type-job | Behaviour |
 |---|---|
 | `sparkJob` / `pysparkJob` / `sparkRJob` | Run via the Spark executor (mock or K8s mode; the Docker Spark executor is not wired, so `docker` mode falls back to mock). |
-| `hadoopJob`, `hiveJob`, `pigJob`, `sparkSqlJob`, `prestoJob`, `trinoJob`, `flinkJob` | Fail loud (see below). |
+| `sparkSqlJob` | Runs the real Spark SQL CLI (`spark-sql`) over the same executor in K8s mode (mock mode simulates it; `docker` mode falls back to mock): `queryList.queries` via `-e`, `queryFileUri` via `-f` (a `gs://` script is read through the wired GCS connector), `jarFileUris` via `--jars`, `scriptVariables` via `--hivevar`, and `properties` via `--conf`. Fail-loud if neither `queryFileUri` nor `queryList.queries` is set. |
+| `hadoopJob`, `hiveJob`, `pigJob`, `prestoJob`, `trinoJob`, `flinkJob` | Fail loud (see below). |
 
-Submitting an unsupported type does **not** return an RPC error: the job is created and immediately lands in `ERROR` with details `job type <X> is not supported by the emulator`, so the client observes a terminal job rather than a transport failure. In particular **hiveJob** and **sparkSqlJob** are fail-loud because execution is engine-bearing (a Hive/Pig/Spark-SQL/Presto/Trino/Flink runtime or query engine) while the emulator is metadata-not-engine; the Hive Metastore plane is a separate surface (see the Metastore subsection below).
+Submitting an unsupported type does **not** return an RPC error: the job is created and immediately lands in `ERROR` with details `job type <X> is not supported by the emulator`, so the client observes a terminal job rather than a transport failure. In particular **hiveJob** is fail-loud because execution is engine-bearing (a Hive/Pig/Presto/Trino/Flink runtime or query engine) while the emulator is metadata-not-engine; the Hive Metastore plane is a separate surface (see the Metastore subsection below).
 
 Because the emulator is metadata-not-engine, **hiveJob** stays fail-loud rather than being silently approximated: HiveQL is a superset of Spark SQL, so running it on Spark would diverge on Hive-specific constructs. If you need Hive execution, point your own engine at the emulator: the Hive Metastore Thrift plane on `:9083` serves the catalog (a single global catalog, see the Metastore subsection below), so a HiveServer2 or Spark deployment attached to it can execute queries while the emulator stores the table metadata.
 
@@ -359,7 +360,7 @@ The Dataproc Serverless (Batch) API is not implemented. Dataproc is clusters + j
 
 ### Dataproc WorkflowTemplates: only the latest version is retained
 
-`WorkflowTemplateService` is served over REST + gRPC (`create`/`get`/`list`/`update`/`delete`, plus `instantiate`/`instantiateInline`). Only the **latest** version of a template is stored: `create` stores version 1, `update` requires the request version to match the current one (`ABORTED` on mismatch) and bumps it, and a `get`/`delete` naming a non-current explicit version returns `NotFound` (real GCP keeps a version history). Instantiation runs the template's `OrderedJob` DAG through the same job core, so only the Spark-family job types (`sparkJob`/`pysparkJob`/`sparkRJob`) execute; other job types fail loud exactly as `SubmitJob` already does (see [Dataproc: job-type support matrix](#dataproc-job-type-support-matrix)). The `workflowTemplates` IAM trio (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`) is not served.
+`WorkflowTemplateService` is served over REST + gRPC (`create`/`get`/`list`/`update`/`delete`, plus `instantiate`/`instantiateInline`). Only the **latest** version of a template is stored: `create` stores version 1, `update` requires the request version to match the current one (`ABORTED` on mismatch) and bumps it, and a `get`/`delete` naming a non-current explicit version returns `NotFound` (real GCP keeps a version history). Instantiation runs the template's `OrderedJob` DAG through the same job core, so only the Spark-family job types (`sparkJob`/`pysparkJob`/`sparkSqlJob`/`sparkRJob`) execute; other job types fail loud exactly as `SubmitJob` already does (see [Dataproc: job-type support matrix](#dataproc-job-type-support-matrix)). The `workflowTemplates` IAM trio (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`) is not served.
 
 ### Dataproc lifecycle events on Pub/Sub (emulator-defined)
 

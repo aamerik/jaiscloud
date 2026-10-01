@@ -73,6 +73,10 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 		s.finishJob(project, region, j, jobStateError, err.Error(), nil)
 		return
 	}
+	// The Spark SQL CLI prints a failed query's message without an "ERROR" log
+	// line, so for sparkSqlJob the driver's exit code is authoritative (no
+	// lenient "clean shutdown hook" success rule).
+	_, isSQLJob := ep.(sparkhelpers.SqlEntryPoint)
 
 	ns := s.namespace
 	if ns == "" {
@@ -120,6 +124,7 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 		Image:              s.sparkImage,
 		EntryPoint:         ep,
 		SparkSubmitPath:    s.sparkSubmitPath,
+		SparkSqlPath:       s.sparkSqlPath,
 		SparkSubmitArgs:    sparkArgs,
 		JarArgs:            jarArgs,
 		PlatformOverlay:    s.platformCfg,
@@ -147,7 +152,7 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 	s.setJobState(runCtx, project, region, jobID, map[string]bool{jobStatePending: true}, jobStateSetupDone, "")
 	s.setJobState(runCtx, project, region, jobID, map[string]bool{jobStateSetupDone: true}, jobStateRunning, "")
 
-	final, err := sparkhelpers.WaitTerminal(runCtx, s.k8sClient, handle)
+	final, err := sparkhelpers.WaitTerminalWith(runCtx, s.k8sClient, handle, sparkhelpers.TerminalOptions{StrictExitCode: isSQLJob})
 	if err != nil {
 		if runCtx.Err() != nil {
 			return // cancelled by CancelJob

@@ -172,7 +172,10 @@ type summary struct {
 	PublishedObjects   []string       `json:"published_objects"`
 	Cluster            string         `json:"cluster"`
 	MetastoreService   string         `json:"metastore_service"`
-	DriverOutputs      map[string]struct {
+	// JobTypes maps each Spark stage to the Dataproc job type it ran as, so the
+	// test can prove the Derive hop took the sparkSqlJob path.
+	JobTypes      map[string]string `json:"job_types"`
+	DriverOutputs map[string]struct {
 		URI   string `json:"uri"`
 		Bytes int    `json:"bytes"`
 	} `json:"driver_outputs"`

@@ -35,6 +35,19 @@ type REntryPoint struct {
 
 func (REntryPoint) isEntryPoint() {}
 
+// SqlEntryPoint describes a Spark SQL CLI (spark-sql) job. Exactly one of
+// Queries or FileURI is set: Queries become a single `-e` argument (joined with
+// ";"), FileURI a `-f` argument (an HCFS/gs:// URI is resolved by the wired
+// connector). JarFileURIs map to `--jars`; HiveVars map to `--hivevar k=v`.
+type SqlEntryPoint struct {
+	Queries     []string
+	FileURI     string
+	JarFileURIs []string
+	HiveVars    map[string]string
+}
+
+func (SqlEntryPoint) isEntryPoint() {}
+
 // ResourceProfile holds CPU/memory/count for a driver or executor.
 type ResourceProfile struct {
 	CPU    string
@@ -67,6 +80,10 @@ type ClientModeJob struct {
 	TTLSecondsAfterFinished *int32
 	// SparkSubmitPath overrides the spark-submit binary path (default: "spark-submit").
 	SparkSubmitPath string
+	// SparkSqlPath overrides the spark-sql binary path for a SqlEntryPoint
+	// (default: "spark-sql", or a sibling of SparkSubmitPath when that is set;
+	// the apache/spark image keeps it at /opt/spark/bin/spark-sql, off PATH).
+	SparkSqlPath string
 	// ExtraDriverEnv are env vars appended to the spark-submit driver container.
 	// Providers build this from cloud-specific emulator config; sparkhelpers
 	// is cloud-agnostic and forwards unchanged.

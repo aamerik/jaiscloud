@@ -40,8 +40,8 @@ func JobInputFromMap(jobBody map[string]any) JobInput {
 }
 
 // jobTypeKeys is the set of Dataproc oneof type-job field names in precedence
-// order. Only Spark-family types run; hadoopJob/hiveJob/pigJob/sparkSqlJob/
-// prestoJob/trinoJob/flinkJob are unsupported.
+// order. Only Spark-family types run; hadoopJob/hiveJob/pigJob/prestoJob/
+// trinoJob/flinkJob are unsupported.
 var jobTypeKeys = []string{
 	"sparkJob", "pysparkJob", "sparkSqlJob", "sparkRJob",
 	"hadoopJob", "hiveJob", "pigJob",
@@ -61,13 +61,12 @@ func extractJobType(body map[string]any) (string, map[string]any) {
 
 // unsupportedJobTypes are job types the emulator does not run.
 var unsupportedJobTypes = map[string]bool{
-	"hadoopJob":   true,
-	"hiveJob":     true,
-	"pigJob":      true,
-	"sparkSqlJob": true,
-	"prestoJob":   true,
-	"trinoJob":    true,
-	"flinkJob":    true,
+	"hadoopJob": true,
+	"hiveJob":   true,
+	"pigJob":    true,
+	"prestoJob": true,
+	"trinoJob":  true,
+	"flinkJob":  true,
 }
 
 // jobToEntryPoint maps a Dataproc type-job body to a sparkhelpers.EntryPoint.
@@ -99,9 +98,44 @@ func jobToEntryPoint(jobType string, typeJob map[string]any) (sparkhelpers.Entry
 		}
 		ep := sparkhelpers.REntryPoint{MainRFile: mainR}
 		return ep, bodyStringSlice(typeJob, "args"), nil
+	case "sparkSqlJob":
+		// spark-sql is a spark-submit wrapper, so this is semantically Spark
+		// SQL (unlike hiveJob, which stays fail-loud as HJ2). queryFileUri is
+		// passed to `-f` and queryList.queries to `-e`; both accept HCFS/gs://
+		// URIs via the wired GCS connector. scriptVariables map to --hivevar
+		// (the SQL CLI applies these as SET-equivalent variables).
+		// SparkSqlJob.query_file_uri and query_list form a proto oneof, so
+		// exactly one must be set.
+		queries := queryListQueries(typeJob)
+		_, hasQueryList := typeJob["queryList"].(map[string]any)
+		fileURI := bodyString(typeJob, "queryFileUri")
+		switch {
+		case fileURI != "" && hasQueryList:
+			return nil, nil, fmt.Errorf("sparkSqlJob must set only one of queryFileUri or queryList")
+		case fileURI == "" && !hasQueryList:
+			return nil, nil, fmt.Errorf("sparkSqlJob requires queryFileUri or queryList.queries")
+		case fileURI == "" && len(queries) == 0:
+			return nil, nil, fmt.Errorf("sparkSqlJob queryList.queries must not be empty")
+		}
+		ep := sparkhelpers.SqlEntryPoint{
+			Queries:     queries,
+			FileURI:     fileURI,
+			JarFileURIs: bodyStringSlice(typeJob, "jarFileUris"),
+			HiveVars:    bodyStringMap(typeJob, "scriptVariables"),
+		}
+		return ep, nil, nil
 	default:
 		return nil, nil, fmt.Errorf("job type %q is not supported by the emulator", jobType)
 	}
+}
+
+// queryListQueries reads <typeJob>.queryList.queries.
+func queryListQueries(typeJob map[string]any) []string {
+	ql, _ := typeJob["queryList"].(map[string]any)
+	if ql == nil {
+		return nil
+	}
+	return bodyStringSlice(ql, "queries")
 }
 
 // propertiesToConfArgs converts a type-job properties map into "--conf k=v"

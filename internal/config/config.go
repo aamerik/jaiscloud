@@ -95,6 +95,9 @@ type Config struct {
 	// Spark driver image (default "spark-submit"; the official apache/spark
 	// image keeps it at /opt/spark/bin/spark-submit, off PATH).
 	K8sSparkSubmitPath string
+	// K8sSparkSqlPath overrides the spark-sql binary path used for Dataproc
+	// sparkSqlJob driver pods (default: a sibling of K8sSparkSubmitPath).
+	K8sSparkSqlPath string
 
 	// Observability (opt-in)
 	Metrics bool // expose /metrics endpoint
@@ -170,6 +173,7 @@ func Load(cloud model.Cloud) (*Config, error) {
 	viper.SetDefault("k8s_spark_image", "")
 	viper.SetDefault("k8s_spark_sa", "")
 	viper.SetDefault("k8s_spark_submit_path", "")
+	viper.SetDefault("k8s_spark_sql_path", "")
 
 	// ── Cloud-specific defaults ─────────────────────────────────────────────
 	// Only the active cloud's keys are registered; the other cloud's
@@ -229,6 +233,7 @@ func Load(cloud model.Cloud) (*Config, error) {
 		K8sSparkImage:      viper.GetString("k8s_spark_image"),
 		K8sSparkSA:         viper.GetString("k8s_spark_sa"),
 		K8sSparkSubmitPath: viper.GetString("k8s_spark_submit_path"),
+		K8sSparkSqlPath:    viper.GetString("k8s_spark_sql_path"),
 	}
 
 	// Cloud-specific fields — only the active cloud's keys are read.
