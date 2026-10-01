@@ -141,3 +141,12 @@ entries:
     match: "Dataproc WorkflowTemplateService"
     pr: 275
     note: "resolved: WorkflowTemplateService CRUD + instantiate/inline instantiate over the job core (#274/#275); IAM trio deferred (DPW3, optional)"
+
+  # MP1/MP2 shipped the HMS partition store + methods (#234) and the Hive-3.x
+  # get_table_meta / alter_table_with_cascade paths (#235). The debt-plan §3.10/§7
+  # rows live in gitignored scratch, so this commits the closure; #235 is the
+  # completing PR (MP5's off-the-shelf HMS-client lifecycle test covers it).
+  - source: "gcp-deferred-debt-plan"
+    match: "jc_hms_partitions"
+    pr: 235
+    note: "resolved: HMS partition CRUD over jc_hms_partitions (MP1 #234) + get_table_meta/alter_table_with_cascade (MP2 #235); MP5 client lifecycle test"

@@ -4,9 +4,23 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"reflect"
 	"sync"
 	"testing"
 )
+
+// jsonEqual reports whether two JSON documents are semantically equal. The
+// Postgres backend stores Table/Partition JSON in JSONB columns, which normalize
+// key order and whitespace, so a byte-for-byte comparison only holds for the
+// memory store. The HMS server parses the struct JSON, so semantic equality is
+// the correct contract (mirrors internal/gcp/store/dataproc/postgres_test.go).
+func jsonEqual(a, b string) bool {
+	var av, bv any
+	if json.Unmarshal([]byte(a), &av) != nil || json.Unmarshal([]byte(b), &bv) != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
+}
 
 // runStoreTests exercises a Store against the shared test matrix. Backend tests
 // (memory/postgres) call this so both implement the identical contract.
@@ -62,7 +76,7 @@ func runStoreTests(t *testing.T, s Store) {
 		t.Fatalf("expected ErrDatabaseNotFound on create table, got %v", err)
 	}
 	gotTbl, err := s.GetTable(ctx, "default", "t1")
-	if err != nil || gotTbl.DBName != "default" || gotTbl.TableName != "t1" || string(gotTbl.TableJSON) != string(tblJSON) {
+	if err != nil || gotTbl.DBName != "default" || gotTbl.TableName != "t1" || !jsonEqual(string(gotTbl.TableJSON), string(tblJSON)) {
 		t.Fatalf("get table: %v %+v", err, gotTbl)
 	}
 	tn, err := s.ListTables(ctx, "default")
@@ -76,11 +90,11 @@ func runStoreTests(t *testing.T, s Store) {
 		// Ignore current entirely — plain overwrite.
 		return Table{DBName: "default", TableName: "t1", TableJSON: newJSON}, nil
 	})
-	if err != nil || string(updated.TableJSON) != string(newJSON) {
+	if err != nil || !jsonEqual(string(updated.TableJSON), string(newJSON)) {
 		t.Fatalf("alter table: %v %+v", err, updated)
 	}
 	gotTbl, _ = s.GetTable(ctx, "default", "t1")
-	if string(gotTbl.TableJSON) != string(newJSON) {
+	if !jsonEqual(string(gotTbl.TableJSON), string(newJSON)) {
 		t.Fatalf("alter table did not overwrite: %s", gotTbl.TableJSON)
 	}
 	if _, err := s.AlterTable(ctx, "default", "nope", func(Table) (Table, error) { return Table{}, nil }); err != ErrTableNotFound {
@@ -92,7 +106,7 @@ func runStoreTests(t *testing.T, s Store) {
 		t.Fatalf("expected mutate error to propagate, got %v", err)
 	}
 	gotTbl, _ = s.GetTable(ctx, "default", "t1")
-	if string(gotTbl.TableJSON) != string(newJSON) {
+	if !jsonEqual(string(gotTbl.TableJSON), string(newJSON)) {
 		t.Fatal("mutate error should not have written")
 	}
 
@@ -177,7 +191,7 @@ func runStoreTests(t *testing.T, s Store) {
 		t.Fatalf("expected ErrTableNotFound on create, got %v", err)
 	}
 	gotP, err := s.GetPartition(ctx, "db2", "c", []string{"2024"})
-	if err != nil || len(gotP.Values) != 1 || gotP.Values[0] != "2024" || string(gotP.PartJSON) != string(pA.PartJSON) {
+	if err != nil || len(gotP.Values) != 1 || gotP.Values[0] != "2024" || !jsonEqual(string(gotP.PartJSON), string(pA.PartJSON)) {
 		t.Fatalf("get partition: %v %+v", err, gotP)
 	}
 	if _, err := s.GetPartition(ctx, "db2", "c", []string{"2025"}); err != ErrPartitionNotFound {
@@ -209,7 +223,7 @@ func runStoreTests(t *testing.T, s Store) {
 		t.Fatalf("alter partition: %v", err)
 	}
 	gotP, _ = s.GetPartition(ctx, "db2", "c", []string{"2024"})
-	if string(gotP.PartJSON) != string(newPJ) {
+	if !jsonEqual(string(gotP.PartJSON), string(newPJ)) {
 		t.Fatalf("alter partition did not overwrite: %s", gotP.PartJSON)
 	}
 	if _, err := s.AlterPartition(ctx, "db2", "c", []string{"1999"}, func(Partition) (Partition, error) {
@@ -397,10 +411,10 @@ func TestSnapshotRestore(t *testing.T) {
 	if _, err := s.GetDatabase(ctx, "db"); err != nil {
 		t.Fatalf("database lost in restore: %v", err)
 	}
-	if got, err := s.GetTable(ctx, "db", "t"); err != nil || string(got.TableJSON) != `["o",[[1,["s","t"]]]]` {
+	if got, err := s.GetTable(ctx, "db", "t"); err != nil || !jsonEqual(string(got.TableJSON), `["o",[[1,["s","t"]]]]`) {
 		t.Fatalf("table lost in restore: %v %+v", err, got)
 	}
-	if got, err := s.GetPartition(ctx, "db", "t", []string{"2024"}); err != nil || string(got.PartJSON) != string(partJSON("2024")) {
+	if got, err := s.GetPartition(ctx, "db", "t", []string{"2024"}); err != nil || !jsonEqual(string(got.PartJSON), string(partJSON("2024"))) {
 		t.Fatalf("partition lost in restore: %v %+v", err, got)
 	}
 }
