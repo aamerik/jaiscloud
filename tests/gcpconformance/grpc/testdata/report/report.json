@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 318,
-  "passed": 318,
+  "total": 333,
+  "passed": 333,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 22,
-    "checks": 318,
-    "passed": 318,
+    "services": 23,
+    "checks": 333,
+    "passed": 333,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -151,6 +151,13 @@
       "service": "storage",
       "total": 24,
       "passed": 24,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "tasks",
+      "total": 15,
+      "passed": 15,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1674,6 +1681,111 @@
       "method": "DeleteJob",
       "status": "pass",
       "key_field": "subsequent GetJob NOT_FOUND"
+    },
+    {
+      "service": "tasks",
+      "rpc": "CreateQueue",
+      "method": "CreateQueue",
+      "status": "pass",
+      "key_field": "name + state RUNNING + default rateLimits"
+    },
+    {
+      "service": "tasks",
+      "rpc": "GetQueue",
+      "method": "GetQueue",
+      "status": "pass",
+      "key_field": "name round-trip"
+    },
+    {
+      "service": "tasks",
+      "rpc": "ListQueues",
+      "method": "ListQueues",
+      "status": "pass",
+      "key_field": "created queue present"
+    },
+    {
+      "service": "tasks",
+      "rpc": "UpdateQueue",
+      "method": "UpdateQueue",
+      "status": "pass",
+      "key_field": "rateLimits updated (masked)"
+    },
+    {
+      "service": "tasks",
+      "rpc": "PauseQueue",
+      "method": "PauseQueue",
+      "status": "pass",
+      "key_field": "state PAUSED"
+    },
+    {
+      "service": "tasks",
+      "rpc": "ResumeQueue",
+      "method": "ResumeQueue",
+      "status": "pass",
+      "key_field": "state RUNNING"
+    },
+    {
+      "service": "tasks",
+      "rpc": "PurgeQueue",
+      "method": "PurgeQueue",
+      "status": "pass",
+      "key_field": "purgeTime set"
+    },
+    {
+      "service": "tasks",
+      "rpc": "DeleteQueue",
+      "method": "DeleteQueue",
+      "status": "pass",
+      "key_field": "subsequent GetQueue NOT_FOUND"
+    },
+    {
+      "service": "tasks",
+      "rpc": "GetIamPolicy",
+      "method": "GetIamPolicy",
+      "status": "pass",
+      "key_field": "etag present"
+    },
+    {
+      "service": "tasks",
+      "rpc": "SetIamPolicy",
+      "method": "SetIamPolicy",
+      "status": "pass",
+      "key_field": "binding persisted"
+    },
+    {
+      "service": "tasks",
+      "rpc": "TestIamPermissions",
+      "method": "TestIamPermissions",
+      "status": "pass",
+      "key_field": "requested permission echoed"
+    },
+    {
+      "service": "tasks",
+      "rpc": "CreateTask",
+      "method": "CreateTask",
+      "status": "pass",
+      "key_field": "name + scheduleTime + httpRequest round-trip"
+    },
+    {
+      "service": "tasks",
+      "rpc": "GetTask",
+      "method": "GetTask",
+      "status": "pass",
+      "key_field": "name round-trip"
+    },
+    {
+      "service": "tasks",
+      "rpc": "ListTasks",
+      "method": "ListTasks",
+      "status": "pass",
+      "key_field": "created task present"
+    },
+    {
+      "service": "tasks",
+      "rpc": "DeleteTask",
+      "method": "DeleteTask",
+      "status": "pass",
+      "key_field": "subsequent GetTask NOT_FOUND"
     },
     {
       "service": "resourcemanager",

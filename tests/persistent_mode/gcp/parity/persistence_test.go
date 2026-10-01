@@ -20,9 +20,9 @@
 //
 //	probed here:
 //	  bigquery, clouddns, cloudsql, compute, eventarc, firestore, functions,
-//	  managedkafka, memorystore, metastore, scheduler, workflowexecutions, workflows
+//	  managedkafka, memorystore, metastore, scheduler, tasks, workflowexecutions, workflows
 //
-// No provider service is skipped: each of the thirteen has a simple, schema-correct
+// No provider service is skipped: each has a simple, schema-correct
 // REST create/read pair. Services whose data lives in the shared ResourceStore
 // (clouddns, cloudsql, compute, memorystore) are cleared by the resources
 // resetter; the rest are cleared by their own store resetter.
@@ -79,6 +79,7 @@ var probes = []probe{
 	{"memorystore", seedMemorystore},
 	{"metastore", seedMetastore},
 	{"scheduler", seedScheduler},
+	{"tasks", seedTasks},
 	{"workflowexecutions", seedWorkflowExecutions},
 	{"workflows", seedWorkflows},
 }
@@ -397,6 +398,19 @@ func seedScheduler(d *driver, suffix string) (func() error, func() error, error)
 		return nil, nil, err
 	}
 	get := fmt.Sprintf("/v1/projects/%s/locations/%s/jobs/%s", project, location, id)
+	return d.verifyPresent(get), d.verifyGone(get), nil
+}
+
+// seedTasks creates a Cloud Tasks queue (v2 projects.locations.queues.create).
+func seedTasks(d *driver, suffix string) (func() error, func() error, error) {
+	id := "tasks-" + suffix
+	post := fmt.Sprintf("/v2/projects/%s/locations/%s/queues", project, location)
+	if err := d.expect("POST", post, jsonBody(map[string]any{
+		"name": fmt.Sprintf("projects/%s/locations/%s/queues/%s", project, location, id),
+	}), http.StatusOK); err != nil {
+		return nil, nil, err
+	}
+	get := fmt.Sprintf("/v2/projects/%s/locations/%s/queues/%s", project, location, id)
 	return d.verifyPresent(get), d.verifyGone(get), nil
 }
 

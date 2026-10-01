@@ -314,6 +314,18 @@ var formatters = map[string]func(project, name string) string{
 		loc, job := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/jobs/%s", p, loc, job)
 	},
+	// Cloud Tasks v2 — a queue is
+	// "projects/{project}/locations/{location}/queues/{queue}" (callers pass
+	// "location/queue") and a task nests under it (callers pass
+	// "location/queue/task").
+	"tasks-queue": func(p, n string) string {
+		loc, q := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/queues/%s", p, loc, q)
+	},
+	"tasks-task": func(p, n string) string {
+		loc, q, t := wfExec(n)
+		return fmt.Sprintf("projects/%s/locations/%s/queues/%s/tasks/%s", p, loc, q, t)
+	},
 	// Cloud Resource Manager — a project's canonical v3 resource name is
 	// "projects/{project}". The v1 REST API has no resource name (it identifies
 	// a project by projectId), so callers pass the project id as the closure
