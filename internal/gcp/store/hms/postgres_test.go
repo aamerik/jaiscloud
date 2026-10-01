@@ -35,9 +35,10 @@ func TestPostgresStore(t *testing.T) {
 	runStoreTests(t, s)
 }
 
-// TestPostgresTableJSONVerbatim verifies the full Table JSON survives a
-// Postgres Snapshot/Restore round trip byte-for-byte.
-func TestPostgresTableJSONVerbatim(t *testing.T) {
+// TestPostgresTableJSONRoundTrip verifies the full Table JSON survives a
+// Postgres Snapshot/Restore round trip. The column is JSONB, so key order and
+// whitespace are normalized — compare semantically, not byte-for-byte.
+func TestPostgresTableJSONRoundTrip(t *testing.T) {
 	dsn := os.Getenv("JAISCLOUD_DSN")
 	if dsn == "" {
 		t.Skip("JAISCLOUD_DSN not set — skipping Postgres snapshot test")
@@ -77,14 +78,15 @@ func TestPostgresTableJSONVerbatim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get table after restore: %v", err)
 	}
-	if string(got.TableJSON) != tblJSON {
-		t.Fatalf("table JSON not verbatim after restore:\n got  %s\n want %s", got.TableJSON, tblJSON)
+	if !jsonEqual(string(got.TableJSON), tblJSON) {
+		t.Fatalf("table JSON not preserved after restore:\n got  %s\n want %s", got.TableJSON, tblJSON)
 	}
 }
 
-// TestPostgresPartitionJSONVerbatim verifies the full Partition JSON survives a
-// Postgres Snapshot/Restore round trip byte-for-byte.
-func TestPostgresPartitionJSONVerbatim(t *testing.T) {
+// TestPostgresPartitionJSONRoundTrip verifies the full Partition JSON survives a
+// Postgres Snapshot/Restore round trip. The column is JSONB, so key order and
+// whitespace are normalized — compare semantically, not byte-for-byte.
+func TestPostgresPartitionJSONRoundTrip(t *testing.T) {
 	dsn := os.Getenv("JAISCLOUD_DSN")
 	if dsn == "" {
 		t.Skip("JAISCLOUD_DSN not set — skipping Postgres partition snapshot test")
@@ -127,7 +129,7 @@ func TestPostgresPartitionJSONVerbatim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get partition after restore: %v", err)
 	}
-	if string(got.PartJSON) != partJSONStr {
-		t.Fatalf("partition JSON not verbatim after restore:\n got  %s\n want %s", got.PartJSON, partJSONStr)
+	if !jsonEqual(string(got.PartJSON), partJSONStr) {
+		t.Fatalf("partition JSON not preserved after restore:\n got  %s\n want %s", got.PartJSON, partJSONStr)
 	}
 }
