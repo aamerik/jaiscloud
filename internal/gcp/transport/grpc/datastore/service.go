@@ -81,6 +81,9 @@ func (s *Service) Commit(ctx context.Context, req *datastorepb.CommitRequest) (*
 		if r.Key != nil {
 			mr.Key = keyToProto(*r.Key, project)
 		}
+		if !r.UpdateTime.IsZero() {
+			mr.UpdateTime = timestamppb.New(r.UpdateTime)
+		}
 		out.MutationResults = append(out.MutationResults, mr)
 	}
 	// CommitTime is set only for transactional commits (see the core doc).
@@ -114,10 +117,14 @@ func (s *Service) Lookup(ctx context.Context, req *datastorepb.LookupRequest) (*
 
 	out := &datastorepb.LookupResponse{}
 	for _, r := range resp.Found {
-		out.Found = append(out.Found, &datastorepb.EntityResult{
+		er := &datastorepb.EntityResult{
 			Entity:  entityToProto(r.Entity, project),
 			Version: r.Version,
-		})
+		}
+		if !r.Entity.UpdateTime.IsZero() {
+			er.UpdateTime = timestamppb.New(r.Entity.UpdateTime)
+		}
+		out.Found = append(out.Found, er)
 	}
 	for _, k := range resp.Missing {
 		out.Missing = append(out.Missing, &datastorepb.EntityResult{
@@ -168,10 +175,14 @@ func (s *Service) RunQuery(ctx context.Context, req *datastorepb.RunQueryRequest
 		batch.MoreResults = datastorepb.QueryResultBatch_MORE_RESULTS_AFTER_LIMIT
 	}
 	for _, r := range resp.Entities {
-		batch.EntityResults = append(batch.EntityResults, &datastorepb.EntityResult{
+		er := &datastorepb.EntityResult{
 			Entity:  entityToProto(r.Entity, project),
 			Version: r.Version,
-		})
+		}
+		if !r.Entity.UpdateTime.IsZero() {
+			er.UpdateTime = timestamppb.New(r.Entity.UpdateTime)
+		}
+		batch.EntityResults = append(batch.EntityResults, er)
 	}
 	return &datastorepb.RunQueryResponse{Batch: batch}, nil
 }

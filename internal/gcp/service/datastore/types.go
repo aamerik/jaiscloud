@@ -111,6 +111,13 @@ type MutationResult struct {
 	Version          int64
 	Key              *Key // non-nil when an ID was allocated for the mutation
 	ConflictDetected bool
+	// UpdateTime is the server-stamped entity update time: the new stamp after
+	// an applied insert/update/upsert, the current entity's stamp when a
+	// mutation is rejected (conflict_detected — the mutation changed nothing),
+	// and zero for a delete (which leaves update_time unset). It is one of the
+	// optimistic-concurrency tokens a client can pass forward as a
+	// Mutation.update_time precondition.
+	UpdateTime time.Time
 }
 
 // CommitResponse is the transport-neutral result of a Commit.

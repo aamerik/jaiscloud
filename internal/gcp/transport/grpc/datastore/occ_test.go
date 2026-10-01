@@ -3,8 +3,12 @@ package datastore
 import (
 	"context"
 	"testing"
+	"time"
 
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"jaiscloud/internal/clock"
 )
 
 // TestLookupReturnsRealVersion verifies EntityResult.Version reflects the
@@ -213,5 +217,89 @@ func TestCommitPartialConflictDoesNotAbortOtherMutations(t *testing.T) {
 	}
 	if len(lookupResp.GetFound()) != 1 {
 		t.Fatal("entity b must exist — its non-conflicting insert must not have been aborted by a's conflict")
+	}
+}
+
+// TestFrozenClockUpdateTimeToken locks the update_time optimistic-concurrency
+// token end to end: it is emitted on Commit and Lookup, is strictly monotonic
+// per entity even under a frozen clock, and a stale update_time precondition is
+// reported as conflict_detected instead of silently applied (the G7 lost-update
+// regression, mirroring Firestore's monotonic UpdateTime guard).
+func TestFrozenClockUpdateTimeToken(t *testing.T) {
+	client, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	frozen := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: frozen})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	key := nameKey("Task", "frozen")
+	ins, err := client.Commit(ctx, &datastorepb.CommitRequest{
+		ProjectId: "test",
+		Mutations: []*datastorepb.Mutation{{
+			Operation: &datastorepb.Mutation_Insert{Insert: entity(key, map[string]*datastorepb.Value{"n": intVal(1)})},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	stamp := ins.GetMutationResults()[0].GetUpdateTime()
+	if stamp == nil {
+		t.Fatal("Commit MutationResult.update_time must be set so a client can pass it forward")
+	}
+	observed := stamp.AsTime()
+
+	lookup := func() *datastorepb.EntityResult {
+		t.Helper()
+		resp, err := client.Lookup(ctx, &datastorepb.LookupRequest{ProjectId: "test", Keys: []*datastorepb.Key{key}})
+		if err != nil {
+			t.Fatalf("lookup: %v", err)
+		}
+		if len(resp.GetFound()) != 1 {
+			t.Fatalf("expected 1 found entity, got %d", len(resp.GetFound()))
+		}
+		return resp.GetFound()[0]
+	}
+
+	if got := lookup().GetUpdateTime(); got == nil || !got.AsTime().Equal(observed) {
+		t.Fatalf("Lookup update_time = %v, want %v (the Commit token)", got, observed)
+	}
+
+	// A mutation carrying the observed token must apply and advance it.
+	upd := func(n int64) *datastorepb.Mutation {
+		return &datastorepb.Mutation{
+			Operation:                 &datastorepb.Mutation_Update{Update: entity(key, map[string]*datastorepb.Value{"n": intVal(n)})},
+			ConflictDetectionStrategy: &datastorepb.Mutation_UpdateTime{UpdateTime: timestamppb.New(observed)},
+		}
+	}
+	applied, err := client.Commit(ctx, &datastorepb.CommitRequest{ProjectId: "test", Mutations: []*datastorepb.Mutation{upd(2)}})
+	if err != nil {
+		t.Fatalf("writer B commit: %v", err)
+	}
+	if applied.GetMutationResults()[0].GetConflictDetected() {
+		t.Fatal("a matching update_time precondition must not conflict")
+	}
+	advanced := applied.GetMutationResults()[0].GetUpdateTime()
+	if advanced == nil || !advanced.AsTime().After(observed) {
+		t.Fatalf("writer B update_time = %v, want strictly after %v", advanced, observed)
+	}
+
+	// A second writer still holding the stale token must be flagged as a
+	// conflict rather than clobbering writer B's write.
+	stale, err := client.Commit(ctx, &datastorepb.CommitRequest{ProjectId: "test", Mutations: []*datastorepb.Mutation{upd(3)}})
+	if err != nil {
+		t.Fatalf("writer A commit: %v", err)
+	}
+	if !stale.GetMutationResults()[0].GetConflictDetected() {
+		t.Fatal("a stale update_time precondition must be conflict_detected")
+	}
+	// A rejected mutation changed nothing, so its result carries the current
+	// entity's update_time (real Datastore semantics).
+	if got := stale.GetMutationResults()[0].GetUpdateTime(); got == nil || !got.AsTime().Equal(advanced.AsTime()) {
+		t.Fatalf("conflict MutationResult.update_time = %v, want %v (the current entity's)", got, advanced)
+	}
+	if got := lookup().GetEntity().GetProperties()["n"].GetIntegerValue(); got != 2 {
+		t.Fatalf("n = %d after the rejected stale write, want 2 (writer B's update must not be lost)", got)
 	}
 }

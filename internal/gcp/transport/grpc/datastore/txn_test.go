@@ -498,6 +498,31 @@ func TestTransactionExpiredTTL(t *testing.T) {
 	}
 }
 
+// TestTransactionActiveUnderFrozenClock is the guard for the frozen-clock TTL
+// edge: transaction expiry is derived from the emulator's business clock, so
+// while the clock is frozen a transaction never crosses its TTL. This is the
+// documented do-not-rely behaviour (GCP-TESTABILITY.md §7) — the test pins it so
+// an accidental switch to wall-clock expiry cannot slip in silently.
+func TestTransactionActiveUnderFrozenClock(t *testing.T) {
+	client, cleanup := testServer(t)
+	defer cleanup()
+
+	// A fixed clock that never advances, so the ~270s TTL is never reached.
+	clock.SetGlobalClock(clock.FixedClock{T: time.Now()})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	txn := beginTxn(t, client)
+	resp, err := txnCommit(t, client, txn, &datastorepb.Mutation{
+		Operation: &datastorepb.Mutation_Upsert{Upsert: entity(nameKey("Task", "frozen"), map[string]*datastorepb.Value{"n": intVal(1)})},
+	})
+	if err != nil {
+		t.Fatalf("commit under a frozen clock = %v, want success (the TTL is business-time based and time is frozen)", err)
+	}
+	if len(resp.GetMutationResults()) != 1 {
+		t.Fatalf("expected 1 mutation result, got %d", len(resp.GetMutationResults()))
+	}
+}
+
 // TestLookupRunQueryUnknownTransaction verifies a non-empty but unknown
 // transaction selector is rejected on reads (not silently ignored).
 func TestLookupRunQueryUnknownTransaction(t *testing.T) {

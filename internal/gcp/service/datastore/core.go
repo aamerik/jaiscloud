@@ -243,12 +243,17 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 			case errors.Is(err, dsstore.ErrConflict):
 				mr.ConflictDetected = true
 				mr.Version = applied.Version
+				// A rejected mutation changed nothing, so real Datastore
+				// reports the current entity's update_time (not the absent
+				// "after processing" stamp).
+				mr.UpdateTime = applied.UpdateTime
 			case errors.Is(err, dsstore.ErrEntityExists):
 				return nil, alreadyExists("entity already exists")
 			case err != nil:
 				return nil, mapStoreError(err)
 			default:
 				mr.Version = applied.Version
+				mr.UpdateTime = applied.UpdateTime
 				if allocated {
 					mr.Key = keyFromCanonical(e.Key)
 				}
@@ -265,12 +270,14 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 			case errors.Is(err, dsstore.ErrConflict):
 				mr.ConflictDetected = true
 				mr.Version = applied.Version
+				mr.UpdateTime = applied.UpdateTime
 			case errors.Is(err, dsstore.ErrEntityNotFound):
 				return nil, failedPrecondition("entity not found", 400)
 			case err != nil:
 				return nil, mapStoreError(err)
 			default:
 				mr.Version = applied.Version
+				mr.UpdateTime = applied.UpdateTime
 			}
 		case MutationDelete:
 			key, err := deleteKey(m.DeleteKey)
@@ -355,7 +362,7 @@ func (s *Service) commitTransactional(ctx context.Context, project string, txn [
 
 	results := make([]MutationResult, 0, len(applied))
 	for i := range applied {
-		mr := MutationResult{Version: applied[i].Version}
+		mr := MutationResult{Version: applied[i].Version, UpdateTime: applied[i].UpdateTime}
 		if allocatedKeys[i] != nil {
 			mr.Key = allocatedKeys[i]
 		}

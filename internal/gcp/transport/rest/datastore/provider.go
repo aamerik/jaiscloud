@@ -103,10 +103,14 @@ func (p *Provider) Lookup(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if len(resp.Found) > 0 {
 		found := make([]any, 0, len(resp.Found))
 		for _, r := range resp.Found {
-			found = append(found, map[string]any{
+			er := map[string]any{
 				"entity":  entityToWire(r.Entity, project),
 				"version": strconv.FormatInt(r.Version, 10),
-			})
+			}
+			if !r.Entity.UpdateTime.IsZero() {
+				er["updateTime"] = r.Entity.UpdateTime.UTC().Format(time.RFC3339Nano)
+			}
+			found = append(found, er)
 		}
 		out["found"] = found
 	}
@@ -170,10 +174,14 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 	if len(resp.Entities) > 0 {
 		ers := make([]any, 0, len(resp.Entities))
 		for _, r := range resp.Entities {
-			ers = append(ers, map[string]any{
+			er := map[string]any{
 				"entity":  entityToWire(r.Entity, project),
 				"version": strconv.FormatInt(r.Version, 10),
-			})
+			}
+			if !r.Entity.UpdateTime.IsZero() {
+				er["updateTime"] = r.Entity.UpdateTime.UTC().Format(time.RFC3339Nano)
+			}
+			ers = append(ers, er)
 		}
 		batch["entityResults"] = ers
 	}
@@ -267,6 +275,9 @@ func (p *Provider) Commit(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		mr := map[string]any{"version": strconv.FormatInt(r.Version, 10)}
 		if r.Key != nil {
 			mr["key"] = keyToWire(*r.Key, project)
+		}
+		if !r.UpdateTime.IsZero() {
+			mr["updateTime"] = r.UpdateTime.UTC().Format(time.RFC3339Nano)
 		}
 		if r.ConflictDetected {
 			mr["conflictDetected"] = true
