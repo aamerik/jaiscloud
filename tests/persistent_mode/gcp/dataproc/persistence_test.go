@@ -433,6 +433,19 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("status.details lost after import: got %q want %q", detailsAfter, detailsBefore)
 	}
 
+	// The sparkSqlJob must round-trip as a DONE sparkSqlJob (its type-job body
+	// and terminal state survive export/import like any other job).
+	code, body = doRequest(t, host, "GET", base+"/jobs/"+sqlJob, nil, "")
+	if code != http.StatusOK {
+		t.Fatalf("get sql job after import: got HTTP %d body %s", code, body)
+	}
+	if state := strField(jsonObj(t, body), "status", "state"); state != "DONE" {
+		t.Fatalf("sql job state after import: got %q body %s", state, body)
+	}
+	if _, ok := jsonObj(t, body)["sparkSqlJob"]; !ok {
+		t.Fatalf("sparkSqlJob body lost after import: %s", body)
+	}
+
 	// ── Verify lists return the restored entries ──────────────────────────────
 	code, body = doRequest(t, host, "GET", base+"/clusters", nil, "")
 	if code != http.StatusOK {
@@ -452,8 +465,8 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("list jobs after import: got HTTP %d body %s", code, body)
 	}
 	jobs, _ := jsonObj(t, body)["jobs"].([]any)
-	if len(jobs) != 2 {
-		t.Fatalf("list jobs after import: expected 2 jobs, got %d", len(jobs))
+	if len(jobs) != 3 {
+		t.Fatalf("list jobs after import: expected 3 jobs, got %d", len(jobs))
 	}
 }
 
