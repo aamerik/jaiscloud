@@ -59,7 +59,7 @@ func TestServiceOperationStore(t *testing.T) {
 		t.Fatalf("wait: %v", err)
 	}
 
-	page, next, err := s.ListOperations(ctx, "proj", "us-central1", 0, "")
+	page, next, err := s.ListOperations(ctx, "proj", "us-central1", V1, "", 0, "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestServiceOperationStore(t *testing.T) {
 	if _, err := s.DeleteFunction(ctx, "proj", "us-central1", "hello"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	page, _, err = s.ListOperations(ctx, "proj", "us-central1", 0, "")
+	page, _, err = s.ListOperations(ctx, "proj", "us-central1", V1, "", 0, "")
 	if err != nil {
 		t.Fatalf("list after mutations: %v", err)
 	}

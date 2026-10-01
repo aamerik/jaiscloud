@@ -8,7 +8,8 @@
 // which is consulted first: Dataproc cluster create/update/start/stop/delete are
 // returned done=false and are completed lazily when the SDK polls
 // Operations.GetOperation. A service that also persists operations implements
-// the richer Registry, so the shared service can List/Cancel/Delete them.
+// the richer Registry (Cancel/Delete) and/or ListRegistry (List) surfaces, so
+// the shared service can act on them.
 //
 // Unknown-name semantics are mode-dependent. The default (synchronous) contract
 // is lenient — an operation name no resolver owns is reported terminal and a
@@ -37,22 +38,38 @@ type Resolver interface {
 }
 
 // Registry is an optional richer Resolver for services that persist operations
-// and can therefore serve the full Operations surface. Each method returns
-// handled=false for a name the service does not own, exactly like ResolveOperation,
-// so services that share a namespace (Service Usage and Cloud Functions v1 both
-// publish top-level operations/{id}) keep their ownership handshake. List's
-// parent is the requested collection; an unknown or foreign parent is declined.
+// and can serve Cancel/Delete. Each method returns handled=false for a name the
+// service does not own, exactly like ResolveOperation, so services that share a
+// namespace (Service Usage and Cloud Functions v1 both publish top-level
+// operations/{id}) keep their ownership handshake.
+//
+// Listing is the separate ListRegistry surface: a service can persist
+// operations and serve them over List without owning Cancel/Delete semantics
+// (Cloud Functions v1 deliberately declines Cancel/Delete so its lenient
+// resolver-owned-absent contract is not turned into a NotFound).
 type Registry interface {
 	Resolver
-	// ListOperations returns the operations under parent. handled=false means
-	// the parent belongs to another service.
-	ListOperations(ctx context.Context, parent string, pageSize int32, pageToken string) (*longrunningpb.ListOperationsResponse, bool, error)
 	// CancelOperation cancels (or validates) an operation. handled=false means
 	// the name belongs to another service.
 	CancelOperation(ctx context.Context, name string) (handled bool, err error)
 	// DeleteOperation removes an operation. handled=false means the name
 	// belongs to another service.
 	DeleteOperation(ctx context.Context, name string) (handled bool, err error)
+}
+
+// ListRegistry is the optional List surface for services that persist
+// operations. List's parent is the requested collection; an unknown or foreign
+// parent is declined (handled=false) so another service's registry — or the
+// empty page — answers. filter is the standard google.longrunning.Operations.List
+// request parameter, forwarded verbatim: a registry that cannot evaluate a
+// non-empty filter must fail loud rather than silently return unfiltered
+// results. (returnPartialSuccess is handled once in Service.ListOperations, not
+// per registry — see there.)
+type ListRegistry interface {
+	Resolver
+	// ListOperations returns the operations under parent. handled=false means
+	// the parent belongs to another service.
+	ListOperations(ctx context.Context, parent string, pageSize int32, pageToken, filter string) (*longrunningpb.ListOperationsResponse, bool, error)
 }
 
 // Service implements longrunningpb.OperationsServer.
@@ -119,22 +136,30 @@ func notFound(name string) error {
 	return status.Errorf(codes.NotFound, "Operation %s not found.", name)
 }
 
-// ListOperations asks each Registry to list under the requested parent. The
+// ListOperations asks each ListRegistry to list under the requested parent. The
 // first registry that owns the parent wins; when none does, the list is empty
 // (a well-formed parent with no operations). The lenient and strict modes agree
-// here: an empty page, never an error. The emulator does not implement the
-// AIP-160 `filter`, so a filtered request fails loud rather than silently
-// returning unfiltered results.
+// here: an empty page, never an error. The standard `filter` parameter is
+// forwarded to the owning registry, which either evaluates it or fails loud (a
+// registry that cannot evaluate a filter must not silently return unfiltered
+// results).
+//
+// `returnPartialSuccess` is not supported: the canonical Operations.List proto
+// and the per-service Discovery documents state the field "will result in an
+// UNIMPLEMENTED error if set unless explicitly documented otherwise", and no
+// emulator service documents support (it is only meaningful when reading across
+// collections, e.g. a `locations/-` parent, which the emulator does not model).
+// It is rejected here rather than per registry so every parent behaves the same.
 func (s *Service) ListOperations(ctx context.Context, req *longrunningpb.ListOperationsRequest) (*longrunningpb.ListOperationsResponse, error) {
-	if req.GetFilter() != "" {
-		return nil, status.Error(codes.Unimplemented, "ListOperations filter is not supported")
+	if req.GetReturnPartialSuccess() {
+		return nil, status.Error(codes.Unimplemented, "ListOperations returnPartialSuccess is not supported")
 	}
 	for _, r := range s.resolvers {
-		reg, ok := r.(Registry)
+		reg, ok := r.(ListRegistry)
 		if !ok {
 			continue
 		}
-		resp, handled, err := reg.ListOperations(ctx, req.GetName(), req.GetPageSize(), req.GetPageToken())
+		resp, handled, err := reg.ListOperations(ctx, req.GetName(), req.GetPageSize(), req.GetPageToken(), req.GetFilter())
 		if !handled {
 			continue
 		}

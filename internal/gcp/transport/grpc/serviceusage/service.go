@@ -18,6 +18,8 @@ import (
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	serviceusagepb "cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
@@ -132,18 +134,25 @@ func isTopLevelOperationsParent(parent string) bool {
 	}
 }
 
-// ListOperations implements the generic google.longrunning.Operations registry
-// for Service Usage's top-level operations. It claims only the top-level parent;
-// a location-scoped parent is declined so the caller keeps its own (empty)
-// list. A top-level operations/{id} name carries no project segment, and the
-// generated longrunning client's routing metadata is `name=<parent>` (which
-// contains no project), so the project resolves from the bearer token or the
-// configured default — the same fallback ListServices uses — which is why
-// `make test-lro-async-gcp` starts the emulator with JAISCLOUD_GCP_PROJECT_ID
-// matching the create project.
-func (s *Service) ListOperations(ctx context.Context, parent string, pageSize int32, pageToken string) (*longrunningpb.ListOperationsResponse, bool, error) {
+// ListOperations implements the generic google.longrunning.Operations
+// ListRegistry surface for Service Usage's top-level operations. It claims only
+// the top-level parent; a location-scoped parent is declined so another
+// service's registry (or the empty page) answers. A top-level operations/{id}
+// name carries no project segment, and the generated longrunning client's
+// routing metadata is `name=<parent>` (which contains no project), so the
+// project resolves from the bearer token or the configured default — the same
+// fallback ListServices uses — which is why `make test-lro-async-gcp` starts the
+// emulator with JAISCLOUD_GCP_PROJECT_ID matching the create project.
+//
+// Service Usage does not evaluate an AIP-160 filter, so a non-empty filter
+// fails loud (Unimplemented) rather than silently listing everything.
+// returnPartialSuccess is rejected once by the shared Operations service.
+func (s *Service) ListOperations(ctx context.Context, parent string, pageSize int32, pageToken, filter string) (*longrunningpb.ListOperationsResponse, bool, error) {
 	if !isTopLevelOperationsParent(parent) {
 		return nil, false, nil
+	}
+	if filter != "" {
+		return nil, true, status.Error(codes.Unimplemented, "ListOperations filter is not supported for Service Usage operations")
 	}
 	ops, next, err := s.core.ListOperations(ctx, s.projectFor(ctx, ""), int(pageSize), pageToken)
 	if err != nil {
@@ -201,4 +210,5 @@ var (
 	_ serviceusagepb.ServiceUsageServer = (*Service)(nil)
 	_ grpcoperations.Resolver           = (*Service)(nil)
 	_ grpcoperations.Registry           = (*Service)(nil)
+	_ grpcoperations.ListRegistry       = (*Service)(nil)
 )

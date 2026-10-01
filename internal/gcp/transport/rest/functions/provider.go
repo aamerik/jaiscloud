@@ -444,7 +444,14 @@ func (p *Provider) WaitOperation(ctx context.Context, nr *model.NormalizedReques
 func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
 	v := p.version(nr)
-	page, next, err := p.core.ListOperations(ctx, project, strParam(nr, "location"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	// returnPartialSuccess is not supported: the per-service Discovery document
+	// states the field "will result in an UNIMPLEMENTED error if set unless
+	// explicitly documented otherwise", and Cloud Functions does not document
+	// support. Fail loud rather than silently returning a full page.
+	if boolParam(nr, "returnPartialSuccess") {
+		return nil, model.NewProviderError("Unimplemented", "ListOperations returnPartialSuccess is not supported", 501)
+	}
+	page, next, err := p.core.ListOperations(ctx, project, strParam(nr, "location"), v, strParam(nr, "filter"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

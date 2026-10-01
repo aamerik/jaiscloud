@@ -108,8 +108,14 @@ func (s *Service) LoadOperation(ctx context.Context, project, name string) (Oper
 }
 
 // ListOperations returns a cursor page of the persisted operations for a
-// location.
-func (s *Service) ListOperations(ctx context.Context, project, location string, pageSize int, pageToken string) ([]Operation, string, error) {
+// location, honoring an optional AIP-160 `filter` (the standard
+// google.longrunning.Operations.List `filter`). v is the API version the caller
+// renders operations as; it selects the resource-name form the `name` filter
+// matches. The filter is evaluated against the settled operation so `done`
+// reflects what a client would read, and it is applied before pagination so a
+// page is always a page of matching results. An unparseable filter is
+// InvalidArgument.
+func (s *Service) ListOperations(ctx context.Context, project, location string, v Version, filter string, pageSize int, pageToken string) ([]Operation, string, error) {
 	if location == "" {
 		return nil, "", invalidArgument("missing location")
 	}
@@ -117,12 +123,22 @@ func (s *Service) ListOperations(ctx context.Context, project, location string, 
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(ops, func(op functionsstore.Operation) string { return op.ID }, pageParams(pageSize, pageToken))
-	out := make([]Operation, 0, len(page))
-	for _, op := range page {
-		out = append(out, s.settle(operationFromStore(op)))
+	pred, err := compileOperationFilter(filter, v, project)
+	if err != nil {
+		return nil, "", err
 	}
-	return out, next, nil
+	// Settle first, then filter: in async mode an operation's stored Done is
+	// false until the delay elapses, but a caller filtering done=true must see
+	// the operation it would actually read back.
+	matched := make([]Operation, 0, len(ops))
+	for _, stored := range ops {
+		op := s.settle(operationFromStore(stored))
+		if pred.match(op) {
+			matched = append(matched, op)
+		}
+	}
+	page, next := paging.Page(matched, func(op Operation) string { return op.ID }, pageParams(pageSize, pageToken))
+	return page, next, nil
 }
 
 // CancelOperation validates that the operation exists. The emulator does not
