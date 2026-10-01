@@ -59,6 +59,7 @@ import (
 	resourcemanagercore "jaiscloud/internal/gcp/service/resourcemanager"
 	schedulercore "jaiscloud/internal/gcp/service/scheduler"
 	serviceusagecore "jaiscloud/internal/gcp/service/serviceusage"
+	taskscore "jaiscloud/internal/gcp/service/tasks"
 	workflowexecutionscore "jaiscloud/internal/gcp/service/workflowexecutions"
 	workflowscore "jaiscloud/internal/gcp/service/workflows"
 	"jaiscloud/internal/gcp/sparkgcp"
@@ -80,6 +81,7 @@ import (
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	schedulerstore "jaiscloud/internal/gcp/store/scheduler"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
+	tasksstore "jaiscloud/internal/gcp/store/tasks"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 	"jaiscloud/internal/gcp/throttle"
 	grpcdataproc "jaiscloud/internal/gcp/transport/grpc/dataproc"
@@ -94,6 +96,7 @@ import (
 	grpcresourcemanager "jaiscloud/internal/gcp/transport/grpc/resourcemanager"
 	grpcscheduler "jaiscloud/internal/gcp/transport/grpc/scheduler"
 	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
+	grpctasks "jaiscloud/internal/gcp/transport/grpc/tasks"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
 	grpcworkflows "jaiscloud/internal/gcp/transport/grpc/workflows"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
@@ -108,6 +111,7 @@ import (
 	restresourcemanager "jaiscloud/internal/gcp/transport/rest/resourcemanager"
 	restscheduler "jaiscloud/internal/gcp/transport/rest/scheduler"
 	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
+	resttasks "jaiscloud/internal/gcp/transport/rest/tasks"
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 	restworkflows "jaiscloud/internal/gcp/transport/rest/workflows"
 	"jaiscloud/internal/gcp/transportcfg"
@@ -120,6 +124,7 @@ import (
 	"jaiscloud/internal/snapshottypes"
 	"jaiscloud/internal/store"
 
+	cloudtaskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 	eventarcpb "cloud.google.com/go/eventarc/apiv1/eventarcpb"
@@ -554,6 +559,13 @@ func startCmd() *cobra.Command {
 			schedulerCore.SetEngine(schedulerEngine)
 			schedulerP := restscheduler.NewProvider(schedulerCore)
 
+			// Cloud Tasks v2's transport-neutral core is shared by the REST
+			// provider and the gRPC adapter, so both transports run against one
+			// store and cannot drift. This phase implements the control plane;
+			// RunTask returns Unimplemented until the dispatch engine lands.
+			tasksCore := taskscore.NewService(stores.tasks, stores.resources)
+			tasksP := resttasks.NewProvider(tasksCore, cfg.ProjectID)
+
 			// Cloud Resource Manager's transport-neutral core is shared by the
 			// v1 REST provider and the v3 gRPC adapter below, so project IAM
 			// policy lives in one store and the two transports cannot drift.
@@ -611,6 +623,7 @@ func startCmd() *cobra.Command {
 				{"compute", computeP},
 				{"serviceusage", serviceusageP},
 				{"scheduler", schedulerP},
+				{"tasks", tasksP},
 				{"resourcemanager", resourcemanagerP},
 				{"datastore", datastoreRestP},
 				{"logging", loggingRestP},
@@ -649,6 +662,7 @@ func startCmd() *cobra.Command {
 			eventarcGRPC := grpceventarc.NewService(eventarcCore, cfg.ProjectID)
 			serviceUsageGRPC := grpcserviceusage.NewService(serviceUsageCore, cfg.ProjectID)
 			schedulerGRPC := grpcscheduler.NewService(schedulerCore, cfg.ProjectID)
+			tasksGRPC := grpctasks.NewService(tasksCore, cfg.ProjectID)
 			resourceManagerGRPC := grpcresourcemanager.NewService(resourceManagerCore, cfg.ProjectID)
 			iamCredentialsGRPC := grpciamcredentials.NewService(iamCredentialsCore, cfg.ProjectID)
 			dataprocGRPC := grpcdataproc.NewService(dataprocCore, cfg.ProjectID)
@@ -690,6 +704,9 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("scheduler") {
 					schedulerpb.RegisterCloudSchedulerServer(gserv.GRPC(), schedulerGRPC)
+				}
+				if transports.GRPCFor("tasks") {
+					cloudtaskspb.RegisterCloudTasksServer(gserv.GRPC(), tasksGRPC)
 				}
 				if transports.GRPCFor("resourcemanager") {
 					resourcemanagerpb.RegisterProjectsServer(gserv.GRPC(), resourceManagerGRPC)
@@ -828,6 +845,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.eventarc)
 			adminHandler.RegisterResetter(schedulerCore)
 			adminHandler.RegisterSchedulerTicker(schedulerEngine)
+			adminHandler.RegisterResetter(tasksCore)
 			adminHandler.RegisterResetter(stores.resources)
 			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
@@ -897,6 +915,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.scheduler.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("scheduler", snap)
+			}
+			if snap, ok := stores.tasks.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("tasks", snap)
 			}
 			if sb, ok := stores.blobs.(admin.SnapshotBlobStore); ok {
 				adminHandler.RegisterBlobStore(sb)
@@ -1205,6 +1226,7 @@ type stores struct {
 	monitoring   monitoringstore.Store
 	eventarc     eventarcstore.Store
 	scheduler    schedulerstore.Store
+	tasks        tasksstore.Store
 	resources    store.ResourceStore
 	blobs        blobfs.BlobStore
 	close        func()
@@ -1244,6 +1266,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			monitoring:   monitoringstore.NewPostgresStore(pg.Pool()),
 			eventarc:     eventarcstore.NewPostgresStore(pg.Pool()),
 			scheduler:    schedulerstore.NewPostgresStore(pg.Pool()),
+			tasks:        tasksstore.NewPostgresStore(pg.Pool()),
 			resources:    pg,
 			blobs:        blobs,
 			close:        func() { pg.Close() },
@@ -1269,6 +1292,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			monitoring:   monitoringstore.NewMemoryStore(),
 			eventarc:     eventarcstore.NewMemoryStore(),
 			scheduler:    schedulerstore.NewMemoryStore(),
+			tasks:        tasksstore.NewMemoryStore(),
 			resources:    store.NewMemoryResourceStore(),
 			blobs:        blobfs.NewMemoryBlobStore(),
 			close:        func() {},
@@ -1297,6 +1321,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		monitoring:   monitoringstore.NewMemoryStore(),
 		eventarc:     eventarcstore.NewMemoryStore(),
 		scheduler:    schedulerstore.NewMemoryStore(),
+		tasks:        tasksstore.NewMemoryStore(),
 		resources:    store.NewMemoryResourceStore(),
 		blobs:        blobs,
 		close:        func() {},

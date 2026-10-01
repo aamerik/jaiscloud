@@ -13,6 +13,7 @@ import (
 	restresourcemanager "jaiscloud/internal/gcp/transport/rest/resourcemanager"
 	restscheduler "jaiscloud/internal/gcp/transport/rest/scheduler"
 	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
+	resttasks "jaiscloud/internal/gcp/transport/rest/tasks"
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 )
 
@@ -200,6 +201,15 @@ var gcpServices = []ServiceDescriptor{
 		ServiceName:    "scheduler",
 		ProviderPrefix: "Scheduler",
 		Codec:          func() adapter.Codec { return restscheduler.NewCodec() },
+	},
+	{
+		// Cloud Tasks v2 shares the /v2/ prefix and is claimed by segment
+		// detection (detectV2Service) on the locations/{location}/queues path,
+		// so it has no PathPrefixes. The codec lives with the REST transport
+		// package that adapts it to the shared core.
+		ServiceName:    "tasks",
+		ProviderPrefix: "Tasks",
+		Codec:          func() adapter.Codec { return resttasks.NewCodec() },
 	},
 	{
 		// Cloud Logging v2 shares the /v2/ namespace; its REST data methods are

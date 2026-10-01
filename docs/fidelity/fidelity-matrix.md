@@ -6,14 +6,14 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **844**
+Cells: **878**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 609 |
-| limited | 117 |
+| ga | 641 |
+| limited | 119 |
 | preview | 14 |
 | unsupported | 104 |
 
@@ -21,8 +21,8 @@ Cells: **844**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 318 | 106 | 14 | 12 |
-| grpc | 291 | 11 | 0 | 92 |
+| rest | 335 | 107 | 14 | 12 |
+| grpc | 306 | 12 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -1031,6 +1031,47 @@ _57 cell(s): ga=57 limited=0 preview=0 unsupported=0_
 | UpdateBucket | grpc | ga | — |
 | UpdateObject | grpc | ga | — |
 | WriteObject | grpc | ga | — |
+
+## tasks
+
+_34 cell(s): ga=32 limited=2 preview=0 unsupported=0_
+
+| operation | transport | state | reason |
+| --- | --- | --- | --- |
+| CreateQueue | grpc | ga | — |
+| CreateTask | grpc | ga | — |
+| DeleteQueue | grpc | ga | — |
+| DeleteTask | grpc | ga | — |
+| GetIamPolicy | grpc | ga | — |
+| GetQueue | grpc | ga | — |
+| GetTask | grpc | ga | — |
+| ListQueues | grpc | ga | — |
+| ListTasks | grpc | ga | — |
+| PauseQueue | grpc | ga | — |
+| PurgeQueue | grpc | ga | — |
+| ResumeQueue | grpc | ga | — |
+| RunTask | grpc | limited | explicit Unimplemented stub until the Cloud Tasks dispatch engine (CT3) |
+| SetIamPolicy | grpc | ga | — |
+| Tasks.QueuesCreate | rest | ga | — |
+| Tasks.QueuesDelete | rest | ga | — |
+| Tasks.QueuesGet | rest | ga | — |
+| Tasks.QueuesGetIamPolicy | rest | ga | — |
+| Tasks.QueuesList | rest | ga | — |
+| Tasks.QueuesPatch | rest | ga | — |
+| Tasks.QueuesPause | rest | ga | — |
+| Tasks.QueuesPurge | rest | ga | — |
+| Tasks.QueuesResume | rest | ga | — |
+| Tasks.QueuesSetIamPolicy | rest | ga | — |
+| Tasks.QueuesTestIamPermissions | rest | ga | — |
+| Tasks.TasksBatchCreate | rest | ga | — |
+| Tasks.TasksBatchDelete | rest | ga | — |
+| Tasks.TasksCreate | rest | ga | — |
+| Tasks.TasksDelete | rest | ga | — |
+| Tasks.TasksGet | rest | ga | — |
+| Tasks.TasksList | rest | ga | — |
+| Tasks.TasksRun | rest | limited | explicit Unimplemented stub until the Cloud Tasks dispatch engine (CT3) |
+| TestIamPermissions | grpc | ga | — |
+| UpdateQueue | grpc | ga | — |
 
 ## workflowexecutions
 

@@ -349,6 +349,13 @@ func detectV2Service(path string) string {
 	if len(rest) < 1 || rest[0] != "locations" {
 		return ""
 	}
+	// Cloud Tasks v2 lives under
+	// /v2/projects/{project}/locations/{location}/queues[/{queue}/tasks...] —
+	// detect it before the Functions location switch (its "queues" segment is
+	// otherwise unmatched).
+	if len(rest) >= 3 && rest[2] == "queues" {
+		return "tasks"
+	}
 	// locations and locations/{location} are the shared google.cloud.location
 	// discovery paths; no other emulated service claims the /v2 namespace.
 	if len(rest) <= 2 {

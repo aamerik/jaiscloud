@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	cloudtaskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 	eventarcpb "cloud.google.com/go/eventarc/apiv1/eventarcpb"
@@ -52,6 +53,7 @@ import (
 	grpcresourcemanager "jaiscloud/internal/gcp/transport/grpc/resourcemanager"
 	grpcscheduler "jaiscloud/internal/gcp/transport/grpc/scheduler"
 	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
+	grpctasks "jaiscloud/internal/gcp/transport/grpc/tasks"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
 	grpcworkflows "jaiscloud/internal/gcp/transport/grpc/workflows"
 )
@@ -104,6 +106,7 @@ var grpcWireService = map[string]string{
 	"google.api.serviceusage.v1.ServiceUsage":            "serviceusage",
 	"google.cloud.resourcemanager.v3.Projects":           "resourcemanager",
 	"google.cloud.scheduler.v1.CloudScheduler":           "scheduler",
+	"google.cloud.tasks.v2.CloudTasks":                   "tasks",
 	"google.iam.v1.IAMPolicy":                            "iam",
 	"google.iam.credentials.v1.IAMCredentials":           "iamcredentials",
 	"google.longrunning.Operations":                      "operations",
@@ -150,6 +153,7 @@ func EnumerateGRPC() []GRPCService {
 	serviceusagepb.RegisterServiceUsageServer(reg, &grpcserviceusage.Service{})
 	resourcemanagerpb.RegisterProjectsServer(reg, &grpcresourcemanager.Service{})
 	schedulerpb.RegisterCloudSchedulerServer(reg, &grpcscheduler.Service{})
+	cloudtaskspb.RegisterCloudTasksServer(reg, &grpctasks.Service{})
 	dataprocpb.RegisterClusterControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterJobControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterWorkflowTemplateServiceServer(reg, &grpcdataproc.Service{})

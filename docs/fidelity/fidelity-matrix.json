@@ -1,22 +1,22 @@
 {
   "version": 1,
   "summary": {
-    "total": 844,
+    "total": 878,
     "by_state": {
-      "ga": 609,
-      "limited": 117,
+      "ga": 641,
+      "limited": 119,
       "preview": 14,
       "unsupported": 104
     },
     "by_transport": {
       "grpc": {
-        "ga": 291,
-        "limited": 11,
+        "ga": 306,
+        "limited": 12,
         "unsupported": 92
       },
       "rest": {
-        "ga": 318,
-        "limited": 106,
+        "ga": 335,
+        "limited": 107,
         "preview": 14,
         "unsupported": 12
       }
@@ -115,6 +115,10 @@
       },
       "storage": {
         "ga": 57
+      },
+      "tasks": {
+        "ga": 32,
+        "limited": 2
       },
       "workflowexecutions": {
         "ga": 8
@@ -8963,6 +8967,362 @@
       "transport": "grpc",
       "state": "ga",
       "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "CreateQueue",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "CreateTask",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "DeleteQueue",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "DeleteTask",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "GetIamPolicy",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "GetQueue",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "GetTask",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "ListQueues",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "ListTasks",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "PauseQueue",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "PurgeQueue",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "ResumeQueue",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "RunTask",
+      "transport": "grpc",
+      "state": "limited",
+      "reason": "explicit Unimplemented stub until the Cloud Tasks dispatch engine (CT3)",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "SetIamPolicy",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.QueuesCreate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.QueuesDelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.QueuesGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.QueuesGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.getIamPolicy",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.QueuesList",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.QueuesPatch",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.patch",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.QueuesPause",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.pause",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.QueuesPurge",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.purge",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.QueuesResume",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.resume",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.QueuesSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.setIamPolicy",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.QueuesTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.testIamPermissions",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.TasksBatchCreate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.tasks.batchCreate",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.TasksBatchDelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.tasks.batchDelete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.TasksCreate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.tasks.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.TasksDelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.tasks.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.TasksGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.tasks.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.TasksList",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.tasks.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "Tasks.TasksRun",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "explicit Unimplemented stub until the Cloud Tasks dispatch engine (CT3)",
+      "evidence": [
+        "discovery=cloudtasks.projects.locations.queues.tasks.run",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "TestIamPermissions",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "tasks",
+      "operation": "UpdateQueue",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
         "postgres=yes",
         "transport=grpc (conformance=1/1 pass)"
       ]
