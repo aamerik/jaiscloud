@@ -330,6 +330,13 @@ func TestCancelJob_TransitionsToCancelled(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("runJob did not return after cancellation")
 	}
+
+	// CancelJob must also stop the executor: the client-mode driver Job (and
+	// its pod) is deleted, not left running after the job reports CANCELLED.
+	require.Eventually(t, func() bool {
+		jobs, _ := client.BatchV1().Jobs("jaiscloud").List(ctx, metav1.ListOptions{})
+		return len(jobs.Items) == 0
+	}, 5*time.Second, 10*time.Millisecond, "cancelled job's driver k8s Job must be reaped")
 }
 
 // TestCancelJob_AlreadyTerminal_NoOp mirrors EMR: cancelling a terminal job is a
