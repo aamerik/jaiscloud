@@ -201,9 +201,10 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 		final, err := sparkhelpers.WaitTerminalWith(runCtx, s.k8sClient, handle, sparkhelpers.TerminalOptions{StrictExitCode: strict})
 		if err != nil {
 			if runCtx.Err() != nil {
-				// cancelled by CancelJob: the driver is still running, so delete
-				// its client-mode k8s Job (and pod) before returning — otherwise
-				// the driver keeps executing after the job reports CANCELLED.
+				// Cancelled (CancelJob, or service shutdown): the driver is
+				// still running, so delete its client-mode k8s Job (and pod)
+				// before returning — otherwise the driver keeps executing after
+				// the job reports CANCELLED.
 				s.reapCancelledDriver(handle)
 				return
 			}
@@ -263,9 +264,10 @@ func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.
 }
 
 // reapCancelledDriver deletes the client-mode k8s Job (and, via cascade, the
-// driver pod) when a CancelJob cancels a running job. runCtx is already
-// cancelled at this point, so a bounded background context is used; the reaping
-// is best-effort and logged, matching emroneks' cancel path.
+// driver pod) when a running job's context is cancelled (CancelJob, or service
+// shutdown). runCtx is already cancelled at this point, so a bounded background
+// context is used; the reaping is best-effort and logged, matching the EMR-on-EKS
+// cancel path.
 func (s *Service) reapCancelledDriver(handle k8shelpers.JobHandle) {
 	if handle.JobName == "" {
 		return

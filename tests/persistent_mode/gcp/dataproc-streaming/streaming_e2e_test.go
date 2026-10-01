@@ -125,16 +125,11 @@ func api(t *testing.T, method, rawURL string, body any) (int, map[string]any) {
 	t.Helper()
 	var rd io.Reader
 	if body != nil {
-		switch b := body.(type) {
-		case string:
-			rd = strings.NewReader(b)
-		default:
-			raw, err := json.Marshal(b)
-			if err != nil {
-				t.Fatalf("marshal body: %v", err)
-			}
-			rd = bytes.NewReader(raw)
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
 		}
+		rd = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequest(method, rawURL, rd)
 	if err != nil {
@@ -272,7 +267,7 @@ func deleteCluster(t *testing.T, base, name string) {
 		return
 	}
 	if code == http.StatusOK {
-		if _, done := body["done"]; !done {
+		if done, _ := body["done"].(bool); !done {
 			pollOperation(t, base, body)
 		}
 	}
@@ -377,10 +372,30 @@ func jobState(t *testing.T, base, jobID string) string {
 	return strField(resp, "status", "state")
 }
 
-// driverJobNames returns the names of the client-mode k8s Jobs for a job id.
-func driverJobNames(t *testing.T, jobID string) []string {
+// driverJobNames returns the names of the client-mode k8s Jobs for a job id. A
+// listing error (kubectl/API unavailable) is returned, never folded into an
+// empty result, so the reap assertion cannot pass spuriously.
+func driverJobNames(t *testing.T, jobID string) ([]string, error) {
 	t.Helper()
 	out, err := kubectl("-n", namespace(), "get", "jobs",
+		"-l", "jaiscloud.io/job-id="+jobID,
+		"-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			names = append(names, l)
+		}
+	}
+	return names, nil
+}
+
+// driverPodNames returns the driver/executor pod names labeled for a job id.
+func driverPodNames(t *testing.T, jobID string) []string {
+	t.Helper()
+	out, err := kubectl("-n", namespace(), "get", "pods",
 		"-l", "jaiscloud.io/job-id="+jobID,
 		"-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
 	if err != nil {
@@ -490,19 +505,33 @@ func waitForState(t *testing.T, base, jobID, want string, timeout time.Duration)
 	t.Fatalf("job %s did not reach %q within %s (last %q)", jobID, want, timeout, last)
 }
 
-// waitDriverReaped asserts no client-mode k8s Job for jobID survives cancel,
-// and logs (but does not fail on) leftover driver pods — a leaked pod is the
-// bug this smoke exists to catch.
+// waitDriverReaped asserts the client-mode k8s Job for jobID is gone after
+// cancel. A listing error is fatal: "could not list" must never be mistaken for
+// "reaped". k8shelpers.Cancel uses foreground deletion, so the Job (and its pod)
+// is only removed once the driver has actually stopped; any remaining pod is
+// logged.
 func waitDriverReaped(t *testing.T, jobID string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
-	var names []string
+	var lastErr error
 	for time.Now().Before(deadline) {
-		names = driverJobNames(t, jobID)
+		names, err := driverJobNames(t, jobID)
+		if err != nil {
+			lastErr = err
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		lastErr = nil
 		if len(names) == 0 {
+			if pods := driverPodNames(t, jobID); len(pods) > 0 {
+				t.Logf("driver Job reaped but pod(s) still present (may be terminating): %v", pods)
+			}
 			return
 		}
 		time.Sleep(2 * time.Second)
 	}
-	t.Fatalf("cancel did not reap the driver k8s Job(s) %v for job %s", names, jobID)
+	if lastErr != nil {
+		t.Fatalf("could not confirm the driver k8s Job reap for job %s: %v", jobID, lastErr)
+	}
+	t.Fatalf("cancel did not reap the driver k8s Job for job %s", jobID)
 }
