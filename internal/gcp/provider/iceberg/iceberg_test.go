@@ -368,6 +368,155 @@ func TestRemoveSnapshotsClearsCurrentNoPromoteKeepsLog(t *testing.T) {
 	}
 }
 
+// statsFile builds a StatisticsFile-shaped payload for a set-statistics update.
+func statsFile(snapshotID int, path string) map[string]any {
+	return map[string]any{
+		"snapshot-id":               snapshotID,
+		"statistics-path":           path,
+		"file-size-in-bytes":        12,
+		"file-footer-size-in-bytes": 4,
+		"blob-metadata":             []any{},
+	}
+}
+
+// TestSetStatisticsPersistsAndUpserts verifies set-statistics persists into
+// TableMetadata and replaces an existing entry for the same snapshot id.
+func TestSetStatisticsPersistsAndUpserts(t *testing.T) {
+	p := newProvider()
+	mustCreateNamespace(t, p, "db")
+	created := mustCreateTable(t, p, "db", "t1")
+	if stats := created["metadata"].(map[string]any)["statistics"].([]any); len(stats) != 0 {
+		t.Fatalf("new table statistics = %v, want empty", stats)
+	}
+
+	meta := commitUpdates(t, p, "db", "t1", []any{
+		map[string]any{"action": "set-statistics", "snapshot-id": 100, "statistics": statsFile(100, "s3://w/db/t1/stats-100.puffin")},
+	})
+	stats := meta["statistics"].([]any)
+	if len(stats) != 1 {
+		t.Fatalf("statistics len = %d, want 1", len(stats))
+	}
+	if got := stats[0].(map[string]any)["statistics-path"]; got != "s3://w/db/t1/stats-100.puffin" {
+		t.Errorf("statistics-path = %v", got)
+	}
+
+	// Same snapshot id replaces in place (still one entry, new path).
+	meta = commitUpdates(t, p, "db", "t1", []any{
+		map[string]any{"action": "set-statistics", "statistics": statsFile(100, "s3://w/db/t1/stats-100-v2.puffin")},
+	})
+	stats = meta["statistics"].([]any)
+	if len(stats) != 1 || stats[0].(map[string]any)["statistics-path"] != "s3://w/db/t1/stats-100-v2.puffin" {
+		t.Fatalf("set-statistics did not replace in place: %v", stats)
+	}
+
+	// A second snapshot id appends.
+	meta = commitUpdates(t, p, "db", "t1", []any{
+		map[string]any{"action": "set-statistics", "statistics": statsFile(200, "s3://w/db/t1/stats-200.puffin")},
+	})
+	if stats = meta["statistics"].([]any); len(stats) != 2 {
+		t.Fatalf("statistics len = %d, want 2", len(stats))
+	}
+
+	// remove-statistics drops by snapshot id.
+	meta = commitUpdates(t, p, "db", "t1", []any{
+		map[string]any{"action": "remove-statistics", "snapshot-id": 100},
+	})
+	stats = meta["statistics"].([]any)
+	if len(stats) != 1 || stats[0].(map[string]any)["snapshot-id"] != float64(200) {
+		t.Fatalf("remove-statistics = %v, want only snapshot 200", stats)
+	}
+
+	// LoadTable renders the persisted statistics.
+	loaded, err := p.LoadTable(context.Background(), newNR(map[string]any{"namespace": "db", "table": "t1"}))
+	if err != nil {
+		t.Fatalf("LoadTable: %v", err)
+	}
+	if got := loaded.Data["metadata"].(map[string]any)["statistics"].([]any); len(got) != 1 {
+		t.Fatalf("LoadTable statistics len = %d, want 1", len(got))
+	}
+}
+
+// TestSetPartitionStatisticsPersistsAndRemoves verifies the partition-statistics
+// upsert/remove surface (set-partition-statistics was previously rejected).
+func TestSetPartitionStatisticsPersistsAndRemoves(t *testing.T) {
+	p := newProvider()
+	mustCreateNamespace(t, p, "db")
+	mustCreateTable(t, p, "db", "t1")
+
+	meta := commitUpdates(t, p, "db", "t1", []any{
+		map[string]any{"action": "set-partition-statistics", "partition-statistics": map[string]any{
+			"snapshot-id": 100, "statistics-path": "s3://w/db/t1/part-100.parquet", "file-size-in-bytes": 10,
+		}},
+	})
+	list := meta["partition-statistics"].([]any)
+	if len(list) != 1 {
+		t.Fatalf("partition-statistics len = %d, want 1", len(list))
+	}
+
+	// Upsert by snapshot id.
+	meta = commitUpdates(t, p, "db", "t1", []any{
+		map[string]any{"action": "set-partition-statistics", "partition-statistics": map[string]any{
+			"snapshot-id": 100, "statistics-path": "s3://w/db/t1/part-100-v2.parquet", "file-size-in-bytes": 11,
+		}},
+	})
+	list = meta["partition-statistics"].([]any)
+	if len(list) != 1 || list[0].(map[string]any)["statistics-path"] != "s3://w/db/t1/part-100-v2.parquet" {
+		t.Fatalf("set-partition-statistics did not upsert: %v", list)
+	}
+
+	meta = commitUpdates(t, p, "db", "t1", []any{
+		map[string]any{"action": "remove-partition-statistics", "snapshot-id": 100},
+	})
+	if list = meta["partition-statistics"].([]any); len(list) != 0 {
+		t.Fatalf("partition-statistics = %v, want empty", list)
+	}
+}
+
+// TestStatisticsMissingPayloadFails verifies an update without its required
+// payload is rejected like the other malformed update actions.
+func TestStatisticsMissingPayloadFails(t *testing.T) {
+	p := newProvider()
+	mustCreateNamespace(t, p, "db")
+	mustCreateTable(t, p, "db", "t1")
+
+	for _, action := range []string{"set-statistics", "set-partition-statistics"} {
+		assertCommitFailed(t, p, "db", "t1", []any{map[string]any{"action": action}})
+	}
+}
+
+// TestTableMetricsReportEndpoint verifies the Iceberg REST reportMetrics
+// endpoint: unknown table -> 404, missing report-type -> 400, valid -> 204.
+func TestTableMetricsReportEndpoint(t *testing.T) {
+	p := newProvider()
+	mustCreateNamespace(t, p, "db")
+	mustCreateTable(t, p, "db", "t1")
+
+	_, err := p.TableMetrics(context.Background(), newNR(map[string]any{
+		"namespace": "db", "table": "nope", "body": map[string]any{"report-type": "scan-report"},
+	}))
+	if pe, ok := err.(*model.ProviderError); !ok || pe.Code != "NoSuchTableException" || pe.HTTPStatus != 404 {
+		t.Fatalf("unknown table: %v", err)
+	}
+
+	if _, err := p.TableMetrics(context.Background(), newNR(map[string]any{
+		"namespace": "db", "table": "t1", "body": map[string]any{},
+	})); err == nil {
+		t.Fatal("expected BadRequestException for missing report-type")
+	} else if pe, ok := err.(*model.ProviderError); !ok || pe.Code != "BadRequestException" || pe.HTTPStatus != 400 {
+		t.Fatalf("missing report-type: %v", err)
+	}
+
+	resp, err := p.TableMetrics(context.Background(), newNR(map[string]any{
+		"namespace": "db", "table": "t1", "body": map[string]any{"report-type": "scan-report"},
+	}))
+	if err != nil {
+		t.Fatalf("TableMetrics: %v", err)
+	}
+	if resp.HTTPStatus != 204 {
+		t.Errorf("status = %d, want 204", resp.HTTPStatus)
+	}
+}
+
 func TestMaxSchemaColumnIDNested(t *testing.T) {
 	schema := map[string]any{
 		"type": "struct",

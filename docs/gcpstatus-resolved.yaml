@@ -116,3 +116,19 @@ entries:
     match: "LROs complete synchronously"
     pr: 269
     note: "resolved: opt-in async LRO timing (JAISCLOUD_LRO_MODE=async) for workflows/functions/metastore/managedkafka over REST+gRPC (#266/#267/#268/#269); serviceusage (#270/LRO4) and generic operations (#271/LRO5) follow-ups"
+
+  # 273 — fix/gcp-iceberg-statistics-metrics (BigLake Iceberg table statistics +
+  # metrics report). The debt-plan §3.11 rows and the §7 remainder entry live in
+  # gitignored scratch, so this commits the closure; evidence-gated on #273.
+  - source: "gcp-deferred-debt-plan"
+    match: "remove-partition-statistics no-o"
+    pr: 273
+    note: "resolved: Iceberg statistics persist to TableMetadata.statistics/partition-statistics, upsert/remove by snapshot-id (ICE1) in #273"
+  - source: "gcp-deferred-debt-plan"
+    match: "metrics → 501"
+    pr: 273
+    note: "resolved: Iceberg reportMetrics is POST -> 204, 404 for an unknown table (ICE2) in #273"
+  - source: "gcp-deferred-debt-plan"
+    match: "BigLake"
+    pr: 273
+    note: "resolved: BigLake set-statistics/remove-statistics + metrics report (ICE1/ICE2) in #273"

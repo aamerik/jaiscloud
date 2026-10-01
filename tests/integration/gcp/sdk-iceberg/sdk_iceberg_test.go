@@ -240,11 +240,49 @@ func TestSDKIceberg(t *testing.T) {
 		t.Fatalf("drop namespace: %d %+v", code, e)
 	}
 
-	// --- metrics is 501 ---
-	code, _, e = do(t, http.MethodGet, "/iceberg/v1/namespaces/"+ns+"/tables/"+tableName+"/metrics", nil)
-	if code != 501 || e == nil || e.Error.Type != "NotImplementedException" {
-		t.Fatalf("expected 501 NotImplementedException, got %d %+v", code, e)
+}
+
+// TestSDKIcebergMetricsReport exercises the reportMetrics endpoint: a valid
+// report is acknowledged with 204, and an unknown table is 404 (the Iceberg REST
+// spec's NoSuchTableException). The update to this expectation (previously a GET
+// returning 501) matches the real REST catalog, which reports via POST.
+func TestSDKIcebergMetricsReport(t *testing.T) {
+	ns := unique("ns-metrics")
+	code, _, e := do(t, http.MethodPost, "/iceberg/v1/namespaces", map[string]any{
+		"namespace": []string{ns}, "properties": map[string]string{},
+	})
+	if code != 200 || e != nil {
+		t.Fatalf("create namespace: %d %+v", code, e)
 	}
+	tableName := unique("tbl")
+	code, _, e = do(t, http.MethodPost, "/iceberg/v1/namespaces/"+ns+"/tables", map[string]any{
+		"name":     tableName,
+		"location": "s3://warehouse/" + ns + "/" + tableName,
+		"schema": map[string]any{
+			"type":   "struct",
+			"fields": []any{map[string]any{"id": 1, "name": "id", "type": "long", "required": true}},
+		},
+	})
+	if code != 200 || e != nil {
+		t.Fatalf("create table: %d %+v", code, e)
+	}
+
+	if code, _, e = do(t, http.MethodPost, "/iceberg/v1/namespaces/"+ns+"/tables/"+tableName+"/metrics", map[string]any{
+		"report-type": "scan-report",
+	}); code != 204 || e != nil {
+		t.Fatalf("report metrics: %d %+v", code, e)
+	}
+
+	code, _, e = do(t, http.MethodPost, "/iceberg/v1/namespaces/"+ns+"/tables/missing-"+tableName+"/metrics", map[string]any{
+		"report-type": "scan-report",
+	})
+	if code != 404 || e == nil || e.Error.Type != "NoSuchTableException" {
+		t.Fatalf("metrics unknown table: %d %+v", code, e)
+	}
+
+	// Cleanup.
+	do(t, http.MethodDelete, "/iceberg/v1/namespaces/"+ns+"/tables/"+tableName, nil)
+	do(t, http.MethodDelete, "/iceberg/v1/namespaces/"+ns, nil)
 }
 
 // TestSDKIcebergSnapshots exercises the snapshot-commit lifecycle: add-snapshot,

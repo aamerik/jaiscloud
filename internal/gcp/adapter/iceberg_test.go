@@ -28,7 +28,7 @@ func TestIcebergCodecDecode(t *testing.T) {
 		{"GET", "/iceberg/v1/namespaces/a/tables/t1", "LoadTable", "a", "t1"},
 		{"POST", "/iceberg/v1/namespaces/a/tables/t1", "CommitTable", "a", "t1"},
 		{"DELETE", "/iceberg/v1/namespaces/a/tables/t1", "DropTable", "a", "t1"},
-		{"GET", "/iceberg/v1/namespaces/a/tables/t1/metrics", "TableMetrics", "a", "t1"},
+		{"POST", "/iceberg/v1/namespaces/a/tables/t1/metrics", "TableMetrics", "a", "t1"},
 		{"POST", "/iceberg/v1/tables/rename", "RenameTable", "", ""},
 		{"POST", "/iceberg/v1/wh/tables/rename", "RenameTable", "", ""},
 		// Multi-level namespace.
@@ -51,6 +51,17 @@ func TestIcebergCodecDecode(t *testing.T) {
 		if tc.table != "" && nr.Params["table"] != tc.table {
 			t.Errorf("%s %s: table = %q, want %q", tc.method, tc.path, nr.Params["table"], tc.table)
 		}
+	}
+}
+
+// TestIcebergCodecDecodeMetricsMethod verifies the metrics route is POST-only:
+// the Iceberg REST reportMetrics endpoint accepts only POST, so a GET on the
+// same path is not a catalog operation.
+func TestIcebergCodecDecodeMetricsMethod(t *testing.T) {
+	codec := &IcebergCodec{}
+	r := httptest.NewRequest(http.MethodGet, "/iceberg/v1/namespaces/a/tables/t1/metrics", nil)
+	if _, err := codec.Decode(r, nil); err == nil {
+		t.Fatal("expected GET metrics to be rejected")
 	}
 }
 
