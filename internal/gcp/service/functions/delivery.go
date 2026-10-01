@@ -22,6 +22,12 @@ const (
 	deliveryWorkers     = 4
 	deliveryQueueSize   = 1024
 	maxDeliveryAttempts = 3
+	// maxThrottleRetries bounds how many times a delivery that is refused by
+	// the admission gate (429 RESOURCE_EXHAUSTED) is re-polled. A throttle is
+	// back-pressure, not an invocation, so it does not consume a
+	// maxDeliveryAttempts attempt or a dead-letter budget (FH2); the bound only
+	// keeps a persistently-saturated function from pinning a worker forever.
+	maxThrottleRetries  = 3
 	deliveryBackoffBase = 200 * time.Millisecond
 	deliveryBackoffMax  = 2 * time.Second
 )
@@ -146,23 +152,51 @@ func (e *deliveryEngine) process(ctx context.Context, job deliveryJob) {
 	// replaces the emulator's bounded cap.
 	dlqTopic, maxAttempts := e.deadLetter(ctx, job)
 	var lastErr string
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	// throttleTries counts how many times this delivery has been refused by the
+	// admission gate. A throttled delivery is re-polled with bounded backoff
+	// without advancing the attempt counter (FH2): the function was never
+	// invoked, so an exhausted retry budget must not dead-letter it.
+	throttleTries := 0
+	for attempt := 1; ; {
 		if !e.active(ctx, job.gen) {
 			return
 		}
 		_, result, invokeErr, err := e.svc.CallFunction(ctx, rec.Project, rec.Location, rec.FunctionID, rec.Data)
-		rec.Attempts = attempt
-		rec.UpdateTime = now()
-		switch {
-		case err == nil && invokeErr == "":
+		if err == nil && invokeErr == "" {
+			rec.Attempts = attempt
+			rec.UpdateTime = now()
 			rec.Status = functionsstore.DeliveryDelivered
 			rec.Result = result
 			rec.Error = ""
 			e.persist(ctx, rec)
 			return
-		case err != nil:
+		}
+		if isThrottle(err) {
+			throttleTries++
+			if throttleTries > maxThrottleRetries {
+				// The throttle outlasted the bounded in-process re-poll. Record it
+				// as pending — visibly not dead-lettered, attempt budget untouched
+				// — rather than consuming the delivery/retry budget. The emulator
+				// does not resume a pending delivery on its own (a deliberate
+				// divergence from Pub/Sub, which would keep counting attempts).
+				rec.Status = functionsstore.DeliveryPending
+				rec.Error = err.Error()
+				rec.UpdateTime = now()
+				e.persist(ctx, rec)
+				return
+			}
+			if !sleepCtx(ctx, backoffFor(throttleTries)) {
+				return
+			}
+			continue
+		}
+		// A real invocation attempt (a nil err with an in-band invokeErr, or an
+		// executor error) consumes one of the bounded attempts.
+		rec.Attempts = attempt
+		rec.UpdateTime = now()
+		if err != nil {
 			lastErr = err.Error()
-		default:
+		} else {
 			lastErr = invokeErr
 		}
 		rec.Error = lastErr
@@ -172,6 +206,7 @@ func (e *deliveryEngine) process(ctx context.Context, job deliveryJob) {
 		if !sleepCtx(ctx, backoffFor(attempt)) {
 			return
 		}
+		attempt++
 	}
 	if job.retry {
 		rec.Status = functionsstore.DeliveryDeadLetter

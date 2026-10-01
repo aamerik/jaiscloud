@@ -1,9 +1,11 @@
 package functions
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 
+	"jaiscloud/internal/gcp/gcperr"
 	"jaiscloud/internal/model"
 )
 
@@ -119,4 +121,27 @@ func (g *concurrencyGate) reset() {
 func concurrencyExceeded(scope, name string) error {
 	return model.NewProviderError("ResourceExhausted",
 		"The request was aborted because there were no available instances for "+scope+" "+name+".", 429)
+}
+
+// isThrottle reports whether err is invocation admission back-pressure — the
+// RESOURCE_EXHAUSTED / HTTP 429 the gate returns when a function (or the
+// project) has no free instance. It lets the delivery engine distinguish a
+// temporary throttle from a genuine invocation error (which is reported
+// in-band) so a throttled event is re-polled without consuming a retry /
+// dead-letter attempt (FH2). The check is typed and routed through
+// gcperr.Resolve, so it never string-matches the error and agrees with both
+// transports.
+//
+// Only RESOURCE_EXHAUSTED is treated as back-pressure: the admission gate is
+// the emulator's sole throttle source and emits 429. A 503 UNAVAILABLE is
+// deliberately excluded — an executor failure is surfaced in-band (invokeErr)
+// with a nil error, so a 503 here would be an unrelated transport/infra fault,
+// not admission back-pressure.
+func isThrottle(err error) bool {
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) {
+		return false
+	}
+	status, _ := gcperr.Resolve(perr)
+	return status == gcperr.ResourceExhausted
 }
