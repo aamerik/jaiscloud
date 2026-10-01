@@ -9,6 +9,7 @@ import (
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/gcp/eventing"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
 
@@ -599,4 +600,143 @@ func TestFunctionExists(t *testing.T) {
 	if err != nil || ok {
 		t.Fatalf("FunctionExists missing = %v, %v", ok, err)
 	}
+}
+
+// TestIsThrottle verifies the typed back-pressure predicate: only the admission
+// gate's RESOURCE_EXHAUSTED / 429 is a throttle; a nil, a plain error, an
+// INTERNAL ProviderError, and (per the FH2 contract) UNAVAILABLE are not.
+func TestIsThrottle(t *testing.T) {
+	if !isThrottle(concurrencyExceeded("function", "fn")) {
+		t.Fatal("admission 429 not classified as throttle")
+	}
+	if isThrottle(nil) {
+		t.Fatal("nil classified as throttle")
+	}
+	if isThrottle(errors.New("boom")) {
+		t.Fatal("plain error classified as throttle")
+	}
+	if isThrottle(model.NewProviderError("Internal", "boom", 500)) {
+		t.Fatal("INTERNAL classified as throttle")
+	}
+	if isThrottle(model.NewProviderError("Unavailable", "down", 503)) {
+		t.Fatal("UNAVAILABLE classified as throttle (only ResourceExhausted is)")
+	}
+}
+
+// createCapacityFn creates a v2 event function with maxInstanceCount 1 — a
+// single in-flight invocation slot — so a second concurrent delivery is refused
+// by the admission gate. retry sets the trigger's failure policy (RETRY_POLICY).
+func createCapacityFn(t *testing.T, s *Service, id string, retry bool) {
+	t.Helper()
+	in := FunctionInput{
+		Runtime:          "nodejs20",
+		EntryPoint:       "handler",
+		MaxInstanceCount: 1,
+		EventTrigger: &functionsstore.EventTrigger{
+			EventType: "google.pubsub.topic.publish",
+			Resource:  "projects/proj/topics/t",
+			Retry:     retry,
+		},
+	}
+	if _, _, err := s.CreateFunction(context.Background(), "proj", "us-central1", id, in, V2); err != nil {
+		t.Fatalf("create %s: %v", id, err)
+	}
+}
+
+// dispatchToTopic dispatches a Pub/Sub event to the shared test topic.
+func dispatchToTopic(ctx context.Context, s *Service, eventID, data string) {
+	s.DispatchEvent(ctx, eventing.Event{
+		Project: "proj", EventType: eventing.TypePubSubPublish,
+		Resource: "projects/proj/topics/t", Source: eventing.SourcePubSub,
+		EventID: eventID, Data: []byte(data),
+	})
+}
+
+// awaitEvent polls the persisted deliveries for the record of one event.
+func awaitEvent(t *testing.T, s *Service, eventID string, ready func(functionsstore.Delivery) bool) functionsstore.Delivery {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		for _, d := range deliveries(t, s) {
+			if d.EventID == eventID && ready(d) {
+				return d
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("delivery %q did not reach the expected state: %+v", eventID, deliveries(t, s))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestDispatchThrottleBackPressureDoesNotConsumeAttempt covers FH2: a delivery
+// refused by the admission gate (429 RESOURCE_EXHAUSTED) is back-pressure, not
+// an invocation, so it is re-polled without advancing its attempt count; once
+// the instance frees, it delivers with a single attempt. The trigger has no
+// failurePolicy — back-pressure is independent of retry.
+func TestDispatchThrottleBackPressureDoesNotConsumeAttempt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	exec := newBlockingExecutor()
+	s, _ := newDeliveryService(t, WithExecutor(exec))
+	createCapacityFn(t, s, "fn", false)
+	s.Start(ctx)
+
+	// The first delivery takes the single instance slot and blocks in the
+	// executor.
+	dispatchToTopic(ctx, s, "first", "first")
+	waitEntered(t, exec, 1)
+
+	// The second delivery is refused by the gate while the slot is held. Wait
+	// past the first backoff (200ms): if it had been wrongly admitted it would
+	// have entered the executor, so enteredCount() staying at 1 confirms the
+	// throttle was exercised.
+	dispatchToTopic(ctx, s, "second", "second")
+	time.Sleep(300 * time.Millisecond)
+	if n := exec.enteredCount(); n != 1 {
+		t.Fatalf("second delivery reached the executor (entered=%d); the test did not force a throttle", n)
+	}
+
+	// Free the slot: the throttled delivery's retry is admitted and succeeds.
+	exec.releaseAll()
+
+	d := awaitEvent(t, s, "second", func(d functionsstore.Delivery) bool {
+		return d.Status != functionsstore.DeliveryPending
+	})
+	if d.Status != functionsstore.DeliveryDelivered || d.Attempts != 1 || d.Result != "second" {
+		t.Fatalf("throttled delivery = %+v (want delivered with attempts=1)", d)
+	}
+}
+
+// TestDispatchPersistentThrottleDoesNotDeadLetter covers FH2: a delivery that is
+// throttled past the emulator's bounded re-poll leaves the record pending with
+// its attempt budget untouched and is never forwarded to the dead-letter topic,
+// even under a retry policy with a configured dead-letter surface.
+func TestDispatchPersistentThrottleDoesNotDeadLetter(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	exec := newBlockingExecutor()
+	subs := &fakeSubs{dlqTopic: "dlq", maxAttempts: 2, ok: true}
+	s, fs := newDeliveryService(t, WithExecutor(exec), WithSubscriptions(subs))
+	createCapacityFn(t, s, "fn", true)
+	setDeliverySubscription(t, fs, "fn", "sub")
+	s.Start(ctx)
+
+	// Hold the slot for the whole test so the second delivery cannot recover.
+	dispatchToTopic(ctx, s, "holder", "holder")
+	waitEntered(t, exec, 1)
+	dispatchToTopic(ctx, s, "throttled", "throttled")
+
+	// The bounded re-poll persists the throttle error when it gives up; the
+	// initial pending record carries no error, so that is the settle signal.
+	d := awaitEvent(t, s, "throttled", func(d functionsstore.Delivery) bool {
+		return d.Error != ""
+	})
+	if d.Status != functionsstore.DeliveryPending || d.Attempts != 0 {
+		t.Fatalf("persistently throttled delivery = %+v (want pending with attempts=0)", d)
+	}
+	if d.DeadLetterTopic != "" || subs.published != 0 {
+		t.Fatalf("throttled delivery was dead-lettered: %+v published=%d", d, subs.published)
+	}
+	exec.releaseAll()
 }

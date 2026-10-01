@@ -221,7 +221,9 @@ evidence for any of them.
       `maxInstanceRequestConcurrency`/`availableCpu`) is stored, range-validated, and surfaced,
       and a configured `maxInstanceCount` (× `maxInstanceRequestConcurrency`) plus a
       project-wide account cap is enforced by an invocation admission gate that returns HTTP
-      429 `RESOURCE_EXHAUSTED` with no available instance. The project quota/account-settings
+      429 `RESOURCE_EXHAUSTED` with no available instance; event delivery treats that refusal as
+      back-pressure (re-polled without consuming a retry/dead-letter attempt; a persistent
+      throttle is left `pending`). The project quota/account-settings
       API itself is still not modelled (FD11): Cloud Functions declares no account/quota method
       (real GCP exposes quotas only through the separate Cloud Quotas / Service Usage APIs), so
       Lambda's `GetAccountSettings` has no Cloud Functions analogue and is deliberately not faked.
