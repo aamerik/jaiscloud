@@ -150,3 +150,13 @@ entries:
     match: "jc_hms_partitions"
     pr: 235
     note: "resolved: HMS partition CRUD over jc_hms_partitions (MP1 #234) + get_table_meta/alter_table_with_cascade (MP2 #235); MP5 client lifecycle test"
+
+  # G5 (Functions v2 deploy unsupported) shipped in the FD14 functions GA wave:
+  # FU2 #212 (v2 ListRuntimes) + FU4/W4.1 #216 (GCS-backed source upload,
+  # storageSource, build/stage, per-deploy revisions). The source doc
+  # (gcp-future-work.md) is gitignored scratch and was never updated, so this
+  # commits the closure; evidence-gated on #216 (the completing PR).
+  - source: "gcp-future-work"
+    match: "Functions v2 deploy"
+    pr: 216
+    note: "resolved: v2 deploy end-to-end (GCS source upload + storageSource + build/stage + revisions) in #216; v2 ListRuntimes in #212"

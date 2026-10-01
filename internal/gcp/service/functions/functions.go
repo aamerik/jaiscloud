@@ -61,7 +61,7 @@ func (s *Service) CreateFunction(ctx context.Context, project, location, id stri
 	// Materialize the backing Eventarc trigger (and its dead-letter
 	// subscription) for a Pub/Sub or Cloud Storage event trigger (FD9, FP2).
 	if s.triggerProvisioner != nil && isEventarcBackedTrigger(f.EventTrigger) {
-		f = s.ensureTrigger(ctx, project, location, id, f)
+		f = s.ensureTrigger(ctx, project, location, id, f, nil)
 		s.persistTriggerFields(ctx, project, location, id, f)
 	}
 	target := resourceID(project)("cloud-function", location+"/"+id)
@@ -164,7 +164,7 @@ func (s *Service) UpdateFunction(ctx context.Context, project, location, id stri
 			// provisioned), so a PATCH of an unrelated field does not bump the
 			// backing trigger's updateTime/etag.
 			if f.EventTrigger.Trigger == "" || !triggerEqual(old.EventTrigger, f.EventTrigger) {
-				f = s.ensureTrigger(ctx, project, location, id, f)
+				f = s.ensureTrigger(ctx, project, location, id, f, old.EventTrigger)
 				s.persistTriggerFields(ctx, project, location, id, f)
 			}
 		} else if old.EventTrigger != nil {

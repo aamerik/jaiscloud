@@ -16,8 +16,12 @@ import (
 //
 // A provisioning failure is non-fatal: the function still receives events via
 // the direct delivery engine (FD4); it just has no user-configurable
-// dead-letter subscription, so the failure is logged rather than returned.
-func (s *Service) ensureTrigger(ctx context.Context, project, location, id string, f functionsstore.Function) functionsstore.Function {
+// dead-letter subscription, so the failure is logged rather than returned. When
+// prev carries a previously provisioned trigger (an update), its
+// Trigger/Subscription are preserved on failure so a transient provisioner
+// error cannot clear the dead-letter surface of a still-existing backing
+// subscription (FP10). prev is nil on create, where there is nothing to keep.
+func (s *Service) ensureTrigger(ctx context.Context, project, location, id string, f functionsstore.Function, prev *functionsstore.EventTrigger) functionsstore.Function {
 	if s.triggerProvisioner == nil || !isEventarcBackedTrigger(f.EventTrigger) {
 		return f
 	}
@@ -30,6 +34,14 @@ func (s *Service) ensureTrigger(ctx context.Context, project, location, id strin
 	})
 	if err != nil {
 		slog.Warn("functions: provision backing event trigger", "function", id, "err", err)
+		if prev != nil {
+			// Restore the prior output-only fields: the metadata merge cleared
+			// them, and the re-provision that would have replaced them failed.
+			et := *f.EventTrigger
+			et.Trigger = prev.Trigger
+			et.Subscription = prev.Subscription
+			f.EventTrigger = &et
+		}
 		return f
 	}
 	// Deep-copy the trigger: the memory store shares the pointer, so mutating in
