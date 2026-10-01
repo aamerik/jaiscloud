@@ -11,6 +11,16 @@ A plan that does not use this shape is invisible to `make gcp-status-next`,
 
 ---
 
+## 0. Local execution environment (plan against it)
+
+The provided dev environment already has a working k3d cluster and a remote
+Docker context, so cluster- and image-build-based gates (`*-k3d`, k8s executor
+modes) can be planned as real, runnable gates. Exact contexts and commands live
+in the `gcp-phase-workflow` skill's Environment section — don't restate them
+here.
+
+---
+
 ## 1. Index — drives priority
 
 `make gcp-status-next` orders by plan family (`Series`) first, then `Session`

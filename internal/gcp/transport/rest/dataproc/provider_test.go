@@ -341,6 +341,41 @@ func TestSubmitJob_MockProgression(t *testing.T) {
 	}
 }
 
+// TestSubmitJob_SchedulingRoundTrip verifies Job.scheduling is parsed from the
+// REST job body and echoed back on the response.
+func TestSubmitJob_SchedulingRoundTrip(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+	}))
+	resp, err := p.SubmitJob(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"job": map[string]any{
+				"reference":  map[string]any{"projectId": "proj", "jobId": "j-sched"},
+				"placement":  map[string]any{"clusterName": "c1"},
+				"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
+				"scheduling": map[string]any{"maxFailuresPerHour": 3, "maxFailuresTotal": 9},
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("SubmitJob: %v", err)
+	}
+	sched, ok := resp.Data["scheduling"].(map[string]any)
+	if !ok {
+		t.Fatalf("scheduling not rendered: %v", resp.Data["scheduling"])
+	}
+	if sched["maxFailuresPerHour"] != int32(3) {
+		t.Fatalf("maxFailuresPerHour = %v", sched["maxFailuresPerHour"])
+	}
+	if sched["maxFailuresTotal"] != int32(9) {
+		t.Fatalf("maxFailuresTotal = %v", sched["maxFailuresTotal"])
+	}
+}
+
 func TestSubmitJob_UnsupportedJobTypeFailsLoud(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()

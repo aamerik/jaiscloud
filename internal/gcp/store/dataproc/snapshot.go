@@ -136,7 +136,8 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 
 	jrows, err := s.pool.Query(ctx, `
 		SELECT project_id, region, job_id, placement_cluster_name, job_type, type_job, labels, status, status_history,
-		       driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time, placement_cluster_uuid
+		       driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time, placement_cluster_uuid,
+		       scheduling, long_running
 		FROM jc_dataproc_jobs ORDER BY project_id, region, job_id
 	`)
 	if err != nil {
@@ -144,10 +145,11 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 	for jrows.Next() {
 		var r jobRow
-		var typeJob, labels, status, history []byte
+		var typeJob, labels, status, history, scheduling []byte
+		var longRunning bool
 		if err := jrows.Scan(&r.ProjectID, &r.Job.Region, &r.Job.JobID, &r.Job.PlacementClusterName, &r.Job.Type, &typeJob,
 			&labels, &status, &history, &r.Job.DriverOutputResourceURI, &r.Job.DriverControlFilesURI,
-			&r.Job.JobUUID, &r.Job.CreateTime, &r.Job.PlacementClusterUUID); err != nil {
+			&r.Job.JobUUID, &r.Job.CreateTime, &r.Job.PlacementClusterUUID, &scheduling, &longRunning); err != nil {
 			jrows.Close()
 			return err
 		}
@@ -155,6 +157,11 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		json.Unmarshal(labels, &r.Job.Labels)
 		json.Unmarshal(status, &r.Job.Status)
 		json.Unmarshal(history, &r.Job.StatusHistory)
+		r.Job.LongRunning = longRunning
+		var sched JobScheduling
+		if json.Unmarshal(scheduling, &sched) == nil && (sched.MaxFailuresPerHour != 0 || sched.MaxFailuresTotal != 0) {
+			r.Job.Scheduling = &sched
+		}
 		jobs = append(jobs, r)
 	}
 	jrows.Close()
@@ -269,11 +276,13 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_dataproc_jobs
 				(project_id, region, job_id, placement_cluster_name, job_type, type_job, labels, status, status_history,
-				 driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time, placement_cluster_uuid)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+				 driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time, placement_cluster_uuid,
+				 scheduling, long_running)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		`, r.ProjectID, r.Job.Region, r.Job.JobID, r.Job.PlacementClusterName, r.Job.Type, nullableJSONRaw(r.Job.TypeJob, "{}"),
 			nullableJSONRaw(labels, "{}"), nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), r.Job.DriverOutputResourceURI,
-			r.Job.DriverControlFilesURI, r.Job.JobUUID, r.Job.CreateTime, r.Job.PlacementClusterUUID); err != nil {
+			r.Job.DriverControlFilesURI, r.Job.JobUUID, r.Job.CreateTime, r.Job.PlacementClusterUUID,
+			nullableJSONRaw(jobSchedulingJSON(r.Job.Scheduling), "{}"), r.Job.LongRunning); err != nil {
 			return err
 		}
 	}

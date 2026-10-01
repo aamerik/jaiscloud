@@ -12,6 +12,11 @@
 `JAVA_HOME=/tmp/opencode/toolchain/jdk-21.0.12.1+1` and
 `/tmp/opencode/toolchain/maven/bin`.
 
+**e2e environment:** the provided dev environment also has a working k3d
+cluster and a remote Docker context, so cluster-/image-based gates (`*-k3d`,
+k8s executor modes) are runnable — the contexts and commands are in the
+`gcp-phase-workflow` skill's Environment section.
+
 The GCP backlog spans many plan docs and PRs. Do not rely on memory or chat
 history to decide what is implemented.
 

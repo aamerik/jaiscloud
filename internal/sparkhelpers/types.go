@@ -12,18 +12,24 @@ import (
 // EntryPoint is a sealed interface for Spark job entry points.
 type EntryPoint interface{ isEntryPoint() }
 
-// JarEntryPoint describes a JAR-based Spark job.
+// JarEntryPoint describes a JAR-based Spark job. JarFileURIs are additional
+// jars added to the driver/executor classpath (dataproc.v1.SparkJob.jar_file_uris
+// → spark-submit --jars).
 type JarEntryPoint struct {
-	JarURI    string
-	MainClass string
+	JarURI      string
+	MainClass   string
+	JarFileURIs []string
 }
 
 func (JarEntryPoint) isEntryPoint() {}
 
-// PythonEntryPoint describes a Python-based Spark job.
+// PythonEntryPoint describes a Python-based Spark job. JarFileURIs are
+// additional jars added to the classpath (dataproc.v1.PySparkJob.jar_file_uris
+// → spark-submit --jars).
 type PythonEntryPoint struct {
 	MainPythonFile string
 	PyFiles        []string
+	JarFileURIs    []string
 }
 
 func (PythonEntryPoint) isEntryPoint() {}
@@ -80,6 +86,11 @@ type ClientModeJob struct {
 	TTLSecondsAfterFinished *int32
 	// SparkSubmitPath overrides the spark-submit binary path (default: "spark-submit").
 	SparkSubmitPath string
+	// Attempt is the 0-based restart attempt. It only affects the k8s object
+	// names (the executor-template ConfigMap and the batch Job), which are
+	// suffixed on retries so a restarted job does not collide with the objects
+	// its previous attempt left behind.
+	Attempt int
 	// SparkSqlPath overrides the spark-sql binary path for a SqlEntryPoint
 	// (default: "spark-sql", or a sibling of SparkSubmitPath when that is set;
 	// the apache/spark image keeps it at /opt/spark/bin/spark-sql, off PATH).

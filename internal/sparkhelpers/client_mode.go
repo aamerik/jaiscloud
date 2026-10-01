@@ -146,8 +146,13 @@ func SubmitClientMode(ctx context.Context, k8s kubernetes.Interface, job ClientM
 		return k8shelpers.JobHandle{}, fmt.Errorf("sparkhelpers: build executor pod template: %w", err)
 	}
 
-	// 2. Create ConfigMap for executor template.
-	cmName := "spark-exec-tpl-" + sanitizeJobID(job.JobID)
+	// 2. Create ConfigMap for executor template. On a restart attempt the name
+	// is suffixed so it does not collide with the previous attempt's objects.
+	objectSuffix := ""
+	if job.Attempt > 0 {
+		objectSuffix = fmt.Sprintf("-r%d", job.Attempt)
+	}
+	cmName := "spark-exec-tpl-" + sanitizeJobID(job.JobID) + objectSuffix
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cmName,
@@ -276,7 +281,7 @@ func SubmitClientMode(ctx context.Context, k8s kubernetes.Interface, job ClientM
 	})
 
 	// 6. Submit the job.
-	jobName := "jc-spark-cm-" + sanitizeJobID(job.JobID)
+	jobName := "jc-spark-cm-" + sanitizeJobID(job.JobID) + objectSuffix
 	req := k8shelpers.SubmitJobRequest{
 		Namespace:               job.Namespace,
 		JobName:                 jobName,

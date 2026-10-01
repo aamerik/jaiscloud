@@ -652,3 +652,34 @@ func TestDiagnoseCluster_Unimplemented(t *testing.T) {
 		t.Fatalf("DiagnoseCluster = %v, want Unimplemented", err)
 	}
 }
+
+// TestSubmitJob_SchedulingRoundTrip verifies Job.scheduling survives the gRPC
+// ingress (proto -> core JobInput) and the egress (core Job -> proto).
+func TestSubmitJob_SchedulingRoundTrip(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	if _, err := s.CreateCluster(ctx, createClusterReq("c1")); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	req := submitReq("j1")
+	req.Job.Scheduling = &dataprocpb.JobScheduling{MaxFailuresPerHour: 3, MaxFailuresTotal: 9}
+	j, err := s.SubmitJob(ctx, req)
+	if err != nil {
+		t.Fatalf("SubmitJob: %v", err)
+	}
+	if j.GetScheduling().GetMaxFailuresPerHour() != 3 || j.GetScheduling().GetMaxFailuresTotal() != 9 {
+		t.Fatalf("scheduling = %+v", j.GetScheduling())
+	}
+}
+
+// TestJobScalarsToProto_IncludesScheduling pins the scalar fallback path: when
+// the full proto transcode fails, the identity/status fields are preserved and
+// must include the restart policy.
+func TestJobScalarsToProto_IncludesScheduling(t *testing.T) {
+	out := jobScalarsToProto(dpstore.Job{
+		Scheduling: &dpstore.JobScheduling{MaxFailuresPerHour: 2, MaxFailuresTotal: 4},
+	})
+	if out.GetScheduling().GetMaxFailuresPerHour() != 2 || out.GetScheduling().GetMaxFailuresTotal() != 4 {
+		t.Fatalf("scalar fallback scheduling = %+v", out.GetScheduling())
+	}
+}
