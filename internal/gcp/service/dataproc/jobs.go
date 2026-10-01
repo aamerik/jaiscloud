@@ -99,10 +99,20 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 		return j, nil
 	}
 
+	// Register the cancel func before launching the executor. submitJob used to
+	// return as soon as the goroutine was spawned, but runJob registered its
+	// cancel func only a moment later; a CancelJob landing in that window moved
+	// the store to CANCEL_PENDING but found no cancel func, so the driver
+	// started and kept running. Registering here closes that window.
 	s.wg.Add(1)
+	runCtx, runCancel := context.WithCancel(s.ctx)
+	key := cancelKey(project, region, j.JobID)
+	s.registerCancel(key, runCancel)
 	go func() {
 		defer s.wg.Done()
-		s.runJob(s.ctx, project, region, j, metastoreEndpoint)
+		defer runCancel()
+		defer s.unregisterCancel(key)
+		s.runJobWithCtx(runCtx, project, region, j, metastoreEndpoint)
 	}()
 	return j, nil
 }
