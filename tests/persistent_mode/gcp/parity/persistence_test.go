@@ -20,9 +20,9 @@
 //
 //	probed here:
 //	  bigquery, clouddns, cloudsql, compute, eventarc, firestore, functions,
-//	  managedkafka, memorystore, metastore, workflowexecutions, workflows
+//	  managedkafka, memorystore, metastore, scheduler, workflowexecutions, workflows
 //
-// No provider service is skipped: each of the twelve has a simple, schema-correct
+// No provider service is skipped: each of the thirteen has a simple, schema-correct
 // REST create/read pair. Services whose data lives in the shared ResourceStore
 // (clouddns, cloudsql, compute, memorystore) are cleared by the resources
 // resetter; the rest are cleared by their own store resetter.
@@ -78,6 +78,7 @@ var probes = []probe{
 	{"managedkafka", seedManagedKafka},
 	{"memorystore", seedMemorystore},
 	{"metastore", seedMetastore},
+	{"scheduler", seedScheduler},
 	{"workflowexecutions", seedWorkflowExecutions},
 	{"workflows", seedWorkflows},
 }
@@ -381,6 +382,24 @@ func seedFunctions(d *driver, suffix string) (func() error, func() error, error)
 }
 
 // seedManagedKafka creates a cluster (v1 projects.locations.clusters.create).
+func seedScheduler(d *driver, suffix string) (func() error, func() error, error) {
+	id := "sched-" + suffix
+	post := fmt.Sprintf("/v1/projects/%s/locations/%s/jobs", project, location)
+	if err := d.expect("POST", post, jsonBody(map[string]any{
+		"name":     fmt.Sprintf("projects/%s/locations/%s/jobs/%s", project, location, id),
+		"schedule": "* * * * *",
+		"timeZone": "UTC",
+		"httpTarget": map[string]any{
+			"uri":        "http://example.test/hook",
+			"httpMethod": "GET",
+		},
+	}), http.StatusOK); err != nil {
+		return nil, nil, err
+	}
+	get := fmt.Sprintf("/v1/projects/%s/locations/%s/jobs/%s", project, location, id)
+	return d.verifyPresent(get), d.verifyGone(get), nil
+}
+
 func seedManagedKafka(d *driver, suffix string) (func() error, func() error, error) {
 	id := "kafka-" + suffix
 	post := fmt.Sprintf("/v1/projects/%s/locations/%s/clusters?clusterId=%s", project, location, url.QueryEscape(id))

@@ -57,6 +57,7 @@ import (
 	metastorecore "jaiscloud/internal/gcp/service/metastore"
 	monitoringcore "jaiscloud/internal/gcp/service/monitoring"
 	resourcemanagercore "jaiscloud/internal/gcp/service/resourcemanager"
+	schedulercore "jaiscloud/internal/gcp/service/scheduler"
 	serviceusagecore "jaiscloud/internal/gcp/service/serviceusage"
 	workflowexecutionscore "jaiscloud/internal/gcp/service/workflowexecutions"
 	workflowscore "jaiscloud/internal/gcp/service/workflows"
@@ -77,6 +78,7 @@ import (
 	metastorestore "jaiscloud/internal/gcp/store/metastore"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
+	schedulerstore "jaiscloud/internal/gcp/store/scheduler"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 	"jaiscloud/internal/gcp/throttle"
@@ -90,6 +92,7 @@ import (
 	grpcmetastore "jaiscloud/internal/gcp/transport/grpc/metastore"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 	grpcresourcemanager "jaiscloud/internal/gcp/transport/grpc/resourcemanager"
+	grpcscheduler "jaiscloud/internal/gcp/transport/grpc/scheduler"
 	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
 	grpcworkflows "jaiscloud/internal/gcp/transport/grpc/workflows"
@@ -103,6 +106,7 @@ import (
 	restmetastore "jaiscloud/internal/gcp/transport/rest/metastore"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
 	restresourcemanager "jaiscloud/internal/gcp/transport/rest/resourcemanager"
+	restscheduler "jaiscloud/internal/gcp/transport/rest/scheduler"
 	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 	restworkflows "jaiscloud/internal/gcp/transport/rest/workflows"
@@ -133,6 +137,7 @@ import (
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
+	schedulerpb "cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	serviceusagepb "cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
 	workflowspb "cloud.google.com/go/workflows/apiv1/workflowspb"
@@ -539,6 +544,16 @@ func startCmd() *cobra.Command {
 			serviceUsageCore := serviceusagecore.NewService(stores.resources, serviceusagecore.WithLROMode(lroMode))
 			serviceusageP := restserviceusage.NewProvider(serviceUsageCore, cfg.ProjectID)
 
+			// Cloud Scheduler v1's transport-neutral core is shared by the REST
+			// provider, the gRPC adapter, and the cron engine, so all three run
+			// against one store and cannot drift. The engine fires
+			// httpTarget/pubsubTarget jobs on the emulator clock; pubsubTarget
+			// delivery reuses the Pub/Sub provider's fan-out path.
+			schedulerCore := schedulercore.NewService(stores.scheduler)
+			schedulerEngine := schedulercore.NewEngine(stores.scheduler, schedulercore.NewRunner(schedulerPubSubPublisher{provider: pubsubP}))
+			schedulerCore.SetEngine(schedulerEngine)
+			schedulerP := restscheduler.NewProvider(schedulerCore)
+
 			// Cloud Resource Manager's transport-neutral core is shared by the
 			// v1 REST provider and the v3 gRPC adapter below, so project IAM
 			// policy lives in one store and the two transports cannot drift.
@@ -595,6 +610,7 @@ func startCmd() *cobra.Command {
 				{"sqladmin", cloudsqlP},
 				{"compute", computeP},
 				{"serviceusage", serviceusageP},
+				{"scheduler", schedulerP},
 				{"resourcemanager", resourcemanagerP},
 				{"datastore", datastoreRestP},
 				{"logging", loggingRestP},
@@ -632,6 +648,7 @@ func startCmd() *cobra.Command {
 			metastoreGRPC := grpcmetastore.NewService(metastoreCore, cfg.ProjectID)
 			eventarcGRPC := grpceventarc.NewService(eventarcCore, cfg.ProjectID)
 			serviceUsageGRPC := grpcserviceusage.NewService(serviceUsageCore, cfg.ProjectID)
+			schedulerGRPC := grpcscheduler.NewService(schedulerCore, cfg.ProjectID)
 			resourceManagerGRPC := grpcresourcemanager.NewService(resourceManagerCore, cfg.ProjectID)
 			iamCredentialsGRPC := grpciamcredentials.NewService(iamCredentialsCore, cfg.ProjectID)
 			dataprocGRPC := grpcdataproc.NewService(dataprocCore, cfg.ProjectID)
@@ -670,6 +687,9 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("serviceusage") {
 					serviceusagepb.RegisterServiceUsageServer(gserv.GRPC(), serviceUsageGRPC)
+				}
+				if transports.GRPCFor("scheduler") {
+					schedulerpb.RegisterCloudSchedulerServer(gserv.GRPC(), schedulerGRPC)
 				}
 				if transports.GRPCFor("resourcemanager") {
 					resourcemanagerpb.RegisterProjectsServer(gserv.GRPC(), resourceManagerGRPC)
@@ -806,6 +826,8 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.logEntries)
 			adminHandler.RegisterResetter(stores.monitoring)
 			adminHandler.RegisterResetter(stores.eventarc)
+			adminHandler.RegisterResetter(schedulerCore)
+			adminHandler.RegisterSchedulerTicker(schedulerEngine)
 			adminHandler.RegisterResetter(stores.resources)
 			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
@@ -872,6 +894,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.eventarc.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("eventarc", snap)
+			}
+			if snap, ok := stores.scheduler.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("scheduler", snap)
 			}
 			if sb, ok := stores.blobs.(admin.SnapshotBlobStore); ok {
 				adminHandler.RegisterBlobStore(sb)
@@ -1016,6 +1041,14 @@ func startCmd() *cobra.Command {
 			}
 			defer evalCancel()
 
+			// Cloud Scheduler cron engine: fires due httpTarget/pubsubTarget
+			// jobs on the virtual clock. Stopped cleanly on shutdown.
+			if serviceEnabled("scheduler") {
+				schedulerCtx, schedulerCancel := context.WithCancel(ctx)
+				go schedulerEngine.Run(schedulerCtx)
+				defer schedulerCancel()
+			}
+
 			// Cloud Functions event-trigger delivery workers. Stopped cleanly on
 			// shutdown; before this point dispatch runs inline.
 			if functionsCore != nil {
@@ -1110,6 +1143,20 @@ type pubsubNotificationPublisher struct {
 	encryptor crypto.EnvelopeEncryptor
 }
 
+// schedulerPubSubPublisher adapts the Pub/Sub provider's fan-out publish path to
+// the Cloud Scheduler engine's Publisher interface. The topic is the full
+// resource name carried by a pubsubTarget.
+type schedulerPubSubPublisher struct {
+	provider *pubsubprovider.Provider
+}
+
+// Publish writes a message to topic (projects/{p}/topics/{t}) with the same
+// envelope encryption and per-subscription fan-out as a topics.publish call.
+func (p schedulerPubSubPublisher) Publish(ctx context.Context, topic string, data []byte, attributes map[string]string) error {
+	_, err := p.provider.PublishEvent(ctx, "", topic, data, attributes)
+	return err
+}
+
 // Publish writes a message to the topic named by topic (a full
 // "projects/{p}/topics/{t}" resource name).
 func (p pubsubNotificationPublisher) Publish(ctx context.Context, topic string, data []byte) error {
@@ -1157,6 +1204,7 @@ type stores struct {
 	logEntries   loggingstore.Store
 	monitoring   monitoringstore.Store
 	eventarc     eventarcstore.Store
+	scheduler    schedulerstore.Store
 	resources    store.ResourceStore
 	blobs        blobfs.BlobStore
 	close        func()
@@ -1195,6 +1243,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			logEntries:   loggingstore.NewPostgresStore(pg.Pool()),
 			monitoring:   monitoringstore.NewPostgresStore(pg.Pool()),
 			eventarc:     eventarcstore.NewPostgresStore(pg.Pool()),
+			scheduler:    schedulerstore.NewPostgresStore(pg.Pool()),
 			resources:    pg,
 			blobs:        blobs,
 			close:        func() { pg.Close() },
@@ -1219,6 +1268,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			logEntries:   loggingstore.NewMemoryStore(),
 			monitoring:   monitoringstore.NewMemoryStore(),
 			eventarc:     eventarcstore.NewMemoryStore(),
+			scheduler:    schedulerstore.NewMemoryStore(),
 			resources:    store.NewMemoryResourceStore(),
 			blobs:        blobfs.NewMemoryBlobStore(),
 			close:        func() {},
@@ -1246,6 +1296,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		logEntries:   loggingstore.NewMemoryStore(),
 		monitoring:   monitoringstore.NewMemoryStore(),
 		eventarc:     eventarcstore.NewMemoryStore(),
+		scheduler:    schedulerstore.NewMemoryStore(),
 		resources:    store.NewMemoryResourceStore(),
 		blobs:        blobs,
 		close:        func() {},

@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 828,
+    "total": 844,
     "by_state": {
-      "ga": 593,
+      "ga": 609,
       "limited": 117,
       "preview": 14,
       "unsupported": 104
     },
     "by_transport": {
       "grpc": {
-        "ga": 283,
+        "ga": 291,
         "limited": 11,
         "unsupported": 92
       },
       "rest": {
-        "ga": 310,
+        "ga": 318,
         "limited": 106,
         "preview": 14,
         "unsupported": 12
@@ -101,6 +101,9 @@
       "resourcemanager": {
         "ga": 8,
         "unsupported": 7
+      },
+      "scheduler": {
+        "ga": 16
       },
       "secretmanager": {
         "ga": 30,
@@ -7743,6 +7746,172 @@
         "mutating",
         "postgres=yes",
         "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "CreateJob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "DeleteJob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "GetJob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "ListJobs",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "PauseJob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "ResumeJob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "RunJob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "Scheduler.JobsCreate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudscheduler.projects.locations.jobs.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "Scheduler.JobsDelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudscheduler.projects.locations.jobs.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "Scheduler.JobsGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudscheduler.projects.locations.jobs.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "Scheduler.JobsList",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudscheduler.projects.locations.jobs.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "Scheduler.JobsPatch",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudscheduler.projects.locations.jobs.patch",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "Scheduler.JobsPause",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudscheduler.projects.locations.jobs.pause",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "Scheduler.JobsResume",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudscheduler.projects.locations.jobs.resume",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "Scheduler.JobsRun",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudscheduler.projects.locations.jobs.run",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "scheduler",
+      "operation": "UpdateJob",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

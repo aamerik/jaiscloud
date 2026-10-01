@@ -307,6 +307,13 @@ var formatters = map[string]func(project, name string) string{
 	"serviceusage-operation": func(_, n string) string {
 		return "operations/" + n
 	},
+	// Cloud Scheduler v1 — a job is
+	// "projects/{project}/locations/{location}/jobs/{job}"; callers pass
+	// "location/job".
+	"scheduler-job": func(p, n string) string {
+		loc, job := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/jobs/%s", p, loc, job)
+	},
 	// Cloud Resource Manager — a project's canonical v3 resource name is
 	// "projects/{project}". The v1 REST API has no resource name (it identifies
 	// a project by projectId), so callers pass the project id as the closure

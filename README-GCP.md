@@ -3,7 +3,7 @@
 > **Early Development Notice**
 > `jaiscloud-gcp` is under active development on the `gcp` branch (current version **v1.1.0**) and has not yet been released as a packaged binary (see the [main README](README.md), which currently lists GCP as "In pipeline"). Build it from source. Some operations may have incomplete implementations, behavioural differences from real GCP, or known bugs — see [Known Limitations](#known-limitations) below, and please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) for anything not already listed there.
 
-**JaisCloud — a free GCP emulator for developers and CI.** It implements real GCP wire protocols — both the REST/JSON APIs and the native gRPC APIs official Google clients use (Storage, Pub/Sub, Firestore, Datastore, KMS, Secret Manager, Logging, Monitoring, Dataproc, Eventarc, Functions, Managed Kafka, Metastore, Service Usage, Workflows, Workflow Executions, Resource Manager, IAM) — no SDK shims, no proxy rewrites. Point an official Google client library at it and it works. Where real GCP is REST-only (Compute, Cloud SQL, Cloud DNS, BigQuery, BigLake Iceberg, Memorystore), only REST is exposed; each service row below states its transports.
+**JaisCloud — a free GCP emulator for developers and CI.** It implements real GCP wire protocols — both the REST/JSON APIs and the native gRPC APIs official Google clients use (Storage, Pub/Sub, Firestore, Datastore, KMS, Secret Manager, Logging, Monitoring, Dataproc, Eventarc, Functions, Managed Kafka, Metastore, Service Usage, Workflows, Workflow Executions, Resource Manager, IAM, Cloud Scheduler) — no SDK shims, no proxy rewrites. Point an official Google client library at it and it works. Where real GCP is REST-only (Compute, Cloud SQL, Cloud DNS, BigQuery, BigLake Iceberg, Memorystore), only REST is exposed; each service row below states its transports.
 
 **One binary per cloud.** `jaiscloud-gcp` is fully self-contained — no `--cloud` flag, no shared runtime with `jaiscloud-aws`. See the [main README](README.md) for the project-wide picture (AWS is the reference implementation; this document covers the GCP binary specifically).
 
@@ -20,6 +20,7 @@
 | Cloud IAM | REST + gRPC | Service accounts, service account keys; gRPC `IAMPolicy` for project/resource policies (authz not enforced) |
 | Service Usage | REST + gRPC | Project service enable/disable/get/list (`services.enable`/`disable`/`batchEnable`), `filter=state:ENABLED` |
 | Cloud Resource Manager | REST + gRPC | Project lookup + project-level IAM policy (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`) — authz not enforced |
+| Cloud Scheduler | REST + gRPC | Cron jobs (`jobs` CRUD + `pause`/`resume`/`run`); a real cron engine fires `httpTarget`/`pubsubTarget` jobs on the emulator clock — see [Known Limitations](#known-limitations) |
 | Cloud Firestore (Native mode) | REST + gRPC | Documents, transactions, structured/aggregation/partition queries, composite indexes, `BatchWrite`/`Write`/`Listen` streaming, pipelines (read-only subset) |
 | Cloud Datastore mode | REST + gRPC | Entities, queries (structured + GQL), ID allocation, `ReserveIds`/`RunAggregationQuery`, transactions (read-set OCC) — see [Known Limitations](#known-limitations) |
 | Cloud Functions (v1 + v2) | REST + gRPC | Deploy (LRO), invoke via `:call` or the deployed HTTPS trigger URL (mock echo by default, Docker/K8s execution modes), locations, source URLs, v2 `serviceConfig` instance/concurrency config (`minInstanceCount`/`maxInstanceCount`/`maxInstanceRequestConcurrency`/`availableCpu`, validated, surfaced + admission-enforced) |
@@ -37,7 +38,8 @@
 | Cloud SQL Admin | REST | Metadata-only instances/databases/users — no SQL engine or data plane, see [Known Limitations](#known-limitations) |
 | Compute Engine | REST | Metadata-only instances/disks/networks/firewalls/subnetworks — no VM, disk, or network data plane, see [Known Limitations](#known-limitations) |
 
-**Not implemented (out of scope):** Artifact Registry, Cloud Run, Cloud Endpoints, Deployment Manager.
+**Not implemented (out of scope):** Artifact Registry, Cloud Run, Cloud Endpoints, Deployment
+Manager, Cloud Tasks, Firebase Auth (Identity Toolkit), GKE (`container.googleapis.com`).
 
 ### Fidelity matrix
 
@@ -180,7 +182,7 @@ The most common flags — all have an equivalent `JAISCLOUD_*` env var.
 | — | `JAISCLOUD_GCP_THROTTLE_RETRY_DELAY` | `1s` | Advertised retry delay (Go duration), surfaced as `Retry-After` + `RetryInfo` |
 | `--metrics` | — | `false` | Expose Prometheus metrics at `/metrics` |
 
-**Transport selection.** `--transports` sets the global default and `--transport-overrides` refines it per service (an override wins). A service is constructed and registered only when at least one transport is selected for it, and only the selected listeners bind — `--transports=rest` opens no `:8081`, while `--transports=grpc` serves the GCP REST API nowhere but keeps the always-on `/_jaiscloud/*` admin plane (and `/metrics`) on `--port`. Per-service selection gates construction and which gRPC services register; `none` removes a service from both transports (a later request for it fails with a registry `no handler` error). The REST API is mounted as one route set, so it is gated by the global `--transports` setting rather than per service. Per-service override names are the **wire** names: `storage`, `pubsub`, `secretmanager`, `kms`, `iam`, `firestore`, `firestoreadmin`, `datastore`, `logging`, `monitoring`, `functions`, `workflows`, `workflowexecutions`, `dataproc`, `managedkafka`, `metastore`, `eventarc`, `serviceusage`, `resourcemanager`, `bigquery`, `dns`, `sqladmin`, `compute`, `iceberg`, `redis` (Memorystore). An unknown service or transport token fails startup loudly.
+**Transport selection.** `--transports` sets the global default and `--transport-overrides` refines it per service (an override wins). A service is constructed and registered only when at least one transport is selected for it, and only the selected listeners bind — `--transports=rest` opens no `:8081`, while `--transports=grpc` serves the GCP REST API nowhere but keeps the always-on `/_jaiscloud/*` admin plane (and `/metrics`) on `--port`. Per-service selection gates construction and which gRPC services register; `none` removes a service from both transports (a later request for it fails with a registry `no handler` error). The REST API is mounted as one route set, so it is gated by the global `--transports` setting rather than per service. Per-service override names are the **wire** names: `storage`, `pubsub`, `secretmanager`, `kms`, `iam`, `firestore`, `firestoreadmin`, `datastore`, `logging`, `monitoring`, `functions`, `workflows`, `workflowexecutions`, `dataproc`, `managedkafka`, `metastore`, `eventarc`, `serviceusage`, `resourcemanager`, `bigquery`, `dns`, `sqladmin`, `compute`, `iceberg`, `redis` (Memorystore), `scheduler`. An unknown service or transport token fails startup loudly.
 
 ```bash
 ./jaiscloud-gcp start --transports=rest                                  # REST + admin only (no :8081)
@@ -277,6 +279,26 @@ Documented approximations: the query read-set tracks the returned entities' vers
 Unsupported constructs — `UNNEST`/`ARRAY`/`STRUCT`, `GEOGRAPHY`, wildcard/`TABLE_SUFFIX` tables, `INFORMATION_SCHEMA`, scripting/stored procedures, `MERGE`, `SAFE.` functions, `QUALIFY`, date/format functions, DDL/DML beyond the accepted set, and legacy SQL — **fail loud** with `400 invalidQuery` instead of returning wrong rows. Documented simplifications: DDL/DML jobs complete synchronously (`jobComplete: true`); `getQueryResults` re-executes a stored `SELECT` but returns the persisted statistics for a DDL/DML job (so a write is never double-applied); `maxResults`/`pageToken` paging is ignored (the full bounded result set is returned); job-statistics/timing fields (`cacheHit`, `creationTime`, `queryId`, bytes/latency counters, ...) are not synthesized; and cross-type comparison and division-by-zero semantics follow the SQLite-backed subset rather than real BigQuery. `routines`, `models`, and `rowAccessPolicies` are explicit `501` stubs.
 
 `tabledata.insertAll` validates rows against the table schema (missing `REQUIRED` fields and unknown fields are rejected unless `ignoreUnknownValues` is set), honors `skipInvalidRows`, and best-effort suppresses duplicate `insertId`s over a bounded, in-memory window (the dedup state is not persisted across restarts). Field *types* are not enforced, and `templateSuffix` is not supported. `tabledata.list` honors `startIndex` (offset pagination). `projects.getServiceAccount` returns a synthetic `bq-{project}@gcp-sa-bigquery.iam.gserviceaccount.com` rather than a real service account.
+
+### Cloud Scheduler: real cron engine; App Engine targets stored only
+
+Cloud Scheduler v1 is served over REST (`cloudscheduler.googleapis.com/v1`) and gRPC
+(`google.cloud.scheduler.v1.CloudScheduler`) from one transport-neutral core and store. Jobs support
+`create`/`get`/`list`/`patch`/`delete` plus `pause`/`resume`/`run`. A real cron engine fires due
+`httpTarget` and `pubsubTarget` jobs on the **emulator clock** (`clock.Now()`): advance the clock
+(`POST /_jaiscloud/clock`) and the engine delivers on its next tick, or call
+`POST /_jaiscloud/scheduler-tick` (or `jobs.run`) to fire deterministically. An `httpTarget`
+delivery performs the documented HTTP request (method, headers, body, with the `X-CloudScheduler*`
+headers) and treats a 2xx as success; a `pubsubTarget` reuses the Pub/Sub publish path, so the
+message fans out to the topic's pull subscriptions. Failures are retried with exponential backoff
+honoring `retryConfig.retryCount`/`minBackoffDuration`/`maxBackoffDuration`, then fall back to the
+cron schedule.
+
+Limitations: `appEngineHttpTarget` is stored and echoed but **never delivered** (the emulator has no
+App Engine router) — its attempts are recorded as `Unimplemented`; English-like schedules ("every 5
+minutes") are not parsed (unix-cron plus `@` descriptors only; anything else is `InvalidArgument`);
+`oauthToken`/`oidcToken` attach a synthetic emulator-local bearer token rather than a real Google
+token; and `updateCmekConfig` is not implemented.
 
 ### Managed Kafka: metadata only, no real broker
 
