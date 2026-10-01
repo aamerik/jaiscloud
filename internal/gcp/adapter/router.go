@@ -200,6 +200,13 @@ func detectV1Service(path string) string {
 	if len(rest) > 0 && rest[0] == "services" {
 		return "serviceusage"
 	}
+	// Cloud Scheduler v1 lives under
+	// /v1/projects/{project}/locations/{location}/jobs[/{job}][:verb] — detect
+	// it before the generic resource-type switch (its "jobs" segment is
+	// otherwise unmatched and would fall through to the unknown-service 404).
+	if len(rest) > 0 && rest[0] == "locations" && len(rest) >= 3 && rest[2] == "jobs" {
+		return "scheduler"
+	}
 	// Dataproc lives under /v1/projects/{project}/regions/{region}/{clusters|jobs|operations}
 	// — detect it before the generic resource-type switch (its "operations"
 	// segment would otherwise be mistaken for the Workflows LRO surface).

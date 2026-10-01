@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 310,
-  "passed": 310,
+  "total": 318,
+  "passed": 318,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 21,
-    "checks": 310,
-    "passed": 310,
+    "services": 22,
+    "checks": 318,
+    "passed": 318,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -123,6 +123,13 @@
       "service": "resourcemanager",
       "total": 4,
       "passed": 4,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "scheduler",
+      "total": 8,
+      "passed": 8,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1611,6 +1618,62 @@
       "method": "DisableService",
       "status": "pass",
       "key_field": "LRO done + state DISABLED"
+    },
+    {
+      "service": "scheduler",
+      "rpc": "CreateJob",
+      "method": "CreateJob",
+      "status": "pass",
+      "key_field": "name/state/httpTarget round-trip"
+    },
+    {
+      "service": "scheduler",
+      "rpc": "GetJob",
+      "method": "GetJob",
+      "status": "pass",
+      "key_field": "name + state ENABLED"
+    },
+    {
+      "service": "scheduler",
+      "rpc": "ListJobs",
+      "method": "ListJobs",
+      "status": "pass",
+      "key_field": "created job present"
+    },
+    {
+      "service": "scheduler",
+      "rpc": "UpdateJob",
+      "method": "UpdateJob",
+      "status": "pass",
+      "key_field": "description updated (masked)"
+    },
+    {
+      "service": "scheduler",
+      "rpc": "PauseJob",
+      "method": "PauseJob",
+      "status": "pass",
+      "key_field": "state PAUSED"
+    },
+    {
+      "service": "scheduler",
+      "rpc": "ResumeJob",
+      "method": "ResumeJob",
+      "status": "pass",
+      "key_field": "state ENABLED"
+    },
+    {
+      "service": "scheduler",
+      "rpc": "RunJob",
+      "method": "RunJob",
+      "status": "pass",
+      "key_field": "lastAttemptTime set"
+    },
+    {
+      "service": "scheduler",
+      "rpc": "DeleteJob",
+      "method": "DeleteJob",
+      "status": "pass",
+      "key_field": "subsequent GetJob NOT_FOUND"
     },
     {
       "service": "resourcemanager",

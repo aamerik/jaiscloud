@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **828**
+Cells: **844**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 593 |
+| ga | 609 |
 | limited | 117 |
 | preview | 14 |
 | unsupported | 104 |
@@ -21,8 +21,8 @@ Cells: **828**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 310 | 106 | 14 | 12 |
-| grpc | 283 | 11 | 0 | 92 |
+| rest | 318 | 106 | 14 | 12 |
+| grpc | 291 | 11 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -887,6 +887,29 @@ _15 cell(s): ga=8 limited=0 preview=0 unsupported=7_
 | TestIamPermissions | grpc | ga | — |
 | UndeleteProject | grpc | unsupported | projects are synthesized, never deleted; explicit Unimplemented stub |
 | UpdateProject | grpc | unsupported | project metadata is not modelled; explicit Unimplemented stub |
+
+## scheduler
+
+_16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
+
+| operation | transport | state | reason |
+| --- | --- | --- | --- |
+| CreateJob | grpc | ga | — |
+| DeleteJob | grpc | ga | — |
+| GetJob | grpc | ga | — |
+| ListJobs | grpc | ga | — |
+| PauseJob | grpc | ga | — |
+| ResumeJob | grpc | ga | — |
+| RunJob | grpc | ga | — |
+| Scheduler.JobsCreate | rest | ga | — |
+| Scheduler.JobsDelete | rest | ga | — |
+| Scheduler.JobsGet | rest | ga | — |
+| Scheduler.JobsList | rest | ga | — |
+| Scheduler.JobsPatch | rest | ga | — |
+| Scheduler.JobsPause | rest | ga | — |
+| Scheduler.JobsResume | rest | ga | — |
+| Scheduler.JobsRun | rest | ga | — |
+| UpdateJob | grpc | ga | — |
 
 ## secretmanager
 

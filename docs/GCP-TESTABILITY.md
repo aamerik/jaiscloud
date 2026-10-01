@@ -69,13 +69,13 @@ of writing:
 
 | Layer | Cells | `ga` | `limited` | `preview` | `unsupported` | `ga` share |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 808 | 573 | 117 | 14 | 104 | 71% |
-| **gRPC** (official clients) | 379 | 276 | 11 | 0 | 92 | 73% |
-| **REST** (Discovery-backed) | 429 | 297 | 106 | 14 | 12 | 69% |
+| **Overall** | 844 | 609 | 117 | 14 | 104 | 72% |
+| **gRPC** (official clients) | 394 | 291 | 11 | 0 | 92 | 74% |
+| **REST** (Discovery-backed) | 450 | 318 | 106 | 14 | 12 | 71% |
 
 - gRPC-only services (no REST transport): **Firestore Admin, Operations (long-running)**.
-- gRPC split = 276 `ga` + 11 `limited` + 92 `unsupported` = 379. REST split = 297 + 106 + 14 + 12 = 429.
-  Overall = 379 + 429 = 808.
+- gRPC split = 291 `ga` + 11 `limited` + 92 `unsupported` = 394. REST split = 318 + 106 + 14 + 12 = 450.
+  Overall = 394 + 450 = 844.
 
 **How to refresh.** The matrix is generated, not hand-edited. Run
 `make gen-gcp-fidelity-matrix`, then re-read
@@ -109,6 +109,7 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `operations` | grpc | 5/5 | 🟢 | Shape only | Shape only | Synchronous operation stub by default. Under `JAISCLOUD_LRO_MODE=async` the shared service is registry-backed for the services that persist operations (currently Service Usage): their persisted operations are `list`/`cancel`/`delete`-able (`cancel` validates but does not cancel) and an operation name no service owns is `NOT_FOUND` (real GCP semantics) instead of the lenient terminal stub. |
 | `serviceusage` | grpc, rest | 10/11 | 🟢 | Shape only | Shape only | Accept-and-succeed enable/disable; no real API gating. `BatchGetServices` is an unsupported stub. |
 | `resourcemanager` | grpc, rest | 8/15 | 🟢 | Shape only | Shape only | v1 REST + v3 gRPC project surfaces over one core: project lookup + project IAM (etag OCC); the 7 project lifecycle/lookup gRPC RPCs are unsupported stubs; authz not enforced. |
+| `scheduler` | grpc, rest | 16/16 | 🟢 | Full | Yes | Job CRUD + `pause`/`resume`/`run` with a real cron engine that fires `httpTarget`/`pubsubTarget` jobs on the emulator clock (advance `/_jaiscloud/clock`, or `POST /_jaiscloud/scheduler-tick`/`jobs.run` to fire deterministically); failures retry with exponential backoff per `retryConfig`. `appEngineHttpTarget` is stored but never delivered (attempts recorded `Unimplemented`); English-like schedules and `oauthToken`/`oidcToken` real token minting are not modelled. |
 | `workflows` | grpc, rest | 11/12 | 🟢 | Shape only | Shape only | Workflow definitions + executions; LROs complete synchronously by default, with an opt-in async mode (`JAISCLOUD_LRO_MODE=async`) that settles on `operations.get`. `ListWorkflowRevisions` is an unsupported stub. |
 | `workflowexecutions` | grpc, rest | 8/8 | 🟢 | Shape only | Shape only | Executions are synchronous. |
 | `functions` | grpc, rest | 38/38 | 🟡 | Shape only | Shape only | Metadata CRUD + mock/docker call over REST and gRPC; v2 runtime catalog (`/v2/.../runtimes`, gRPC `ListRuntimes`) served; common-API `GetLocation`/`CancelOperation`/`DeleteOperation`/`WaitOperation` served; function mutations persist a pollable `google.longrunning` operation store (memory + Postgres + snapshot), so `operations.get`/`list` and REST `:wait` return the typed response; GCS-referenced source archives (`sourceArchiveUrl` / `storageSource`) are fetched, persisted with a revision hash, and executed under Docker/K8s; v2 `generateUploadUrl` provisions a GCS-backed upload target so `gcloud functions deploy --gen2` runs end-to-end, and each deploy bumps a persisted revision counter so a deployed function renders `serviceConfig.revision` (the backing Cloud Run service revision) + `allTrafficOnLatestRevision` (no real container build); the v2 1st→2nd gen upgrade/traffic control plane (`setupFunctionUpgradeConfig`, `redirect`/`rollbackFunctionUpgradeTraffic`, `commitFunctionUpgrade`/`commitFunctionUpgradeAsGen2`, `abortFunctionUpgrade`, `detachFunction`) is served over REST with a persisted `upgradeInfo` state machine — REST-only in practice (documented as `FunctionService` RPCs, but absent from the public `googleapis` proto and all generated clients); the synthesized HTTPS trigger URL (`{location}-{project}.cloudfunctions.net/{id}`) is served (Host-scoped raw-body invocation, HTTP 500 on an executor error/timeout, 404 for an unknown or event-only function); event triggers deliver Pub/Sub publishes, GCS object finalize/delete, and matching Eventarc `cloudFunction` routes through the same executor, retry per `failurePolicy.retry`/`retryPolicy`, and persist a delivery record (`delivered`/`failed`/`dead_letter`); v2 `serviceConfig` instance/concurrency settings (`minInstanceCount`, `maxInstanceCount`, `maxInstanceRequestConcurrency`, `availableCpu`) are stored, range-validated against the real API (including the Cloud Run sub-1-vCPU → concurrency-1 rule), and surfaced; a configured `maxInstanceCount` (× `maxInstanceRequestConcurrency`) and a project-wide account cap are enforced by an invocation admission gate that returns HTTP 429 `RESOURCE_EXHAUSTED` when the capacity is exceeded, while no separate project quota/account-settings API is modelled (FD11). A Pub/Sub or Cloud Storage event trigger materializes a backing Eventarc trigger (`eventTrigger.trigger`, output-only) whose platform-provisioned `transport.pubsub.subscription` is user-configurable with `deadLetterPolicy` over `subscriptions.patch` (a Cloud Storage trigger's transport topic is auto-provisioned by the platform, mirroring real Eventarc); exhausted deliveries are republished to the dead-letter topic with the `CloudPubSubDeadLetterSource*` attributes. The v2 `ListRuntimes` filter evaluates the AIP-160 subset `=`/`!=`/`:`(contains)/`<`/`<=`/`>`/`>=` with `AND`/`OR`/`NOT` and parentheses over `name`/`displayName`/`stage`/`environment` (AIP-160 function calls are rejected with `InvalidArgument`). |
@@ -119,9 +120,9 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `bigquery` | rest | 0/23 | 🟡 | Shape only | Shape only | A documented Standard SQL subset (`SELECT` + DDL/DML) runs on an in-process pure-Go SQLite engine in both memory and `--dsn` modes; `routines`/`models`/`rowAccessPolicies` are `501` stubs and the full GoogleSQL surface is not modelled. |
 | `iceberg` | rest | 0/14 | 🔴 | None | No | BigLake Iceberg REST catalog; `preview`. |
 
-Tier groups: **Green (19)** `dataproc`, `datastore`, `eventarc`, `firestore`,
+Tier groups: **Green (20)** `dataproc`, `datastore`, `eventarc`, `firestore`,
 `firestoreadmin`, `iam`, `kms`, `logging`, `managedkafka`, `metastore`, `monitoring`,
-`operations`, `pubsub`, `resourcemanager`, `secretmanager`, `serviceusage`, `storage`,
+`operations`, `pubsub`, `resourcemanager`, `scheduler`, `secretmanager`, `serviceusage`, `storage`,
 `workflowexecutions`, `workflows`. **Yellow (6)** `bigquery`, `clouddns`,
 `cloudsql`, `compute`, `functions`, `memorystore`. **Red (1)** `iceberg`.
 

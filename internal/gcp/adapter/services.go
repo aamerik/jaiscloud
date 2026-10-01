@@ -11,6 +11,7 @@ import (
 	restmetastore "jaiscloud/internal/gcp/transport/rest/metastore"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
 	restresourcemanager "jaiscloud/internal/gcp/transport/rest/resourcemanager"
+	restscheduler "jaiscloud/internal/gcp/transport/rest/scheduler"
 	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 )
@@ -190,6 +191,15 @@ var gcpServices = []ServiceDescriptor{
 		ServiceName:    "datastore",
 		ProviderPrefix: "Datastore",
 		Codec:          func() adapter.Codec { return restdatastore.NewCodec() },
+	},
+	{
+		// Cloud Scheduler v1 shares the /v1/ prefix and is claimed by segment
+		// detection (detectV1Service) on the locations/{location}/jobs path, so
+		// it has no PathPrefixes. The codec lives with the REST transport
+		// package that adapts it to the shared core.
+		ServiceName:    "scheduler",
+		ProviderPrefix: "Scheduler",
+		Codec:          func() adapter.Codec { return restscheduler.NewCodec() },
 	},
 	{
 		// Cloud Logging v2 shares the /v2/ namespace; its REST data methods are

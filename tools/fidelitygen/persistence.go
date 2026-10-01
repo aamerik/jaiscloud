@@ -43,6 +43,7 @@ package main
 //	resourcemanager    -> internal/store (ResourceStore, via internal/gcp/policy)
 //	logging            -> internal/gcp/store/logging
 //	monitoring         -> internal/gcp/store/monitoring
+//	scheduler          -> internal/gcp/store/scheduler
 //
 // Every enumerated REST service therefore qualifies today, and the gRPC-only
 // data services (datastore, logging) qualify via their own dedicated stores
@@ -84,5 +85,6 @@ var persistentBackends = map[string]bool{
 	"resourcemanager":    true,
 	"logging":            true,
 	"monitoring":         true,
+	"scheduler":          true,
 	"operations":         true,
 }
