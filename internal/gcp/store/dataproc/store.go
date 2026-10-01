@@ -16,10 +16,11 @@ import (
 )
 
 var (
-	ErrNoSuchCluster   = errors.New("NoSuchCluster")
-	ErrNoSuchJob       = errors.New("NoSuchJob")
-	ErrNoSuchOperation = errors.New("NoSuchOperation")
-	ErrAlreadyExists   = errors.New("AlreadyExists")
+	ErrNoSuchCluster          = errors.New("NoSuchCluster")
+	ErrNoSuchJob              = errors.New("NoSuchJob")
+	ErrNoSuchOperation        = errors.New("NoSuchOperation")
+	ErrNoSuchWorkflowTemplate = errors.New("NoSuchWorkflowTemplate")
+	ErrAlreadyExists          = errors.New("AlreadyExists")
 )
 
 // ClusterStatus mirrors dataproc.v1.ClusterStatus.
@@ -111,6 +112,25 @@ type Operation struct {
 	EndTime    time.Time `json:"endTime"`
 }
 
+// WorkflowTemplate is a stored Dataproc workflow template
+// (dataproc.v1.WorkflowTemplate). Definition is the full WorkflowTemplate wire
+// object (jobs, placement, parameters, labels, dagTimeout, ...) stored verbatim
+// as JSON; the create/update timestamps and version are managed by the store.
+//
+// Only the latest version is retained: a create stores version 1 and every
+// update stores the next version in place (real GCP keeps a version history —
+// see README-GCP.md). Get/Delete with an explicit non-current version therefore
+// report NotFound.
+type WorkflowTemplate struct {
+	ProjectID  string          `json:"projectId"`
+	Region     string          `json:"region"`
+	TemplateID string          `json:"id"`
+	Version    int32           `json:"version"`
+	Definition json.RawMessage `json:"definition"`
+	CreateTime time.Time       `json:"createTime"`
+	UpdateTime time.Time       `json:"updateTime"`
+}
+
 // Store is the Cloud Dataproc store.
 type Store interface {
 	CreateCluster(ctx context.Context, projectID, region string, c Cluster) error
@@ -155,6 +175,16 @@ type Store interface {
 	// and without this jc_dataproc_operations grows unbounded (the only other
 	// delete is Reset).
 	DeleteStaleOperations(ctx context.Context, cutoff time.Time) (int, error)
+
+	CreateWorkflowTemplate(ctx context.Context, projectID, region string, t WorkflowTemplate) error
+	GetWorkflowTemplate(ctx context.Context, projectID, region, templateID string) (WorkflowTemplate, error)
+	// UpdateWorkflowTemplateAtomic performs a locked get-mutate-set cycle over a
+	// template, so a version bump (UpdateWorkflowTemplate) can't race a
+	// concurrent update into a lost version. mutate receives the current
+	// template and returns the version to persist.
+	UpdateWorkflowTemplateAtomic(ctx context.Context, projectID, region, templateID string, mutate func(WorkflowTemplate) (WorkflowTemplate, error)) (WorkflowTemplate, error)
+	DeleteWorkflowTemplate(ctx context.Context, projectID, region, templateID string) error
+	ListWorkflowTemplates(ctx context.Context, projectID, region string) ([]WorkflowTemplate, error)
 
 	Reset(ctx context.Context)
 }

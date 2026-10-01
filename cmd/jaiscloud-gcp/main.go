@@ -662,6 +662,7 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("dataproc") {
 					dataprocpb.RegisterClusterControllerServer(gserv.GRPC(), dataprocGRPC)
 					dataprocpb.RegisterJobControllerServer(gserv.GRPC(), dataprocGRPC)
+					dataprocpb.RegisterWorkflowTemplateServiceServer(gserv.GRPC(), dataprocGRPC)
 				}
 				if transports.GRPCFor("functions") {
 					functionspb.RegisterCloudFunctionsServiceServer(gserv.GRPC(), functionsGRPC)

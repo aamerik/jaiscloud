@@ -46,6 +46,11 @@ func dataprocChecks() []Check {
 		{Service: "dataproc", RPC: "CreateCluster (metastore)", Method: "CreateCluster", KeyField: "auxiliaryServicesConfig.metastoreConfig echo", Run: checkDPMetastoreAttachment},
 		{Service: "dataproc", RPC: "GetJob (placement)", Method: "GetJob", KeyField: "placement.clusterUuid", Run: checkDPJobPlacementClusterUUID},
 		{Service: "dataproc", RPC: "SubmitJob (driver output)", Method: "SubmitJob", KeyField: "driver output/control URIs present", Run: checkDPDriverOutputURIs},
+		{Service: "dataproc", RPC: "CreateWorkflowTemplate", Method: "CreateWorkflowTemplate", KeyField: "name/version round-trip", Run: checkDPCreateWorkflowTemplate},
+		{Service: "dataproc", RPC: "GetWorkflowTemplate", Method: "GetWorkflowTemplate", KeyField: "job stepId round-trip", Run: checkDPGetWorkflowTemplate},
+		{Service: "dataproc", RPC: "ListWorkflowTemplates", Method: "ListWorkflowTemplates", KeyField: "created template present", Run: checkDPListWorkflowTemplates},
+		{Service: "dataproc", RPC: "UpdateWorkflowTemplate", Method: "UpdateWorkflowTemplate", KeyField: "version bumped", Run: checkDPUpdateWorkflowTemplate},
+		{Service: "dataproc", RPC: "DeleteWorkflowTemplate", Method: "DeleteWorkflowTemplate", KeyField: "NotFound after delete", Run: checkDPDeleteWorkflowTemplate},
 	}
 }
 
@@ -817,6 +822,160 @@ func checkDPDeleteJob(ctx context.Context, cfg Config) error {
 	}
 	if _, err := jc.GetJob(ctx, &dataprocpb.GetJobRequest{ProjectId: cfg.Project, Region: dataprocRegion, JobId: jobID}); status.Code(err) != codes.NotFound {
 		return fmt.Errorf("GetJob after delete = %v, want NotFound", err)
+	}
+	return nil
+}
+
+// ─── Workflow templates (DPW1) ───────────────────────────────────────────────
+
+// dataprocWorkflowParent is the workflowTemplates parent
+// (projects/{project}/regions/{region}).
+func dataprocWorkflowParent(cfg Config) string {
+	return fmt.Sprintf("projects/%s/regions/%s", cfg.Project, dataprocRegion)
+}
+
+func newDataprocWorkflowTemplateClient(ctx context.Context, cfg Config) (*dataproc.WorkflowTemplateClient, error) {
+	return dataproc.NewWorkflowTemplateClient(ctx, dataprocClientOptions(cfg)...)
+}
+
+// dataprocWorkflowTemplate builds a minimal inline workflow template.
+func dataprocWorkflowTemplate(id string) *dataprocpb.WorkflowTemplate {
+	return &dataprocpb.WorkflowTemplate{
+		Id: id,
+		Placement: &dataprocpb.WorkflowTemplatePlacement{
+			Placement: &dataprocpb.WorkflowTemplatePlacement_ManagedCluster{
+				ManagedCluster: &dataprocpb.ManagedCluster{ClusterName: "gcpc-wf-probe-cluster"},
+			},
+		},
+		Jobs: []*dataprocpb.OrderedJob{{
+			StepId:  "a",
+			JobType: &dataprocpb.OrderedJob_PysparkJob{PysparkJob: &dataprocpb.PySparkJob{MainPythonFileUri: "gs://bucket/main.py"}},
+		}},
+	}
+}
+
+// Check 19: CreateWorkflowTemplate round-trips a template.
+func checkDPCreateWorkflowTemplate(ctx context.Context, cfg Config) error {
+	client, err := newDataprocWorkflowTemplateClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	id := cfg.ResourceName("gcpc-grpc-dpwf")
+	got, err := client.CreateWorkflowTemplate(ctx, &dataprocpb.CreateWorkflowTemplateRequest{
+		Parent:   dataprocWorkflowParent(cfg),
+		Template: dataprocWorkflowTemplate(id),
+	})
+	if err != nil {
+		return fmt.Errorf("CreateWorkflowTemplate: %w", err)
+	}
+	wantName := dataprocWorkflowParent(cfg) + "/workflowTemplates/" + id
+	if got.GetName() != wantName || got.GetId() != id || got.GetVersion() != 1 {
+		return fmt.Errorf("created template = name %q id %q version %d, want %q/%q/1",
+			got.GetName(), got.GetId(), got.GetVersion(), wantName, id)
+	}
+	return nil
+}
+
+// Check 20: GetWorkflowTemplate round-trips the job definition.
+func checkDPGetWorkflowTemplate(ctx context.Context, cfg Config) error {
+	client, err := newDataprocWorkflowTemplateClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	id := cfg.ResourceName("gcpc-grpc-dpwf-get")
+	if _, err := client.CreateWorkflowTemplate(ctx, &dataprocpb.CreateWorkflowTemplateRequest{
+		Parent: dataprocWorkflowParent(cfg), Template: dataprocWorkflowTemplate(id),
+	}); err != nil && status.Code(err) != codes.AlreadyExists {
+		return fmt.Errorf("CreateWorkflowTemplate: %w", err)
+	}
+	got, err := client.GetWorkflowTemplate(ctx, &dataprocpb.GetWorkflowTemplateRequest{
+		Name: dataprocWorkflowParent(cfg) + "/workflowTemplates/" + id,
+	})
+	if err != nil {
+		return fmt.Errorf("GetWorkflowTemplate: %w", err)
+	}
+	if len(got.GetJobs()) != 1 || got.GetJobs()[0].GetStepId() != "a" {
+		return fmt.Errorf("jobs = %+v", got.GetJobs())
+	}
+	return nil
+}
+
+// Check 21: ListWorkflowTemplates includes the created template.
+func checkDPListWorkflowTemplates(ctx context.Context, cfg Config) error {
+	client, err := newDataprocWorkflowTemplateClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	id := cfg.ResourceName("gcpc-grpc-dpwf-list")
+	if _, err := client.CreateWorkflowTemplate(ctx, &dataprocpb.CreateWorkflowTemplateRequest{
+		Parent: dataprocWorkflowParent(cfg), Template: dataprocWorkflowTemplate(id),
+	}); err != nil && status.Code(err) != codes.AlreadyExists {
+		return fmt.Errorf("CreateWorkflowTemplate: %w", err)
+	}
+	it := client.ListWorkflowTemplates(ctx, &dataprocpb.ListWorkflowTemplatesRequest{Parent: dataprocWorkflowParent(cfg)})
+	for {
+		got, err := it.Next()
+		if err == iterator.Done {
+			return fmt.Errorf("ListWorkflowTemplates did not include %q", id)
+		}
+		if err != nil {
+			return fmt.Errorf("ListWorkflowTemplates: %w", err)
+		}
+		if got.GetId() == id {
+			return nil
+		}
+	}
+}
+
+// Check 22: UpdateWorkflowTemplate bumps the version.
+func checkDPUpdateWorkflowTemplate(ctx context.Context, cfg Config) error {
+	client, err := newDataprocWorkflowTemplateClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	id := cfg.ResourceName("gcpc-grpc-dpwf-upd")
+	name := dataprocWorkflowParent(cfg) + "/workflowTemplates/" + id
+	if _, err := client.CreateWorkflowTemplate(ctx, &dataprocpb.CreateWorkflowTemplateRequest{
+		Parent: dataprocWorkflowParent(cfg), Template: dataprocWorkflowTemplate(id),
+	}); err != nil && status.Code(err) != codes.AlreadyExists {
+		return fmt.Errorf("CreateWorkflowTemplate: %w", err)
+	}
+	tmpl := dataprocWorkflowTemplate(id)
+	tmpl.Name = name
+	tmpl.Version = 1
+	got, err := client.UpdateWorkflowTemplate(ctx, &dataprocpb.UpdateWorkflowTemplateRequest{Template: tmpl})
+	if err != nil {
+		return fmt.Errorf("UpdateWorkflowTemplate: %w", err)
+	}
+	if got.GetVersion() != 2 {
+		return fmt.Errorf("version = %d, want 2", got.GetVersion())
+	}
+	return nil
+}
+
+// Check 23: DeleteWorkflowTemplate removes the template.
+func checkDPDeleteWorkflowTemplate(ctx context.Context, cfg Config) error {
+	client, err := newDataprocWorkflowTemplateClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	id := cfg.ResourceName("gcpc-grpc-dpwf-del")
+	name := dataprocWorkflowParent(cfg) + "/workflowTemplates/" + id
+	if _, err := client.CreateWorkflowTemplate(ctx, &dataprocpb.CreateWorkflowTemplateRequest{
+		Parent: dataprocWorkflowParent(cfg), Template: dataprocWorkflowTemplate(id),
+	}); err != nil {
+		return fmt.Errorf("CreateWorkflowTemplate: %w", err)
+	}
+	if err := client.DeleteWorkflowTemplate(ctx, &dataprocpb.DeleteWorkflowTemplateRequest{Name: name}); err != nil {
+		return fmt.Errorf("DeleteWorkflowTemplate: %w", err)
+	}
+	if _, err := client.GetWorkflowTemplate(ctx, &dataprocpb.GetWorkflowTemplateRequest{Name: name}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("GetWorkflowTemplate after delete = %v, want NotFound", err)
 	}
 	return nil
 }

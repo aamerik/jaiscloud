@@ -10,9 +10,10 @@ import (
 // MemoryStore is an in-memory Store.
 type MemoryStore struct {
 	mu         sync.RWMutex
-	clusters   map[string]map[string]Cluster   // projectID+"/"+region → name → cluster
-	jobs       map[string]map[string]Job       // projectID+"/"+region → id → job
-	operations map[string]map[string]Operation // projectID+"/"+region → id → operation
+	clusters   map[string]map[string]Cluster          // projectID+"/"+region → name → cluster
+	jobs       map[string]map[string]Job              // projectID+"/"+region → id → job
+	operations map[string]map[string]Operation        // projectID+"/"+region → id → operation
+	templates  map[string]map[string]WorkflowTemplate // projectID+"/"+region → templateID → template
 }
 
 // NewMemoryStore returns an empty in-memory store.
@@ -21,6 +22,7 @@ func NewMemoryStore() *MemoryStore {
 		clusters:   make(map[string]map[string]Cluster),
 		jobs:       make(map[string]map[string]Job),
 		operations: make(map[string]map[string]Operation),
+		templates:  make(map[string]map[string]WorkflowTemplate),
 	}
 }
 
@@ -186,6 +188,75 @@ func (s *MemoryStore) ListJobs(_ context.Context, projectID, region string) ([]J
 	return result, nil
 }
 
+// --- Workflow templates ---
+
+func (s *MemoryStore) CreateWorkflowTemplate(_ context.Context, projectID, region string, t WorkflowTemplate) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scopeKey(projectID, region)
+	if s.templates[key] == nil {
+		s.templates[key] = make(map[string]WorkflowTemplate)
+	}
+	if _, ok := s.templates[key][t.TemplateID]; ok {
+		return ErrAlreadyExists
+	}
+	t.ProjectID = projectID
+	t.Region = region
+	s.templates[key][t.TemplateID] = t
+	return nil
+}
+
+func (s *MemoryStore) GetWorkflowTemplate(_ context.Context, projectID, region, templateID string) (WorkflowTemplate, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, ok := s.templates[scopeKey(projectID, region)][templateID]
+	if !ok {
+		return WorkflowTemplate{}, ErrNoSuchWorkflowTemplate
+	}
+	return t, nil
+}
+
+func (s *MemoryStore) UpdateWorkflowTemplateAtomic(_ context.Context, projectID, region, templateID string, mutate func(WorkflowTemplate) (WorkflowTemplate, error)) (WorkflowTemplate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scopeKey(projectID, region)
+	current, ok := s.templates[key][templateID]
+	if !ok {
+		return WorkflowTemplate{}, ErrNoSuchWorkflowTemplate
+	}
+	next, err := mutate(current)
+	if err != nil {
+		return WorkflowTemplate{}, err
+	}
+	next.ProjectID = projectID
+	next.Region = region
+	s.templates[key][templateID] = next
+	return next, nil
+}
+
+func (s *MemoryStore) DeleteWorkflowTemplate(_ context.Context, projectID, region, templateID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scopeKey(projectID, region)
+	if _, ok := s.templates[key][templateID]; !ok {
+		return ErrNoSuchWorkflowTemplate
+	}
+	delete(s.templates[key], templateID)
+	return nil
+}
+
+func (s *MemoryStore) ListWorkflowTemplates(_ context.Context, projectID, region string) ([]WorkflowTemplate, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m := s.templates[scopeKey(projectID, region)]
+	result := make([]WorkflowTemplate, 0, len(m))
+	for _, t := range m {
+		result = append(result, t)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].TemplateID < result[j].TemplateID })
+	return result, nil
+}
+
 func (s *MemoryStore) CreateOperation(_ context.Context, projectID, region string, op Operation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -267,4 +338,5 @@ func (s *MemoryStore) Reset(_ context.Context) {
 	s.clusters = make(map[string]map[string]Cluster)
 	s.jobs = make(map[string]map[string]Job)
 	s.operations = make(map[string]map[string]Operation)
+	s.templates = make(map[string]map[string]WorkflowTemplate)
 }

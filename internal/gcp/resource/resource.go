@@ -117,6 +117,10 @@ var formatters = map[string]func(project, name string) string{
 		reg, op := regionOf(n)
 		return fmt.Sprintf("projects/%s/regions/%s/operations/%s", p, reg, op)
 	},
+	"dataproc-workflowTemplate": func(p, n string) string {
+		reg, id := regionOf(n)
+		return fmt.Sprintf("projects/%s/regions/%s/workflowTemplates/%s", p, reg, id)
+	},
 	// Managed Kafka (Apache Kafka for BigQuery) — names embed the location;
 	// callers pass "location/cluster" and "location/cluster/topic".
 	"managedkafka-cluster": func(p, n string) string {

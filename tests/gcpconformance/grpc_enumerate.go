@@ -76,6 +76,7 @@ type GRPCService struct {
 var grpcWireService = map[string]string{
 	"google.cloud.dataproc.v1.ClusterController":         "dataproc",
 	"google.cloud.dataproc.v1.JobController":             "dataproc",
+	"google.cloud.dataproc.v1.WorkflowTemplateService":   "dataproc",
 	"google.cloud.functions.v1.CloudFunctionsService":    "functions",
 	"google.cloud.functions.v2.FunctionService":          "functions",
 	"google.storage.v2.Storage":                          "storage",
@@ -147,6 +148,7 @@ func EnumerateGRPC() []GRPCService {
 	resourcemanagerpb.RegisterProjectsServer(reg, &grpcresourcemanager.Service{})
 	dataprocpb.RegisterClusterControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterJobControllerServer(reg, &grpcdataproc.Service{})
+	dataprocpb.RegisterWorkflowTemplateServiceServer(reg, &grpcdataproc.Service{})
 	functionspb.RegisterCloudFunctionsServiceServer(reg, &grpcfunctions.Service{})
 	apiv2functionspb.RegisterFunctionServiceServer(reg, &grpcfunctions.ServiceV2{})
 	credentialspb.RegisterIAMCredentialsServer(reg, &grpciamcredentials.Service{})

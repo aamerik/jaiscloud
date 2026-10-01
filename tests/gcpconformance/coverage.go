@@ -53,6 +53,11 @@ var actionOverrides = map[string]string{
 	"Compute.OperationsGet":                   "compute.globalOperations.get",
 	"Compute.OperationsList":                  "compute.globalOperations.list",
 	"Dataproc.SubmitJobAsOperation":           "dataproc.projects.regions.jobs.submitAsOperation",
+	"Dataproc.CreateWorkflowTemplate":         "dataproc.projects.regions.workflowTemplates.create",
+	"Dataproc.GetWorkflowTemplate":            "dataproc.projects.regions.workflowTemplates.get",
+	"Dataproc.ListWorkflowTemplates":          "dataproc.projects.regions.workflowTemplates.list",
+	"Dataproc.UpdateWorkflowTemplate":         "dataproc.projects.regions.workflowTemplates.update",
+	"Dataproc.DeleteWorkflowTemplate":         "dataproc.projects.regions.workflowTemplates.delete",
 	"Metastore.AlterMetadataResourceLocation": "metastore.projects.locations.services.alterLocation",
 
 	// BigQuery's tabledata/jobs/projects surfaces use different method names

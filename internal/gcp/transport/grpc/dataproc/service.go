@@ -32,6 +32,7 @@ import (
 type Service struct {
 	dataprocpb.UnimplementedClusterControllerServer
 	dataprocpb.UnimplementedJobControllerServer
+	dataprocpb.UnimplementedWorkflowTemplateServiceServer
 
 	core        *core.Service
 	defaultProj string

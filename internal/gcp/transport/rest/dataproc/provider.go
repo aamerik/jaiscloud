@@ -41,6 +41,12 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Dataproc.DeleteJob":            p.DeleteJob,
 		"Dataproc.CancelJob":            p.CancelJob,
 		"Dataproc.GetOperation":         p.GetOperation,
+
+		"Dataproc.CreateWorkflowTemplate": p.CreateWorkflowTemplate,
+		"Dataproc.GetWorkflowTemplate":    p.GetWorkflowTemplate,
+		"Dataproc.ListWorkflowTemplates":  p.ListWorkflowTemplates,
+		"Dataproc.UpdateWorkflowTemplate": p.UpdateWorkflowTemplate,
+		"Dataproc.DeleteWorkflowTemplate": p.DeleteWorkflowTemplate,
 	}
 }
 
@@ -219,4 +225,73 @@ func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest
 		return nil, err
 	}
 	return provider.OK(core.OperationJSON(op)), nil
+}
+
+// --- Workflow templates ---
+
+// CreateWorkflowTemplate stores a workflow template. The Discovery request body
+// is the WorkflowTemplate itself.
+func (p *Provider) CreateWorkflowTemplate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	body := bodyOf(nr)
+	t, err := p.core.CreateWorkflowTemplate(ctx, p.project(nr), strParam(nr, "region"),
+		core.WorkflowTemplateInput{ID: bodyString(body, "id"), Definition: body})
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.WorkflowTemplateJSON(t)), nil
+}
+
+// GetWorkflowTemplate returns one workflow template, optionally a specific
+// version.
+func (p *Provider) GetWorkflowTemplate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	t, err := p.core.GetWorkflowTemplate(ctx, p.project(nr), strParam(nr, "region"),
+		strParam(nr, "workflowTemplateId"), int32(intFrom(nr.Params["version"])))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.WorkflowTemplateJSON(t)), nil
+}
+
+// ListWorkflowTemplates returns a page of the region's workflow templates.
+func (p *Provider) ListWorkflowTemplates(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	page, next, err := p.core.ListWorkflowTemplates(ctx, p.project(nr), strParam(nr, "region"),
+		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]any, 0, len(page))
+	for _, t := range page {
+		items = append(items, core.WorkflowTemplateJSON(t))
+	}
+	out := map[string]any{"templates": items}
+	if next != "" {
+		out["nextPageToken"] = next
+	}
+	return provider.OK(out), nil
+}
+
+// UpdateWorkflowTemplate replaces a workflow template. The Discovery request
+// body is the WorkflowTemplate itself (with the version to match).
+func (p *Provider) UpdateWorkflowTemplate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	body := bodyOf(nr)
+	id := strParam(nr, "workflowTemplateId")
+	if id == "" {
+		id = bodyString(body, "id")
+	}
+	t, err := p.core.UpdateWorkflowTemplate(ctx, p.project(nr), strParam(nr, "region"),
+		core.WorkflowTemplateInput{ID: id, Version: int32(intFrom(body["version"])), Definition: body})
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.WorkflowTemplateJSON(t)), nil
+}
+
+// DeleteWorkflowTemplate removes a workflow template (all versions, or a
+// specific version).
+func (p *Provider) DeleteWorkflowTemplate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if err := p.core.DeleteWorkflowTemplate(ctx, p.project(nr), strParam(nr, "region"),
+		strParam(nr, "workflowTemplateId"), int32(intFrom(nr.Params["version"]))); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
 }

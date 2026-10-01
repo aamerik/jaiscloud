@@ -102,6 +102,10 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 		if len(tail) >= 2 {
 			nr.Params["operationId"] = tail[1]
 		}
+	case "workflowTemplates":
+		if len(tail) >= 2 {
+			nr.Params["workflowTemplateId"] = tail[1]
+		}
 	}
 
 	isCollection := len(tail) == 1
@@ -135,6 +139,11 @@ func deriveDataprocAction(resourceType string, isCollection bool, method, custom
 			case "cancel":
 				return "CancelJob"
 			}
+		case "workflowTemplates":
+			// instantiate/instantiateInline and the workflowTemplates IAM verbs
+			// are not routed yet; an unhandled custom verb must not fall through
+			// to the create/patch method switch.
+			return ""
 		}
 	}
 
@@ -165,6 +174,19 @@ func deriveDataprocAction(resourceType string, isCollection bool, method, custom
 		switch {
 		case method == http.MethodGet:
 			return "GetOperation"
+		}
+	case "workflowTemplates":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateWorkflowTemplate"
+		case isCollection && method == http.MethodGet:
+			return "ListWorkflowTemplates"
+		case method == http.MethodGet:
+			return "GetWorkflowTemplate"
+		case method == http.MethodPut:
+			return "UpdateWorkflowTemplate"
+		case method == http.MethodDelete:
+			return "DeleteWorkflowTemplate"
 		}
 	}
 	return ""
