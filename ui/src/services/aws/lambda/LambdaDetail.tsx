@@ -8,6 +8,7 @@ import {
   Container,
   ContentLayout,
   Header,
+  Icon,
   KeyValuePairs,
   Link,
   Select,
@@ -74,7 +75,7 @@ export function LambdaDetail() {
                 navigate('/aws/lambda')
               }}
             >
-              ← Lambda functions
+              <Icon name="angle-left" /> Lambda functions
             </Link>
           }
           actions={<StatusIndicator type={resourceStatus(fn.state)}>{fn.state}</StatusIndicator>}

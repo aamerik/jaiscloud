@@ -91,8 +91,8 @@ export function SFNExecutions() {
     return (
       <ContentLayout header={<Header variant="h1">Executions</Header>}>
         <SpaceBetween size="l">
-          <Button variant="link" onClick={() => navigate('../state-machines')}>
-            ← State machines
+          <Button variant="link" iconName="angle-left" onClick={() => navigate('../state-machines')}>
+            State machines
           </Button>
           <Alert type="info" header="No state machine selected">
             Open a state machine to view and start its executions.
@@ -128,7 +128,7 @@ export function SFNExecutions() {
           description={<Box variant="code">{smArn}</Box>}
           actions={
             <SpaceBetween direction="horizontal" size="xs">
-              <Button onClick={() => navigate('../state-machines')}>← State machines</Button>
+              <Button iconName="angle-left" onClick={() => navigate('../state-machines')}>State machines</Button>
               <Button variant="primary" onClick={() => setStartOpen(true)}>
                 Start execution
               </Button>

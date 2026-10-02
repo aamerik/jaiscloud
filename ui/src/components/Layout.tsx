@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { applyMode, Mode } from '@cloudscape-design/global-styles'
+import { applyDensity, applyMode, Density, Mode } from '@cloudscape-design/global-styles'
 import {
   Alert,
   AppLayout,
   BreadcrumbGroup,
   Flashbar,
   HelpPanel,
+  Icon,
   Input,
   Link,
   SideNavigation,
@@ -21,10 +22,12 @@ import type {
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useEventStream } from '../hooks/useEventStream'
+import { useFavorites } from '../hooks/useFavorites'
 import { useServices } from '../hooks/useServices'
 import { groupByCategory, serviceForPath, type NavSection } from './nav'
 import { NotificationsProvider, useNotifications } from './notifications'
 import { ServiceTierBadge } from './ServiceTierBadge'
+import { serviceIconName } from './serviceIcons'
 import { tierDescription, tierLabel } from '../lib/tier'
 
 /** Router basename; links must include it so they also work without JS. */
@@ -44,6 +47,7 @@ function serviceItem(service: NavSection, expand: boolean): NavItem {
       type: 'expandable-link-group',
       text: service.label,
       href: href(service.rootPath),
+      icon: <Icon name={serviceIconName(service.id)} />,
       defaultExpanded: expand,
       items: service.children.map((child) => ({
         type: 'link',
@@ -56,6 +60,7 @@ function serviceItem(service: NavSection, expand: boolean): NavItem {
     type: 'link',
     text: service.label,
     href: href(service.rootPath),
+    icon: <Icon name={serviceIconName(service.id)} />,
     info: <ServiceTierBadge service={service} />,
   }
 }
@@ -91,6 +96,11 @@ function Shell({ children }: Props) {
   const [mode, setMode] = useState<Mode>(() =>
     localStorage.getItem('jaiscloud-mode') === 'dark' ? Mode.Dark : Mode.Light,
   )
+  const [density, setDensity] = useState<Density>(() =>
+    localStorage.getItem('jaiscloud-density') === 'compact'
+      ? Density.Compact
+      : Density.Comfortable,
+  )
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const { data: meta } = useMeta()
@@ -102,11 +112,20 @@ function Shell({ children }: Props) {
   const currentService = serviceForPath(services, pathname)
   const { breadcrumbItems, onFollow } = useConsoleNav(services)
   const { items: notifications } = useNotifications()
+  const { favorites } = useFavorites()
 
   useEffect(() => {
     applyMode(mode)
     localStorage.setItem('jaiscloud-mode', mode)
   }, [mode])
+
+  useEffect(() => {
+    applyDensity(density)
+    localStorage.setItem(
+      'jaiscloud-density',
+      density === Density.Compact ? 'compact' : 'comfortable',
+    )
+  }, [density])
 
   useEffect(() => {
     if (!currentService) return
@@ -140,23 +159,35 @@ function Shell({ children }: Props) {
       })
       .filter((group) => group.items.length > 0)
 
-    return [
-      { type: 'link', text: 'Console home', href: href('/') },
+    const favoriteGroup: SideNavigationProps.SectionGroup | null =
+      favorites.length > 0
+        ? {
+            type: 'section-group',
+            title: 'Favorites',
+            items: favorites
+              .map((id) => services.find((service) => service.id === id))
+              .filter((service): service is NavSection => service != null)
+              .map((service) => serviceItem(service, false)),
+          }
+        : null
+
+    const items: SideNavigationProps.Item[] = [
+      { type: 'link', text: 'Console home', href: href('/'), icon: <Icon name="view-full" /> },
+    ]
+    if (favoriteGroup && favoriteGroup.items.length > 0) {
+      items.push(favoriteGroup)
+    }
+    items.push(
       { type: 'divider' },
       ...groups,
       { type: 'divider' },
-      { type: 'link', text: 'Admin', href: href('/admin') },
-    ]
-  }, [search, pathname, services])
+      { type: 'link', text: 'Admin', href: href('/admin'), icon: <Icon name="security" /> },
+    )
+    return items
+  }, [search, pathname, services, favorites])
 
   const utilities = useMemo<TopNavigationProps.Utility[]>(() => {
     const items: TopNavigationProps.Utility[] = [
-      {
-        type: 'button',
-        text: meta?.region ?? '—',
-        iconName: 'globe',
-        disableUtilityCollapse: true,
-      },
       {
         type: 'menu-dropdown',
         text: accountId || 'Account',
@@ -193,6 +224,20 @@ function Shell({ children }: Props) {
         },
       },
       {
+        type: 'menu-dropdown',
+        text: density === Density.Compact ? 'Compact' : 'Comfortable',
+        iconName: density === Density.Compact ? 'shrink' : 'expand',
+        ariaLabel: 'Density',
+        disableUtilityCollapse: true,
+        items: [
+          { id: 'comfortable', text: 'Comfortable' },
+          { id: 'compact', text: 'Compact' },
+        ],
+        onItemClick: (event) => {
+          setDensity(event.detail.id === 'compact' ? Density.Compact : Density.Comfortable)
+        },
+      },
+      {
         type: 'button',
         text: 'Admin',
         iconName: 'settings',
@@ -209,7 +254,7 @@ function Shell({ children }: Props) {
       items.push({ type: 'button', text: version, disableUtilityCollapse: true })
     }
     return items
-  }, [meta, accountId, accounts, connected, refetchAccounts, setAccountId, mode, navigate])
+  }, [meta, accountId, accounts, connected, refetchAccounts, setAccountId, mode, density, navigate])
 
   return (
     <>

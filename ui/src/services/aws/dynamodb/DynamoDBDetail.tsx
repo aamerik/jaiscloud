@@ -7,6 +7,7 @@ import {
   Button,
   ContentLayout,
   Header,
+  Icon,
   Link,
   Modal,
   Select,
@@ -164,7 +165,7 @@ export function DynamoDBDetail() {
                 navigate('/aws/dynamodb')
               }}
             >
-              ← All tables
+              <Icon name="angle-left" /> All tables
             </Link>
           }
           actions={

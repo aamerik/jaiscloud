@@ -9,6 +9,7 @@ import {
   ContentLayout,
   FileUpload,
   Header,
+  Icon,
   Input,
   Link,
   Modal,
@@ -153,7 +154,7 @@ export function S3Detail() {
                 navigate('/aws/s3')
               }}
             >
-              ← All buckets
+              <Icon name="angle-left" /> All buckets
             </Link>
           }
           actions={

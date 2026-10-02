@@ -11,6 +11,7 @@ import {
   Form,
   FormField,
   Header,
+  Icon,
   Input,
   KeyValuePairs,
   Link,
@@ -133,7 +134,7 @@ export function EMRDetail() {
                   navigate('/aws/emr/clusters')
                 }}
               >
-                ← Clusters
+                <Icon name="angle-left" /> Clusters
               </Link>
               <SpaceBetween direction="horizontal" size="xs">
                 <StatusIndicator type={resourceStatus(cluster.state)}>{cluster.state}</StatusIndicator>

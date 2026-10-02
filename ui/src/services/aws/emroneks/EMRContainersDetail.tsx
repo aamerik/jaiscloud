@@ -10,6 +10,7 @@ import {
   Form,
   FormField,
   Header,
+  Icon,
   Input,
   KeyValuePairs,
   Link,
@@ -137,7 +138,7 @@ export function EMRContainersDetail() {
                   navigate('/aws/emr-containers/clusters')
                 }}
               >
-                ← Virtual clusters
+                <Icon name="angle-left" /> Virtual clusters
               </Link>
               <SpaceBetween direction="horizontal" size="xs">
                 <StatusIndicator type={resourceStatus(vc.state)}>{vc.state}</StatusIndicator>
