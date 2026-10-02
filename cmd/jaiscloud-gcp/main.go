@@ -48,6 +48,7 @@ import (
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
+	containercore "jaiscloud/internal/gcp/service/container"
 	dataproccore "jaiscloud/internal/gcp/service/dataproc"
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
 	eventarccore "jaiscloud/internal/gcp/service/eventarc"
@@ -66,6 +67,7 @@ import (
 	"jaiscloud/internal/gcp/sparkgcp"
 	gcpstore "jaiscloud/internal/gcp/store"
 	bigquerystore "jaiscloud/internal/gcp/store/bigquery"
+	containerstore "jaiscloud/internal/gcp/store/container"
 	dataprocstore "jaiscloud/internal/gcp/store/dataproc"
 	datastorestore "jaiscloud/internal/gcp/store/datastore"
 	eventarcstore "jaiscloud/internal/gcp/store/eventarc"
@@ -100,6 +102,7 @@ import (
 	grpctasks "jaiscloud/internal/gcp/transport/grpc/tasks"
 	grpcworkflowexecutions "jaiscloud/internal/gcp/transport/grpc/workflowexecutions"
 	grpcworkflows "jaiscloud/internal/gcp/transport/grpc/workflows"
+	restcontainer "jaiscloud/internal/gcp/transport/rest/container"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	resteventarc "jaiscloud/internal/gcp/transport/rest/eventarc"
@@ -553,6 +556,15 @@ func startCmd() *cobra.Command {
 			// Compute Engine is metadata-only over the shared ResourceStore.
 			computeP := computeprovider.New(stores.resources)
 
+			// Google Kubernetes Engine (GKE) v1's metadata-only control plane.
+			// REST only — GKE's native transport is gRPC, but the emulator
+			// deliberately exposes the REST metadata surface (docs/GA.md §7).
+			// The core sits behind a ClusterManager seam whose only
+			// implementation is the mock: a cluster is a stored record, not a
+			// real Kubernetes control plane.
+			containerCore := containercore.NewService(stores.container)
+			containerP := restcontainer.NewProvider(containerCore)
+
 			// Service Usage v1's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports run
 			// against one store and cannot drift.
@@ -636,6 +648,7 @@ func startCmd() *cobra.Command {
 				{"redis", memorystoreP},
 				{"sqladmin", cloudsqlP},
 				{"compute", computeP},
+				{"container", containerP},
 				{"serviceusage", serviceusageP},
 				{"scheduler", schedulerP},
 				{"tasks", tasksP},
@@ -866,6 +879,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(tasksCore)
 			adminHandler.RegisterTasksTicker(tasksEngine)
 			adminHandler.RegisterResetter(stores.resources)
+			adminHandler.RegisterResetter(containerCore)
 			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
 			adminHandler.RegisterResetter(storageGRPC)
@@ -937,6 +951,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.tasks.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("tasks", snap)
+			}
+			if snap, ok := stores.container.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("container", snap)
 			}
 			if sb, ok := stores.blobs.(admin.SnapshotBlobStore); ok {
 				adminHandler.RegisterBlobStore(sb)
@@ -1257,6 +1274,7 @@ type stores struct {
 	eventarc     eventarcstore.Store
 	scheduler    schedulerstore.Store
 	tasks        tasksstore.Store
+	container    containerstore.Store
 	resources    store.ResourceStore
 	blobs        blobfs.BlobStore
 	close        func()
@@ -1297,6 +1315,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			eventarc:     eventarcstore.NewPostgresStore(pg.Pool()),
 			scheduler:    schedulerstore.NewPostgresStore(pg.Pool()),
 			tasks:        tasksstore.NewPostgresStore(pg.Pool()),
+			container:    containerstore.NewPostgresStore(pg.Pool()),
 			resources:    pg,
 			blobs:        blobs,
 			close:        func() { pg.Close() },
@@ -1323,6 +1342,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			eventarc:     eventarcstore.NewMemoryStore(),
 			scheduler:    schedulerstore.NewMemoryStore(),
 			tasks:        tasksstore.NewMemoryStore(),
+			container:    containerstore.NewMemoryStore(),
 			resources:    store.NewMemoryResourceStore(),
 			blobs:        blobfs.NewMemoryBlobStore(),
 			close:        func() {},
@@ -1352,6 +1372,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		eventarc:     eventarcstore.NewMemoryStore(),
 		scheduler:    schedulerstore.NewMemoryStore(),
 		tasks:        tasksstore.NewMemoryStore(),
+		container:    containerstore.NewMemoryStore(),
 		resources:    store.NewMemoryResourceStore(),
 		blobs:        blobs,
 		close:        func() {},

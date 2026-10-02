@@ -24,6 +24,7 @@ import (
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
+	restcontainer "jaiscloud/internal/gcp/transport/rest/container"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	resteventarc "jaiscloud/internal/gcp/transport/rest/eventarc"
@@ -66,6 +67,7 @@ var providerPrefixes = map[string]string{
 	"Workflow":          "workflows",
 	"WorkflowExecution": "workflowexecutions",
 	"Dataproc":          "dataproc",
+	"Container":         "container",
 	"ManagedKafka":      "managedkafka",
 	"Metastore":         "metastore",
 	"Iceberg":           "iceberg",
@@ -99,6 +101,7 @@ func providers() []provider.Provider {
 		&restworkflows.Provider{},
 		&restworkflowexecutions.Provider{},
 		&restdataproc.Provider{},
+		&restcontainer.Provider{},
 		&restmanagedkafka.Provider{},
 		&restmetastore.Provider{},
 		&icebergprovider.Provider{},

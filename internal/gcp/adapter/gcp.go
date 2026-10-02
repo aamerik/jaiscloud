@@ -95,10 +95,12 @@ func (a *GCPAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 	}
 
 	// A host-detected request is a deployed function's HTTPS trigger, which has
-	// its own raw-HTTP codec instead of the control-plane JSON codec. Every
-	// path-detected request uses the service map as before.
+	// its own raw-HTTP codec instead of the control-plane JSON codec. Other
+	// host-token services (GKE's "container" token) still use their service
+	// codec; only the Functions trigger host is special. Every path-detected
+	// request uses the service map as before.
 	var codec adapter.Codec
-	if source == SourceHost {
+	if service == "functions" && source == SourceHost {
 		codec = a.functionTrigger
 	} else {
 		c, err := a.CodecFor(service)

@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 878,
+    "total": 884,
     "by_state": {
-      "ga": 651,
+      "ga": 657,
       "limited": 109,
       "preview": 14,
       "unsupported": 104
@@ -15,7 +15,7 @@
         "unsupported": 92
       },
       "rest": {
-        "ga": 340,
+        "ga": 346,
         "limited": 102,
         "preview": 14,
         "unsupported": 12
@@ -37,6 +37,9 @@
       "compute": {
         "limited": 32,
         "unsupported": 1
+      },
+      "container": {
+        "ga": 6
       },
       "dataproc": {
         "ga": 42,
@@ -1223,6 +1226,68 @@
       "reason": "metadata-only over ResourceStore (no control plane)",
       "evidence": [
         "discovery=compute.zones.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "Container.CreateCluster",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=container.projects.locations.clusters.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "Container.DeleteCluster",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=container.projects.locations.clusters.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "Container.GetCluster",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=container.projects.locations.clusters.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "Container.GetOperation",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=container.projects.locations.operations.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "Container.ListClusters",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=container.projects.locations.clusters.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "Container.ListOperations",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=container.projects.locations.operations.list",
         "postgres=yes"
       ]
     },

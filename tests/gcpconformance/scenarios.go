@@ -423,6 +423,29 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "monitoring", Method: "DELETE", Path: monBase + "/metricDescriptors/" + mType},
 	)
 
+	// ─── Google Kubernetes Engine (GKE) v1 ────────────────────────────────────
+	// GKE shares the canonical /v1/projects/{p}/locations/{l}/clusters path with
+	// Managed Kafka on one origin, so the recorder reaches it through the
+	// /container path prefix (Terraform/gcloud path-mode routing; the SDK
+	// host-mode form is covered by the adapter/router unit test). A cluster is
+	// created (returns a CREATE_CLUSTER Operation), read, listed, its operation
+	// is fetched and listed, then it is deleted (DELETE_CLUSTER Operation) and a
+	// post-delete read proves the NotFound error envelope.
+	gkeCluster := "conf-gke-" + suffix
+	gkeBase := "/container/v1/projects/" + p + "/locations/us-central1"
+	gkeClusterName := gkeBase + "/clusters/" + gkeCluster
+	sc = append(sc,
+		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/clusters",
+			Body: fmt.Sprintf(`{"cluster":{"name":%q,"initialNodeCount":1}}`, gkeCluster),
+			Save: map[string]string{"gkeOp": "name"}},
+		Scenario{Service: "container", Method: "GET", Path: gkeClusterName},
+		Scenario{Service: "container", Method: "GET", Path: gkeBase + "/clusters"},
+		Scenario{Service: "container", Method: "GET", Path: gkeBase + "/operations/${gkeOp}"},
+		Scenario{Service: "container", Method: "GET", Path: gkeBase + "/operations"},
+		Scenario{Service: "container", Method: "DELETE", Path: gkeClusterName},
+		Scenario{Service: "container", Method: "GET", Path: gkeClusterName},
+	)
+
 	return sc
 }
 

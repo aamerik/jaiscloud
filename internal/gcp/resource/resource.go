@@ -314,6 +314,19 @@ var formatters = map[string]func(project, name string) string{
 		loc, job := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/jobs/%s", p, loc, job)
 	},
+	// Google Kubernetes Engine (GKE) v1 — a cluster is
+	// "projects/{project}/locations/{location}/clusters/{cluster}" (callers pass
+	// "location/cluster") and the GKE Operation is
+	// "projects/{project}/locations/{location}/operations/{operation}" (callers
+	// pass "location/operation").
+	"container-cluster": func(p, n string) string {
+		loc, c := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/clusters/%s", p, loc, c)
+	},
+	"container-operation": func(p, n string) string {
+		loc, op := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
+	},
 	// Cloud Tasks v2 — a queue is
 	// "projects/{project}/locations/{location}/queues/{queue}" (callers pass
 	// "location/queue") and a task nests under it (callers pass
