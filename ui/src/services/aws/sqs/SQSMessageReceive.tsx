@@ -148,21 +148,8 @@ export function SQSMessageReceive({ queueUrl }: Props) {
           </Box>
         }
       >
-        {viewMessage && <pre style={preStyle}>{tryPrettyJson(viewMessage.body)}</pre>}
+        {viewMessage && <Box variant="pre">{tryPrettyJson(viewMessage.body)}</Box>}
       </Modal>
     </SpaceBetween>
   )
-}
-
-const preStyle: React.CSSProperties = {
-  margin: 0,
-  padding: '0.75rem',
-  background: '#f4f5f7',
-  borderRadius: 4,
-  overflow: 'auto',
-  fontSize: '0.82em',
-  fontFamily: 'monospace',
-  whiteSpace: 'pre-wrap',
-  wordBreak: 'break-all',
-  maxHeight: 400,
 }

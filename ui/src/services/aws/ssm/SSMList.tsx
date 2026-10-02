@@ -260,11 +260,7 @@ export function SSMList() {
             {viewValue === null ? (
               <Box color="text-status-inactive">Loading…</Box>
             ) : (
-              <Box variant="code">
-                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                  {viewValue}
-                </pre>
-              </Box>
+              <Box variant="pre">{viewValue}</Box>
             )}
           </FormField>
         </SpaceBetween>

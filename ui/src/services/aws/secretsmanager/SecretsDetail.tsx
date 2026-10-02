@@ -131,11 +131,7 @@ export function SecretsDetail() {
               {(error as Error).message}
             </Alert>
           ) : (
-            <Box variant="code">
-              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                {valueData?.SecretString ?? '(binary)'}
-              </pre>
-            </Box>
+            <Box variant="pre">{valueData?.SecretString ?? '(binary)'}</Box>
           )}
         </Container>
       )}

@@ -152,11 +152,14 @@ export function LambdaTest({ name }: Props) {
           />
 
           <Box margin={{ top: 'l' }}>
-            {resultTab === 'response' && (
-              <pre style={responseStyle(hasError)}>
-                {tryPrettyJson(result.payload) || '(empty response)'}
-              </pre>
-            )}
+            {resultTab === 'response' &&
+              (hasError ? (
+                <Alert type="error" header="Function error">
+                  {tryPrettyJson(result.payload) || '(empty response)'}
+                </Alert>
+              ) : (
+                <Box variant="pre">{tryPrettyJson(result.payload) || '(empty response)'}</Box>
+              ))}
 
             {resultTab === 'logs' && (
               <SpaceBetween size="m">
@@ -205,23 +208,6 @@ export function LambdaTest({ name }: Props) {
       )}
     </SpaceBetween>
   )
-}
-
-function responseStyle(hasError: boolean): React.CSSProperties {
-  return {
-    margin: 0,
-    padding: '0.75rem',
-    borderRadius: 6,
-    overflow: 'auto',
-    fontSize: '0.82em',
-    fontFamily: 'monospace',
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-all',
-    background: hasError ? '#fff5f5' : '#f4f5f7',
-    border: `1px solid ${hasError ? '#f5c6cb' : '#e7e9ec'}`,
-    color: hasError ? '#d13212' : '#16191f',
-    maxHeight: 400,
-  }
 }
 
 const logsStyle: React.CSSProperties = {
