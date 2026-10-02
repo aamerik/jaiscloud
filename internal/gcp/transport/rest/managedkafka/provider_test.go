@@ -102,13 +102,34 @@ func TestProviderClusterAndTopicFlow(t *testing.T) {
 		t.Errorf("name = %v", created["name"])
 	}
 
-	// Create topic.
-	if _, err := p.CreateTopic(ctx, nr(map[string]any{
+	// Create topic with property overrides; the wire body echoes them back.
+	createResp, err := p.CreateTopic(ctx, nr(map[string]any{
 		"location": "us-central1", "clusterId": "c1", "topicId": "t1",
-		"body": map[string]any{"partitionCount": float64(3), "replicationFactor": float64(2)},
-	})); err != nil {
+		"body": map[string]any{
+			"partitionCount":    float64(3),
+			"replicationFactor": float64(2),
+			"configs":           map[string]any{"cleanup.policy": "compact"},
+		},
+	}))
+	if err != nil {
 		t.Fatalf("CreateTopic: %v", err)
 	}
+	if got, _ := createResp.Data["configs"].(map[string]any); got["cleanup.policy"] != "compact" {
+		t.Errorf("created configs = %v, want cleanup.policy=compact", createResp.Data["configs"])
+	}
+
+	// An update can change a property override.
+	updResp, err := p.UpdateTopic(ctx, nr(map[string]any{
+		"location": "us-central1", "clusterId": "c1", "topicId": "t1",
+		"body": map[string]any{"configs": map[string]any{"cleanup.policy": "delete"}},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateTopic: %v", err)
+	}
+	if got, _ := updResp.Data["configs"].(map[string]any); got["cleanup.policy"] != "delete" {
+		t.Errorf("updated configs = %v, want cleanup.policy=delete", updResp.Data["configs"])
+	}
+
 	listResp, err := p.ListTopics(ctx, nr(map[string]any{"location": "us-central1", "clusterId": "c1"}))
 	if err != nil {
 		t.Fatalf("ListTopics: %v", err)

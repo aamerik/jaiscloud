@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // kafkaProbeTimeout bounds the whole probe (connect + produce + consume +
@@ -32,6 +33,10 @@ type kafkaProbeSummary struct {
 	Partitions map[int32]int   `json:"partitions"`
 	Committed  map[int32]int64 `json:"committed"`
 	Lag        map[int32]int64 `json:"lag"`
+	// Configs are the topic's explicitly-overridden properties as the broker
+	// reports them (Source=DYNAMIC_TOPIC_CONFIG). The k3d gate uses this to
+	// prove the API's Topic.configs were applied to the real broker.
+	Configs map[string]string `json:"configs,omitempty"`
 }
 
 // kafkaProbeConfig is the resolved kafka-probe invocation.
@@ -151,6 +156,10 @@ func runKafkaProbe(ctx context.Context, cfg kafkaProbeConfig) error {
 	if err != nil {
 		return err
 	}
+	configs, err := describeProbeConfigs(ctx, admin, cfg.Topic)
+	if err != nil {
+		return fmt.Errorf("kafka-probe: describe topic configs: %w", err)
+	}
 
 	summary := kafkaProbeSummary{
 		OK:         true,
@@ -161,6 +170,7 @@ func runKafkaProbe(ctx context.Context, cfg kafkaProbeConfig) error {
 		Partitions: produced,
 		Committed:  committedByPart,
 		Lag:        lag,
+		Configs:    configs,
 	}
 
 	var failures []string
@@ -225,4 +235,37 @@ func summarizeProbeOffsets(topic string, produced map[int32]int, end kadm.Listed
 		lag[partition] = endOffset - committedOffset
 	}
 	return committedByPart, lag, nil
+}
+
+// describeProbeConfigs reads topic's configs from the broker and returns only
+// the explicitly-overridden properties.
+func describeProbeConfigs(ctx context.Context, admin *kadm.Client, topic string) (map[string]string, error) {
+	rcs, err := admin.DescribeTopicConfigs(ctx, topic)
+	if err != nil {
+		return nil, err
+	}
+	rc, err := rcs.On(topic, nil)
+	if err != nil {
+		return nil, err
+	}
+	if rc.Err != nil {
+		return nil, rc.Err
+	}
+	return topicOverrides(rc), nil
+}
+
+// topicOverrides extracts the topic properties a caller explicitly set (the
+// broker reports them with Source=DYNAMIC_TOPIC_CONFIG), dropping the defaults
+// and synonyms the describe response also carries.
+func topicOverrides(rc kadm.ResourceConfig) map[string]string {
+	out := map[string]string{}
+	for _, c := range rc.Configs {
+		if c.Source == kmsg.ConfigSourceDynamicTopicConfig {
+			out[c.Key] = c.MaybeValue()
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

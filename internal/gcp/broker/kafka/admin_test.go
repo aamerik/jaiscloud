@@ -20,6 +20,8 @@ type fakeKafkaAdmin struct {
 	created []string
 	added   []string
 	deleted []string
+	configs []map[string]string
+	altered []fakeAlterConfigs
 	closed  bool
 	err     error
 
@@ -34,10 +36,25 @@ type fakeKafkaAdmin struct {
 	aclErr error
 }
 
-func (f *fakeKafkaAdmin) EnsureTopic(_ context.Context, topic string, partitions int32, replicationFactor int16) error {
+// fakeAlterConfigs records one incremental topic-config alter through the pool.
+type fakeAlterConfigs struct {
+	Topic  string
+	Set    map[string]string
+	Remove []string
+}
+
+func (f *fakeKafkaAdmin) EnsureTopic(_ context.Context, topic string, partitions int32, replicationFactor int16, configs map[string]string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.created = append(f.created, fmt.Sprintf("%s:%d:%d", topic, partitions, replicationFactor))
+	f.configs = append(f.configs, configs)
+	return f.err
+}
+
+func (f *fakeKafkaAdmin) AlterTopicConfigs(_ context.Context, topic string, set map[string]string, remove []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.altered = append(f.altered, fakeAlterConfigs{Topic: topic, Set: set, Remove: remove})
 	return f.err
 }
 
@@ -102,6 +119,8 @@ func (f *fakeKafkaAdmin) Close() error {
 type fakeAdminAPI struct {
 	createResp kadm.CreateTopicResponse
 	createErr  error
+	alterResp  kadm.AlterConfigsResponses
+	alterErr   error
 	updateResp kadm.CreatePartitionsResponses
 	updateErr  error
 	deleteResp kadm.DeleteTopicResponse
@@ -126,10 +145,19 @@ type fakeAdminAPI struct {
 
 	deleteACLBuilders []*kadm.ACLBuilder
 	createACLBuilders []*kadm.ACLBuilder
+
+	createConfigs map[string]*string
+	alterReqs     [][]kadm.AlterConfig
 }
 
-func (f *fakeAdminAPI) CreateTopic(context.Context, int32, int16, map[string]*string, string) (kadm.CreateTopicResponse, error) {
+func (f *fakeAdminAPI) CreateTopic(_ context.Context, _ int32, _ int16, configs map[string]*string, _ string) (kadm.CreateTopicResponse, error) {
+	f.createConfigs = configs
 	return f.createResp, f.createErr
+}
+
+func (f *fakeAdminAPI) AlterTopicConfigs(_ context.Context, configs []kadm.AlterConfig, _ ...string) (kadm.AlterConfigsResponses, error) {
+	f.alterReqs = append(f.alterReqs, configs)
+	return f.alterResp, f.alterErr
 }
 
 func (f *fakeAdminAPI) UpdatePartitions(context.Context, int, ...string) (kadm.CreatePartitionsResponses, error) {
@@ -195,11 +223,11 @@ func TestFranzAdminIdempotentCreateAndDelete(t *testing.T) {
 	ctx := context.Background()
 
 	api := &fakeAdminAPI{createErr: kerr.TopicAlreadyExists}
-	if err := (&franzAdmin{client: api}).EnsureTopic(ctx, "t1", 0, 0); err != nil {
+	if err := (&franzAdmin{client: api}).EnsureTopic(ctx, "t1", 0, 0, nil); err != nil {
 		t.Fatalf("EnsureTopic(already exists) = %v, want nil", err)
 	}
 	api.createErr = errors.New("boom")
-	if err := (&franzAdmin{client: api}).EnsureTopic(ctx, "t1", 3, 2); err == nil {
+	if err := (&franzAdmin{client: api}).EnsureTopic(ctx, "t1", 3, 2, nil); err == nil {
 		t.Fatal("EnsureTopic swallowed a real error")
 	}
 
@@ -210,6 +238,64 @@ func TestFranzAdminIdempotentCreateAndDelete(t *testing.T) {
 	api.deleteErr = errors.New("boom")
 	if err := (&franzAdmin{client: api}).DeleteTopic(ctx, "t1"); err == nil {
 		t.Fatal("DeleteTopic swallowed a real error")
+	}
+}
+
+func TestFranzAdminEnsureTopicPassesConfigs(t *testing.T) {
+	api := &fakeAdminAPI{}
+	if err := (&franzAdmin{client: api}).EnsureTopic(context.Background(), "t1", 3, 1, map[string]string{"cleanup.policy": "compact"}); err != nil {
+		t.Fatalf("EnsureTopic: %v", err)
+	}
+	if api.createConfigs["cleanup.policy"] == nil || *api.createConfigs["cleanup.policy"] != "compact" {
+		t.Fatalf("create configs = %v, want cleanup.policy=compact", api.createConfigs)
+	}
+}
+
+func TestFranzAdminEnsureTopicClassifiesInvalidConfig(t *testing.T) {
+	api := &fakeAdminAPI{createErr: kerr.InvalidConfig}
+	err := (&franzAdmin{client: api}).EnsureTopic(context.Background(), "t1", 3, 1, map[string]string{"bogus": "x"})
+	if !errors.Is(err, core.ErrInvalidTopicConfig) {
+		t.Fatalf("EnsureTopic error = %v, want ErrInvalidTopicConfig", err)
+	}
+}
+
+func TestFranzAdminAlterTopicConfigsBuildsIncrementalOps(t *testing.T) {
+	api := &fakeAdminAPI{alterResp: kadm.AlterConfigsResponses{{Name: "t1"}}}
+	err := (&franzAdmin{client: api}).AlterTopicConfigs(context.Background(), "t1",
+		map[string]string{"retention.ms": "1000", "cleanup.policy": "compact"},
+		[]string{"segment.ms"})
+	if err != nil {
+		t.Fatalf("AlterTopicConfigs: %v", err)
+	}
+	if len(api.alterReqs) != 1 {
+		t.Fatalf("alter requests = %d, want 1", len(api.alterReqs))
+	}
+	// Set ops are sorted by key, then deletes sorted by key.
+	ops := api.alterReqs[0]
+	if len(ops) != 3 {
+		t.Fatalf("alter ops = %+v, want 3", ops)
+	}
+	if ops[0].Name != "cleanup.policy" || ops[0].Op != kadm.SetConfig || ops[0].Value == nil || *ops[0].Value != "compact" {
+		t.Errorf("op[0] = %+v, want Set cleanup.policy=compact", ops[0])
+	}
+	if ops[1].Name != "retention.ms" || ops[1].Op != kadm.SetConfig {
+		t.Errorf("op[1] = %+v, want Set retention.ms", ops[1])
+	}
+	if ops[2].Name != "segment.ms" || ops[2].Op != kadm.DeleteConfig {
+		t.Errorf("op[2] = %+v, want Delete segment.ms", ops[2])
+	}
+}
+
+func TestFranzAdminAlterTopicConfigsSurfacesResponseError(t *testing.T) {
+	api := &fakeAdminAPI{alterResp: kadm.AlterConfigsResponses{{Name: "t1", Err: kerr.InvalidConfig}}}
+	err := (&franzAdmin{client: api}).AlterTopicConfigs(context.Background(), "t1", map[string]string{"bogus": "x"}, nil)
+	if !errors.Is(err, core.ErrInvalidTopicConfig) {
+		t.Fatalf("AlterTopicConfigs error = %v, want ErrInvalidTopicConfig", err)
+	}
+
+	api2 := &fakeAdminAPI{alterErr: errors.New("network")}
+	if err := (&franzAdmin{client: api2}).AlterTopicConfigs(context.Background(), "t1", map[string]string{"a": "b"}, nil); err == nil {
+		t.Fatal("AlterTopicConfigs swallowed a request-level error")
 	}
 }
 
@@ -361,8 +447,11 @@ func TestTopicHelpersNoOpWithoutEndpoint(t *testing.T) {
 	p := newAdminPool(factory)
 	ctx := context.Background()
 
-	if err := ensureTopic(ctx, p, "", "t1", 3); err != nil {
+	if err := ensureTopic(ctx, p, "", "t1", 3, map[string]string{"cleanup.policy": "compact"}); err != nil {
 		t.Fatalf("ensureTopic: %v", err)
+	}
+	if err := alterTopicConfigs(ctx, p, "", "t1", map[string]string{"retention.ms": "1000"}, []string{"cleanup.policy"}); err != nil {
+		t.Fatalf("alterTopicConfigs: %v", err)
 	}
 	if err := addPartitions(ctx, p, "", "t1", 6); err != nil {
 		t.Fatalf("addPartitions: %v", err)
@@ -380,11 +469,14 @@ func TestTopicHelpersDelegateToAdmin(t *testing.T) {
 	p := newAdminPool(func(string) (kafkaAdmin, error) { return fa, nil })
 	ctx := context.Background()
 
-	if err := ensureTopic(ctx, p, "broker:9092", "t1", 0); err != nil {
+	if err := ensureTopic(ctx, p, "broker:9092", "t1", 0, nil); err != nil {
 		t.Fatalf("ensureTopic: %v", err)
 	}
-	if err := ensureTopic(ctx, p, "broker:9092", "t2", 3); err != nil {
+	if err := ensureTopic(ctx, p, "broker:9092", "t2", 3, map[string]string{"cleanup.policy": "compact"}); err != nil {
 		t.Fatalf("ensureTopic: %v", err)
+	}
+	if err := alterTopicConfigs(ctx, p, "broker:9092", "t2", map[string]string{"retention.ms": "1000"}, []string{"cleanup.policy"}); err != nil {
+		t.Fatalf("alterTopicConfigs: %v", err)
 	}
 	if err := addPartitions(ctx, p, "broker:9092", "t2", 6); err != nil {
 		t.Fatalf("addPartitions: %v", err)
@@ -404,13 +496,24 @@ func TestTopicHelpersDelegateToAdmin(t *testing.T) {
 	if len(fa.deleted) != 1 || fa.deleted[0] != "t2" {
 		t.Errorf("deleted = %v, want [t2]", fa.deleted)
 	}
+	if len(fa.configs) != 2 || fa.configs[1]["cleanup.policy"] != "compact" {
+		t.Errorf("configs = %v, want t2 cleanup.policy=compact", fa.configs)
+	}
+	if len(fa.altered) != 1 || fa.altered[0].Topic != "t2" ||
+		fa.altered[0].Set["retention.ms"] != "1000" ||
+		len(fa.altered[0].Remove) != 1 || fa.altered[0].Remove[0] != "cleanup.policy" {
+		t.Errorf("altered = %+v, want t2 retention.ms=1000 remove cleanup.policy", fa.altered)
+	}
 }
 
 func TestTopicHelpersSurfaceAdminError(t *testing.T) {
 	fa := &fakeKafkaAdmin{err: errors.New("broker down")}
 	p := newAdminPool(func(string) (kafkaAdmin, error) { return fa, nil })
-	if err := ensureTopic(context.Background(), p, "broker:9092", "t1", 1); err == nil {
+	if err := ensureTopic(context.Background(), p, "broker:9092", "t1", 1, nil); err == nil {
 		t.Fatal("ensureTopic swallowed the admin error")
+	}
+	if err := alterTopicConfigs(context.Background(), p, "broker:9092", "t1", map[string]string{"a": "b"}, nil); err == nil {
+		t.Fatal("alterTopicConfigs swallowed the admin error")
 	}
 }
 
@@ -475,8 +578,11 @@ func TestK8sBrokerTopicOpsNoOpWithoutEndpoint(t *testing.T) {
 	b.admins = newAdminPool(factory)
 	ctx := context.Background()
 
-	if err := b.EnsureTopic(ctx, "p", "l", "c1", "t1", 3); err != nil {
+	if err := b.EnsureTopic(ctx, "p", "l", "c1", "t1", 3, map[string]string{"cleanup.policy": "compact"}); err != nil {
 		t.Fatalf("EnsureTopic: %v", err)
+	}
+	if err := b.AlterTopicConfigs(ctx, "p", "l", "c1", "t1", map[string]string{"retention.ms": "1000"}, []string{"cleanup.policy"}); err != nil {
+		t.Fatalf("AlterTopicConfigs: %v", err)
 	}
 	if err := b.AddTopicPartitions(ctx, "p", "l", "c1", "t1", 6); err != nil {
 		t.Fatalf("AddTopicPartitions: %v", err)
@@ -523,8 +629,11 @@ func TestK8sBrokerDelegatesTopicOpsAndReapsAdmin(t *testing.T) {
 	if _, err := b.EnsureCluster(ctx, "p", "l", "c1"); err != nil {
 		t.Fatalf("EnsureCluster: %v", err)
 	}
-	if err := b.EnsureTopic(ctx, "p", "l", "c1", "t1", 3); err != nil {
+	if err := b.EnsureTopic(ctx, "p", "l", "c1", "t1", 3, map[string]string{"cleanup.policy": "compact"}); err != nil {
 		t.Fatalf("EnsureTopic: %v", err)
+	}
+	if err := b.AlterTopicConfigs(ctx, "p", "l", "c1", "t1", map[string]string{"retention.ms": "1000"}, []string{"cleanup.policy"}); err != nil {
+		t.Fatalf("AlterTopicConfigs: %v", err)
 	}
 	if err := b.AddTopicPartitions(ctx, "p", "l", "c1", "t1", 6); err != nil {
 		t.Fatalf("AddTopicPartitions: %v", err)
@@ -540,6 +649,14 @@ func TestK8sBrokerDelegatesTopicOpsAndReapsAdmin(t *testing.T) {
 	}
 	if len(fa.deleted) != 1 || fa.deleted[0] != "t1" {
 		t.Errorf("deleted = %v", fa.deleted)
+	}
+	if len(fa.configs) != 1 || fa.configs[0]["cleanup.policy"] != "compact" {
+		t.Errorf("create configs = %v, want cleanup.policy=compact", fa.configs)
+	}
+	if len(fa.altered) != 1 || fa.altered[0].Topic != "t1" ||
+		fa.altered[0].Set["retention.ms"] != "1000" ||
+		len(fa.altered[0].Remove) != 1 || fa.altered[0].Remove[0] != "cleanup.policy" {
+		t.Errorf("altered = %+v", fa.altered)
 	}
 
 	// Stopping the cluster closes the pooled admin (its endpoint is gone).
