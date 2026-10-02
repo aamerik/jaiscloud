@@ -1,116 +1,184 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listInstances, terminateInstance, startInstance, stopInstance, type Instance } from '../../../api/ec2'
-
-function stateColor(state: string): string {
-  if (state === 'running') return 'text-green-600'
-  if (state === 'stopped') return 'text-gray-500'
-  if (state === 'terminated') return 'text-red-500'
-  return 'text-yellow-500'
-}
+import {
+  Alert,
+  Box,
+  Button,
+  ButtonDropdown,
+  ContentLayout,
+  CopyToClipboard,
+  Header,
+  Modal,
+  SpaceBetween,
+  StatusIndicator,
+} from '@cloudscape-design/components'
+import {
+  listInstances,
+  terminateInstance,
+  startInstance,
+  stopInstance,
+  type Instance,
+} from '../../../api/ec2'
+import { resourceStatus } from '../../../lib/status'
+import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { useNotifications } from '../../../components/notifications'
 
 export function EC2Instances() {
   const qc = useQueryClient()
-  const [selected, setSelected] = useState<Instance | null>(null)
+  const [selected, setSelected] = useState<Instance[]>([])
+  const [confirmTerminate, setConfirmTerminate] = useState(false)
+  const { notify } = useNotifications()
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['ec2', 'instances'],
     queryFn: () => listInstances(),
   })
 
-  const terminate = useMutation({
-    mutationFn: (id: string) => terminateInstance(id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['ec2', 'instances'] }); setSelected(null) },
-  })
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['ec2', 'instances'] })
+
   const start = useMutation({
-    mutationFn: (id: string) => startInstance(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['ec2', 'instances'] }),
+    mutationFn: async (instances: Instance[]) => {
+      for (const instance of instances) await startInstance(instance.id)
+    },
+    onSuccess: (_r, instances) => {
+      void invalidate()
+      notify({ type: 'success', header: `Starting ${instances.length} instance(s)` })
+      setSelected([])
+    },
+    onError: (err) => notify({ type: 'error', header: 'Start failed', content: (err as Error).message }),
   })
   const stop = useMutation({
-    mutationFn: (id: string) => stopInstance(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['ec2', 'instances'] }),
+    mutationFn: async (instances: Instance[]) => {
+      for (const instance of instances) await stopInstance(instance.id)
+    },
+    onSuccess: (_r, instances) => {
+      void invalidate()
+      notify({ type: 'success', header: `Stopping ${instances.length} instance(s)` })
+      setSelected([])
+    },
+    onError: (err) => notify({ type: 'error', header: 'Stop failed', content: (err as Error).message }),
+  })
+  const terminate = useMutation({
+    mutationFn: async (instances: Instance[]) => {
+      for (const instance of instances) await terminateInstance(instance.id)
+    },
+    onSuccess: (_r, instances) => {
+      void invalidate()
+      notify({ type: 'success', header: `Terminated ${instances.length} instance(s)` })
+      setSelected([])
+      setConfirmTerminate(false)
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Terminate failed', content: (err as Error).message }),
   })
 
   const items = data?.items ?? []
 
+  const columns: ResourceColumn<Instance>[] = [
+    {
+      id: 'id',
+      header: 'Instance ID',
+      filterLabel: 'Instance ID',
+      filterValue: (i) => i.id,
+      cell: (i) => (
+        <SpaceBetween direction="horizontal" size="xs">
+          <Box variant="code" display="inline">
+            {i.id}
+          </Box>
+          <CopyToClipboard
+            variant="icon"
+            textToCopy={i.id}
+            copyButtonAriaLabel={`Copy instance ID ${i.id}`}
+            copySuccessText="Instance ID copied"
+            copyErrorText="Failed to copy instance ID"
+          />
+        </SpaceBetween>
+      ),
+    },
+    {
+      id: 'state',
+      header: 'State',
+      filterLabel: 'State',
+      filterValue: (i) => i.state,
+      cell: (i) => <StatusIndicator type={resourceStatus(i.state)}>{i.state}</StatusIndicator>,
+    },
+    {
+      id: 'type',
+      header: 'Instance type',
+      filterLabel: 'Instance type',
+      filterValue: (i) => i.instanceType,
+      cell: (i) => i.instanceType,
+    },
+    { id: 'image', header: 'AMI ID', cell: (i) => <Box variant="code">{i.imageId}</Box> },
+    { id: 'private', header: 'Private IP', cell: (i) => <Box variant="code">{i.privateIp || '—'}</Box> },
+    { id: 'public', header: 'Public IP', cell: (i) => <Box variant="code">{i.publicIp || '—'}</Box> },
+  ]
+
+  const hasStopped = selected.some((i) => i.state === 'stopped')
+  const hasRunning = selected.some((i) => i.state === 'running')
+
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold">EC2 Instances</h1>
-        <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded">metadata only</span>
-      </div>
-
-      {isLoading && <p className="text-gray-500">Loading...</p>}
-
-      {!isLoading && items.length === 0 && (
-        <div className="text-center py-16 text-gray-400">No instances found</div>
+    <ContentLayout header={<Header variant="h1">Instances</Header>}>
+      {error ? (
+        <Alert type="error" header="Failed to load instances">
+          {(error as Error).message}
+        </Alert>
+      ) : (
+        <ResourceTable
+          items={items}
+          columns={columns}
+          trackBy={(i) => i.id}
+          title="Instances"
+          description="EC2 instances (metadata only)"
+          loading={isLoading}
+          selectionType="multi"
+          selectedItems={selected}
+          onSelectionChange={setSelected}
+          actions={
+            <ButtonDropdown
+              items={[
+                { id: 'start', text: 'Start', disabled: !hasStopped },
+                { id: 'stop', text: 'Stop', disabled: !hasRunning },
+                { id: 'terminate', text: 'Terminate', disabled: selected.length === 0 },
+              ]}
+              onItemClick={({ detail }) => {
+                if (detail.id === 'start') start.mutate(selected)
+                else if (detail.id === 'stop') stop.mutate(selected)
+                else setConfirmTerminate(true)
+              }}
+              disabled={selected.length === 0}
+            >
+              Actions
+            </ButtonDropdown>
+          }
+          emptyTitle="No instances"
+          emptyBody="No EC2 instances found in this region."
+        />
       )}
 
-      {items.length > 0 && (
-        <div className="overflow-x-auto rounded border border-gray-200">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50 text-gray-600 uppercase text-xs">
-              <tr>
-                <th className="px-4 py-2 text-left">Instance ID</th>
-                <th className="px-4 py-2 text-left">State</th>
-                <th className="px-4 py-2 text-left">Type</th>
-                <th className="px-4 py-2 text-left">Image ID</th>
-                <th className="px-4 py-2 text-left">Private IP</th>
-                <th className="px-4 py-2 text-left">Public IP</th>
-                <th className="px-4 py-2 text-left">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {items.map(inst => (
-                <tr key={inst.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-2 font-mono text-xs">{inst.id}</td>
-                  <td className={`px-4 py-2 font-medium ${stateColor(inst.state)}`}>{inst.state}</td>
-                  <td className="px-4 py-2">{inst.instanceType}</td>
-                  <td className="px-4 py-2 font-mono text-xs">{inst.imageId}</td>
-                  <td className="px-4 py-2 font-mono text-xs">{inst.privateIp || '—'}</td>
-                  <td className="px-4 py-2 font-mono text-xs">{inst.publicIp || '—'}</td>
-                  <td className="px-4 py-2 space-x-1">
-                    {inst.state === 'stopped' && (
-                      <button
-                        onClick={() => start.mutate(inst.id)}
-                        className="text-xs px-2 py-0.5 rounded bg-green-100 text-green-700 hover:bg-green-200"
-                      >Start</button>
-                    )}
-                    {inst.state === 'running' && (
-                      <button
-                        onClick={() => stop.mutate(inst.id)}
-                        className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-700 hover:bg-yellow-200"
-                      >Stop</button>
-                    )}
-                    {inst.state !== 'terminated' && (
-                      <button
-                        onClick={() => setSelected(inst)}
-                        className="text-xs px-2 py-0.5 rounded bg-red-100 text-red-700 hover:bg-red-200"
-                      >Terminate</button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {selected && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 w-96">
-            <h2 className="text-lg font-semibold mb-2">Terminate Instance</h2>
-            <p className="text-sm text-gray-600 mb-4">Terminate <span className="font-mono">{selected.id}</span>? This cannot be undone.</p>
-            <div className="flex gap-2 justify-end">
-              <button onClick={() => setSelected(null)} className="px-4 py-2 text-sm rounded border border-gray-300 hover:bg-gray-50">Cancel</button>
-              <button
-                onClick={() => terminate.mutate(selected.id)}
-                className="px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700"
-              >Terminate</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      <Modal
+        visible={confirmTerminate}
+        onDismiss={() => setConfirmTerminate(false)}
+        header="Terminate instances"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setConfirmTerminate(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={terminate.isPending}
+                onClick={() => terminate.mutate(selected)}
+              >
+                Terminate
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        Terminate {selected.length} instance{selected.length !== 1 ? 's' : ''}? This cannot be undone.
+      </Modal>
+    </ContentLayout>
   )
 }

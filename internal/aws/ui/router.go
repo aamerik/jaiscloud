@@ -222,6 +222,14 @@ func spaHandler(assets fs.FS, token string) http.HandlerFunc {
 			r2.URL.Path = "/"
 		}
 
+		// Hash-named build assets are immutable; HTML and SPA fallbacks must be
+		// revalidated so a new build is never masked by the browser cache.
+		if strings.HasPrefix(r2.URL.Path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+
 		fileServer.ServeHTTP(w, r2)
 	}
 }

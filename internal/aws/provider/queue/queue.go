@@ -187,13 +187,14 @@ func (p *QueueProvider) CreateQueue(ctx context.Context, nr *model.NormalizedReq
 	}
 
 	now := clock.Now()
+	tags := attrsParam(nr.Params, "Tags")
 	state := map[string]any{
 		"QueueName":                     name,
 		"QueueUrl":                      queueURL,
 		"QueueArn":                      nr.ResourceID("sqs-queue", name),
 		"IsFifo":                        isFIFO,
 		"Attributes":                    attrs,
-		"Tags":                          map[string]string{},
+		"Tags":                          tags,
 		"CreatedTimestamp":              strconv.FormatInt(now.Unix(), 10),
 		"LastModifiedTimestamp":         strconv.FormatInt(now.Unix(), 10),
 		"VisibilityTimeout":             attrOrDefault(attrs, "VisibilityTimeout", "30"),

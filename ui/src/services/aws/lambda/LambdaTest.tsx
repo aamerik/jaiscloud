@@ -1,6 +1,7 @@
 import { Fragment, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import { JsonEditor } from '../../../components/JsonEditor'
 import { invokeFunction, type InvokeResponse } from '../../../api/lambda'
 
 interface Props {
@@ -64,17 +65,11 @@ export function LambdaTest({ name }: Props) {
             <option value="DryRun">DryRun</option>
           </select>
         </div>
-        <textarea
+        <JsonEditor
           value={payload}
-          onChange={(e) => setPayload(e.target.value)}
-          rows={8}
-          spellCheck={false}
-          style={{
-            width: '100%', boxSizing: 'border-box', fontFamily: 'monospace', fontSize: '0.85em',
-            border: '1px solid #c9cdd4', borderRadius: 4, padding: '0.6rem 0.75rem',
-            resize: 'vertical', background: '#1e1e1e', color: '#d4d4d4', outline: 'none',
-          }}
-          placeholder="{}"
+          onChange={setPayload}
+          height={200}
+          ariaLabel="Test event payload"
         />
       </div>
 

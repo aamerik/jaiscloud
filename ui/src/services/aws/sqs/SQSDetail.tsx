@@ -1,8 +1,20 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getQueue, purgeQueue, listDLQSources, getTags, peekMessages, type PeekedMessage } from '../../../api/sqs'
+import { getQueue, purgeQueue, listDLQSources, getTags, tagQueue, untagQueue, peekMessages, type PeekedMessage } from '../../../api/sqs'
+import {
+  AttributeEditor,
+  Box,
+  Button,
+  ContentLayout,
+  Header,
+  Input,
+  KeyValuePairs,
+  SpaceBetween,
+  Tabs,
+} from '@cloudscape-design/components'
 import { formatDate } from '../../../lib/date'
+import { useNotifications } from '../../../components/notifications'
 import { SQSMessageSend } from './SQSMessageSend'
 
 type Tab = 'overview' | 'messages' | 'dlq' | 'tags'
@@ -41,6 +53,39 @@ export function SQSDetail() {
     queryKey: ['sqs', 'queue', queueUrl, 'tags'],
     queryFn: () => getTags(queueUrl),
     enabled: tab === 'tags' && !!queueUrl,
+  })
+
+  const [tagItems, setTagItems] = useState<{ key: string; value: string }[]>([])
+  const tagBaseline = useRef<Record<string, string>>({})
+  const { notify } = useNotifications()
+
+  useEffect(() => {
+    if (tags) {
+      tagBaseline.current = tags
+      setTagItems(Object.entries(tags).map(([key, value]) => ({ key, value })))
+    }
+  }, [tags])
+
+  const saveTags = useMutation({
+    mutationFn: async () => {
+      const next: Record<string, string> = {}
+      for (const { key, value } of tagItems) {
+        if (key.trim()) next[key.trim()] = value
+      }
+      const added: Record<string, string> = {}
+      for (const [k, v] of Object.entries(next)) {
+        if (tagBaseline.current[k] !== v) added[k] = v
+      }
+      const removed = Object.keys(tagBaseline.current).filter((k) => !(k in next))
+      if (Object.keys(added).length > 0) await tagQueue(queueUrl, added)
+      if (removed.length > 0) await untagQueue(queueUrl, removed)
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['sqs', 'queue', queueUrl, 'tags'] })
+      notify({ type: 'success', header: 'Tags saved' })
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Failed to save tags', content: (err as Error).message }),
   })
 
   const { data: peekData, isFetching: peekFetching, refetch: refetchPeek } = useQuery({
@@ -85,68 +130,29 @@ export function SQSDetail() {
   ]
 
   return (
-    <div>
-      {/* Breadcrumb + header */}
-      <div style={{ marginBottom: '1.5rem' }}>
-        <Link to="/aws/sqs" style={{ color: '#0972d3', fontSize: '0.85em', textDecoration: 'none' }}>
-          ← SQS Queues
-        </Link>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginTop: '0.5rem', gap: '1rem', flexWrap: 'wrap' }}>
-          <div>
-            <h2 style={{ margin: '0 0 0.4rem', fontSize: '1.4rem', fontWeight: 600 }}>{queue.name}</h2>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-              <span style={{
-                background: queue.type === 'FIFO' ? '#e0f0ff' : '#f4f5f7',
-                color: queue.type === 'FIFO' ? '#0972d3' : '#5f6b7a',
-                padding: '0.15em 0.55em', borderRadius: 3, fontSize: '0.8em', fontWeight: 500,
-              }}>
-                {queue.type}
-              </span>
-              <code style={{ fontSize: '0.75em', color: '#8d9daa' }}>{queue.arn}</code>
-            </div>
-          </div>
-          <button
-            onClick={() => setPurgeConfirm(true)}
-            style={{ background: 'none', border: '1px solid #e77600', color: '#e77600', borderRadius: 4, padding: '0.4rem 0.9rem', cursor: 'pointer', fontSize: '0.85em', flexShrink: 0 }}
-          >
-            Purge queue
-          </button>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div style={{ display: 'flex', borderBottom: '2px solid #e7e9ec', marginBottom: '1.5rem' }}>
-        {(Object.keys(TAB_LABELS) as Tab[]).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{
-              background: 'none', border: 'none', padding: '0.6rem 1.25rem', cursor: 'pointer',
-              fontSize: '0.9em', fontWeight: tab === t ? 600 : 400,
-              color: tab === t ? '#e77600' : '#5f6b7a',
-              borderBottom: `2px solid ${tab === t ? '#e77600' : 'transparent'}`,
-              marginBottom: -2, whiteSpace: 'nowrap',
-            }}
-          >
-            {TAB_LABELS[t]}
-          </button>
-        ))}
-      </div>
+    <ContentLayout
+      header={
+        <Header
+          variant="h1"
+          description={<Box variant="code">{queue.arn}</Box>}
+          actions={<Button onClick={() => setPurgeConfirm(true)}>Purge queue</Button>}
+        >
+          {queue.name}
+        </Header>
+      }
+    >
+      <Tabs
+        tabs={(Object.keys(TAB_LABELS) as Tab[]).map((t) => ({ id: t, label: TAB_LABELS[t] }))}
+        activeTabId={tab}
+        onChange={({ detail }) => setTab(detail.activeTabId as Tab)}
+      />
 
       {/* Tab content */}
       {tab === 'overview' && (
-        <dl style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '0 2rem', margin: 0, fontSize: '0.9em' }}>
-          {overviewRows.map(([label, value]) => (
-            <Fragment key={label}>
-              <dt style={{ color: '#5f6b7a', fontWeight: 500, padding: '0.5rem 0', borderBottom: '1px solid #f4f5f7', whiteSpace: 'nowrap' }}>
-                {label}
-              </dt>
-              <dd style={{ margin: 0, padding: '0.5rem 0', borderBottom: '1px solid #f4f5f7', wordBreak: 'break-all', color: '#16191f' }}>
-                {value}
-              </dd>
-            </Fragment>
-          ))}
-        </dl>
+        <KeyValuePairs
+          columns={2}
+          items={overviewRows.map(([label, value]) => ({ label, value }))}
+        />
       )}
 
       {tab === 'messages' && (
@@ -329,30 +335,50 @@ export function SQSDetail() {
       )}
 
       {tab === 'tags' && (
-        <div>
-          {!tags || Object.keys(tags).length === 0 ? (
-            <p style={{ color: '#5f6b7a', fontSize: '0.9em', fontStyle: 'italic' }}>No tags on this queue.</p>
-          ) : (
-            <div style={{ border: '1px solid #e7e9ec', borderRadius: 6, overflow: 'hidden' }}>
-              <table style={{ borderCollapse: 'collapse', fontSize: '0.9em', width: '100%' }}>
-                <thead>
-                  <tr style={{ background: '#f4f5f7', borderBottom: '2px solid #e7e9ec' }}>
-                    <th style={th}>Key</th>
-                    <th style={th}>Value</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(tags).map(([k, v]) => (
-                    <tr key={k} style={{ borderBottom: '1px solid #e7e9ec' }}>
-                      <td style={td}><code style={{ background: '#f4f5f7', padding: '0.2em 0.5em', borderRadius: 3 }}>{k}</code></td>
-                      <td style={td}>{v}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+        <SpaceBetween size="m">
+          <AttributeEditor
+            items={tagItems}
+            onAddButtonClick={() => setTagItems((prev) => [...prev, { key: '', value: '' }])}
+            onRemoveButtonClick={({ detail: { itemIndex } }) =>
+              setTagItems((prev) => prev.filter((_, i) => i !== itemIndex))
+            }
+            addButtonText="Add tag"
+            removeButtonText="Remove"
+            definition={[
+              {
+                label: 'Key',
+                control: (item: { key: string; value: string }, i: number) => (
+                  <Input
+                    value={item.key}
+                    placeholder="Key"
+                    onChange={({ detail }) =>
+                      setTagItems((prev) =>
+                        prev.map((it, idx) => (idx === i ? { ...it, key: detail.value } : it)),
+                      )
+                    }
+                  />
+                ),
+              },
+              {
+                label: 'Value',
+                control: (item: { key: string; value: string }, i: number) => (
+                  <Input
+                    value={item.value}
+                    placeholder="Value"
+                    onChange={({ detail }) =>
+                      setTagItems((prev) =>
+                        prev.map((it, idx) => (idx === i ? { ...it, value: detail.value } : it)),
+                      )
+                    }
+                  />
+                ),
+              },
+            ]}
+          />
+          <Button variant="primary" loading={saveTags.isPending} onClick={() => saveTags.mutate()}>
+            Save tags
+          </Button>
+        </SpaceBetween>
       )}
 
       {/* Purge confirm dialog */}
@@ -381,7 +407,7 @@ export function SQSDetail() {
           </div>
         </div>
       )}
-    </div>
+    </ContentLayout>
   )
 }
 

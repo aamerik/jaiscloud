@@ -1,137 +1,229 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listInstances, createInstance, deleteInstance, startInstance, stopInstance } from '../../../api/rds'
-
-function statusColor(status: string): string {
-  if (status === 'available') return 'bg-green-100 text-green-700'
-  if (status === 'stopped') return 'bg-gray-100 text-gray-600'
-  if (status === 'deleting') return 'bg-red-100 text-red-700'
-  return 'bg-yellow-100 text-yellow-700'
-}
+import {
+  Alert,
+  Box,
+  Button,
+  ButtonDropdown,
+  ContentLayout,
+  Form,
+  FormField,
+  Header,
+  Input,
+  Modal,
+  SpaceBetween,
+  StatusIndicator,
+} from '@cloudscape-design/components'
+import {
+  listInstances,
+  createInstance,
+  deleteInstance,
+  startInstance,
+  stopInstance,
+  type DBInstance,
+} from '../../../api/rds'
+import { resourceStatus } from '../../../lib/status'
+import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { useNotifications } from '../../../components/notifications'
 
 export function RDSInstances() {
   const qc = useQueryClient()
+  const [selected, setSelected] = useState<DBInstance[]>([])
   const [createOpen, setCreateOpen] = useState(false)
-  const [form, setForm] = useState({ id: '', engine: 'mysql', class: 'db.t3.micro', username: 'admin', password: '' })
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [form, setForm] = useState({
+    id: '',
+    engine: 'mysql',
+    class: 'db.t3.micro',
+    username: 'admin',
+    password: '',
+  })
+  const { notify } = useNotifications()
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['rds', 'instances'],
     queryFn: listInstances,
   })
 
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['rds', 'instances'] })
+
   const create = useMutation({
     mutationFn: () => createInstance(form),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['rds', 'instances'] }); setCreateOpen(false) },
+    onSuccess: () => {
+      void invalidate()
+      notify({ type: 'success', header: 'DB instance created', content: form.id })
+      setCreateOpen(false)
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Create failed', content: (err as Error).message }),
   })
 
   const del = useMutation({
-    mutationFn: (id: string) => deleteInstance(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['rds', 'instances'] }),
+    mutationFn: async (instances: DBInstance[]) => {
+      for (const instance of instances) await deleteInstance(instance.id)
+    },
+    onSuccess: (_r, instances) => {
+      void invalidate()
+      notify({ type: 'success', header: `Deleted ${instances.length} instance(s)` })
+      setSelected([])
+      setConfirmDelete(false)
+    },
+    onError: (err) => notify({ type: 'error', header: 'Delete failed', content: (err as Error).message }),
   })
 
   const start = useMutation({
-    mutationFn: (id: string) => startInstance(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['rds', 'instances'] }),
+    mutationFn: async (instances: DBInstance[]) => {
+      for (const instance of instances) await startInstance(instance.id)
+    },
+    onSuccess: (_r, instances) => {
+      void invalidate()
+      notify({ type: 'success', header: `Starting ${instances.length} instance(s)` })
+      setSelected([])
+    },
+    onError: (err) => notify({ type: 'error', header: 'Start failed', content: (err as Error).message }),
   })
 
   const stop = useMutation({
-    mutationFn: (id: string) => stopInstance(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['rds', 'instances'] }),
+    mutationFn: async (instances: DBInstance[]) => {
+      for (const instance of instances) await stopInstance(instance.id)
+    },
+    onSuccess: (_r, instances) => {
+      void invalidate()
+      notify({ type: 'success', header: `Stopping ${instances.length} instance(s)` })
+      setSelected([])
+    },
+    onError: (err) => notify({ type: 'error', header: 'Stop failed', content: (err as Error).message }),
   })
 
   const items = data?.items ?? []
 
+  const columns: ResourceColumn<DBInstance>[] = [
+    { id: 'id', header: 'Identifier', filterLabel: 'Identifier', filterValue: (i) => i.id, cell: (i) => i.id },
+    {
+      id: 'status',
+      header: 'Status',
+      filterLabel: 'Status',
+      filterValue: (i) => i.status,
+      cell: (i) => <StatusIndicator type={resourceStatus(i.status)}>{i.status}</StatusIndicator>,
+    },
+    { id: 'engine', header: 'Engine', filterLabel: 'Engine', filterValue: (i) => i.engine, cell: (i) => i.engine },
+    { id: 'class', header: 'Class', cell: (i) => i.class },
+    {
+      id: 'endpoint',
+      header: 'Endpoint',
+      cell: (i) => <Box variant="code">{i.endpoint ? `${i.endpoint}:${i.port}` : '—'}</Box>,
+    },
+  ]
+
+  const hasStopped = selected.some((i) => i.status === 'stopped')
+  const hasAvailable = selected.some((i) => i.status === 'available')
+
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold">RDS Instances</h1>
-        <div className="flex items-center gap-2">
-          <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded">metadata only</span>
-          <button onClick={() => setCreateOpen(true)} className="px-3 py-1.5 text-sm rounded bg-orange-500 text-white hover:bg-orange-600">
-            Create Instance
-          </button>
-        </div>
-      </div>
-
-      {isLoading && <p className="text-gray-500">Loading...</p>}
-      {!isLoading && items.length === 0 && (
-        <div className="text-center py-16 text-gray-400">No RDS instances found</div>
+    <ContentLayout header={<Header variant="h1">RDS instances</Header>}>
+      {error ? (
+        <Alert type="error" header="Failed to load RDS instances">
+          {(error as Error).message}
+        </Alert>
+      ) : (
+        <ResourceTable
+          items={items}
+          columns={columns}
+          trackBy={(i) => i.id}
+          title="Databases"
+          description="metadata only"
+          loading={isLoading}
+          selectionType="multi"
+          selectedItems={selected}
+          onSelectionChange={setSelected}
+          actions={
+            <SpaceBetween direction="horizontal" size="xs">
+              <ButtonDropdown
+                items={[
+                  { id: 'start', text: 'Start', disabled: !hasStopped },
+                  { id: 'stop', text: 'Stop', disabled: !hasAvailable },
+                  { id: 'delete', text: 'Delete', disabled: selected.length === 0 },
+                ]}
+                onItemClick={({ detail }) => {
+                  if (detail.id === 'start') start.mutate(selected)
+                  else if (detail.id === 'stop') stop.mutate(selected)
+                  else setConfirmDelete(true)
+                }}
+                disabled={selected.length === 0}
+              >
+                Actions
+              </ButtonDropdown>
+              <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                Create database
+              </Button>
+            </SpaceBetween>
+          }
+          emptyTitle="No databases"
+          emptyBody="Create an RDS instance to get started."
+        />
       )}
 
-      {items.length > 0 && (
-        <div className="overflow-x-auto rounded border border-gray-200">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50 text-gray-600 uppercase text-xs">
-              <tr>
-                <th className="px-4 py-2 text-left">Identifier</th>
-                <th className="px-4 py-2 text-left">Status</th>
-                <th className="px-4 py-2 text-left">Engine</th>
-                <th className="px-4 py-2 text-left">Class</th>
-                <th className="px-4 py-2 text-left">Endpoint</th>
-                <th className="px-4 py-2 text-left">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {items.map(inst => (
-                <tr key={inst.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-2 font-medium">{inst.id}</td>
-                  <td className="px-4 py-2">
-                    <span className={`text-xs px-2 py-0.5 rounded ${statusColor(inst.status)}`}>{inst.status}</span>
-                  </td>
-                  <td className="px-4 py-2">{inst.engine}</td>
-                  <td className="px-4 py-2">{inst.class}</td>
-                  <td className="px-4 py-2 font-mono text-xs">{inst.endpoint ? `${inst.endpoint}:${inst.port}` : '—'}</td>
-                  <td className="px-4 py-2 space-x-1">
-                    {inst.status === 'stopped' && (
-                      <button onClick={() => start.mutate(inst.id)} className="text-xs px-2 py-0.5 rounded bg-green-100 text-green-700 hover:bg-green-200">Start</button>
-                    )}
-                    {inst.status === 'available' && (
-                      <button onClick={() => stop.mutate(inst.id)} className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-700 hover:bg-yellow-200">Stop</button>
-                    )}
-                    <button onClick={() => del.mutate(inst.id)} className="text-xs px-2 py-0.5 rounded bg-red-100 text-red-700 hover:bg-red-200">Delete</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {createOpen && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 w-[480px]">
-            <h2 className="text-lg font-semibold mb-4">Create RDS Instance</h2>
-            <div className="space-y-3">
-              {[
-                { label: 'Identifier', key: 'id' as const, placeholder: 'my-db' },
-                { label: 'Engine', key: 'engine' as const, placeholder: 'mysql' },
-                { label: 'Class', key: 'class' as const, placeholder: 'db.t3.micro' },
-                { label: 'Master Username', key: 'username' as const, placeholder: 'admin' },
-                { label: 'Master Password', key: 'password' as const, placeholder: '••••••••' },
-              ].map(f => (
-                <div key={f.key}>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">{f.label}</label>
-                  <input
-                    type={f.key === 'password' ? 'password' : 'text'}
-                    className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
-                    placeholder={f.placeholder}
-                    value={form[f.key]}
-                    onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))}
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-2 justify-end mt-4">
-              <button onClick={() => setCreateOpen(false)} className="px-4 py-2 text-sm rounded border border-gray-300 hover:bg-gray-50">Cancel</button>
-              <button
-                onClick={() => create.mutate()}
+      <Modal
+        visible={createOpen}
+        onDismiss={() => setCreateOpen(false)}
+        header="Create database"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setCreateOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={create.isPending}
                 disabled={!form.id.trim()}
-                className="px-4 py-2 text-sm rounded bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50"
-              >Create</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+                onClick={() => create.mutate()}
+              >
+                Create database
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        <Form>
+          <SpaceBetween size="m">
+            <FormField label="DB identifier">
+              <Input value={form.id} onChange={({ detail }) => setForm({ ...form, id: detail.value })} placeholder="my-db" />
+            </FormField>
+            <FormField label="Engine">
+              <Input value={form.engine} onChange={({ detail }) => setForm({ ...form, engine: detail.value })} />
+            </FormField>
+            <FormField label="DB instance class">
+              <Input value={form.class} onChange={({ detail }) => setForm({ ...form, class: detail.value })} />
+            </FormField>
+            <FormField label="Master username">
+              <Input value={form.username} onChange={({ detail }) => setForm({ ...form, username: detail.value })} />
+            </FormField>
+            <FormField label="Master password">
+              <Input type="password" value={form.password} onChange={({ detail }) => setForm({ ...form, password: detail.value })} />
+            </FormField>
+          </SpaceBetween>
+        </Form>
+      </Modal>
+
+      <Modal
+        visible={confirmDelete}
+        onDismiss={() => setConfirmDelete(false)}
+        header="Delete databases"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setConfirmDelete(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" loading={del.isPending} onClick={() => del.mutate(selected)}>
+                Delete
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        Permanently delete {selected.length} database{selected.length !== 1 ? 's' : ''}?
+      </Modal>
+    </ContentLayout>
   )
 }

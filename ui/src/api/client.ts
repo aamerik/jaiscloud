@@ -90,3 +90,33 @@ export const api = {
   delete: <T>(path: string, params?: Record<string, string | number>) =>
     request<T>('DELETE', path, undefined, params),
 }
+
+/** PUT a binary body (e.g. an uploaded file) to a UI API path. */
+export async function putBlob(
+  path: string,
+  params: Record<string, string | number>,
+  blob: Blob,
+  contentType: string,
+): Promise<void> {
+  const url = new URL(`${BASE}${path}`, window.location.origin)
+  if (_currentAccount) {
+    url.searchParams.set('account', _currentAccount)
+  }
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, String(v)))
+
+  const token = getCookie('session')
+  const headers: Record<string, string> = { 'Content-Type': contentType }
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
+  const res = await fetch(url.toString(), {
+    method: 'PUT',
+    headers,
+    credentials: 'include',
+    body: blob,
+  })
+  if (!res.ok) {
+    throw new APIError(res.status, 'UploadFailed', `Upload failed: ${res.status} ${res.statusText}`)
+  }
+}

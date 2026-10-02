@@ -125,3 +125,11 @@ export function listDLQSources(queueUrl: string): Promise<DLQSourceQueuesRespons
 export function getTags(queueUrl: string): Promise<Record<string, string>> {
   return api.get<Record<string, string>>(`${BASE}/queues/tags`, { url: queueUrl })
 }
+
+export function tagQueue(queueUrl: string, tags: Record<string, string>): Promise<void> {
+  return api.post<void>(`${BASE}/queues/tags`, { url: queueUrl, tags })
+}
+
+export function untagQueue(queueUrl: string, tagKeys: string[]): Promise<void> {
+  return api.post<void>(`${BASE}/queues/tags/untag`, { url: queueUrl, tagKeys })
+}

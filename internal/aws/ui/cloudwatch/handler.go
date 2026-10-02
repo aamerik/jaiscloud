@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"jaiscloud/internal/aws/ui/uihelper"
 	"jaiscloud/internal/config"
@@ -92,7 +93,17 @@ func (h *Handler) GetMetricStatistics(w http.ResponseWriter, r *http.Request) {
 	if len(stats) == 0 {
 		stats = []string{"Sum", "Average", "Minimum", "Maximum", "SampleCount"}
 	}
-	for i, s := range stats {
+	// Accept both repeated (?statistics=Sum&statistics=Average) and
+	// comma-separated (?statistics=Sum,Average) forms.
+	var flat []string
+	for _, s := range stats {
+		for _, part := range strings.Split(s, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				flat = append(flat, part)
+			}
+		}
+	}
+	for i, s := range flat {
 		nr.Params[fmt.Sprintf("Statistics.member.%d", i+1)] = s
 	}
 

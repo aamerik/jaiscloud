@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, putBlob } from './client'
 
 export interface Bucket {
   name: string
@@ -106,4 +106,14 @@ export function listObjectVersions(bucket: string, prefix?: string): Promise<Lis
 
 export function getBucketTags(bucket: string): Promise<{ tags: Record<string, string> }> {
   return api.get<{ tags: Record<string, string> }>(`${BASE}/buckets/${encodeURIComponent(bucket)}/tags`)
+}
+
+/** Upload a single object body to a bucket. */
+export function putObject(bucket: string, key: string, blob: Blob): Promise<void> {
+  return putBlob(
+    `${BASE}/buckets/${encodeURIComponent(bucket)}/objects`,
+    { key },
+    blob,
+    blob.type || 'application/octet-stream',
+  )
 }
