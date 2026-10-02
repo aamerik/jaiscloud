@@ -34,7 +34,7 @@ func (h *Handler) ListCacheClusters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawClusters, _ := resp.Data["CacheClusters"].([]any)
+	rawClusters := uihelper.AsSlice(resp.Data["CacheClusters"])
 	items := make([]CacheCluster, 0, len(rawClusters))
 	for _, raw := range rawClusters {
 		if m, ok := raw.(map[string]any); ok {

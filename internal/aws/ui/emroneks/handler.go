@@ -37,7 +37,7 @@ func (h *Handler) ListVirtualClusters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawVCs, _ := resp.Data["virtualClusters"].([]any)
+	rawVCs := uihelper.AsSlice(resp.Data["virtualClusters"])
 	items := make([]VirtualCluster, 0, len(rawVCs))
 	for _, raw := range rawVCs {
 		if m, ok := raw.(map[string]any); ok {
@@ -147,7 +147,7 @@ func (h *Handler) ListJobRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawJobs, _ := resp.Data["jobRuns"].([]any)
+	rawJobs := uihelper.AsSlice(resp.Data["jobRuns"])
 	items := make([]JobRun, 0, len(rawJobs))
 	for _, raw := range rawJobs {
 		if m, ok := raw.(map[string]any); ok {

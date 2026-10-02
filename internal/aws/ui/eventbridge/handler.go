@@ -40,7 +40,7 @@ func (h *Handler) ListRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawRules, _ := resp.Data["Rules"].([]any)
+	rawRules := uihelper.AsSlice(resp.Data["Rules"])
 	items := make([]Rule, 0, len(rawRules))
 	for _, raw := range rawRules {
 		if m, ok := raw.(map[string]any); ok {
@@ -177,7 +177,7 @@ func (h *Handler) ListTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawTargets, _ := resp.Data["Targets"].([]any)
+	rawTargets := uihelper.AsSlice(resp.Data["Targets"])
 	items := make([]Target, 0, len(rawTargets))
 	for _, raw := range rawTargets {
 		if m, ok := raw.(map[string]any); ok {
@@ -304,7 +304,7 @@ func (h *Handler) ListEventBuses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawBuses, _ := resp.Data["EventBuses"].([]any)
+	rawBuses := uihelper.AsSlice(resp.Data["EventBuses"])
 	items := make([]EventBus, 0, len(rawBuses))
 	for _, raw := range rawBuses {
 		if m, ok := raw.(map[string]any); ok {

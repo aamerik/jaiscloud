@@ -37,7 +37,7 @@ func (h *Handler) ListStateMachines(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawSMs, _ := resp.Data["stateMachines"].([]any)
+	rawSMs := uihelper.AsSlice(resp.Data["stateMachines"])
 	items := make([]StateMachine, 0, len(rawSMs))
 	for _, raw := range rawSMs {
 		if m, ok := raw.(map[string]any); ok {
@@ -160,7 +160,7 @@ func (h *Handler) ListExecutions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawExecs, _ := resp.Data["executions"].([]any)
+	rawExecs := uihelper.AsSlice(resp.Data["executions"])
 	items := make([]Execution, 0, len(rawExecs))
 	for _, raw := range rawExecs {
 		if m, ok := raw.(map[string]any); ok {
@@ -203,7 +203,7 @@ func (h *Handler) GetExecutionHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawEvents, _ := resp.Data["events"].([]any)
+	rawEvents := uihelper.AsSlice(resp.Data["events"])
 	events := make([]HistoryEvent, 0, len(rawEvents))
 	for _, raw := range rawEvents {
 		if m, ok := raw.(map[string]any); ok {

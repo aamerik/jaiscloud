@@ -33,7 +33,7 @@ func (h *Handler) ListDBInstances(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawInstances, _ := resp.Data["DBInstances"].([]any)
+	rawInstances := uihelper.AsSlice(resp.Data["DBInstances"])
 	items := make([]DBInstance, 0, len(rawInstances))
 	for _, raw := range rawInstances {
 		if m, ok := raw.(map[string]any); ok {

@@ -41,7 +41,7 @@ func (h *Handler) ListClusters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawClusters, _ := resp.Data["Clusters"].([]any)
+	rawClusters := uihelper.AsSlice(resp.Data["Clusters"])
 	nextToken, _ := resp.Data["Marker"].(string)
 
 	items := make([]ClusterSummary, 0, len(rawClusters))
@@ -186,7 +186,7 @@ func (h *Handler) GetClusterStatus(w http.ResponseWriter, r *http.Request) {
 
 	var stepSummaries []StepSummary
 	if stepsResp, stepsErr := h.provider.ListSteps(r.Context(), nrSteps); stepsErr == nil {
-		if rawSteps, ok := stepsResp.Data["Steps"].([]any); ok {
+		if rawSteps := uihelper.AsSlice(stepsResp.Data["Steps"]); len(rawSteps) > 0 {
 			for _, raw := range rawSteps {
 				if m, ok := raw.(map[string]any); ok {
 					cfg, _ := m["Config"].(map[string]any)
@@ -241,7 +241,7 @@ func (h *Handler) ListSteps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawSteps, _ := resp.Data["Steps"].([]any)
+	rawSteps := uihelper.AsSlice(resp.Data["Steps"])
 	nextToken, _ := resp.Data["Marker"].(string)
 
 	items := make([]Step, 0, len(rawSteps))
@@ -339,7 +339,7 @@ func mapClusterDetail(m map[string]any) ClusterDetail {
 	}
 
 	apps := []string{}
-	if rawApps, ok := m["Applications"].([]any); ok {
+	if rawApps := uihelper.AsSlice(m["Applications"]); len(rawApps) > 0 {
 		for _, a := range rawApps {
 			if am, ok := a.(map[string]any); ok {
 				if n, ok := am["Name"].(string); ok && n != "" {
@@ -350,7 +350,7 @@ func mapClusterDetail(m map[string]any) ClusterDetail {
 	}
 
 	tags := []TagEntry{}
-	if rawTags, ok := m["Tags"].([]any); ok {
+	if rawTags := uihelper.AsSlice(m["Tags"]); len(rawTags) > 0 {
 		for _, t := range rawTags {
 			if tm, ok := t.(map[string]any); ok {
 				k, _ := tm["Key"].(string)

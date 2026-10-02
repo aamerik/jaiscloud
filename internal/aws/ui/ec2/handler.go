@@ -34,10 +34,10 @@ func (h *Handler) ListInstances(w http.ResponseWriter, r *http.Request) {
 
 	// Flatten Reservations → Instances
 	var items []Instance
-	if rawReservations, ok := resp.Data["Reservations"].([]any); ok {
+	if rawReservations := uihelper.AsSlice(resp.Data["Reservations"]); len(rawReservations) > 0 {
 		for _, rawRes := range rawReservations {
 			if res, ok := rawRes.(map[string]any); ok {
-				if rawInsts, ok := res["Instances"].([]any); ok {
+				if rawInsts := uihelper.AsSlice(res["Instances"]); len(rawInsts) > 0 {
 					for _, rawInst := range rawInsts {
 						if m, ok := rawInst.(map[string]any); ok {
 							items = append(items, mapInstance(m))

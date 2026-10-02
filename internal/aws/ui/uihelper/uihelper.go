@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strconv"
 
 	"jaiscloud/internal/aws/arn"
@@ -15,6 +16,26 @@ import (
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/model"
 )
+
+// AsSlice coerces a provider response value that may be a typed slice
+// (e.g. []map[string]any, []string, []reservation) into []any so handlers can
+// range over it uniformly. Returns nil for non-slice values. Providers use
+// pagination.Paginate[T] which preserves the element type, so a plain
+// .([]any) assertion silently fails.
+func AsSlice(v any) []any {
+	if v == nil {
+		return nil
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Slice {
+		return nil
+	}
+	out := make([]any, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		out[i] = rv.Index(i).Interface()
+	}
+	return out
+}
 
 // RegionFrom reads region from query string or request context.
 func RegionFrom(r *http.Request) string {

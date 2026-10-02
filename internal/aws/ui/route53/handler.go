@@ -34,7 +34,7 @@ func (h *Handler) ListHostedZones(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawZones, _ := resp.Data["HostedZones"].([]any)
+	rawZones := uihelper.AsSlice(resp.Data["HostedZones"])
 	items := make([]HostedZone, 0, len(rawZones))
 	for _, raw := range rawZones {
 		if m, ok := raw.(map[string]any); ok {
@@ -102,7 +102,7 @@ func (h *Handler) ListResourceRecordSets(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	rawSets, _ := resp.Data["ResourceRecordSets"].([]any)
+	rawSets := uihelper.AsSlice(resp.Data["ResourceRecordSets"])
 	items := make([]RecordSet, 0, len(rawSets))
 	for _, raw := range rawSets {
 		if m, ok := raw.(map[string]any); ok {
@@ -137,7 +137,7 @@ func mapRecordSet(m map[string]any) RecordSet {
 	if ttl, ok := m["TTL"].(float64); ok {
 		rs.TTL = int(ttl)
 	}
-	if recs, ok := m["ResourceRecords"].([]any); ok {
+	if recs := uihelper.AsSlice(m["ResourceRecords"]); len(recs) > 0 {
 		for _, rec := range recs {
 			if rm, ok := rec.(map[string]any); ok {
 				rs.Records = append(rs.Records, strAny(rm, "Value"))
