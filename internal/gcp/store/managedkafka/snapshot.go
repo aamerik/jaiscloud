@@ -8,6 +8,12 @@ import (
 
 // --- Memory store ---
 
+// Snapshot serializes the control-plane metadata only (clusters, topics,
+// operations, ACLs). A cluster's live broker endpoint and the broker's own
+// topic/group/ACL/message bytes are runtime state and are deliberately excluded
+// (Cluster.BootstrapAddress is json:"-"): --dsn snapshots and import/export must
+// not claim broker data is portable. On restore the broker is re-ensured lazily
+// on the first read or data-plane call.
 func (s *MemoryStore) IsEmpty(_ context.Context) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

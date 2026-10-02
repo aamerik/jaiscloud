@@ -147,6 +147,96 @@ func TestK8sBrokerShutdownReapsAll(t *testing.T) {
 	}
 }
 
+// TestK8sBrokerResetReapsAndSweeps proves /_jaiscloud/reset teardown: Reset
+// clears tracked endpoints and also sweeps broker resources the process never
+// tracked (a failed start or a previous instance's leftovers).
+func TestK8sBrokerResetReapsAndSweeps(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	b := newK8sBroker(client, "jaiscloud", "redpanda:test", discardLogger())
+	b.probe = func(string) bool { return true }
+
+	ctx := context.Background()
+	if _, err := b.EnsureCluster(ctx, "p", "l", "c1"); err != nil {
+		t.Fatalf("EnsureCluster: %v", err)
+	}
+	name := brokerResourceName(ClusterKey{Project: "p", Location: "l", Cluster: "c1"})
+
+	if _, err := client.CoreV1().Pods("jaiscloud").Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "mkbroker-orphan", Namespace: "jaiscloud", Labels: map[string]string{brokerLabelKey: brokerLabelValue}},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed orphan pod: %v", err)
+	}
+
+	if err := b.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if ep := b.Endpoint("p", "l", "c1"); ep != "" {
+		t.Errorf("Endpoint after Reset = %q, want empty", ep)
+	}
+	if _, err := client.CoreV1().Pods("jaiscloud").Get(ctx, name, metav1.GetOptions{}); err == nil {
+		t.Error("tracked broker pod survived Reset")
+	}
+	if _, err := client.CoreV1().Services("jaiscloud").Get(ctx, name, metav1.GetOptions{}); err == nil {
+		t.Error("tracked broker service survived Reset")
+	}
+	if _, err := client.CoreV1().Pods("jaiscloud").Get(ctx, "mkbroker-orphan", metav1.GetOptions{}); err == nil {
+		t.Error("untracked orphan pod survived Reset")
+	}
+}
+
+// TestK8sBrokerSweepOrphans proves the startup sweep deletes only
+// broker-labeled Pods/Services, leaving unrelated resources alone.
+func TestK8sBrokerSweepOrphans(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "mkbroker-orphan", Namespace: "jaiscloud", Labels: map[string]string{brokerLabelKey: brokerLabelValue}}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "other-pod", Namespace: "jaiscloud"}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "mkbroker-orphan", Namespace: "jaiscloud", Labels: map[string]string{brokerLabelKey: brokerLabelValue}}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "other-svc", Namespace: "jaiscloud"}},
+	)
+	b := newK8sBroker(client, "jaiscloud", "redpanda:test", discardLogger())
+	b.sweepOrphans()
+
+	ctx := context.Background()
+	if _, err := client.CoreV1().Pods("jaiscloud").Get(ctx, "mkbroker-orphan", metav1.GetOptions{}); err == nil {
+		t.Error("labeled orphan pod was not swept")
+	}
+	if _, err := client.CoreV1().Services("jaiscloud").Get(ctx, "mkbroker-orphan", metav1.GetOptions{}); err == nil {
+		t.Error("labeled orphan service was not swept")
+	}
+	if _, err := client.CoreV1().Pods("jaiscloud").Get(ctx, "other-pod", metav1.GetOptions{}); err != nil {
+		t.Error("unlabeled pod must not be swept")
+	}
+	if _, err := client.CoreV1().Services("jaiscloud").Get(ctx, "other-svc", metav1.GetOptions{}); err != nil {
+		t.Error("unlabeled service must not be swept")
+	}
+}
+
+// TestK8sBrokerEnsureFailureReapsResources proves a broker that never becomes
+// ready does not leak the Pod/Service it created.
+func TestK8sBrokerEnsureFailureReapsResources(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	b := newK8sBroker(client, "jaiscloud", "redpanda:test", discardLogger())
+	b.probe = func(string) bool { return false } // never ready
+
+	key := ClusterKey{Project: "p", Location: "l", Cluster: "c1"}
+	name := brokerResourceName(key)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := b.EnsureCluster(ctx, key.Project, key.Location, key.Cluster); err == nil {
+		t.Fatal("EnsureCluster succeeded with a never-ready broker; want error")
+	}
+	if _, err := client.CoreV1().Pods("jaiscloud").Get(context.Background(), name, metav1.GetOptions{}); err == nil {
+		t.Error("pod leaked after a failed broker start")
+	}
+	if _, err := client.CoreV1().Services("jaiscloud").Get(context.Background(), name, metav1.GetOptions{}); err == nil {
+		t.Error("service leaked after a failed broker start")
+	}
+	if ep := b.Endpoint(key.Project, key.Location, key.Cluster); ep != "" {
+		t.Errorf("Endpoint after failed start = %q, want empty", ep)
+	}
+}
+
 func TestBrokerResourceName(t *testing.T) {
 	key := ClusterKey{Project: "proj", Location: "us-central1", Cluster: "My_Cluster!!"}
 	name := brokerResourceName(key)
@@ -209,6 +299,60 @@ func TestNativeBrokerLifecycle(t *testing.T) {
 	}
 	if b.Endpoint("p", "l", "c1") != "" {
 		t.Error("Endpoint not cleared after StopCluster")
+	}
+	// Broker data is ephemeral: the per-cluster scratch dir is removed on stop.
+	if _, err := os.Stat(filepath.Join(dir, "managedkafka", brokerResourceName(ClusterKey{Project: "p", Location: "l", Cluster: "c1"}))); !os.IsNotExist(err) {
+		t.Errorf("data dir not removed after StopCluster: %v", err)
+	}
+}
+
+// TestNativeBrokerResetRemovesData proves /_jaiscloud/reset teardown: Reset
+// stops the broker, clears its endpoint, and removes the data root.
+func TestNativeBrokerResetRemovesData(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-redpanda")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+	b := newNativeBroker(bin, dir, discardLogger())
+	b.probe = func(string) bool { return true }
+
+	ctx := context.Background()
+	if _, err := b.EnsureCluster(ctx, "p", "l", "c1"); err != nil {
+		t.Fatalf("EnsureCluster: %v", err)
+	}
+	if err := b.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if ep := b.Endpoint("p", "l", "c1"); ep != "" {
+		t.Errorf("Endpoint after Reset = %q, want empty", ep)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "managedkafka")); !os.IsNotExist(err) {
+		t.Errorf("data root not removed after Reset: %v", err)
+	}
+}
+
+// TestNativeBrokerSweepsStaleDataOnStart proves a restarted emulator does not
+// leak a previous instance's data dirs.
+func TestNativeBrokerSweepsStaleDataOnStart(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, "managedkafka", "mkbroker-stale")
+	if err := os.MkdirAll(stale, 0o755); err != nil {
+		t.Fatalf("seed stale data dir: %v", err)
+	}
+	bin := filepath.Join(dir, "fake-redpanda")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+	b := newNativeBroker(bin, dir, discardLogger())
+	b.probe = func(string) bool { return true }
+	t.Cleanup(func() { _ = b.Shutdown(context.Background()) })
+
+	if _, err := b.EnsureCluster(context.Background(), "p", "l", "c1"); err != nil {
+		t.Fatalf("EnsureCluster: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale data dir not swept on first start: %v", err)
 	}
 }
 

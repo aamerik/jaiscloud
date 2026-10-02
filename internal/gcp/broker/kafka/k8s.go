@@ -32,6 +32,14 @@ const (
 	// e2e smoke can find the per-cluster Service the cluster advertises.
 	brokerLabelKey   = "jaiscloud.io/broker"
 	brokerLabelValue = "managedkafka"
+	// brokerSelector matches every broker resource this package owns; the
+	// startup orphan sweep and Reset use it to reap leftovers.
+	brokerSelector = brokerLabelKey + "=" + brokerLabelValue
+	// brokerSweepTimeout bounds the startup orphan sweep.
+	brokerSweepTimeout = 30 * time.Second
+	// brokerSweepCap bounds a sweep so a mislabelled namespace cannot trigger
+	// unbounded deletes.
+	brokerSweepCap = 2000
 )
 
 // k8sBroker runs a single-node Redpanda Pod plus a ClusterIP Service per
@@ -45,6 +53,9 @@ type k8sBroker struct {
 	mu        sync.Mutex
 	endpoints map[ClusterKey]string // key → "<svc>.<ns>.svc.cluster.local:9092"
 	admins    *adminPool
+	// sweepOnce runs the startup orphan sweep exactly once, before the first
+	// broker starts.
+	sweepOnce sync.Once
 
 	// probe reports whether addr is accepting TCP connections. Overridable in
 	// tests; defaults to a one-second TCP dial.
@@ -127,6 +138,10 @@ func (b *k8sBroker) EnsureCluster(ctx context.Context, project, location, cluste
 	key := ClusterKey{Project: project, Location: location, Cluster: cluster}
 	keyStr := key.String()
 
+	// Reap broker resources left behind by a previous emulator instance (or a
+	// failed start) before starting a new one.
+	b.sweepOnce.Do(b.sweepOrphans)
+
 	b.mu.Lock()
 	if ep, ok := b.endpoints[key]; ok {
 		b.mu.Unlock()
@@ -144,11 +159,15 @@ func (b *k8sBroker) EnsureCluster(ctx context.Context, project, location, cluste
 		return "", fmt.Errorf("managedkafka broker: ensure service: %w", err)
 	}
 	if err := b.ensurePod(ctx, name, dns); err != nil {
+		b.reapResources(ctx, name)
 		return "", fmt.Errorf("managedkafka broker: ensure pod: %w", err)
 	}
 
 	b.logger.Info("managedkafka broker: waiting for redpanda pod", "cluster", keyStr, "address", dns)
 	if err := b.waitReady(ctx, dns); err != nil {
+		// A broker that never became ready must not leak its Pod/Service; the
+		// caller degrades to the metadata-only topology.
+		b.reapResources(ctx, name)
 		return "", err
 	}
 
@@ -191,7 +210,11 @@ func (b *k8sBroker) StopCluster(ctx context.Context, project, location, cluster 
 	return svcErr
 }
 
-func (b *k8sBroker) Shutdown(ctx context.Context) error {
+// Reset stops and reaps every tracked broker, then sweeps any broker resources
+// left in the namespace that this process never tracked (a failed partial
+// create, or a previous instance's leftovers). The manager stays usable: a
+// later EnsureCluster starts a fresh broker.
+func (b *k8sBroker) Reset(ctx context.Context) error {
 	b.mu.Lock()
 	keys := make([]ClusterKey, 0, len(b.endpoints))
 	for k := range b.endpoints {
@@ -206,7 +229,92 @@ func (b *k8sBroker) Shutdown(ctx context.Context) error {
 		}
 	}
 	b.admins.closeAll()
+	b.sweepOrphans()
 	return firstErr
+}
+
+// Shutdown reaps every broker on emulator shutdown.
+func (b *k8sBroker) Shutdown(ctx context.Context) error { return b.Reset(ctx) }
+
+// reapResources deletes a broker's Pod and Service, ignoring NotFound, so a
+// failed start does not leak them.
+func (b *k8sBroker) reapResources(ctx context.Context, name string) {
+	if err := b.client.CoreV1().Pods(b.namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
+		b.logger.Warn("managedkafka broker: reap pod failed", "pod", name, "err", err)
+	}
+	if err := b.client.CoreV1().Services(b.namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
+		b.logger.Warn("managedkafka broker: reap service failed", "service", name, "err", err)
+	}
+}
+
+// sweepOrphans deletes broker Pods and Services left by a previous emulator
+// instance or a failed start, matched by the broker label. Broker liveness is
+// runtime state this process cannot adopt across the deterministic resource
+// names, so every labeled resource is an orphan. Best-effort: a failure is
+// logged, never fatal to cluster creation.
+func (b *k8sBroker) sweepOrphans() {
+	ctx, cancel := context.WithTimeout(context.Background(), brokerSweepTimeout)
+	defer cancel()
+	b.sweepOrphanPods(ctx)
+	b.sweepOrphanServices(ctx)
+}
+
+func (b *k8sBroker) sweepOrphanPods(ctx context.Context) {
+	deleted := 0
+	var cont string
+	for {
+		list, err := b.client.CoreV1().Pods(b.namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: brokerSelector,
+			Limit:         500,
+			Continue:      cont,
+		})
+		if err != nil {
+			b.logger.Warn("managedkafka broker: orphan pod sweep failed", "err", err)
+			return
+		}
+		for i := range list.Items {
+			name := list.Items[i].Name
+			if err := b.client.CoreV1().Pods(b.namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
+				b.logger.Warn("managedkafka broker: orphan pod delete failed", "pod", name, "err", err)
+				continue
+			}
+			deleted++
+			b.logger.Info("managedkafka broker: reaped orphan pod", "pod", name)
+		}
+		cont = list.Continue
+		if cont == "" || deleted >= brokerSweepCap {
+			return
+		}
+	}
+}
+
+func (b *k8sBroker) sweepOrphanServices(ctx context.Context) {
+	deleted := 0
+	var cont string
+	for {
+		list, err := b.client.CoreV1().Services(b.namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: brokerSelector,
+			Limit:         500,
+			Continue:      cont,
+		})
+		if err != nil {
+			b.logger.Warn("managedkafka broker: orphan service sweep failed", "err", err)
+			return
+		}
+		for i := range list.Items {
+			name := list.Items[i].Name
+			if err := b.client.CoreV1().Services(b.namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
+				b.logger.Warn("managedkafka broker: orphan service delete failed", "service", name, "err", err)
+				continue
+			}
+			deleted++
+			b.logger.Info("managedkafka broker: reaped orphan service", "service", name)
+		}
+		cont = list.Continue
+		if cont == "" || deleted >= brokerSweepCap {
+			return
+		}
+	}
 }
 
 // ─── K8s resource management ─────────────────────────────────────────────────
@@ -301,7 +409,12 @@ func (b *k8sBroker) buildPod(name, dns string) *corev1.Pod {
 				VolumeMounts: []corev1.VolumeMount{{Name: "data", MountPath: "/var/lib/redpanda/data"}},
 			}},
 			Volumes: []corev1.Volume{{
-				Name:         "data",
+				Name: "data",
+				// Broker data is ephemeral and non-portable (MK5): an emptyDir
+				// is deleted with the Pod, so a reaped/reused cluster id starts
+				// clean and no volume is left behind. Control-plane metadata is
+				// the authoritative state; producer bytes never travel in a
+				// --dsn snapshot.
 				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 			}},
 		},

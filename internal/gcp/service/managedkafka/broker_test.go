@@ -17,6 +17,7 @@ type fakeBroker struct {
 	err      error
 	ensured  []string
 	stopped  []string
+	reset    bool
 
 	// Topic data-plane behaviour + call recording.
 	ensureTopicErr   error
@@ -77,6 +78,11 @@ func (f *fakeBroker) Endpoint(_, _, _ string) string { return f.endpoint }
 func (f *fakeBroker) StopCluster(_ context.Context, project, location, cluster string) error {
 	f.stopped = append(f.stopped, f.key(project, location, cluster))
 	return nil
+}
+
+func (f *fakeBroker) Reset(_ context.Context) error {
+	f.reset = true
+	return f.err
 }
 
 func (f *fakeBroker) EnsureTopic(_ context.Context, project, location, cluster, topic string, partitions int) error {
@@ -239,6 +245,67 @@ func TestWithBrokerNilIsMock(t *testing.T) {
 	}
 	if c.BootstrapAddress != "" {
 		t.Errorf("bootstrapAddress = %q, want empty for mock topology", c.BootstrapAddress)
+	}
+}
+
+// TestResetReapsBroker proves Service.Reset reaps the broker as well as wiping
+// the store, so /_jaiscloud/reset does not leave a broker running.
+func TestResetReapsBroker(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBroker{endpoint: "broker:9092"}
+	s := NewService(mkstore.NewMemoryStore(), WithBroker(fb))
+	withCluster(t, s)
+
+	s.Reset(ctx)
+	if !fb.reset {
+		t.Error("Service.Reset did not reap the broker")
+	}
+	if _, err := s.GetCluster(ctx, "proj", "us-central1", "c1"); err == nil {
+		t.Fatal("expected NotFound after Reset")
+	}
+}
+
+// TestGetClusterRehydratesPersistedCluster proves a cluster persisted under
+// --dsn (metadata only, no live broker) gets its broker started on first read,
+// so a restarted/imported cluster is usable rather than advertising the dead
+// synthesized address.
+func TestGetClusterRehydratesPersistedCluster(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBroker{} // no live endpoint until EnsureCluster runs
+	store := mkstore.NewMemoryStore()
+	s := NewService(store, WithBroker(fb))
+	if err := store.CreateCluster(ctx, "proj", "us-central1", mkstore.Cluster{Location: "us-central1", Name: "c1"}); err != nil {
+		t.Fatalf("seed persisted cluster: %v", err)
+	}
+	if len(fb.ensured) != 0 {
+		t.Fatalf("broker started before first use: %v", fb.ensured)
+	}
+	if _, err := s.GetCluster(ctx, "proj", "us-central1", "c1"); err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if len(fb.ensured) != 1 || fb.ensured[0] != "proj/us-central1/c1" {
+		t.Fatalf("GetCluster did not rehydrate the broker: %v", fb.ensured)
+	}
+}
+
+// TestDataPlaneRehydratesPersistedCluster proves the first data-plane call on a
+// persisted cluster starts its broker before provisioning.
+func TestDataPlaneRehydratesPersistedCluster(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBroker{} // no live endpoint until EnsureCluster runs
+	store := mkstore.NewMemoryStore()
+	s := NewService(store, WithBroker(fb))
+	if err := store.CreateCluster(ctx, "proj", "us-central1", mkstore.Cluster{Location: "us-central1", Name: "c1"}); err != nil {
+		t.Fatalf("seed persisted cluster: %v", err)
+	}
+	if _, err := s.CreateTopic(ctx, "proj", "us-central1", "c1", "t1", topicIn(1, 1)); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if len(fb.ensured) != 1 || fb.ensured[0] != "proj/us-central1/c1" {
+		t.Fatalf("data-plane call did not rehydrate the broker: %v", fb.ensured)
+	}
+	if len(fb.ensuredTopics) != 1 {
+		t.Fatalf("topic not provisioned after rehydrate: %v", fb.ensuredTopics)
 	}
 }
 

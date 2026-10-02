@@ -227,6 +227,7 @@ func (s *Service) brokerListGroups(ctx context.Context, project, location, clust
 	if s.broker == nil {
 		return nil, nil
 	}
+	s.brokerReady(ctx, project, location, cluster)
 	return s.broker.ListConsumerGroups(ctx, project, location, cluster)
 }
 
@@ -234,6 +235,7 @@ func (s *Service) brokerConsumerGroupOffsets(ctx context.Context, project, locat
 	if s.broker == nil {
 		return nil, false, nil
 	}
+	s.brokerReady(ctx, project, location, cluster)
 	return s.broker.ConsumerGroupOffsets(ctx, project, location, cluster, group)
 }
 
@@ -241,6 +243,7 @@ func (s *Service) brokerConsumerGroupMembers(ctx context.Context, project, locat
 	if s.broker == nil {
 		return 0, false, nil
 	}
+	s.brokerReady(ctx, project, location, cluster)
 	return s.broker.ConsumerGroupMembers(ctx, project, location, cluster, group)
 }
 
@@ -248,6 +251,7 @@ func (s *Service) brokerDeleteConsumerGroup(ctx context.Context, project, locati
 	if s.broker == nil {
 		return false, nil
 	}
+	s.brokerReady(ctx, project, location, cluster)
 	return s.broker.DeleteConsumerGroup(ctx, project, location, cluster, group)
 }
 
@@ -255,6 +259,7 @@ func (s *Service) brokerCommitConsumerGroupOffsets(ctx context.Context, project,
 	if s.broker == nil {
 		return consumerGroupNotFound()
 	}
+	s.brokerReady(ctx, project, location, cluster)
 	return s.broker.CommitConsumerGroupOffsets(ctx, project, location, cluster, group, offsets)
 }
 

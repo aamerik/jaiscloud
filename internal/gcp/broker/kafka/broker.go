@@ -15,8 +15,12 @@
 // startup timeout) is reported as an error so the caller can degrade to mock;
 // the broker never panics the control plane. The manager holds endpoints in
 // memory only — broker liveness is runtime state, not persisted metadata — so a
-// restarted emulator never advertises a dead address (durability, reset and
-// orphan reaping are the planned follow-up, MK5).
+// restarted emulator never advertises a dead address. Broker data is ephemeral
+// and non-portable (MK5): a k8s broker uses an emptyDir, a native broker a
+// per-cluster scratch dir, and both are removed on stop/reset. Reset tears down
+// every broker for /_jaiscloud/reset, and a startup sweep reaps resources left
+// by a previous instance so restarted emulators do not leak broker Pods,
+// Services, or data dirs.
 package kafka
 
 import (
@@ -102,8 +106,15 @@ type Broker interface {
 	// replacing every binding for the ACL's resource pattern; an empty entry
 	// set removes them. With no live broker it is a no-op.
 	ReplaceAcl(ctx context.Context, project, location, cluster, resourceType, resourceName, patternType string, entries []core.AclBinding) error
+	// Reset stops and reaps every broker this manager owns and clears all
+	// tracked state, leaving the manager reusable: a later EnsureCluster starts
+	// a fresh broker. It also sweeps broker resources this process never
+	// tracked (a failed partial create, or a previous instance's leftovers).
+	// The control plane calls it on /_jaiscloud/reset so a reset does not leak
+	// broker Pods, Services, or subprocesses.
+	Reset(ctx context.Context) error
 	// Shutdown stops every broker this manager owns (called on emulator
-	// shutdown).
+	// shutdown). It has the same effect as Reset.
 	Shutdown(ctx context.Context) error
 	// Mode reports the configured backend.
 	Mode() Mode
@@ -218,6 +229,7 @@ func (mockBroker) CommitConsumerGroupOffsets(context.Context, string, string, st
 func (mockBroker) ReplaceAcl(context.Context, string, string, string, string, string, string, []core.AclBinding) error {
 	return nil
 }
+func (mockBroker) Reset(context.Context) error    { return nil }
 func (mockBroker) Shutdown(context.Context) error { return nil }
 func (mockBroker) Mode() Mode                     { return ModeMock }
 

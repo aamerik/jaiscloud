@@ -181,3 +181,33 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("acl lost after restore: %v %+v", err, gotAcl)
 	}
 }
+
+// TestSnapshotExcludesBrokerEndpoint proves the --dsn contract: a cluster's live
+// broker endpoint is runtime state, not portable metadata. A snapshot taken
+// while a broker is running must not carry its address into a restore, so a
+// restarted emulator never advertises a dead broker.
+func TestSnapshotExcludesBrokerEndpoint(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	_ = s.CreateCluster(ctx, "p", "l", Cluster{Name: "c", BootstrapAddress: "mkbroker-c.jaiscloud.svc.cluster.local:9092"})
+
+	var buf bytes.Buffer
+	if err := s.Snapshot(ctx, &buf); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if bytes.Contains(buf.Bytes(), []byte("svc.cluster.local")) {
+		t.Fatalf("snapshot leaked the broker endpoint: %s", buf.String())
+	}
+
+	s2 := NewMemoryStore()
+	if err := s2.Restore(ctx, &buf); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := s2.GetCluster(ctx, "p", "l", "c")
+	if err != nil {
+		t.Fatalf("cluster lost after restore: %v", err)
+	}
+	if got.BootstrapAddress != "" {
+		t.Fatalf("restored cluster carries a broker endpoint %q; broker bytes/endpoints are not portable", got.BootstrapAddress)
+	}
+}
