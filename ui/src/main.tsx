@@ -9,7 +9,7 @@ import { applyAwsConsoleTheme } from './theme/aws/theme'
 import './theme/aws/console.css'
 
 // Current AWS Console visual language + the AWS orange primary palette.
-setThemeClass(Theme.VisualRefresh)
+setThemeClass(Theme.OneTheme)
 applyMode(localStorage.getItem('jaiscloud-mode') === 'dark' ? Mode.Dark : Mode.Light)
 applyAwsConsoleTheme()
 
