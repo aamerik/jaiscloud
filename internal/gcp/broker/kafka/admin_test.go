@@ -28,6 +28,10 @@ type fakeKafkaAdmin struct {
 	groupOffsets map[string][]core.ConsumerGroupOffset
 	groupMembers map[string]int
 	committed    map[string][]core.ConsumerGroupOffset
+
+	// ACL state.
+	acls   []aclSpec
+	aclErr error
 }
 
 func (f *fakeKafkaAdmin) EnsureTopic(_ context.Context, topic string, partitions int32, replicationFactor int16) error {
@@ -79,6 +83,13 @@ func (f *fakeKafkaAdmin) CommitGroupOffsets(_ context.Context, group string, off
 	return f.err
 }
 
+func (f *fakeKafkaAdmin) ReplaceACLs(_ context.Context, spec aclSpec) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.acls = append(f.acls, spec)
+	return f.aclErr
+}
+
 func (f *fakeKafkaAdmin) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -107,6 +118,14 @@ type fakeAdminAPI struct {
 	commitResp       kadm.OffsetResponses
 	commitErr        error
 	committed        kadm.Offsets
+
+	deleteACLResp kadm.DeleteACLsResults
+	deleteACLErr  error
+	createACLResp kadm.CreateACLsResults
+	createACLErr  error
+
+	deleteACLBuilders []*kadm.ACLBuilder
+	createACLBuilders []*kadm.ACLBuilder
 }
 
 func (f *fakeAdminAPI) CreateTopic(context.Context, int32, int16, map[string]*string, string) (kadm.CreateTopicResponse, error) {
@@ -140,6 +159,16 @@ func (f *fakeAdminAPI) DeleteGroups(context.Context, ...string) (kadm.DeleteGrou
 func (f *fakeAdminAPI) CommitOffsets(_ context.Context, _ string, os kadm.Offsets) (kadm.OffsetResponses, error) {
 	f.committed = os
 	return f.commitResp, f.commitErr
+}
+
+func (f *fakeAdminAPI) DeleteACLs(_ context.Context, b *kadm.ACLBuilder) (kadm.DeleteACLsResults, error) {
+	f.deleteACLBuilders = append(f.deleteACLBuilders, b)
+	return f.deleteACLResp, f.deleteACLErr
+}
+
+func (f *fakeAdminAPI) CreateACLs(_ context.Context, b *kadm.ACLBuilder) (kadm.CreateACLsResults, error) {
+	f.createACLBuilders = append(f.createACLBuilders, b)
+	return f.createACLResp, f.createACLErr
 }
 
 func (f *fakeAdminAPI) Close() {}

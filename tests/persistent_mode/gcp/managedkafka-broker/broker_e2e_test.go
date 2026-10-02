@@ -233,10 +233,51 @@ func TestManagedKafkaBrokerK3d(t *testing.T) {
 		conn.Close()
 	})
 
+	// MK4: an ACL created through the API is applied to the broker's Kafka ACL
+	// table, and deleting it removes the binding. rpk runs inside the broker
+	// Pod (the Redpanda image ships it), so this reads the broker's own view.
+	code, topicBody := api(t, httpClient, http.MethodPost,
+		base+clusterPath(cluster)+"/topics?topicId=orders",
+		map[string]any{"partitionCount": 1, "replicationFactor": 1})
+	if code < 200 || code >= 300 {
+		t.Fatalf("create topic: HTTP %d: %v", code, topicBody)
+	}
+
+	entry := map[string]any{"principal": "User:acl-smoke", "permissionType": "ALLOW", "operation": "READ", "host": "*"}
+	code, aclBody := api(t, httpClient, http.MethodPost,
+		base+clusterPath(cluster)+"/acls?aclId=topic%2Forders",
+		map[string]any{"aclEntries": []any{entry}})
+	if code < 200 || code >= 300 {
+		t.Fatalf("create acl: HTTP %d: %v", code, aclBody)
+	}
+	assertBrokerAcl(t, svcName, "User:acl-smoke", true)
+
+	code, delBody := api(t, httpClient, http.MethodDelete,
+		base+clusterPath(cluster)+"/acls/topic/orders", nil)
+	if code >= 300 {
+		t.Fatalf("delete acl: HTTP %d: %v", code, delBody)
+	}
+	assertBrokerAcl(t, svcName, "User:acl-smoke", false)
+
 	// Delete the cluster and assert the broker is reaped.
 	deleteCluster(t, base, cluster)
 	waitForResourceGone(t, "svc", svcName, 60*time.Second)
 	waitForResourceGone(t, "pod", svcName, 90*time.Second)
+}
+
+// assertBrokerAcl reads the broker's Kafka ACL table from inside the broker Pod
+// and asserts whether the principal is present.
+func assertBrokerAcl(t *testing.T, pod, principal string, want bool) {
+	t.Helper()
+	out, err := kubectl("-n", namespace(), "exec", pod, "-c", "redpanda", "--",
+		"rpk", "acl", "list", "--brokers", "127.0.0.1:9092")
+	if err != nil {
+		t.Fatalf("rpk acl list in %s: %v", pod, err)
+	}
+	got := strings.Contains(out, principal)
+	if got != want {
+		t.Fatalf("broker ACL table principal %q present=%v, want %v:\n%s", principal, got, want, out)
+	}
 }
 
 func deleteCluster(t *testing.T, base, cluster string) {

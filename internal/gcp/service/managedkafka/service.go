@@ -87,6 +87,12 @@ type Broker interface {
 	// CommitConsumerGroupOffsets sets the group's committed offsets. The caller
 	// checks existence first; a no-broker topology never reaches here.
 	CommitConsumerGroupOffsets(ctx context.Context, project, location, cluster, group string, offsets []ConsumerGroupOffset) error
+	// ReplaceAcl mirrors an ACL's entry set onto the cluster's live broker,
+	// replacing every broker ACL binding for the ACL's resource pattern; an
+	// empty entry set removes them. With no running broker it is a
+	// metadata-only no-op. A broker failure is returned so the caller can roll
+	// the metadata write back.
+	ReplaceAcl(ctx context.Context, project, location, cluster, resourceType, resourceName, patternType string, entries []AclBinding) error
 }
 
 // Service is the transport-neutral Managed Kafka v1 service.
@@ -208,6 +214,21 @@ func (s *Service) deleteBrokerTopic(ctx context.Context, project, location, clus
 	}
 	if err := s.broker.DeleteBrokerTopic(ctx, project, location, cluster, topic); err != nil {
 		return brokerInternalError("delete topic", err)
+	}
+	return nil
+}
+
+// replaceBrokerAcl mirrors an ACL's entry set onto the cluster's live broker,
+// replacing every binding for the ACL's resource pattern (an empty set removes
+// them). It is a no-op when the service has no broker manager or the cluster has
+// no live broker; a data-plane failure is surfaced as INTERNAL so the caller can
+// roll the metadata write back.
+func (s *Service) replaceBrokerAcl(ctx context.Context, project, location, cluster, resourceType, resourceName, patternType string, entries []AclBinding) error {
+	if s.broker == nil {
+		return nil
+	}
+	if err := s.broker.ReplaceAcl(ctx, project, location, cluster, resourceType, resourceName, patternType, entries); err != nil {
+		return brokerInternalError("replace acl", err)
 	}
 	return nil
 }

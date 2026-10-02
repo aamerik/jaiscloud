@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -41,6 +42,9 @@ type kafkaAdmin interface {
 	DeleteGroup(ctx context.Context, group string) (bool, error)
 	// CommitGroupOffsets sets the group's committed offsets.
 	CommitGroupOffsets(ctx context.Context, group string, offsets []core.ConsumerGroupOffset) error
+	// ReplaceACLs replaces every binding for spec's resource pattern with
+	// spec.Entries; an empty entry set removes them.
+	ReplaceACLs(ctx context.Context, spec aclSpec) error
 	// Close releases the underlying client.
 	Close() error
 }
@@ -60,6 +64,8 @@ type adminAPI interface {
 	FetchOffsets(ctx context.Context, group string) (kadm.OffsetResponses, error)
 	DeleteGroups(ctx context.Context, groups ...string) (kadm.DeleteGroupResponses, error)
 	CommitOffsets(ctx context.Context, group string, os kadm.Offsets) (kadm.OffsetResponses, error)
+	DeleteACLs(ctx context.Context, b *kadm.ACLBuilder) (kadm.DeleteACLsResults, error)
+	CreateACLs(ctx context.Context, b *kadm.ACLBuilder) (kadm.CreateACLsResults, error)
 	Close()
 }
 
@@ -406,6 +412,58 @@ func (a *franzAdmin) CommitGroupOffsets(ctx context.Context, group string, offse
 			return core.ErrConsumerGroupTopicNotFound
 		}
 		return err
+	}
+	return nil
+}
+
+// ReplaceACLs replaces every binding for spec's resource pattern with
+// spec.Entries. The broker ACL table has no "replace", so it is a delete of the
+// pattern's existing bindings followed by one create per entry (the builder
+// multiplies principals by operations, so a per-entry operation/permission
+// needs its own request). An empty entry set is a pure delete.
+func (a *franzAdmin) ReplaceACLs(ctx context.Context, spec aclSpec) error {
+	pattern, err := aclPattern(spec.PatternType)
+	if err != nil {
+		return err
+	}
+	del, err := aclDeleteFilter(spec, pattern)
+	if err != nil {
+		return err
+	}
+	drs, err := a.client.DeleteACLs(ctx, del)
+	if err != nil {
+		return err
+	}
+	if err := firstDeleteACLErr(drs); err != nil {
+		return err
+	}
+
+	for _, e := range spec.Entries {
+		op, err := aclOperation(e.Operation)
+		if err != nil {
+			return err
+		}
+		create, err := aclBuilder(spec, pattern)
+		if err != nil {
+			return err
+		}
+		create.Operations(op)
+		principal := ensureUserPrefix(e.Principal)
+		switch {
+		case strings.EqualFold(e.PermissionType, "ALLOW"):
+			create.Allow(principal).AllowHosts(aclHost(e.Host))
+		case strings.EqualFold(e.PermissionType, "DENY"):
+			create.Deny(principal).DenyHosts(aclHost(e.Host))
+		default:
+			return fmt.Errorf("managedkafka broker: unknown acl permission type %q", e.PermissionType)
+		}
+		crs, err := a.client.CreateACLs(ctx, create)
+		if err != nil {
+			return err
+		}
+		if err := firstCreateACLErr(crs); err != nil {
+			return err
+		}
 	}
 	return nil
 }

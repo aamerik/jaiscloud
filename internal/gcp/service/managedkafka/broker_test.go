@@ -36,6 +36,10 @@ type fakeBroker struct {
 	commitOffsetsErr error
 	committed        map[string][]ConsumerGroupOffset // group → offsets passed to commit
 
+	// ACL data-plane behaviour + call recording.
+	replaceAclErr error
+	aclCalls      []fakeAclCall
+
 	// Optional hooks fire while the broker call is "in flight", so tests can
 	// simulate a concurrent mutation landing before the call fails.
 	beforeEnsureTopic   func()
@@ -46,6 +50,14 @@ type fakeBroker struct {
 type fakeGroup struct {
 	offsets []ConsumerGroupOffset
 	members int
+}
+
+// fakeAclCall records one ACL mirror call.
+type fakeAclCall struct {
+	ResourceType string
+	ResourceName string
+	PatternType  string
+	Entries      []AclBinding
 }
 
 func (f *fakeBroker) key(project, location, cluster string) string {
@@ -123,6 +135,16 @@ func (f *fakeBroker) DeleteConsumerGroup(_ context.Context, _, _, _, group strin
 	_, ok := f.groupState[group]
 	delete(f.groupState, group)
 	return ok, nil
+}
+
+func (f *fakeBroker) ReplaceAcl(_ context.Context, _, _, _, resourceType, resourceName, patternType string, entries []AclBinding) error {
+	f.aclCalls = append(f.aclCalls, fakeAclCall{
+		ResourceType: resourceType,
+		ResourceName: resourceName,
+		PatternType:  patternType,
+		Entries:      entries,
+	})
+	return f.replaceAclErr
 }
 
 func (f *fakeBroker) CommitConsumerGroupOffsets(_ context.Context, _, _, _, group string, offsets []ConsumerGroupOffset) error {

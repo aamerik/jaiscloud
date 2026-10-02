@@ -113,6 +113,16 @@ func (b *k8sBroker) CommitConsumerGroupOffsets(ctx context.Context, project, loc
 	return commitGroupOffsets(ctx, b.admins, b.Endpoint(project, location, cluster), group, offsets)
 }
 
+// ReplaceAcl mirrors an ACL's entry set onto the live broker.
+func (b *k8sBroker) ReplaceAcl(ctx context.Context, project, location, cluster, resourceType, resourceName, patternType string, entries []core.AclBinding) error {
+	return replaceACLs(ctx, b.admins, b.Endpoint(project, location, cluster), aclSpec{
+		ResourceType: resourceType,
+		ResourceName: resourceName,
+		PatternType:  patternType,
+		Entries:      entries,
+	})
+}
+
 func (b *k8sBroker) EnsureCluster(ctx context.Context, project, location, cluster string) (string, error) {
 	key := ClusterKey{Project: project, Location: location, Cluster: cluster}
 	keyStr := key.String()

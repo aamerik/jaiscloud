@@ -278,8 +278,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `TailLogEntries` is a bounded, at-most-once poll;
   Eventarc is metadata-only (no event-delivery engine); Managed Kafka is metadata-only by default
   (an opt-in k8s/native broker mode stands up a real Redpanda endpoint behind `bootstrapAddress`,
-  over which topic create/update/delete are mirrored and consumer groups are read from its group
-  coordinator — with no broker the list is empty and get/update/delete return `NOT_FOUND`);
+  over which topic create/update/delete and ACL mutations are mirrored and consumer groups are read
+  from its group coordinator — with no broker the list is empty and get/update/delete return
+  `NOT_FOUND`; ACLs are installed on the broker but only enforced when its own
+  `kafka_enable_authorization` is enabled, which is off by default);
   Cloud Resource Manager serves the legacy v1 REST and v3 gRPC project surfaces over one core
   (projects are synthesized and immutable, project IAM is metadata, and bindings are not enforced);
   Dataproc `Reset` does not drain in-flight Spark job goroutines, and a Dataproc gRPC
