@@ -181,7 +181,7 @@ function Shell({ children }: Props) {
       {
         type: 'menu-dropdown',
         text: mode === Mode.Dark ? 'Dark' : 'Light',
-        iconName: 'settings',
+        iconName: 'light-dark',
         ariaLabel: 'Appearance',
         disableUtilityCollapse: true,
         items: [
@@ -192,6 +192,14 @@ function Shell({ children }: Props) {
           setMode(event.detail.id === 'dark' ? Mode.Dark : Mode.Light)
         },
       },
+      {
+        type: 'button',
+        text: 'Admin',
+        iconName: 'settings',
+        ariaLabel: 'Admin panel',
+        disableUtilityCollapse: true,
+        onClick: () => navigate('/admin'),
+      },
     ]
 
     const version = [meta?.version ? `v${meta.version}` : '', meta?.mode ?? '']
@@ -201,7 +209,7 @@ function Shell({ children }: Props) {
       items.push({ type: 'button', text: version, disableUtilityCollapse: true })
     }
     return items
-  }, [meta, accountId, accounts, connected, refetchAccounts, setAccountId, mode])
+  }, [meta, accountId, accounts, connected, refetchAccounts, setAccountId, mode, navigate])
 
   return (
     <>
