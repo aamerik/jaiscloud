@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -177,6 +180,7 @@ func (b *nativeBroker) EnsureCluster(ctx context.Context, project, location, clu
 	// ctx: a request-scoped context would kill the broker when the create call
 	// returns.
 	cmd := exec.Command(b.binary, args...)
+	applySysProcAttr(cmd)
 	cmd.Stdout = &slogWriter{level: slog.LevelDebug, prefix: "redpanda"}
 	cmd.Stderr = &slogWriter{level: slog.LevelWarn, prefix: "redpanda"}
 
@@ -185,11 +189,24 @@ func (b *nativeBroker) EnsureCluster(ctx context.Context, project, location, clu
 		return "", fmt.Errorf("managedkafka broker: start redpanda: %w", err)
 	}
 
+	// Record the child (PID + /proc start-time) under its data dir so a later
+	// emulator instance can safely reap it if this one is SIGKILLed before
+	// StopCluster/Shutdown runs. Pdeathsig covers the live case; the pidfile
+	// fingerprint covers a crashed parent whose child outlived it.
+	if dir != "" {
+		if err := writePidRecord(dir, cmd.Process.Pid); err != nil {
+			b.logger.Warn("managedkafka broker: pidfile write failed", "dir", dir, "err", err)
+		}
+	}
+
 	if err := b.waitReady(ctx, addr); err != nil {
 		// Reap the failed process and collect it so no zombie or orphaned
 		// child is left behind.
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+		if dir != "" {
+			_ = os.Remove(filepath.Join(dir, nativePidFile))
+		}
 		return "", err
 	}
 
@@ -213,8 +230,10 @@ func (b *nativeBroker) StopCluster(_ context.Context, project, location, cluster
 	b.admins.close(inst.addr)
 	err := stopProcess(inst.cmd)
 	// Broker data is ephemeral and non-portable (MK5): remove the per-cluster
-	// scratch dir so a reused cluster id starts clean.
+	// scratch dir so a reused cluster id starts clean. The pidfile goes with
+	// it, so a graceful stop can never be reaped again on a later startup.
 	if inst.dir != "" {
+		_ = os.Remove(filepath.Join(inst.dir, nativePidFile))
 		if rmErr := os.RemoveAll(inst.dir); rmErr != nil {
 			b.logger.Warn("managedkafka broker: data dir cleanup failed", "dir", inst.dir, "err", rmErr)
 		}
@@ -248,11 +267,113 @@ func (b *nativeBroker) Reset(ctx context.Context) error {
 // Shutdown reaps every broker on emulator shutdown.
 func (b *nativeBroker) Shutdown(ctx context.Context) error { return b.Reset(ctx) }
 
-// sweepOrphans removes data directories left by a previous emulator instance.
-// It does not attempt to kill orphaned processes: a subprocess is reaped on a
-// graceful StopCluster/Shutdown, and killing arbitrary processes by name would
-// be unsafe.
-func (b *nativeBroker) sweepOrphans() { b.removeDataRoot() }
+// sweepOrphans reaps brokers left by a previous emulator instance: for each
+// per-cluster data dir it kills the recorded child — but only when the PID's
+// /proc start-time still matches the recorded one, so a recycled PID is never
+// killed — then removes the broker data root. A subprocess is reaped on a
+// graceful StopCluster/Shutdown too; this covers the SIGKILLed-parent path.
+func (b *nativeBroker) sweepOrphans() {
+	if b.dataDir != "" {
+		root := filepath.Join(b.dataDir, "managedkafka")
+		if entries, err := os.ReadDir(root); err == nil {
+			for _, e := range entries {
+				if e.IsDir() {
+					b.reapRecordedPID(filepath.Join(root, e.Name()))
+				}
+			}
+		}
+	}
+	b.removeDataRoot()
+}
+
+// reapRecordedPID kills the broker process recorded in dir's pidfile, but only
+// when the recorded start-time equals the live process's — the PID-reuse-safe
+// alternative to killing by name/arg. os.FindProcess + Process.Kill is used
+// rather than syscall.Kill so the file still builds off Unix (the start-time
+// fingerprint already guarantees the process is live).
+func (b *nativeBroker) reapRecordedPID(dir string) {
+	rec, ok := readPidRecord(dir)
+	if !ok {
+		return
+	}
+	if live, ok := procStartTime(rec.PID); !ok || live != rec.StartTime {
+		return
+	}
+	proc, err := os.FindProcess(rec.PID)
+	if err != nil {
+		b.logger.Warn("managedkafka broker: find orphan failed", "pid", rec.PID, "err", err)
+		return
+	}
+	if err := proc.Kill(); err != nil {
+		b.logger.Warn("managedkafka broker: reap orphan failed", "pid", rec.PID, "err", err)
+		return
+	}
+	b.logger.Info("managedkafka broker: reaped orphaned broker subprocess", "pid", rec.PID, "dir", dir)
+}
+
+// nativePidFile is the per-cluster pidfile name written under the broker data
+// dir so a later emulator instance can safely reap an orphaned broker.
+const nativePidFile = "broker.pid"
+
+// pidRecord identifies a broker subprocess without relying on its name: the
+// PID plus its /proc start-time, which is stable for the life of the process
+// and changes when the kernel reuses the PID.
+type pidRecord struct {
+	PID       int
+	StartTime string
+}
+
+// writePidRecord records pid (with its start-time fingerprint) in dir. It
+// fails — leaving no pidfile — when the start-time cannot be read, because a
+// record without a fingerprint could never be safely reaped.
+func writePidRecord(dir string, pid int) error {
+	start, ok := procStartTime(pid)
+	if !ok {
+		return fmt.Errorf("read start time for pid %d", pid)
+	}
+	rec := fmt.Sprintf("%d %s\n", pid, start)
+	return os.WriteFile(filepath.Join(dir, nativePidFile), []byte(rec), 0o644)
+}
+
+// readPidRecord reads and validates dir's pidfile.
+func readPidRecord(dir string) (pidRecord, bool) {
+	data, err := os.ReadFile(filepath.Join(dir, nativePidFile))
+	if err != nil {
+		return pidRecord{}, false
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) != 2 {
+		return pidRecord{}, false
+	}
+	pid, err := strconv.Atoi(fields[0])
+	if err != nil || pid <= 0 {
+		return pidRecord{}, false
+	}
+	return pidRecord{PID: pid, StartTime: fields[1]}, true
+}
+
+// procStartTime returns field 22 (start-time) of Linux /proc/<pid>/stat, a
+// value that is stable for the life of the process and distinguishes a PID
+// from a later process that reused it. ok is false when it cannot be read
+// (the process is gone, or the platform has no /proc).
+func procStartTime(pid int) (string, bool) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return "", false
+	}
+	// The comm field (2) is parenthesized and may itself contain spaces and
+	// parentheses, so split only after the final ')'. Field 3 (state) then
+	// starts the remainder, making start-time (field 22) index 19.
+	end := bytes.LastIndexByte(data, ')')
+	if end < 0 {
+		return "", false
+	}
+	fields := strings.Fields(string(data[end+1:]))
+	if len(fields) < 20 {
+		return "", false
+	}
+	return fields[19], true
+}
 
 // removeDataRoot deletes the broker data root under the configured data dir.
 // Broker data is ephemeral and non-portable, so nothing here is restored.
