@@ -165,6 +165,11 @@ Use this path if you are developing JaisCloud itself or need to iterate quickly 
 | ⚙️ Metadata-only | Wire protocol + resource CRUD (create, describe, delete, tag). No execution engine — instances don't run, clusters don't provision VMs. |
 | 🔌 Stub | Endpoint exists, returns plausible responses. Limited operation coverage. |
 
+> The tier for each service is exposed to the UI as the `Tier` field on
+> `ServiceDescriptor` in `internal/aws/ui/services.go` (served by
+> `GET /api/ui/v1/services`). Keep that table in sync with this one; the
+> classification is pinned by `internal/aws/ui/services_test.go`.
+
 ### Service implementation matrix
 
 | Service | Tier | Default storage | Postgres storage (`--dsn`) | Integration tests |
