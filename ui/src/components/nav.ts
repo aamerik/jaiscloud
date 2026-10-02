@@ -12,6 +12,51 @@ export interface NavSection {
   children: NavChild[]
 }
 
+/** AWS Console category for each service, in console display order. */
+export const categoryOrder = [
+  'Compute',
+  'Containers',
+  'Storage',
+  'Database',
+  'Networking & Content Delivery',
+  'Analytics',
+  'Application Integration',
+  'Management & Governance',
+  'Security, Identity & Compliance',
+  'Business Applications',
+]
+
+export const serviceCategory: Record<string, string> = {
+  ec2: 'Compute',
+  lambda: 'Compute',
+  ecs: 'Containers',
+  eks: 'Containers',
+  s3: 'Storage',
+  rds: 'Database',
+  dynamodb: 'Database',
+  elasticache: 'Database',
+  route53: 'Networking & Content Delivery',
+  elbv2: 'Networking & Content Delivery',
+  apigateway: 'Networking & Content Delivery',
+  emr: 'Analytics',
+  'emr-containers': 'Analytics',
+  glue: 'Analytics',
+  kinesis: 'Analytics',
+  firehose: 'Analytics',
+  sqs: 'Application Integration',
+  sns: 'Application Integration',
+  eventbridge: 'Application Integration',
+  sfn: 'Application Integration',
+  cloudwatch: 'Management & Governance',
+  logs: 'Management & Governance',
+  cloudformation: 'Management & Governance',
+  ssm: 'Management & Governance',
+  iam: 'Security, Identity & Compliance',
+  kms: 'Security, Identity & Compliance',
+  secretsmanager: 'Security, Identity & Compliance',
+  ses: 'Business Applications',
+}
+
 /** AWS service navigation, mirroring the AWS Console service menu. */
 export const navTree: NavSection[] = [
   {

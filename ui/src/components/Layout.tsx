@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import {
   AppLayout,
   BreadcrumbGroup,
+  Input,
   SideNavigation,
   TopNavigation,
 } from '@cloudscape-design/components'
@@ -14,7 +15,7 @@ import type {
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useEventStream } from '../hooks/useEventStream'
-import { navTree } from './nav'
+import { categoryOrder, navTree, serviceCategory, type NavSection } from './nav'
 
 /** Router basename; links must include it so they also work without JS. */
 const BASE = '/ui'
@@ -25,6 +26,25 @@ interface Props {
   children: React.ReactNode
 }
 
+type NavItem = SideNavigationProps.Link | SideNavigationProps.ExpandableLinkGroup
+
+function serviceItem(section: NavSection, expand: boolean): NavItem {
+  if (section.children.length > 1) {
+    return {
+      type: 'expandable-link-group',
+      text: section.label,
+      href: href(section.rootPath),
+      defaultExpanded: expand,
+      items: section.children.map((child) => ({
+        type: 'link',
+        text: child.label,
+        href: href(child.path),
+      })),
+    }
+  }
+  return { type: 'link', text: section.label, href: href(section.rootPath) }
+}
+
 function useConsoleNav() {
   const { pathname } = useLocation()
   const navigate = useNavigate()
@@ -33,33 +53,6 @@ function useConsoleNav() {
     event.preventDefault()
     navigate(event.detail.href.replace(BASE, '') || '/')
   }
-
-  const sideItems = useMemo<SideNavigationProps.Item[]>(() => {
-    const services: SideNavigationProps.Item[] = navTree.map((section) => {
-      if (section.children.length > 1) {
-        return {
-          type: 'expandable-link-group',
-          text: section.label,
-          href: href(section.rootPath),
-          defaultExpanded: pathname.startsWith(section.basePath),
-          items: section.children.map((child) => ({
-            type: 'link',
-            text: child.label,
-            href: href(child.path),
-          })),
-        }
-      }
-      return { type: 'link', text: section.label, href: href(section.rootPath) }
-    })
-
-    return [
-      { type: 'link', text: 'Console home', href: href('/') },
-      { type: 'divider' },
-      ...services,
-      { type: 'divider' },
-      { type: 'link', text: 'Admin', href: href('/admin') },
-    ]
-  }, [pathname])
 
   const breadcrumbItems = useMemo<BreadcrumbGroupProps.Item[]>(() => {
     const items: BreadcrumbGroupProps.Item[] = [
@@ -75,26 +68,45 @@ function useConsoleNav() {
     return items
   }, [pathname])
 
-  return { sideItems, breadcrumbItems, onFollow }
+  return { breadcrumbItems, onFollow }
 }
 
 function Shell({ children }: Props) {
   const [navOpen, setNavOpen] = useState(true)
+  const [search, setSearch] = useState('')
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const { data: meta } = useMeta()
   const { accountId, setAccountId } = useAccount()
-  const {
-    data: accountsData,
-    refetch: refetchAccounts,
-  } = useAccounts()
+  const { data: accountsData, refetch: refetchAccounts } = useAccounts()
   const { connected } = useEventStream()
-  const { sideItems, breadcrumbItems, onFollow } = useConsoleNav()
+  const { breadcrumbItems, onFollow } = useConsoleNav()
 
   const accounts = useMemo(
     () => accountsData?.accounts ?? (accountId ? [accountId] : []),
     [accountsData, accountId],
   )
+
+  const sideItems = useMemo<SideNavigationProps.Item[]>(() => {
+    const query = search.trim().toLowerCase()
+    const groups = categoryOrder
+      .map((title) => {
+        const items = navTree
+          .filter((section) => serviceCategory[section.id] === title)
+          .filter((section) => !query || section.label.toLowerCase().includes(query))
+          .map((section) => serviceItem(section, query.length > 0 || pathname.startsWith(section.basePath)))
+        return { type: 'section-group', title, items } as SideNavigationProps.SectionGroup
+      })
+      .filter((group) => group.items.length > 0)
+
+    return [
+      { type: 'link', text: 'Console home', href: href('/') },
+      { type: 'divider' },
+      ...groups,
+      { type: 'divider' },
+      { type: 'link', text: 'Admin', href: href('/admin') },
+    ]
+  }, [search, pathname])
 
   const utilities = useMemo<TopNavigationProps.Utility[]>(() => {
     const items: TopNavigationProps.Utility[] = [
@@ -127,10 +139,7 @@ function Shell({ children }: Props) {
       },
     ]
 
-    const version = [
-      meta?.version ? `v${meta.version}` : '',
-      meta?.mode ?? '',
-    ]
+    const version = [meta?.version ? `v${meta.version}` : '', meta?.mode ?? '']
       .filter(Boolean)
       .join(' · ')
     if (version) {
@@ -156,21 +165,29 @@ function Shell({ children }: Props) {
       </div>
       <AppLayout
         navigation={
-          <SideNavigation
-            header={{ href: href('/'), text: 'AWS services' }}
-            items={sideItems}
-            onFollow={onFollow}
-            activeHref={href(pathname)}
-          />
+          <div className="console-sidenav">
+            <div className="console-sidenav__search">
+              <Input
+                type="search"
+                value={search}
+                onChange={({ detail }) => setSearch(detail.value)}
+                placeholder="Find services"
+                ariaLabel="Find services"
+              />
+            </div>
+            <SideNavigation
+              key={search}
+              header={{ href: href('/'), text: 'All services' }}
+              items={sideItems}
+              onFollow={onFollow}
+              activeHref={href(pathname)}
+            />
+          </div>
         }
         navigationOpen={navOpen}
         onNavigationChange={({ detail }) => setNavOpen(detail.open)}
         breadcrumbs={
-          <BreadcrumbGroup
-            items={breadcrumbItems}
-            onFollow={onFollow}
-            ariaLabel="Breadcrumbs"
-          />
+          <BreadcrumbGroup items={breadcrumbItems} onFollow={onFollow} ariaLabel="Breadcrumbs" />
         }
         content={children}
         toolsHide
