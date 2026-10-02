@@ -1658,7 +1658,7 @@ func impactRank(s string) int {
 func runNext(items []*Item, n int, by string) {
 	var planned, attention []*Item
 	for _, it := range items {
-		if it.Kind == "pr" || it.Kind == "matrix" || it.State == "merged" || it.State == "done" || it.Class == "intentional" {
+		if it.Kind == "pr" || it.Kind == "matrix" || it.Kind == "superseded" || it.State == "merged" || it.State == "done" || it.Class == "intentional" {
 			continue
 		}
 		if classAttention(it.Class) < 99 {
@@ -2374,6 +2374,37 @@ func runQuery(items []*Item, query, service string, check bool) int {
 		}
 		if len(strong) > 0 {
 			verdictSet = strong
+			// A multi-service row (e.g. SCH2 "tasks, firebaseauth, container") is a
+			// bundle: its merged state means the bundle was dispositioned, not that
+			// each listed service is implemented. When a precise single-service row
+			// also matches, prefer it so the bundle cannot mask an intentional
+			// no-fix service.
+			if len(verdictSet) > 1 {
+				var single []*Item
+				for _, it := range verdictSet {
+					if !strings.Contains(it.Service, ",") {
+						single = append(single, it)
+					}
+				}
+				if len(single) > 0 {
+					verdictSet = single
+				}
+			}
+		}
+	}
+	// When a service is named, a row whose primary service is that service is
+	// authoritative over a multi-service row that merely lists it. Without this, a
+	// merged documentation task (e.g. SCH2 "tasks, firebaseauth, container") makes
+	// an intentionally no-fix service (R33 firebaseauth) look implemented.
+	if svc != "" {
+		var primary []*Item
+		for _, it := range verdictSet {
+			if primaryService(it.Service) == svc {
+				primary = append(primary, it)
+			}
+		}
+		if len(primary) > 0 {
+			verdictSet = primary
 		}
 	}
 	for _, it := range matches {
@@ -2387,12 +2418,15 @@ func runQuery(items []*Item, query, service string, check bool) int {
 			fmt.Printf("         plan doc: %s\n", it.PlanDoc)
 		}
 	}
-	done, inflight, backlogHit := false, false, false
+	done, inflight, intentional, backlogHit := false, false, false, false
 	for _, it := range verdictSet {
 		if it.Kind == "pr" || it.Kind == "matrix" {
 			continue // PR history / matrix gaps are context, not a commitment
 		}
 		backlogHit = true
+		if it.Disposition == "no-fix" || it.Disposition == "optional" {
+			intentional = true
+		}
 		switch it.State {
 		case "merged", "done":
 			done = true
@@ -2408,6 +2442,8 @@ func runQuery(items []*Item, query, service string, check bool) int {
 		case inflight:
 			fmt.Println("=> ASSESSMENT: in flight — coordinate with the existing branch/PR.")
 			return 3
+		case intentional:
+			fmt.Println("=> ASSESSMENT: intentionally out of scope (no-fix) — not implemented; do not schedule.")
 		case !backlogHit:
 			fmt.Println("=> ASSESSMENT: no matching backlog item (PR history only) — likely new work.")
 		}
@@ -2797,4 +2833,14 @@ func allTermsIn(s string, terms []string) bool {
 		}
 	}
 	return true
+}
+
+// primaryService is the first entry of a row's (possibly comma-separated) Service
+// field, lower-cased. Multi-service rows list the service they primarily concern
+// first (e.g. "tasks, firebaseauth, container").
+func primaryService(s string) string {
+	if i := strings.IndexByte(s, ','); i >= 0 {
+		s = s[:i]
+	}
+	return strings.ToLower(strings.TrimSpace(s))
 }

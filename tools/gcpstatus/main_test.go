@@ -635,6 +635,48 @@ func TestRunQueryCheckPrefersIdentityMatch(t *testing.T) {
 	}
 }
 
+// TestRunQueryCheckIntentionalNotDone: a merged documentation task that lists a
+// service among several must not make an intentionally no-fix backlog item look
+// implemented (R33 Firebase Auth vs SCH2).
+func TestRunQueryCheckIntentionalNotDone(t *testing.T) {
+	items := []*Item{
+		{ID: "R33", Service: "firebaseauth", State: "deferred", Kind: "backlog",
+			Disposition: "no-fix", Gap: "`FirebaseAuthTest`"},
+		{ID: "SCH2", Service: "tasks, firebaseauth, container", State: "merged", Kind: "backlog",
+			Gap: "Cloud Tasks, Firebase Auth, and GKE have no surface"},
+	}
+	if code := runQuery(items, "firebase auth", "firebaseauth", true); code != 0 {
+		t.Fatalf("check = %d, want 0 (intentional no-fix masked by a merged documentation task)", code)
+	}
+	// The same holds when the service is only named in the query text (no -service).
+	if code := runQuery(items, "firebase auth", "", true); code != 0 {
+		t.Fatalf("check without -service = %d, want 0 (bundle masked the intentional row)", code)
+	}
+	// A real merged implementation whose primary service matches still wins.
+	impl := []*Item{
+		{ID: "R33", Service: "firebaseauth", State: "merged", Kind: "backlog", Gap: "implemented"},
+		{ID: "SCH2", Service: "tasks, firebaseauth, container", State: "merged", Kind: "backlog", Gap: "documented"},
+	}
+	if code := runQuery(impl, "firebase auth", "firebaseauth", true); code != 2 {
+		t.Fatalf("check = %d, want 2 (merged primary-service implementation)", code)
+	}
+}
+
+// TestPrimaryService pins the first-token parsing used to rank a named service.
+func TestPrimaryService(t *testing.T) {
+	cases := map[string]string{
+		"firebaseauth":                   "firebaseauth",
+		"tasks, firebaseauth, container": "tasks",
+		" Cloud Run ":                    "cloud run",
+		"":                               "",
+	}
+	for in, want := range cases {
+		if got := primaryService(in); got != want {
+			t.Fatalf("primaryService(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // TestLoadResolved validates overlay parsing + required fields.
 func TestLoadResolved(t *testing.T) {
 	if got, err := loadResolved(""); err != nil || got != nil {

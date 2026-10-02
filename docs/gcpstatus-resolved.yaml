@@ -163,8 +163,11 @@ entries:
 
   # #291 implemented Cloud Scheduler v1 (SCH1) and explicitly documented the
   # remaining unimplemented services — Cloud Tasks, Firebase Auth, GKE — as out
-  # of scope (SCH2). The floci compat report (historical/superseded) still
-  # carries these prose findings verbatim.
+  # of scope (SCH2). The floci compat report is HISTORICAL/superseded: the local
+  # scratch copy now carries `<!-- gcpstatus: superseded -->` so its prose findings
+  # contribute no live backlog, but these evidence-gated entries stay as the durable
+  # closure for copies where the marker is absent. Cloud Tasks v2 landed in #292
+  # (CT1/CT2) + #293 (CT3).
   - source: "gcp-floci-compat-results"
     match: "implement-or-explicitly-document-the-rem"
     pr: 291
