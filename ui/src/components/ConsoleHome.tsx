@@ -8,26 +8,44 @@ import {
   SpaceBetween,
 } from '@cloudscape-design/components'
 import { useNavigate } from 'react-router-dom'
-import { categoryOrder, navTree, serviceCategory, type NavSection } from './nav'
+import { useServices } from '../hooks/useServices'
+import { groupByCategory, type NavSection } from './nav'
 
-function toSection(id: string): NavSection | undefined {
-  return navTree.find((section) => section.id === id)
+function recentIds(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem('jaiscloud-recent') ?? '[]') as string[]
+  } catch {
+    return []
+  }
 }
 
 /**
- * Console Home landing page: recently visited services plus all services
- * grouped by AWS category, mirroring the AWS Console home.
+ * Console Home landing page: recently visited services plus all supported
+ * services grouped by AWS category. The service list is provided by the
+ * backend, so only services this build supports are shown.
  */
 export function ConsoleHome() {
   const navigate = useNavigate()
+  const { data } = useServices()
+  const services = data?.services ?? []
 
-  let recent: NavSection[] = []
-  try {
-    const ids: string[] = JSON.parse(localStorage.getItem('jaiscloud-recent') ?? '[]')
-    recent = ids.map(toSection).filter((section): section is NavSection => section != null)
-  } catch {
-    recent = []
-  }
+  const recent = recentIds()
+    .map((id) => services.find((service) => service.id === id))
+    .filter((service): service is NavSection => service != null)
+
+  const groups = groupByCategory(services)
+
+  const renderLink = (service: NavSection) => (
+    <Link
+      href={`/ui${service.rootPath}`}
+      onFollow={(event) => {
+        event.preventDefault()
+        navigate(service.rootPath)
+      }}
+    >
+      {service.label}
+    </Link>
+  )
 
   return (
     <ContentLayout
@@ -42,22 +60,12 @@ export function ConsoleHome() {
           <Cards
             items={recent}
             cardDefinition={{
-              header: (item) => (
-                <Link
-                  href={`/ui${item.rootPath}`}
-                  onFollow={(event) => {
-                    event.preventDefault()
-                    navigate(item.rootPath)
-                  }}
-                >
-                  {item.label}
-                </Link>
-              ),
+              header: (item) => renderLink(item),
               sections: [
                 {
                   id: 'category',
                   header: 'Category',
-                  content: (item) => serviceCategory[item.id] ?? '—',
+                  content: (item) => item.category,
                 },
               ],
             }}
@@ -72,34 +80,21 @@ export function ConsoleHome() {
           />
         )}
 
-        {categoryOrder.map((title) => {
-          const services = navTree.filter((section) => serviceCategory[section.id] === title)
-          if (services.length === 0) return null
-          return (
-            <Container key={title} header={<Header variant="h2">{title}</Header>}>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-                  gap: '0.75rem',
-                }}
-              >
-                {services.map((section) => (
-                  <Link
-                    key={section.id}
-                    href={`/ui${section.rootPath}`}
-                    onFollow={(event) => {
-                      event.preventDefault()
-                      navigate(section.rootPath)
-                    }}
-                  >
-                    {section.label}
-                  </Link>
-                ))}
-              </div>
-            </Container>
-          )
-        })}
+        {groups.map((group) => (
+          <Container key={group.category} header={<Header variant="h2">{group.category}</Header>}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                gap: '0.75rem',
+              }}
+            >
+              {group.services.map((service) => (
+                <span key={service.id}>{renderLink(service)}</span>
+              ))}
+            </div>
+          </Container>
+        ))}
       </SpaceBetween>
     </ContentLayout>
   )

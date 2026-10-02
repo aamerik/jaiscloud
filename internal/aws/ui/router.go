@@ -55,7 +55,7 @@ type MetaResponse struct {
 
 // ServicesResponse is the payload for GET /api/ui/v1/services.
 type ServicesResponse struct {
-	Services []string `json:"services"`
+	Services []ServiceDescriptor `json:"services"`
 }
 
 // BuildRouter builds the UI chi router.
