@@ -27,6 +27,8 @@ import {
   type CWAlarm,
 } from '../../../api/cloudwatch'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
+import { formatDate } from '../../../lib/date'
 import { useNotifications } from '../../../components/notifications'
 
 const STATE_OPTIONS = [
@@ -66,6 +68,7 @@ export function CloudWatchAlarms() {
   const [stateFilter, setStateFilter] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<CWAlarm | null>(null)
   const [stateTarget, setStateTarget] = useState<CWAlarm | null>(null)
+  const [details, setDetails] = useState<CWAlarm | null>(null)
   const [newStateValue, setNewStateValue] = useState('OK')
   const [newStateReason, setNewStateReason] = useState('')
 
@@ -185,12 +188,15 @@ export function CloudWatchAlarms() {
           variant="icon"
           ariaLabel={`Actions for ${a.alarmName}`}
           items={[
+            { id: 'details', text: 'View details' },
             { id: 'state', text: 'Set state' },
             { id: 'toggle', text: a.actionsEnabled ? 'Disable actions' : 'Enable actions' },
             { id: 'delete', text: 'Delete' },
           ]}
           onItemClick={({ detail }) => {
-            if (detail.id === 'state') {
+            if (detail.id === 'details') {
+              setDetails(a)
+            } else if (detail.id === 'state') {
               setStateTarget(a)
               setNewStateValue('OK')
               setNewStateReason('')
@@ -236,6 +242,51 @@ export function CloudWatchAlarms() {
           emptyBody="Create a CloudWatch alarm to watch a metric and notify you when it crosses a threshold."
         />
       )}
+
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.alarmName ?? 'Alarm'}
+        items={
+          details
+            ? [
+                { label: 'Name', value: details.alarmName },
+                { label: 'ARN', value: <Box variant="code">{details.alarmArn || '—'}</Box> },
+                { label: 'Description', value: details.alarmDescription || '—' },
+                {
+                  label: 'State',
+                  value: (
+                    <StatusIndicator type={alarmStatus(details.stateValue)}>
+                      {details.stateValue ?? '—'}
+                    </StatusIndicator>
+                  ),
+                },
+                {
+                  label: 'Metric',
+                  value:
+                    details.namespace || details.metricName
+                      ? `${details.namespace ?? '—'}/${details.metricName ?? '—'}`
+                      : '—',
+                },
+                { label: 'Statistic', value: details.statistic || '—' },
+                { label: 'Period', value: details.period != null ? `${details.period}s` : '—' },
+                { label: 'Threshold', value: details.threshold != null ? String(details.threshold) : '—' },
+                { label: 'Comparison operator', value: details.comparisonOperator || '—' },
+                { label: 'Evaluation periods', value: details.evaluationPeriods != null ? String(details.evaluationPeriods) : '—' },
+                {
+                  label: 'Actions',
+                  value: (
+                    <Badge color={details.actionsEnabled ? 'green' : 'grey'}>
+                      {details.actionsEnabled ? 'enabled' : 'disabled'}
+                    </Badge>
+                  ),
+                },
+                { label: 'State reason', value: details.stateReason || '—' },
+                { label: 'Updated', value: formatDate(details.updatedAt) },
+              ]
+            : []
+        }
+      />
 
       <Modal
         visible={createOpen}

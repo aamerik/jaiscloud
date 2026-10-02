@@ -23,6 +23,7 @@ import {
 } from '../../../api/glue'
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
 import { useNotifications } from '../../../components/notifications'
 
 const EMPTY_FORM = { name: '', role: '', databaseName: '', s3Targets: '' }
@@ -32,6 +33,7 @@ export function GlueCrawlers() {
   const { notify } = useNotifications()
   const [createOpen, setCreateOpen] = useState(false)
   const [selected, setSelected] = useState<Crawler[]>([])
+  const [details, setDetails] = useState<Crawler | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [form, setForm] = useState(EMPTY_FORM)
 
@@ -121,6 +123,15 @@ export function GlueCrawlers() {
       filterValue: (c) => c.state ?? '',
       cell: (c) => <StatusIndicator type={resourceStatus(c.state)}>{c.state || '—'}</StatusIndicator>,
     },
+    {
+      id: 'actions',
+      header: '',
+      cell: (c) => (
+        <Button variant="inline-link" onClick={() => setDetails(c)}>
+          View details
+        </Button>
+      ),
+    },
   ]
 
   return (
@@ -163,6 +174,28 @@ export function GlueCrawlers() {
           emptyBody="Create a crawler to discover and catalog data from S3."
         />
       )}
+
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.name ?? 'Crawler'}
+        items={
+          details
+            ? [
+                { label: 'Name', value: details.name },
+                { label: 'Role', value: details.role || '—' },
+                {
+                  label: 'State',
+                  value: (
+                    <StatusIndicator type={resourceStatus(details.state)}>
+                      {details.state || '—'}
+                    </StatusIndicator>
+                  ),
+                },
+              ]
+            : []
+        }
+      />
 
       <Modal
         visible={createOpen}

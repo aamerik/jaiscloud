@@ -22,6 +22,7 @@ import {
   type EventBus,
 } from '../../../api/eventbridge'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
 import { useNotifications } from '../../../components/notifications'
 
 const EMPTY_EVENT_FORM = { source: '', detailType: '', detail: '{}', bus: '' }
@@ -34,6 +35,7 @@ export function EventBridgeBuses() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [sendEventsOpen, setSendEventsOpen] = useState(false)
   const [busName, setBusName] = useState('')
+  const [details, setDetails] = useState<EventBus | null>(null)
   const [eventForm, setEventForm] = useState(EMPTY_EVENT_FORM)
 
   const { data, isLoading, error } = useQuery({
@@ -105,6 +107,15 @@ export function EventBridgeBuses() {
       header: 'ARN',
       cell: (b) => (b.arn ? <Box variant="code">{b.arn}</Box> : '—'),
     },
+    {
+      id: 'actions',
+      header: '',
+      cell: (b) => (
+        <Button variant="inline-link" onClick={() => setDetails(b)}>
+          View details
+        </Button>
+      ),
+    },
   ]
 
   return (
@@ -148,6 +159,20 @@ export function EventBridgeBuses() {
           emptyBody="The default bus is always available."
         />
       )}
+
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.name ?? 'Event bus'}
+        items={
+          details
+            ? [
+                { label: 'Name', value: details.name },
+                { label: 'ARN', value: <Box variant="code">{details.arn || '—'}</Box> },
+              ]
+            : []
+        }
+      />
 
       <Modal
         visible={createOpen}

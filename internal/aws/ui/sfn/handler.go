@@ -40,9 +40,33 @@ func (h *Handler) ListStateMachines(w http.ResponseWriter, r *http.Request) {
 	rawSMs := uihelper.AsSlice(resp.Data["stateMachines"])
 	items := make([]StateMachine, 0, len(rawSMs))
 	for _, raw := range rawSMs {
-		if m, ok := raw.(map[string]any); ok {
-			items = append(items, mapStateMachine(m))
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
 		}
+		sm := mapStateMachine(m)
+		// ListStateMachines omits roleArn/definition/status; enrich from
+		// DescribeStateMachine so the UI details view is complete.
+		if sm.ARN != "" {
+			detail := uihelper.NR(r.Context(), h.cfg, "states", "DescribeStateMachine", region, account)
+			detail.Params["stateMachineArn"] = sm.ARN
+			if dresp, derr := h.provider.DescribeStateMachine(r.Context(), detail); derr == nil {
+				full := mapStateMachine(dresp.Data)
+				if full.RoleARN != "" {
+					sm.RoleARN = full.RoleARN
+				}
+				if full.Status != "" {
+					sm.Status = full.Status
+				}
+				if full.Definition != "" {
+					sm.Definition = full.Definition
+				}
+				if full.CreatedAt != 0 {
+					sm.CreatedAt = full.CreatedAt
+				}
+			}
+		}
+		items = append(items, sm)
 	}
 	nextToken, _ := resp.Data["nextToken"].(string)
 
@@ -227,13 +251,19 @@ func (h *Handler) GetExecutionHistory(w http.ResponseWriter, r *http.Request) {
 
 func mapStateMachine(m map[string]any) StateMachine {
 	sm := StateMachine{
-		ARN:     strAny(m, "stateMachineArn"),
-		Name:    strAny(m, "name"),
-		Type:    strAny(m, "type"),
-		Status:  strAny(m, "status"),
-		RoleARN: strAny(m, "roleArn"),
+		ARN:        strAny(m, "stateMachineArn"),
+		Name:       strAny(m, "name"),
+		Type:       strAny(m, "type"),
+		Status:     strAny(m, "status"),
+		RoleARN:    strAny(m, "roleArn"),
+		Definition: strAny(m, "definition"),
 	}
-	if v, ok := m["creationDate"].(float64); ok {
+	switch v := m["creationDate"].(type) {
+	case float64:
+		sm.CreatedAt = int64(v)
+	case int64:
+		sm.CreatedAt = v
+	case int:
 		sm.CreatedAt = int64(v)
 	}
 	return sm

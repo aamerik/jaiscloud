@@ -10,7 +10,6 @@ import {
   FormField,
   Header,
   Input,
-  KeyValuePairs,
   Modal,
   SpaceBetween,
   StatusIndicator,
@@ -25,6 +24,7 @@ import {
 } from '../../../api/rds'
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
 import { useNotifications } from '../../../components/notifications'
 
 export function RDSInstances() {
@@ -173,46 +173,36 @@ export function RDSInstances() {
         />
       )}
 
-      <Modal
+      <ResourceDetailsModal
         visible={details != null}
         onDismiss={() => setDetails(null)}
         header={details?.id ?? 'Database'}
-        size="medium"
-        footer={
-          <Box float="right">
-            <Button variant="link" onClick={() => setDetails(null)}>
-              Close
-            </Button>
-          </Box>
+        items={
+          details
+            ? [
+                { label: 'Identifier', value: details.id },
+                {
+                  label: 'Status',
+                  value: (
+                    <StatusIndicator type={resourceStatus(details.status)}>
+                      {details.status}
+                    </StatusIndicator>
+                  ),
+                },
+                { label: 'Engine', value: details.engine },
+                { label: 'Class', value: details.class },
+                {
+                  label: 'Endpoint',
+                  value: (
+                    <Box variant="code">
+                      {details.endpoint ? `${details.endpoint}:${details.port}` : '—'}
+                    </Box>
+                  ),
+                },
+              ]
+            : []
         }
-      >
-        {details && (
-          <KeyValuePairs
-            columns={1}
-            items={[
-              { label: 'Identifier', value: details.id },
-              {
-                label: 'Status',
-                value: (
-                  <StatusIndicator type={resourceStatus(details.status)}>
-                    {details.status}
-                  </StatusIndicator>
-                ),
-              },
-              { label: 'Engine', value: details.engine },
-              { label: 'Class', value: details.class },
-              {
-                label: 'Endpoint',
-                value: (
-                  <Box variant="code">
-                    {details.endpoint ? `${details.endpoint}:${details.port}` : '—'}
-                  </Box>
-                ),
-              },
-            ]}
-          />
-        )}
-      </Modal>
+      />
 
       <Modal
         visible={createOpen}

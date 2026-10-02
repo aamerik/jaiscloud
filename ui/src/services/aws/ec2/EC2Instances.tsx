@@ -8,7 +8,6 @@ import {
   ContentLayout,
   CopyToClipboard,
   Header,
-  KeyValuePairs,
   Modal,
   SpaceBetween,
   StatusIndicator,
@@ -22,6 +21,7 @@ import {
 } from '../../../api/ec2'
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
 import { useNotifications } from '../../../components/notifications'
 
 export function EC2Instances() {
@@ -167,40 +167,30 @@ export function EC2Instances() {
         />
       )}
 
-      <Modal
+      <ResourceDetailsModal
         visible={details != null}
         onDismiss={() => setDetails(null)}
         header={`Instance ${details?.id ?? ''}`}
-        size="medium"
-        footer={
-          <Box float="right">
-            <Button variant="link" onClick={() => setDetails(null)}>
-              Close
-            </Button>
-          </Box>
+        items={
+          details
+            ? [
+                { label: 'Instance ID', value: <Box variant="code">{details.id}</Box> },
+                {
+                  label: 'State',
+                  value: (
+                    <StatusIndicator type={resourceStatus(details.state)}>
+                      {details.state}
+                    </StatusIndicator>
+                  ),
+                },
+                { label: 'Instance type', value: details.instanceType },
+                { label: 'AMI ID', value: <Box variant="code">{details.imageId}</Box> },
+                { label: 'Private IP', value: <Box variant="code">{details.privateIp || '—'}</Box> },
+                { label: 'Public IP', value: <Box variant="code">{details.publicIp || '—'}</Box> },
+              ]
+            : []
         }
-      >
-        {details && (
-          <KeyValuePairs
-            columns={1}
-            items={[
-              { label: 'Instance ID', value: <Box variant="code">{details.id}</Box> },
-              {
-                label: 'State',
-                value: (
-                  <StatusIndicator type={resourceStatus(details.state)}>
-                    {details.state}
-                  </StatusIndicator>
-                ),
-              },
-              { label: 'Instance type', value: details.instanceType },
-              { label: 'AMI ID', value: <Box variant="code">{details.imageId}</Box> },
-              { label: 'Private IP', value: <Box variant="code">{details.privateIp || '—'}</Box> },
-              { label: 'Public IP', value: <Box variant="code">{details.publicIp || '—'}</Box> },
-            ]}
-          />
-        )}
-      </Modal>
+      />
 
       <Modal
         visible={confirmTerminate}

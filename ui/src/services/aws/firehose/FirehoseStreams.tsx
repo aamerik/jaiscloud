@@ -21,6 +21,7 @@ import {
   type DeliveryStream,
 } from '../../../api/firehose'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
 import { useNotifications } from '../../../components/notifications'
 
 const TYPE_OPTIONS = [
@@ -32,6 +33,7 @@ export function FirehoseStreams() {
   const qc = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [selected, setSelected] = useState<DeliveryStream[]>([])
+  const [details, setDetails] = useState<DeliveryStream | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [form, setForm] = useState({ name: '', type: 'DirectPut' })
   const { notify } = useNotifications()
@@ -76,6 +78,15 @@ export function FirehoseStreams() {
       filterValue: (s) => s.name,
       cell: (s) => s.name,
     },
+    {
+      id: 'actions',
+      header: '',
+      cell: (s) => (
+        <Button variant="inline-link" onClick={() => setDetails(s)}>
+          View details
+        </Button>
+      ),
+    },
   ]
 
   return (
@@ -112,6 +123,13 @@ export function FirehoseStreams() {
           emptyBody="Create a Firehose delivery stream to load data into a destination."
         />
       )}
+
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.name ?? 'Delivery stream'}
+        items={details ? [{ label: 'Stream name', value: details.name }] : []}
+      />
 
       <Modal
         visible={createOpen}

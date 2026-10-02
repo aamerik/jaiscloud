@@ -9,7 +9,6 @@ import {
   FormField,
   Header,
   Input,
-  KeyValuePairs,
   Modal,
   SpaceBetween,
   StatusIndicator,
@@ -18,6 +17,7 @@ import { listClusters, createCluster, deleteCluster, type EKSCluster } from '../
 import { formatDate } from '../../../lib/date'
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
 import { useNotifications } from '../../../components/notifications'
 
 export function EKSClusters() {
@@ -120,39 +120,29 @@ export function EKSClusters() {
         />
       )}
 
-      <Modal
+      <ResourceDetailsModal
         visible={details != null}
         onDismiss={() => setDetails(null)}
         header={details?.name ?? 'Cluster'}
-        size="medium"
-        footer={
-          <Box float="right">
-            <Button variant="link" onClick={() => setDetails(null)}>
-              Close
-            </Button>
-          </Box>
+        items={
+          details
+            ? [
+                { label: 'Name', value: details.name },
+                {
+                  label: 'Status',
+                  value: (
+                    <StatusIndicator type={resourceStatus(details.status)}>
+                      {details.status || '—'}
+                    </StatusIndicator>
+                  ),
+                },
+                { label: 'Version', value: details.version || '—' },
+                { label: 'ARN', value: <Box variant="code">{details.arn}</Box> },
+                { label: 'Created', value: formatDate(details.createdAt) },
+              ]
+            : []
         }
-      >
-        {details && (
-          <KeyValuePairs
-            columns={1}
-            items={[
-              { label: 'Name', value: details.name },
-              {
-                label: 'Status',
-                value: (
-                  <StatusIndicator type={resourceStatus(details.status)}>
-                    {details.status || '—'}
-                  </StatusIndicator>
-                ),
-              },
-              { label: 'Version', value: details.version || '—' },
-              { label: 'ARN', value: <Box variant="code">{details.arn}</Box> },
-              { label: 'Created', value: formatDate(details.createdAt) },
-            ]}
-          />
-        )}
-      </Modal>
+      />
 
       <Modal
         visible={createOpen}

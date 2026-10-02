@@ -23,6 +23,7 @@ import {
 } from '../../../api/elbv2'
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
 import { useNotifications } from '../../../components/notifications'
 
 const TYPE_OPTIONS = [
@@ -41,6 +42,7 @@ export function ELBv2LoadBalancers() {
   const [createOpen, setCreateOpen] = useState(false)
   const [selected, setSelected] = useState<LoadBalancer[]>([])
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [details, setDetails] = useState<LoadBalancer | null>(null)
   const [form, setForm] = useState({ name: '', type: 'application', scheme: 'internet-facing' })
   const { notify } = useNotifications()
 
@@ -96,6 +98,15 @@ export function ELBv2LoadBalancers() {
       cell: (lb) => lb.scheme || '—',
     },
     { id: 'dnsName', header: 'DNS name', cell: (lb) => <Box variant="code">{lb.dnsName || '—'}</Box> },
+    {
+      id: 'actions',
+      header: '',
+      cell: (lb) => (
+        <Button variant="inline-link" onClick={() => setDetails(lb)}>
+          View details
+        </Button>
+      ),
+    },
   ]
 
   return (
@@ -133,6 +144,31 @@ export function ELBv2LoadBalancers() {
           emptyBody="Create an Elastic Load Balancer to get started."
         />
       )}
+
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.name ?? 'Load balancer'}
+        items={
+          details
+            ? [
+                { label: 'Name', value: details.name },
+                { label: 'ARN', value: <Box variant="code">{details.arn || '—'}</Box> },
+                {
+                  label: 'State',
+                  value: (
+                    <StatusIndicator type={resourceStatus(details.state)}>
+                      {details.state || '—'}
+                    </StatusIndicator>
+                  ),
+                },
+                { label: 'Type', value: details.type || '—' },
+                { label: 'Scheme', value: details.scheme || '—' },
+                { label: 'DNS name', value: <Box variant="code">{details.dnsName || '—'}</Box> },
+              ]
+            : []
+        }
+      />
 
       <Modal
         visible={createOpen}

@@ -9,6 +9,7 @@ import (
 // ProviderInterface is the subset of *stepfunctions.Provider used by UI handlers.
 type ProviderInterface interface {
 	ListStateMachines(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	DescribeStateMachine(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	CreateStateMachine(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	DeleteStateMachine(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	StartExecution(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)

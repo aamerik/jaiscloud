@@ -19,6 +19,7 @@ import { listStacks, createStack, deleteStack, type Stack } from '../../../api/c
 import { formatDate } from '../../../lib/date'
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
 import { useNotifications } from '../../../components/notifications'
 
 const DEFAULT_TEMPLATE = JSON.stringify(
@@ -32,6 +33,7 @@ export function CFNStacks() {
   const [createOpen, setCreateOpen] = useState(false)
   const [selected, setSelected] = useState<Stack[]>([])
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [details, setDetails] = useState<Stack | null>(null)
   const [form, setForm] = useState({ name: '', templateBody: DEFAULT_TEMPLATE })
   const { notify } = useNotifications()
 
@@ -80,6 +82,15 @@ export function CFNStacks() {
     },
     { id: 'description', header: 'Description', cell: (s) => s.description || '—' },
     { id: 'created', header: 'Created', cell: (s) => formatDate(s.createdAt) },
+    {
+      id: 'actions',
+      header: '',
+      cell: (s) => (
+        <Button variant="inline-link" onClick={() => setDetails(s)}>
+          View details
+        </Button>
+      ),
+    },
   ]
 
   return (
@@ -116,6 +127,30 @@ export function CFNStacks() {
           emptyBody="Create a CloudFormation stack to provision resources."
         />
       )}
+
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.name ?? 'Stack'}
+        items={
+          details
+            ? [
+                { label: 'Name', value: details.name },
+                { label: 'Stack ID', value: <Box variant="code">{details.stackId || '—'}</Box> },
+                {
+                  label: 'Status',
+                  value: (
+                    <StatusIndicator type={resourceStatus(details.status)}>
+                      {details.status || '—'}
+                    </StatusIndicator>
+                  ),
+                },
+                { label: 'Description', value: details.description || '—' },
+                { label: 'Created', value: formatDate(details.createdAt) },
+              ]
+            : []
+        }
+      />
 
       <Modal
         visible={createOpen}

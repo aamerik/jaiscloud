@@ -21,12 +21,14 @@ import {
   type Identity,
 } from '../../../api/ses'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
 import { useNotifications } from '../../../components/notifications'
 
 export function SESIdentities() {
   const qc = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [selected, setSelected] = useState<Identity[]>([])
+  const [details, setDetails] = useState<Identity | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [identityInput, setIdentityInput] = useState('')
   const { notify } = useNotifications()
@@ -79,6 +81,15 @@ export function SESIdentities() {
       filterValue: (i) => i.type,
       cell: (i) => <Badge color="blue">{i.type}</Badge>,
     },
+    {
+      id: 'actions',
+      header: '',
+      cell: (i) => (
+        <Button variant="inline-link" onClick={() => setDetails(i)}>
+          View details
+        </Button>
+      ),
+    },
   ]
 
   return (
@@ -115,6 +126,20 @@ export function SESIdentities() {
           emptyBody="Verify an email address or domain to start sending with SES."
         />
       )}
+
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.identity ?? 'Identity'}
+        items={
+          details
+            ? [
+                { label: 'Identity', value: details.identity },
+                { label: 'Type', value: details.type },
+              ]
+            : []
+        }
+      />
 
       <Modal
         visible={createOpen}

@@ -23,6 +23,7 @@ import {
 } from '../../../api/elasticache'
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
 import { useNotifications } from '../../../components/notifications'
 
 const ENGINE_OPTIONS = [
@@ -34,6 +35,7 @@ export function ElastiCacheClusters() {
   const qc = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [selected, setSelected] = useState<CacheCluster[]>([])
+  const [details, setDetails] = useState<CacheCluster | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [form, setForm] = useState({ id: '', engine: 'redis', nodeType: 'cache.t3.micro', numNodes: 1 })
   const { notify } = useNotifications()
@@ -97,6 +99,15 @@ export function ElastiCacheClusters() {
     { id: 'nodeType', header: 'Node type', cell: (c) => c.nodeType },
     { id: 'nodes', header: 'Nodes', cell: (c) => c.numNodes },
     { id: 'endpoint', header: 'Endpoint', cell: (c) => <Box variant="code">{c.endpoint || '—'}</Box> },
+    {
+      id: 'actions',
+      header: '',
+      cell: (c) => (
+        <Button variant="inline-link" onClick={() => setDetails(c)}>
+          View details
+        </Button>
+      ),
+    },
   ]
 
   return (
@@ -134,6 +145,31 @@ export function ElastiCacheClusters() {
           emptyBody="Create an ElastiCache cluster to get started."
         />
       )}
+
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.id ?? 'Cluster'}
+        items={
+          details
+            ? [
+                { label: 'Identifier', value: details.id },
+                {
+                  label: 'Status',
+                  value: (
+                    <StatusIndicator type={resourceStatus(details.status)}>
+                      {details.status || '—'}
+                    </StatusIndicator>
+                  ),
+                },
+                { label: 'Engine', value: details.engine },
+                { label: 'Node type', value: details.nodeType },
+                { label: 'Nodes', value: String(details.numNodes) },
+                { label: 'Endpoint', value: <Box variant="code">{details.endpoint || '—'}</Box> },
+              ]
+            : []
+        }
+      />
 
       <Modal
         visible={createOpen}

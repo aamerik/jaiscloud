@@ -17,12 +17,14 @@ import {
 import { listStreams, createStream, deleteStream, type Stream } from '../../../api/kinesis'
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
 import { useNotifications } from '../../../components/notifications'
 
 export function KinesisStreams() {
   const qc = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [selected, setSelected] = useState<Stream[]>([])
+  const [details, setDetails] = useState<Stream | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [form, setForm] = useState({ name: '', shardCount: 1 })
   const { notify } = useNotifications()
@@ -72,6 +74,15 @@ export function KinesisStreams() {
     },
     { id: 'mode', header: 'Mode', filterLabel: 'Mode', filterValue: (s) => s.mode, cell: (s) => s.mode || '—' },
     { id: 'arn', header: 'ARN', cell: (s) => <Box variant="code">{s.arn || '—'}</Box> },
+    {
+      id: 'actions',
+      header: '',
+      cell: (s) => (
+        <Button variant="inline-link" onClick={() => setDetails(s)}>
+          View details
+        </Button>
+      ),
+    },
   ]
 
   return (
@@ -108,6 +119,29 @@ export function KinesisStreams() {
           emptyBody="Create a Kinesis data stream to start ingesting records."
         />
       )}
+
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.name ?? 'Stream'}
+        items={
+          details
+            ? [
+                { label: 'Stream name', value: details.name },
+                {
+                  label: 'Status',
+                  value: (
+                    <StatusIndicator type={resourceStatus(details.status)}>
+                      {details.status || '—'}
+                    </StatusIndicator>
+                  ),
+                },
+                { label: 'Mode', value: details.mode || '—' },
+                { label: 'ARN', value: <Box variant="code">{details.arn || '—'}</Box> },
+              ]
+            : []
+        }
+      />
 
       <Modal
         visible={createOpen}

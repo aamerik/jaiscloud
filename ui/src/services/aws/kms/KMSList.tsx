@@ -25,6 +25,8 @@ import {
 } from '../../../api/kms'
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
+import { formatDate } from '../../../lib/date'
 import { useNotifications } from '../../../components/notifications'
 
 const KEY_USAGES = [
@@ -47,6 +49,7 @@ export function KMSList() {
   const [newUsage, setNewUsage] = useState('ENCRYPT_DECRYPT')
   const [newSpec, setNewSpec] = useState('SYMMETRIC_DEFAULT')
   const [deleteKey, setDeleteKey] = useState<KMSKey | null>(null)
+  const [details, setDetails] = useState<KMSKey | null>(null)
   const [deleteDays, setDeleteDays] = useState(30)
   const qc = useQueryClient()
   const { notify } = useNotifications()
@@ -157,6 +160,9 @@ export function KMSList() {
       cell: (k) => (
         <div onClick={(event) => event.stopPropagation()}>
           <SpaceBetween direction="horizontal" size="xs">
+            <Button variant="link" onClick={() => setDetails(k)}>
+              View details
+            </Button>
             {k.keyState === 'Disabled' && (
               <Button variant="link" onClick={() => enableMut.mutate(k.keyId)}>
                 Enable
@@ -205,6 +211,33 @@ export function KMSList() {
           emptyBody="KMS keys encrypt and protect your data across AWS services."
         />
       )}
+
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.description || details?.keyId || 'Key'}
+        items={
+          details
+            ? [
+                { label: 'Key ID', value: <Box variant="code">{details.keyId}</Box> },
+                { label: 'ARN', value: <Box variant="code">{details.arn || '—'}</Box> },
+                { label: 'Description', value: details.description || '—' },
+                { label: 'Usage', value: details.keyUsage || '—' },
+                { label: 'Spec', value: details.keySpec || '—' },
+                {
+                  label: 'State',
+                  value: (
+                    <StatusIndicator type={resourceStatus(details.keyState)}>
+                      {details.keyState || '—'}
+                    </StatusIndicator>
+                  ),
+                },
+                { label: 'Origin', value: details.origin || '—' },
+                { label: 'Created', value: formatDate(details.createdAt) },
+              ]
+            : []
+        }
+      />
 
       <Modal
         visible={createOpen}

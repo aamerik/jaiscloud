@@ -25,7 +25,9 @@ import {
   type StateMachine,
 } from '../../../api/sfn'
 import { resourceStatus } from '../../../lib/status'
+import { formatDate } from '../../../lib/date'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
 import { useNotifications } from '../../../components/notifications'
 
 const TYPE_OPTIONS = [
@@ -39,6 +41,7 @@ export function SFNStateMachines() {
   const [createOpen, setCreateOpen] = useState(false)
   const [selected, setSelected] = useState<StateMachine[]>([])
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [details, setDetails] = useState<StateMachine | null>(null)
   const [form, setForm] = useState({ name: '', definition: '', roleArn: '', type: 'STANDARD' })
   const { notify } = useNotifications()
 
@@ -112,6 +115,17 @@ export function SFNStateMachines() {
       ),
     },
     { id: 'arn', header: 'ARN', cell: (sm) => <Box variant="code">{sm.arn}</Box> },
+    {
+      id: 'actions',
+      header: '',
+      cell: (sm) => (
+        <div onClick={(event) => event.stopPropagation()}>
+          <Button variant="inline-link" onClick={() => setDetails(sm)}>
+            View details
+          </Button>
+        </div>
+      ),
+    },
   ]
 
   return (
@@ -149,6 +163,47 @@ export function SFNStateMachines() {
           emptyBody="Create a state machine to orchestrate workflows."
         />
       )}
+
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.name ?? 'State machine'}
+        items={
+          details
+            ? [
+                { label: 'Name', value: details.name },
+                { label: 'ARN', value: <Box variant="code">{details.arn}</Box> },
+                { label: 'Type', value: details.type || '—' },
+                {
+                  label: 'Status',
+                  value: (
+                    <StatusIndicator type={resourceStatus(details.status)}>
+                      {details.status || '—'}
+                    </StatusIndicator>
+                  ),
+                },
+                {
+                  label: 'Role ARN',
+                  value: details.roleArn ? <Box variant="code">{details.roleArn}</Box> : '—',
+                },
+                { label: 'Created', value: formatDate(details.createdAt) },
+                {
+                  label: 'Definition',
+                  value: details.definition ? (
+                    <Textarea
+                      readOnly
+                      rows={8}
+                      value={details.definition}
+                      ariaLabel="State machine definition"
+                    />
+                  ) : (
+                    '—'
+                  ),
+                },
+              ]
+            : []
+        }
+      />
 
       <Modal
         visible={createOpen}
