@@ -4,6 +4,7 @@ import { applyMode, Mode } from '@cloudscape-design/global-styles'
 import {
   AppLayout,
   BreadcrumbGroup,
+  Flashbar,
   Input,
   SideNavigation,
   TopNavigation,
@@ -17,6 +18,7 @@ import { AccountProvider, useAccount, useAccounts } from '../context/AccountCont
 import { useMeta } from '../hooks/useMeta'
 import { useEventStream } from '../hooks/useEventStream'
 import { categoryOrder, navTree, serviceCategory, type NavSection } from './nav'
+import { NotificationsProvider, useNotifications } from './notifications'
 
 /** Router basename; links must include it so they also work without JS. */
 const BASE = '/ui'
@@ -85,6 +87,7 @@ function Shell({ children }: Props) {
   const { data: accountsData, refetch: refetchAccounts } = useAccounts()
   const { connected } = useEventStream()
   const { breadcrumbItems, onFollow } = useConsoleNav()
+  const { items: notifications } = useNotifications()
 
   useEffect(() => {
     applyMode(mode)
@@ -213,6 +216,8 @@ function Shell({ children }: Props) {
           <BreadcrumbGroup items={breadcrumbItems} onFollow={onFollow} ariaLabel="Breadcrumbs" />
         }
         content={children}
+        notifications={<Flashbar items={notifications} />}
+        stickyNotifications
         toolsHide
         contentType="default"
       />
@@ -223,7 +228,9 @@ function Shell({ children }: Props) {
 export function Layout({ children }: Props) {
   return (
     <AccountProvider>
-      <Shell>{children}</Shell>
+      <NotificationsProvider>
+        <Shell>{children}</Shell>
+      </NotificationsProvider>
     </AccountProvider>
   )
 }

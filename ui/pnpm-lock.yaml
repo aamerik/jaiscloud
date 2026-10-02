@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@cloudscape-design/collection-hooks':
+        specifier: ^1.0.110
+        version: 1.0.110(react@19.2.6)
       '@cloudscape-design/components':
         specifier: ^3.0.1391
         version: 3.0.1391(react-dom@19.2.6(react@19.2.6))(react@19.2.6)

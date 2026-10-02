@@ -6,23 +6,26 @@ import {
   Badge,
   Box,
   Button,
+  ButtonDropdown,
   ContentLayout,
   Header,
   Link,
   Modal,
   SpaceBetween,
-  Table,
 } from '@cloudscape-design/components'
-import type { TableProps } from '@cloudscape-design/components'
 import { listQueues, deleteQueue, type Queue } from '../../../api/sqs'
 import { formatDate } from '../../../lib/date'
+import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { useNotifications } from '../../../components/notifications'
 import { SQSCreate } from './SQSCreate'
 
 export function SQSList() {
   const [createOpen, setCreateOpen] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState<Queue | null>(null)
+  const [selected, setSelected] = useState<Queue[]>([])
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const { notify } = useNotifications()
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['sqs', 'queues'],
@@ -30,19 +33,30 @@ export function SQSList() {
   })
 
   const deleteMut = useMutation({
-    mutationFn: (url: string) => deleteQueue(url),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['sqs', 'queues'] })
-      setConfirmDelete(null)
+    mutationFn: async (queues: Queue[]) => {
+      for (const queue of queues) await deleteQueue(queue.url)
     },
+    onSuccess: (_result, queues) => {
+      void qc.invalidateQueries({ queryKey: ['sqs', 'queues'] })
+      notify({
+        type: 'success',
+        header: `Deleted ${queues.length} queue${queues.length !== 1 ? 's' : ''}`,
+      })
+      setSelected([])
+      setConfirmDelete(false)
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Delete failed', content: (err as Error).message }),
   })
 
   const queues = data?.items ?? []
 
-  const columnDefinitions: TableProps.ColumnDefinition<Queue>[] = [
+  const columns: ResourceColumn<Queue>[] = [
     {
       id: 'name',
       header: 'Name',
+      filterLabel: 'Name',
+      filterValue: (q) => q.name,
       cell: (q) => (
         <Link
           href={`/ui/aws/sqs/${encodeURIComponent(q.url)}`}
@@ -58,6 +72,8 @@ export function SQSList() {
     {
       id: 'type',
       header: 'Type',
+      filterLabel: 'Type',
+      filterValue: (q) => q.type,
       cell: (q) => <Badge color={q.type === 'FIFO' ? 'blue' : 'grey'}>{q.type}</Badge>,
     },
     {
@@ -70,68 +86,42 @@ export function SQSList() {
       header: 'Messages in flight',
       cell: (q) => q.messagesInFlight.toLocaleString(),
     },
-    {
-      id: 'created',
-      header: 'Created',
-      cell: (q) => formatDate(q.createdAt),
-    },
-    {
-      id: 'actions',
-      header: '',
-      width: 150,
-      minWidth: 150,
-      cell: (q) => (
-        <div onClick={(event) => event.stopPropagation()}>
-          <Button onClick={() => setConfirmDelete(q)}>Delete</Button>
-        </div>
-      ),
-    },
+    { id: 'created', header: 'Created', cell: (q) => formatDate(q.createdAt) },
   ]
 
   return (
-    <ContentLayout
-      header={
-        <Header
-          variant="h1"
-          description={data?.total != null ? `${data.total} queue${data.total !== 1 ? 's' : ''}` : undefined}
-          actions={
-            <Button variant="primary" onClick={() => setCreateOpen(true)}>
-              Create queue
-            </Button>
-          }
-        >
-          SQS queues
-        </Header>
-      }
-    >
+    <ContentLayout header={<Header variant="h1">SQS queues</Header>}>
       {error ? (
         <Alert type="error" header="Failed to load queues">
           {(error as Error).message}
         </Alert>
       ) : (
-        <Table
-          variant="container"
-          columnDefinitions={columnDefinitions}
+        <ResourceTable
           items={queues}
+          columns={columns}
+          trackBy={(q) => q.url}
+          title="Queues"
           loading={isLoading}
-          loadingText="Loading queues"
-          trackBy="url"
-          onRowClick={({ detail }) =>
-            navigate(`/aws/sqs/${encodeURIComponent(detail.item.url)}`)
+          onRowClick={(q) => navigate(`/aws/sqs/${encodeURIComponent(q.url)}`)}
+          selectionType="multi"
+          selectedItems={selected}
+          onSelectionChange={setSelected}
+          actions={
+            <SpaceBetween direction="horizontal" size="xs">
+              <ButtonDropdown
+                items={[{ id: 'delete', text: 'Delete', disabled: selected.length === 0 }]}
+                onItemClick={() => setConfirmDelete(true)}
+                disabled={selected.length === 0}
+              >
+                Actions
+              </ButtonDropdown>
+              <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                Create queue
+              </Button>
+            </SpaceBetween>
           }
-          empty={
-            <Box textAlign="center" color="inherit">
-              <SpaceBetween size="m">
-                <b>No queues</b>
-                <Box variant="p" color="inherit">
-                  SQS queues let your applications communicate asynchronously.
-                </Box>
-                <Button variant="primary" onClick={() => setCreateOpen(true)}>
-                  Create queue
-                </Button>
-              </SpaceBetween>
-            </Box>
-          }
+          emptyTitle="No queues"
+          emptyBody="SQS queues let your applications communicate asynchronously."
         />
       )}
 
@@ -141,24 +131,25 @@ export function SQSList() {
           onCreated={() => {
             setCreateOpen(false)
             void qc.invalidateQueries({ queryKey: ['sqs', 'queues'] })
+            notify({ type: 'success', header: 'Queue created' })
           }}
         />
       )}
 
       <Modal
-        visible={confirmDelete != null}
-        onDismiss={() => setConfirmDelete(null)}
-        header="Delete queue"
+        visible={confirmDelete}
+        onDismiss={() => setConfirmDelete(false)}
+        header="Delete queues"
         footer={
           <Box float="right">
             <SpaceBetween direction="horizontal" size="xs">
-              <Button variant="link" onClick={() => setConfirmDelete(null)}>
+              <Button variant="link" onClick={() => setConfirmDelete(false)}>
                 Cancel
               </Button>
               <Button
                 variant="primary"
                 loading={deleteMut.isPending}
-                onClick={() => confirmDelete && deleteMut.mutate(confirmDelete.url)}
+                onClick={() => deleteMut.mutate(selected)}
               >
                 Delete
               </Button>
@@ -166,13 +157,8 @@ export function SQSList() {
           </Box>
         }
       >
-        {deleteMut.error && (
-          <Box color="text-status-error" margin={{ bottom: 's' }}>
-            {(deleteMut.error as Error).message}
-          </Box>
-        )}
-        Permanently delete <b>{confirmDelete?.name}</b>? All messages will be lost and cannot
-        be recovered.
+        Permanently delete {selected.length} queue{selected.length !== 1 ? 's' : ''}? All messages
+        will be lost and cannot be recovered.
       </Modal>
     </ContentLayout>
   )

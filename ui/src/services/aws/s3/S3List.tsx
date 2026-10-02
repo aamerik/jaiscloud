@@ -6,6 +6,7 @@ import {
   Badge,
   Box,
   Button,
+  ButtonDropdown,
   ContentLayout,
   Form,
   FormField,
@@ -14,17 +15,19 @@ import {
   Link,
   Modal,
   SpaceBetween,
-  Table,
 } from '@cloudscape-design/components'
-import type { TableProps } from '@cloudscape-design/components'
 import { listBuckets, createBucket, deleteBucket, type Bucket } from '../../../api/s3'
+import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { useNotifications } from '../../../components/notifications'
 
 export function S3List() {
   const [createOpen, setCreateOpen] = useState(false)
   const [newName, setNewName] = useState('')
-  const [confirmDelete, setConfirmDelete] = useState<Bucket | null>(null)
+  const [selected, setSelected] = useState<Bucket[]>([])
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const { notify } = useNotifications()
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['s3', 'buckets'],
@@ -35,25 +38,39 @@ export function S3List() {
     mutationFn: () => createBucket({ name: newName }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['s3', 'buckets'] })
+      notify({ type: 'success', header: 'Bucket created', content: newName })
       setCreateOpen(false)
       setNewName('')
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Could not create bucket', content: (err as Error).message }),
   })
 
   const deleteMut = useMutation({
-    mutationFn: (name: string) => deleteBucket(name),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['s3', 'buckets'] })
-      setConfirmDelete(null)
+    mutationFn: async (buckets: Bucket[]) => {
+      for (const bucket of buckets) await deleteBucket(bucket.name)
     },
+    onSuccess: (_result, buckets) => {
+      void qc.invalidateQueries({ queryKey: ['s3', 'buckets'] })
+      notify({
+        type: 'success',
+        header: `Deleted ${buckets.length} bucket${buckets.length !== 1 ? 's' : ''}`,
+      })
+      setSelected([])
+      setConfirmDelete(false)
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Delete failed', content: (err as Error).message }),
   })
 
   const buckets = data?.items ?? []
 
-  const columnDefinitions: TableProps.ColumnDefinition<Bucket>[] = [
+  const columns: ResourceColumn<Bucket>[] = [
     {
       id: 'name',
       header: 'Name',
+      filterLabel: 'Name',
+      filterValue: (b) => b.name,
       cell: (b) => (
         <Link
           href={`/ui/aws/s3/${encodeURIComponent(b.name)}`}
@@ -66,7 +83,7 @@ export function S3List() {
         </Link>
       ),
     },
-    { id: 'region', header: 'Region', cell: (b) => b.region },
+    { id: 'region', header: 'Region', filterLabel: 'Region', filterValue: (b) => b.region, cell: (b) => b.region },
     {
       id: 'versioning',
       header: 'Versioning',
@@ -74,63 +91,41 @@ export function S3List() {
         <Badge color={b.versioning === 'Enabled' ? 'green' : 'grey'}>{b.versioning}</Badge>
       ),
     },
-    {
-      id: 'actions',
-      header: '',
-      width: 150,
-      minWidth: 150,
-      cell: (b) => (
-        <div onClick={(event) => event.stopPropagation()}>
-          <Button onClick={() => setConfirmDelete(b)}>Delete</Button>
-        </div>
-      ),
-    },
   ]
 
   return (
-    <ContentLayout
-      header={
-        <Header
-          variant="h1"
-          description={`${buckets.length} bucket${buckets.length !== 1 ? 's' : ''}`}
-          actions={
-            <Button variant="primary" onClick={() => setCreateOpen(true)}>
-              Create bucket
-            </Button>
-          }
-        >
-          S3 buckets
-        </Header>
-      }
-    >
+    <ContentLayout header={<Header variant="h1">S3 buckets</Header>}>
       {error ? (
         <Alert type="error" header="Failed to load buckets">
           {(error as Error).message}
         </Alert>
       ) : (
-        <Table
-          variant="container"
-          columnDefinitions={columnDefinitions}
+        <ResourceTable
           items={buckets}
+          columns={columns}
+          trackBy={(b) => b.name}
+          title="Buckets"
           loading={isLoading}
-          loadingText="Loading buckets"
-          trackBy="name"
-          onRowClick={({ detail }) =>
-            navigate(`/aws/s3/${encodeURIComponent(detail.item.name)}`)
+          onRowClick={(b) => navigate(`/aws/s3/${encodeURIComponent(b.name)}`)}
+          selectionType="multi"
+          selectedItems={selected}
+          onSelectionChange={setSelected}
+          actions={
+            <SpaceBetween direction="horizontal" size="xs">
+              <ButtonDropdown
+                items={[{ id: 'delete', text: 'Delete', disabled: selected.length === 0 }]}
+                onItemClick={() => setConfirmDelete(true)}
+                disabled={selected.length === 0}
+              >
+                Actions
+              </ButtonDropdown>
+              <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                Create bucket
+              </Button>
+            </SpaceBetween>
           }
-          empty={
-            <Box textAlign="center" color="inherit">
-              <SpaceBetween size="m">
-                <b>No buckets</b>
-                <Box variant="p" color="inherit">
-                  S3 buckets store your objects and files.
-                </Box>
-                <Button variant="primary" onClick={() => setCreateOpen(true)}>
-                  Create bucket
-                </Button>
-              </SpaceBetween>
-            </Box>
-          }
+          emptyTitle="No buckets"
+          emptyBody="S3 buckets store your objects and files."
         />
       )}
 
@@ -157,11 +152,6 @@ export function S3List() {
         }
       >
         <Form>
-          {createMut.error && (
-            <Alert type="error" header="Could not create bucket">
-              {(createMut.error as Error).message}
-            </Alert>
-          )}
           <FormField label="Bucket name" description="Bucket names must be globally unique.">
             <Input
               autoFocus
@@ -174,19 +164,19 @@ export function S3List() {
       </Modal>
 
       <Modal
-        visible={confirmDelete != null}
-        onDismiss={() => setConfirmDelete(null)}
-        header="Delete bucket"
+        visible={confirmDelete}
+        onDismiss={() => setConfirmDelete(false)}
+        header="Delete buckets"
         footer={
           <Box float="right">
             <SpaceBetween direction="horizontal" size="xs">
-              <Button variant="link" onClick={() => setConfirmDelete(null)}>
+              <Button variant="link" onClick={() => setConfirmDelete(false)}>
                 Cancel
               </Button>
               <Button
                 variant="primary"
                 loading={deleteMut.isPending}
-                onClick={() => confirmDelete && deleteMut.mutate(confirmDelete.name)}
+                onClick={() => deleteMut.mutate(selected)}
               >
                 Delete
               </Button>
@@ -194,12 +184,8 @@ export function S3List() {
           </Box>
         }
       >
-        {deleteMut.error && (
-          <Box color="text-status-error" margin={{ bottom: 's' }}>
-            {(deleteMut.error as Error).message}
-          </Box>
-        )}
-        Permanently delete <b>{confirmDelete?.name}</b>? The bucket must be empty.
+        Permanently delete {selected.length} bucket{selected.length !== 1 ? 's' : ''}? Each bucket
+        must be empty.
       </Modal>
     </ContentLayout>
   )

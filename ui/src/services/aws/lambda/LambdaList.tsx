@@ -3,31 +3,28 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
   Alert,
-  Badge,
   Box,
   Button,
+  ButtonDropdown,
   ContentLayout,
   Header,
   Link,
   Modal,
   SpaceBetween,
-  Table,
+  StatusIndicator,
 } from '@cloudscape-design/components'
-import type { TableProps } from '@cloudscape-design/components'
 import { listFunctions, deleteFunction, type LambdaFunction } from '../../../api/lambda'
 import { formatDate } from '../../../lib/date'
-
-function stateBadge(state: string): 'green' | 'blue' | 'red' | 'grey' {
-  if (state === 'Active') return 'green'
-  if (state === 'Pending') return 'blue'
-  if (state === 'Inactive' || state === 'Failed') return 'red'
-  return 'grey'
-}
+import { resourceStatus } from '../../../lib/status'
+import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { useNotifications } from '../../../components/notifications'
 
 export function LambdaList() {
-  const [confirmDelete, setConfirmDelete] = useState<LambdaFunction | null>(null)
+  const [selected, setSelected] = useState<LambdaFunction[]>([])
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const { notify } = useNotifications()
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['lambda', 'functions'],
@@ -35,19 +32,30 @@ export function LambdaList() {
   })
 
   const deleteMut = useMutation({
-    mutationFn: (name: string) => deleteFunction(name),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['lambda', 'functions'] })
-      setConfirmDelete(null)
+    mutationFn: async (functions: LambdaFunction[]) => {
+      for (const fn of functions) await deleteFunction(fn.name)
     },
+    onSuccess: (_result, functions) => {
+      void qc.invalidateQueries({ queryKey: ['lambda', 'functions'] })
+      notify({
+        type: 'success',
+        header: `Deleted ${functions.length} function${functions.length !== 1 ? 's' : ''}`,
+      })
+      setSelected([])
+      setConfirmDelete(false)
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Delete failed', content: (err as Error).message }),
   })
 
   const functions = data?.items ?? []
 
-  const columnDefinitions: TableProps.ColumnDefinition<LambdaFunction>[] = [
+  const columns: ResourceColumn<LambdaFunction>[] = [
     {
       id: 'name',
       header: 'Name',
+      filterLabel: 'Name',
+      filterValue: (fn) => fn.name,
       cell: (fn) => (
         <Link
           href={`/ui/aws/lambda/${encodeURIComponent(fn.name)}`}
@@ -60,84 +68,67 @@ export function LambdaList() {
         </Link>
       ),
     },
-    { id: 'runtime', header: 'Runtime', cell: (fn) => <code>{fn.runtime}</code> },
     {
-      id: 'handler',
-      header: 'Handler',
-      cell: (fn) => <Box variant="code">{fn.handler}</Box>,
+      id: 'runtime',
+      header: 'Runtime',
+      filterLabel: 'Runtime',
+      filterValue: (fn) => fn.runtime,
+      cell: (fn) => <code>{fn.runtime}</code>,
     },
+    { id: 'handler', header: 'Handler', cell: (fn) => <Box variant="code">{fn.handler}</Box> },
     { id: 'modified', header: 'Last modified', cell: (fn) => formatDate(fn.lastModified) },
     {
       id: 'state',
       header: 'State',
-      cell: (fn) => <Badge color={stateBadge(fn.state)}>{fn.state || '—'}</Badge>,
-    },
-    {
-      id: 'actions',
-      header: '',
-      width: 150,
-      minWidth: 150,
-      cell: (fn) => (
-        <div onClick={(event) => event.stopPropagation()}>
-          <Button onClick={() => setConfirmDelete(fn)}>Delete</Button>
-        </div>
-      ),
+      cell: (fn) => <StatusIndicator type={resourceStatus(fn.state)}>{fn.state || '—'}</StatusIndicator>,
     },
   ]
 
   return (
-    <ContentLayout
-      header={
-        <Header
-          variant="h1"
-          description={`${functions.length} function${functions.length !== 1 ? 's' : ''}`}
-        >
-          Lambda functions
-        </Header>
-      }
-    >
+    <ContentLayout header={<Header variant="h1">Lambda functions</Header>}>
       {error ? (
         <Alert type="error" header="Failed to load functions">
           {(error as Error).message}
         </Alert>
       ) : (
-        <Table
-          variant="container"
-          columnDefinitions={columnDefinitions}
+        <ResourceTable
           items={functions}
+          columns={columns}
+          trackBy={(fn) => fn.arn}
+          title="Functions"
           loading={isLoading}
-          loadingText="Loading functions"
-          trackBy="arn"
-          onRowClick={({ detail }) =>
-            navigate(`/aws/lambda/${encodeURIComponent(detail.item.name)}`)
+          onRowClick={(fn) => navigate(`/aws/lambda/${encodeURIComponent(fn.name)}`)}
+          selectionType="multi"
+          selectedItems={selected}
+          onSelectionChange={setSelected}
+          actions={
+            <ButtonDropdown
+              items={[{ id: 'delete', text: 'Delete', disabled: selected.length === 0 }]}
+              onItemClick={() => setConfirmDelete(true)}
+              disabled={selected.length === 0}
+            >
+              Actions
+            </ButtonDropdown>
           }
-          empty={
-            <Box textAlign="center" color="inherit">
-              <SpaceBetween size="m">
-                <b>No functions</b>
-                <Box variant="p" color="inherit">
-                  Lambda functions let you run code without managing infrastructure.
-                </Box>
-              </SpaceBetween>
-            </Box>
-          }
+          emptyTitle="No functions"
+          emptyBody="Lambda functions let you run code without managing infrastructure."
         />
       )}
 
       <Modal
-        visible={confirmDelete != null}
-        onDismiss={() => setConfirmDelete(null)}
-        header="Delete function"
+        visible={confirmDelete}
+        onDismiss={() => setConfirmDelete(false)}
+        header="Delete functions"
         footer={
           <Box float="right">
             <SpaceBetween direction="horizontal" size="xs">
-              <Button variant="link" onClick={() => setConfirmDelete(null)}>
+              <Button variant="link" onClick={() => setConfirmDelete(false)}>
                 Cancel
               </Button>
               <Button
                 variant="primary"
                 loading={deleteMut.isPending}
-                onClick={() => confirmDelete && deleteMut.mutate(confirmDelete.name)}
+                onClick={() => deleteMut.mutate(selected)}
               >
                 Delete
               </Button>
@@ -145,12 +136,7 @@ export function LambdaList() {
           </Box>
         }
       >
-        {deleteMut.error && (
-          <Box color="text-status-error" margin={{ bottom: 's' }}>
-            {(deleteMut.error as Error).message}
-          </Box>
-        )}
-        Permanently delete <b>{confirmDelete?.name}</b>?
+        Permanently delete {selected.length} function{selected.length !== 1 ? 's' : ''}?
       </Modal>
     </ContentLayout>
   )

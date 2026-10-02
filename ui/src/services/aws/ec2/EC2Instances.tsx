@@ -2,16 +2,16 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
-  Badge,
   Box,
   Button,
+  ButtonDropdown,
   ContentLayout,
+  CopyToClipboard,
   Header,
   Modal,
   SpaceBetween,
-  Table,
+  StatusIndicator,
 } from '@cloudscape-design/components'
-import type { TableProps } from '@cloudscape-design/components'
 import {
   listInstances,
   terminateInstance,
@@ -19,17 +19,15 @@ import {
   stopInstance,
   type Instance,
 } from '../../../api/ec2'
-
-function stateBadge(state: string): 'green' | 'blue' | 'red' | 'grey' {
-  if (state === 'running') return 'green'
-  if (state === 'terminated') return 'red'
-  if (state === 'stopped') return 'grey'
-  return 'blue'
-}
+import { resourceStatus } from '../../../lib/status'
+import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { useNotifications } from '../../../components/notifications'
 
 export function EC2Instances() {
   const qc = useQueryClient()
-  const [selected, setSelected] = useState<Instance | null>(null)
+  const [selected, setSelected] = useState<Instance[]>([])
+  const [confirmTerminate, setConfirmTerminate] = useState(false)
+  const { notify } = useNotifications()
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['ec2', 'instances'],
@@ -37,93 +35,141 @@ export function EC2Instances() {
   })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['ec2', 'instances'] })
-  const terminate = useMutation({
-    mutationFn: (id: string) => terminateInstance(id),
-    onSuccess: () => {
-      invalidate()
-      setSelected(null)
+
+  const start = useMutation({
+    mutationFn: async (instances: Instance[]) => {
+      for (const instance of instances) await startInstance(instance.id)
     },
+    onSuccess: (_r, instances) => {
+      void invalidate()
+      notify({ type: 'success', header: `Starting ${instances.length} instance(s)` })
+      setSelected([])
+    },
+    onError: (err) => notify({ type: 'error', header: 'Start failed', content: (err as Error).message }),
   })
-  const start = useMutation({ mutationFn: (id: string) => startInstance(id), onSuccess: invalidate })
-  const stop = useMutation({ mutationFn: (id: string) => stopInstance(id), onSuccess: invalidate })
+  const stop = useMutation({
+    mutationFn: async (instances: Instance[]) => {
+      for (const instance of instances) await stopInstance(instance.id)
+    },
+    onSuccess: (_r, instances) => {
+      void invalidate()
+      notify({ type: 'success', header: `Stopping ${instances.length} instance(s)` })
+      setSelected([])
+    },
+    onError: (err) => notify({ type: 'error', header: 'Stop failed', content: (err as Error).message }),
+  })
+  const terminate = useMutation({
+    mutationFn: async (instances: Instance[]) => {
+      for (const instance of instances) await terminateInstance(instance.id)
+    },
+    onSuccess: (_r, instances) => {
+      void invalidate()
+      notify({ type: 'success', header: `Terminated ${instances.length} instance(s)` })
+      setSelected([])
+      setConfirmTerminate(false)
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Terminate failed', content: (err as Error).message }),
+  })
 
   const items = data?.items ?? []
 
-  const columnDefinitions: TableProps.ColumnDefinition<Instance>[] = [
-    { id: 'id', header: 'Instance ID', cell: (i) => <Box variant="code">{i.id}</Box> },
-    { id: 'state', header: 'State', cell: (i) => <Badge color={stateBadge(i.state)}>{i.state}</Badge> },
-    { id: 'type', header: 'Instance type', cell: (i) => i.instanceType },
-    { id: 'image', header: 'AMI ID', cell: (i) => <Box variant="code">{i.imageId}</Box> },
-    { id: 'private', header: 'Private IP', cell: (i) => <Box variant="code">{i.privateIp || '—'}</Box> },
-    { id: 'public', header: 'Public IP', cell: (i) => <Box variant="code">{i.publicIp || '—'}</Box> },
+  const columns: ResourceColumn<Instance>[] = [
     {
-      id: 'actions',
-      header: '',
-      width: 220,
+      id: 'id',
+      header: 'Instance ID',
+      filterLabel: 'Instance ID',
+      filterValue: (i) => i.id,
       cell: (i) => (
         <SpaceBetween direction="horizontal" size="xs">
-          {i.state === 'stopped' && (
-            <Button onClick={() => start.mutate(i.id)}>Start</Button>
-          )}
-          {i.state === 'running' && <Button onClick={() => stop.mutate(i.id)}>Stop</Button>}
-          {i.state !== 'terminated' && (
-            <Button onClick={() => setSelected(i)}>Terminate</Button>
-          )}
+          <Box variant="code" display="inline">
+            {i.id}
+          </Box>
+          <CopyToClipboard
+            variant="icon"
+            textToCopy={i.id}
+            copyButtonAriaLabel={`Copy instance ID ${i.id}`}
+            copySuccessText="Instance ID copied"
+            copyErrorText="Failed to copy instance ID"
+          />
         </SpaceBetween>
       ),
     },
+    {
+      id: 'state',
+      header: 'State',
+      filterLabel: 'State',
+      filterValue: (i) => i.state,
+      cell: (i) => <StatusIndicator type={resourceStatus(i.state)}>{i.state}</StatusIndicator>,
+    },
+    {
+      id: 'type',
+      header: 'Instance type',
+      filterLabel: 'Instance type',
+      filterValue: (i) => i.instanceType,
+      cell: (i) => i.instanceType,
+    },
+    { id: 'image', header: 'AMI ID', cell: (i) => <Box variant="code">{i.imageId}</Box> },
+    { id: 'private', header: 'Private IP', cell: (i) => <Box variant="code">{i.privateIp || '—'}</Box> },
+    { id: 'public', header: 'Public IP', cell: (i) => <Box variant="code">{i.publicIp || '—'}</Box> },
   ]
 
+  const hasStopped = selected.some((i) => i.state === 'stopped')
+  const hasRunning = selected.some((i) => i.state === 'running')
+
   return (
-    <ContentLayout
-      header={
-        <Header
-          variant="h1"
-          description="EC2 instances (metadata only)"
-        >
-          Instances
-        </Header>
-      }
-    >
+    <ContentLayout header={<Header variant="h1">Instances</Header>}>
       {error ? (
         <Alert type="error" header="Failed to load instances">
           {(error as Error).message}
         </Alert>
       ) : (
-        <Table
-          variant="container"
-          columnDefinitions={columnDefinitions}
+        <ResourceTable
           items={items}
+          columns={columns}
+          trackBy={(i) => i.id}
+          title="Instances"
+          description="EC2 instances (metadata only)"
           loading={isLoading}
-          loadingText="Loading instances"
-          trackBy="id"
-          empty={
-            <Box textAlign="center" color="inherit">
-              <SpaceBetween size="m">
-                <b>No instances</b>
-                <Box variant="p" color="inherit">
-                  No EC2 instances found in this region.
-                </Box>
-              </SpaceBetween>
-            </Box>
+          selectionType="multi"
+          selectedItems={selected}
+          onSelectionChange={setSelected}
+          actions={
+            <ButtonDropdown
+              items={[
+                { id: 'start', text: 'Start', disabled: !hasStopped },
+                { id: 'stop', text: 'Stop', disabled: !hasRunning },
+                { id: 'terminate', text: 'Terminate', disabled: selected.length === 0 },
+              ]}
+              onItemClick={({ detail }) => {
+                if (detail.id === 'start') start.mutate(selected)
+                else if (detail.id === 'stop') stop.mutate(selected)
+                else setConfirmTerminate(true)
+              }}
+              disabled={selected.length === 0}
+            >
+              Actions
+            </ButtonDropdown>
           }
+          emptyTitle="No instances"
+          emptyBody="No EC2 instances found in this region."
         />
       )}
 
       <Modal
-        visible={selected != null}
-        onDismiss={() => setSelected(null)}
-        header="Terminate instance"
+        visible={confirmTerminate}
+        onDismiss={() => setConfirmTerminate(false)}
+        header="Terminate instances"
         footer={
           <Box float="right">
             <SpaceBetween direction="horizontal" size="xs">
-              <Button variant="link" onClick={() => setSelected(null)}>
+              <Button variant="link" onClick={() => setConfirmTerminate(false)}>
                 Cancel
               </Button>
               <Button
                 variant="primary"
                 loading={terminate.isPending}
-                onClick={() => selected && terminate.mutate(selected.id)}
+                onClick={() => terminate.mutate(selected)}
               >
                 Terminate
               </Button>
@@ -131,12 +177,7 @@ export function EC2Instances() {
           </Box>
         }
       >
-        {terminate.error && (
-          <Box color="text-status-error" margin={{ bottom: 's' }}>
-            {(terminate.error as Error).message}
-          </Box>
-        )}
-        Terminate <b>{selected?.id}</b>? This cannot be undone.
+        Terminate {selected.length} instance{selected.length !== 1 ? 's' : ''}? This cannot be undone.
       </Modal>
     </ContentLayout>
   )
