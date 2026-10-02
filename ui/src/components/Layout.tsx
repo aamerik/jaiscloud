@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { applyMode, Mode } from '@cloudscape-design/global-styles'
 import {
+  Alert,
   AppLayout,
   BreadcrumbGroup,
   Flashbar,
@@ -20,8 +21,11 @@ import type {
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useEventStream } from '../hooks/useEventStream'
-import { categoryOrder, navTree, serviceCategory, type NavSection } from './nav'
+import { useServices } from '../hooks/useServices'
+import { groupByCategory, serviceForPath, type NavSection } from './nav'
 import { NotificationsProvider, useNotifications } from './notifications'
+import { ServiceTierBadge } from './ServiceTierBadge'
+import { tierDescription, tierLabel } from '../lib/tier'
 
 /** Router basename; links must include it so they also work without JS. */
 const BASE = '/ui'
@@ -34,24 +38,29 @@ interface Props {
 
 type NavItem = SideNavigationProps.Link | SideNavigationProps.ExpandableLinkGroup
 
-function serviceItem(section: NavSection, expand: boolean): NavItem {
-  if (section.children.length > 1) {
+function serviceItem(service: NavSection, expand: boolean): NavItem {
+  if (service.children.length > 1) {
     return {
       type: 'expandable-link-group',
-      text: section.label,
-      href: href(section.rootPath),
+      text: service.label,
+      href: href(service.rootPath),
       defaultExpanded: expand,
-      items: section.children.map((child) => ({
+      items: service.children.map((child) => ({
         type: 'link',
         text: child.label,
         href: href(child.path),
       })),
     }
   }
-  return { type: 'link', text: section.label, href: href(section.rootPath) }
+  return {
+    type: 'link',
+    text: service.label,
+    href: href(service.rootPath),
+    info: <ServiceTierBadge service={service} />,
+  }
 }
 
-function useConsoleNav() {
+function useConsoleNav(services: NavSection[]) {
   const { pathname } = useLocation()
   const navigate = useNavigate()
 
@@ -61,18 +70,16 @@ function useConsoleNav() {
   }
 
   const breadcrumbItems = useMemo<BreadcrumbGroupProps.Item[]>(() => {
-    const items: BreadcrumbGroupProps.Item[] = [
-      { text: 'JaisCloud', href: href('/') },
-    ]
+    const items: BreadcrumbGroupProps.Item[] = [{ text: 'JaisCloud', href: href('/') }]
     const parts = pathname.split('/').filter(Boolean)
-    if (parts[0] === 'aws' && parts[1]) {
-      const section = navTree.find((s) => s.basePath === `/aws/${parts[1]}`)
-      if (section) items.push({ text: section.label, href: href(section.rootPath) })
+    if (parts[0] === 'aws') {
+      const service = serviceForPath(services, pathname)
+      if (service) items.push({ text: service.label, href: href(service.rootPath) })
     } else if (parts[0] === 'admin') {
       items.push({ text: 'Admin', href: href('/admin') })
     }
     return items
-  }, [pathname])
+  }, [pathname, services])
 
   return { breadcrumbItems, onFollow }
 }
@@ -90,9 +97,11 @@ function Shell({ children }: Props) {
   const { accountId, setAccountId } = useAccount()
   const { data: accountsData, refetch: refetchAccounts } = useAccounts()
   const { connected } = useEventStream()
-  const { breadcrumbItems, onFollow } = useConsoleNav()
+  const { data: servicesData } = useServices()
+  const services = useMemo(() => servicesData?.services ?? [], [servicesData])
+  const currentService = serviceForPath(services, pathname)
+  const { breadcrumbItems, onFollow } = useConsoleNav(services)
   const { items: notifications } = useNotifications()
-  const currentSection = navTree.find((section) => pathname.startsWith(section.basePath))
 
   useEffect(() => {
     applyMode(mode)
@@ -100,16 +109,15 @@ function Shell({ children }: Props) {
   }, [mode])
 
   useEffect(() => {
-    const section = navTree.find((s) => pathname.startsWith(s.basePath))
-    if (!section) return
+    if (!currentService) return
     try {
       const ids: string[] = JSON.parse(localStorage.getItem('jaiscloud-recent') ?? '[]')
-      const next = [section.id, ...ids.filter((id) => id !== section.id)].slice(0, 6)
+      const next = [currentService.id, ...ids.filter((id) => id !== currentService.id)].slice(0, 6)
       localStorage.setItem('jaiscloud-recent', JSON.stringify(next))
     } catch {
       /* ignore malformed storage */
     }
-  }, [pathname])
+  }, [currentService])
 
   const accounts = useMemo(
     () => accountsData?.accounts ?? (accountId ? [accountId] : []),
@@ -118,13 +126,17 @@ function Shell({ children }: Props) {
 
   const sideItems = useMemo<SideNavigationProps.Item[]>(() => {
     const query = search.trim().toLowerCase()
-    const groups = categoryOrder
-      .map((title) => {
-        const items = navTree
-          .filter((section) => serviceCategory[section.id] === title)
-          .filter((section) => !query || section.label.toLowerCase().includes(query))
-          .map((section) => serviceItem(section, query.length > 0 || pathname.startsWith(section.basePath)))
-        return { type: 'section-group', title, items } as SideNavigationProps.SectionGroup
+    const groups: SideNavigationProps.Item[] = groupByCategory(services)
+      .map((group) => {
+        const items = group.services
+          .filter((service) => !query || service.label.toLowerCase().includes(query))
+          .map((service) =>
+            serviceItem(
+              service,
+              query.length > 0 || serviceForPath(services, pathname)?.id === service.id,
+            ),
+          )
+        return { type: 'section-group', title: group.category, items } as SideNavigationProps.SectionGroup
       })
       .filter((group) => group.items.length > 0)
 
@@ -135,7 +147,7 @@ function Shell({ children }: Props) {
       { type: 'divider' },
       { type: 'link', text: 'Admin', href: href('/admin') },
     ]
-  }, [search, pathname])
+  }, [search, pathname, services])
 
   const utilities = useMemo<TopNavigationProps.Utility[]>(() => {
     const items: TopNavigationProps.Utility[] = [
@@ -169,7 +181,7 @@ function Shell({ children }: Props) {
       {
         type: 'menu-dropdown',
         text: mode === Mode.Dark ? 'Dark' : 'Light',
-        iconName: 'settings',
+        iconName: 'light-dark',
         ariaLabel: 'Appearance',
         disableUtilityCollapse: true,
         items: [
@@ -180,6 +192,14 @@ function Shell({ children }: Props) {
           setMode(event.detail.id === 'dark' ? Mode.Dark : Mode.Light)
         },
       },
+      {
+        type: 'button',
+        text: 'Admin',
+        iconName: 'settings',
+        ariaLabel: 'Admin panel',
+        disableUtilityCollapse: true,
+        onClick: () => navigate('/admin'),
+      },
     ]
 
     const version = [meta?.version ? `v${meta.version}` : '', meta?.mode ?? '']
@@ -189,7 +209,7 @@ function Shell({ children }: Props) {
       items.push({ type: 'button', text: version, disableUtilityCollapse: true })
     }
     return items
-  }, [meta, accountId, accounts, connected, refetchAccounts, setAccountId, mode])
+  }, [meta, accountId, accounts, connected, refetchAccounts, setAccountId, mode, navigate])
 
   return (
     <>
@@ -233,14 +253,23 @@ function Shell({ children }: Props) {
           <BreadcrumbGroup items={breadcrumbItems} onFollow={onFollow} ariaLabel="Breadcrumbs" />
         }
         content={children}
-        notifications={<Flashbar items={notifications} />}
+        notifications={
+          <SpaceBetween size="xs">
+            {currentService && currentService.tier !== 'full' && (
+              <Alert type="info" header={tierLabel(currentService)}>
+                {tierDescription(currentService)}
+              </Alert>
+            )}
+            <Flashbar items={notifications} />
+          </SpaceBetween>
+        }
         stickyNotifications
         tools={
-          currentSection ? (
-            <HelpPanel header={<h2>{currentSection.label}</h2>}>
+          currentService ? (
+            <HelpPanel header={<h2>{currentService.label}</h2>}>
               <SpaceBetween size="m">
                 <p>
-                  JaisCloud emulates {currentSection.label}. Manage its resources in account{' '}
+                  JaisCloud emulates {currentService.label}. Manage its resources in account{' '}
                   {accountId || '—'} ({meta?.region ?? '—'}).
                 </p>
                 <Link external href="https://docs.aws.amazon.com/">
@@ -252,7 +281,7 @@ function Shell({ children }: Props) {
         }
         toolsOpen={toolsOpen}
         onToolsChange={({ detail }) => setToolsOpen(detail.open)}
-        toolsHide={!currentSection}
+        toolsHide={!currentService}
         contentType="default"
       />
     </>

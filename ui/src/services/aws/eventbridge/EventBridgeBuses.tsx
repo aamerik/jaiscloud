@@ -1,31 +1,44 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
+  Alert,
+  Box,
+  Button,
+  ButtonDropdown,
+  ContentLayout,
+  Form,
+  FormField,
+  Header,
+  Input,
+  Modal,
+  SpaceBetween,
+  Textarea,
+} from '@cloudscape-design/components'
+import {
   listEventBuses,
   createEventBus,
   deleteEventBus,
   putEvents,
   type EventBus,
 } from '../../../api/eventbridge'
-import { EmptyState } from '../../../components/EmptyState'
+import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
+import { useNotifications } from '../../../components/notifications'
 
-const tableStyle: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }
-const thStyle: React.CSSProperties = { textAlign: 'left', padding: '0.6rem 1rem', borderBottom: '2px solid #2d3748', color: '#b0bec5', fontWeight: 600, fontSize: '0.78rem', textTransform: 'uppercase' }
-const tdStyle: React.CSSProperties = { padding: '0.6rem 1rem', verticalAlign: 'middle' }
-const btnStyle: React.CSSProperties = { padding: '0.4rem 1rem', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: '0.85rem', background: '#0073bb', color: '#fff' }
-const inputStyle: React.CSSProperties = { padding: '0.4rem 0.75rem', borderRadius: 4, border: '1px solid #2d3748', background: '#1a2332', color: '#e8eaf0', fontSize: '0.85rem', width: '100%', boxSizing: 'border-box' }
-const overlayStyle: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }
-const modalStyle: React.CSSProperties = { background: '#1a2332', borderRadius: 8, padding: '2rem', minWidth: 440, maxWidth: 580 }
+const EMPTY_EVENT_FORM = { source: '', detailType: '', detail: '{}', bus: '' }
 
 export function EventBridgeBuses() {
   const qc = useQueryClient()
+  const { notify } = useNotifications()
   const [createOpen, setCreateOpen] = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState<EventBus | null>(null)
+  const [selected, setSelected] = useState<EventBus[]>([])
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [sendEventsOpen, setSendEventsOpen] = useState(false)
   const [busName, setBusName] = useState('')
-  const [eventForm, setEventForm] = useState({ source: '', detailType: '', detail: '{}', bus: '' })
+  const [details, setDetails] = useState<EventBus | null>(null)
+  const [eventForm, setEventForm] = useState(EMPTY_EVENT_FORM)
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['eventbridge', 'buses'],
     queryFn: () => listEventBuses(),
   })
@@ -34,124 +47,246 @@ export function EventBridgeBuses() {
     mutationFn: () => createEventBus(busName),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['eventbridge', 'buses'] })
+      notify({ type: 'success', header: 'Event bus created', content: busName })
       setCreateOpen(false)
       setBusName('')
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Create failed', content: (err as Error).message }),
   })
 
   const deleteMut = useMutation({
-    mutationFn: (name: string) => deleteEventBus(name),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['eventbridge', 'buses'] })
-      setDeleteTarget(null)
+    mutationFn: async (buses: EventBus[]) => {
+      for (const bus of buses) await deleteEventBus(bus.name)
     },
+    onSuccess: (_result, buses) => {
+      void qc.invalidateQueries({ queryKey: ['eventbridge', 'buses'] })
+      notify({
+        type: 'success',
+        header: `Deleted ${buses.length} event bus${buses.length !== 1 ? 'es' : ''}`,
+      })
+      setSelected([])
+      setConfirmDelete(false)
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Delete failed', content: (err as Error).message }),
   })
 
   const sendEventsMut = useMutation({
-    mutationFn: () => putEvents([{ source: eventForm.source, detailType: eventForm.detailType, detail: eventForm.detail, bus: eventForm.bus || undefined }]),
+    mutationFn: () =>
+      putEvents([
+        {
+          source: eventForm.source,
+          detailType: eventForm.detailType,
+          detail: eventForm.detail,
+          bus: eventForm.bus || undefined,
+        },
+      ]),
     onSuccess: () => {
+      notify({ type: 'success', header: 'Event sent' })
       setSendEventsOpen(false)
-      setEventForm({ source: '', detailType: '', detail: '{}', bus: '' })
+      setEventForm(EMPTY_EVENT_FORM)
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Failed to send event', content: (err as Error).message }),
   })
 
-  if (isLoading) return <div style={{ padding: '2rem', color: '#5f6b7a' }}>Loading event buses…</div>
-
   const buses = data?.items ?? []
+  const includesDefault = selected.some((b) => b.name === 'default')
+
+  const columns: ResourceColumn<EventBus>[] = [
+    {
+      id: 'name',
+      header: 'Name',
+      filterLabel: 'Name',
+      filterValue: (b) => b.name,
+      cell: (b) => <Box fontWeight="bold">{b.name}</Box>,
+    },
+    {
+      id: 'arn',
+      header: 'ARN',
+      cell: (b) => (b.arn ? <Box variant="code">{b.arn}</Box> : '—'),
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: (b) => (
+        <Button variant="inline-link" onClick={() => setDetails(b)}>
+          View details
+        </Button>
+      ),
+    },
+  ]
 
   return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-        <div>
-          <h2 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 600 }}>Event Buses</h2>
-          <span style={{ fontSize: '0.85em', color: '#5f6b7a' }}>{buses.length} bus{buses.length !== 1 ? 'es' : ''}</span>
-        </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button style={{ ...btnStyle, background: '#2d3748' }} onClick={() => setSendEventsOpen(true)}>Send Events</button>
-          <button style={btnStyle} onClick={() => setCreateOpen(true)}>Create Bus</button>
-        </div>
-      </div>
-
-      {buses.length === 0 ? (
-        <EmptyState title="No custom event buses. The default bus is always available." />
+    <ContentLayout header={<Header variant="h1">Event buses</Header>}>
+      {error ? (
+        <Alert type="error" header="Failed to load event buses">
+          {(error as Error).message}
+        </Alert>
       ) : (
-        <table style={tableStyle}>
-          <thead>
-            <tr>{['Name', 'ARN', ''].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr>
-          </thead>
-          <tbody>
-            {buses.map(bus => (
-              <tr key={bus.name} style={{ borderBottom: '1px solid #2d3748' }}>
-                <td style={{ ...tdStyle, fontWeight: 600 }}>{bus.name}</td>
-                <td style={{ ...tdStyle, color: '#b0bec5', fontSize: '0.82rem', fontFamily: 'monospace' }}>{bus.arn ?? '—'}</td>
-                <td style={{ ...tdStyle, textAlign: 'right' }}>
-                  {bus.name !== 'default' && (
-                    <button style={{ ...btnStyle, background: 'transparent', color: '#d13212', border: '1px solid #d13212', padding: '0.25rem 0.6rem', fontSize: '0.8rem' }} onClick={() => setDeleteTarget(bus)}>Delete</button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ResourceTable
+          items={buses}
+          columns={columns}
+          trackBy={(b) => b.name}
+          title="Event buses"
+          loading={isLoading}
+          selectionType="multi"
+          selectedItems={selected}
+          onSelectionChange={setSelected}
+          actions={
+            <SpaceBetween direction="horizontal" size="xs">
+              <ButtonDropdown
+                items={[
+                  {
+                    id: 'delete',
+                    text: 'Delete',
+                    disabled: selected.length === 0 || includesDefault,
+                  },
+                ]}
+                onItemClick={() => setConfirmDelete(true)}
+                disabled={selected.length === 0 || includesDefault}
+              >
+                Actions
+              </ButtonDropdown>
+              <Button onClick={() => setSendEventsOpen(true)}>Send events</Button>
+              <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                Create bus
+              </Button>
+            </SpaceBetween>
+          }
+          emptyTitle="No custom event buses"
+          emptyBody="The default bus is always available."
+        />
       )}
 
-      {createOpen && (
-        <div style={overlayStyle} onClick={() => setCreateOpen(false)}>
-          <div style={modalStyle} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 1.5rem', fontWeight: 600 }}>Create Event Bus</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '1.5rem' }}>
-              <label style={{ fontSize: '0.8rem', color: '#b0bec5' }}>Name *</label>
-              <input style={inputStyle} placeholder="my-custom-bus" value={busName} onChange={e => setBusName(e.target.value)} />
-            </div>
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0' }} onClick={() => setCreateOpen(false)}>Cancel</button>
-              <button style={btnStyle} disabled={!busName || createMut.isPending} onClick={() => createMut.mutate()}>
-                {createMut.isPending ? 'Creating…' : 'Create'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.name ?? 'Event bus'}
+        items={
+          details
+            ? [
+                { label: 'Name', value: details.name },
+                { label: 'ARN', value: <Box variant="code">{details.arn || '—'}</Box> },
+              ]
+            : []
+        }
+      />
 
-      {deleteTarget && (
-        <div style={overlayStyle} onClick={() => setDeleteTarget(null)}>
-          <div style={modalStyle} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 1rem', fontWeight: 600 }}>Delete Event Bus?</h3>
-            <p style={{ color: '#b0bec5', marginBottom: '1.5rem' }}>Delete bus <strong>{deleteTarget.name}</strong>?</p>
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0' }} onClick={() => setDeleteTarget(null)}>Cancel</button>
-              <button style={{ ...btnStyle, background: '#d13212' }} disabled={deleteMut.isPending} onClick={() => deleteMut.mutate(deleteTarget.name)}>
-                {deleteMut.isPending ? 'Deleting…' : 'Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal
+        visible={createOpen}
+        onDismiss={() => setCreateOpen(false)}
+        header="Create event bus"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setCreateOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={createMut.isPending}
+                disabled={!busName.trim()}
+                onClick={() => createMut.mutate()}
+              >
+                Create
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        <Form>
+          <FormField label="Name" constraintText="Required">
+            <Input
+              value={busName}
+              placeholder="my-custom-bus"
+              onChange={({ detail }) => setBusName(detail.value)}
+            />
+          </FormField>
+        </Form>
+      </Modal>
 
-      {sendEventsOpen && (
-        <div style={overlayStyle} onClick={() => setSendEventsOpen(false)}>
-          <div style={modalStyle} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 1.5rem', fontWeight: 600 }}>Send Event</h3>
-            {[
-              { key: 'source', label: 'Source *', placeholder: 'my.app' },
-              { key: 'detailType', label: 'Detail Type *', placeholder: 'StateChange' },
-              { key: 'detail', label: 'Detail (JSON) *', placeholder: '{}' },
-              { key: 'bus', label: 'Event Bus (optional)', placeholder: 'default' },
-            ].map(f => (
-              <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '1rem' }}>
-                <label style={{ fontSize: '0.8rem', color: '#b0bec5' }}>{f.label}</label>
-                <input style={inputStyle} placeholder={f.placeholder} value={(eventForm as Record<string, string>)[f.key]} onChange={e => setEventForm(p => ({ ...p, [f.key]: e.target.value }))} />
-              </div>
-            ))}
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0' }} onClick={() => setSendEventsOpen(false)}>Cancel</button>
-              <button style={btnStyle} disabled={!eventForm.source || !eventForm.detailType || sendEventsMut.isPending} onClick={() => sendEventsMut.mutate()}>
-                {sendEventsMut.isPending ? 'Sending…' : 'Send'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      <Modal
+        visible={confirmDelete}
+        onDismiss={() => setConfirmDelete(false)}
+        header="Delete event buses"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setConfirmDelete(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={deleteMut.isPending}
+                onClick={() => deleteMut.mutate(selected)}
+              >
+                Delete
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        Delete {selected.length} event bus{selected.length !== 1 ? 'es' : ''}? This action cannot be
+        undone.
+      </Modal>
+
+      <Modal
+        visible={sendEventsOpen}
+        onDismiss={() => setSendEventsOpen(false)}
+        header="Send event"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setSendEventsOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={sendEventsMut.isPending}
+                disabled={!eventForm.source.trim() || !eventForm.detailType.trim()}
+                onClick={() => sendEventsMut.mutate()}
+              >
+                Send
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        <Form>
+          <SpaceBetween size="m">
+            <FormField label="Source" constraintText="Required">
+              <Input
+                value={eventForm.source}
+                placeholder="my.app"
+                onChange={({ detail }) => setEventForm({ ...eventForm, source: detail.value })}
+              />
+            </FormField>
+            <FormField label="Detail type" constraintText="Required">
+              <Input
+                value={eventForm.detailType}
+                placeholder="StateChange"
+                onChange={({ detail }) => setEventForm({ ...eventForm, detailType: detail.value })}
+              />
+            </FormField>
+            <FormField label="Detail (JSON)" constraintText="Required">
+              <Textarea
+                value={eventForm.detail}
+                placeholder="{}"
+                onChange={({ detail }) => setEventForm({ ...eventForm, detail: detail.value })}
+              />
+            </FormField>
+            <FormField label="Event bus" description="Optional. Defaults to the default bus.">
+              <Input
+                value={eventForm.bus}
+                placeholder="default"
+                onChange={({ detail }) => setEventForm({ ...eventForm, bus: detail.value })}
+              />
+            </FormField>
+          </SpaceBetween>
+        </Form>
+      </Modal>
+    </ContentLayout>
   )
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"jaiscloud/internal/aws/ui/uihelper"
 	"jaiscloud/internal/config"
@@ -298,13 +299,13 @@ func (h *Handler) describeKey(r *http.Request, keyID, keyARN, region, account st
 	}
 
 	key := KMSKey{
-		KeyID:    strAny(md, "KeyId"),
-		ARN:      strAny(md, "Arn"),
-		KeyUsage: strAny(md, "KeyUsage"),
-		KeySpec:  strAny(md, "KeySpec"),
-		KeyState: strAny(md, "KeyState"),
-		Origin:   strAny(md, "Origin"),
-		CreatedAt: strAny(md, "CreationDate"),
+		KeyID:     strAny(md, "KeyId"),
+		ARN:       strAny(md, "Arn"),
+		KeyUsage:  strAny(md, "KeyUsage"),
+		KeySpec:   strAny(md, "KeySpec"),
+		KeyState:  strAny(md, "KeyState"),
+		Origin:    strAny(md, "Origin"),
+		CreatedAt: dateAny(md, "CreationDate"),
 	}
 	if md["Description"] != nil {
 		key.Description = strAny(md, "Description")
@@ -324,4 +325,21 @@ func (h *Handler) describeKey(r *http.Request, keyID, keyARN, region, account st
 func strAny(m map[string]any, key string) string {
 	v, _ := m[key].(string)
 	return v
+}
+
+// dateAny reads a timestamp that providers may return as an RFC3339 string or
+// as Unix seconds (float64), returning the raw string for the UI to format.
+func dateAny(m map[string]any, key string) string {
+	switch v := m[key].(type) {
+	case string:
+		return v
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case int:
+		return strconv.Itoa(v)
+	case float64:
+		return strconv.FormatInt(int64(v), 10)
+	default:
+		return ""
+	}
 }

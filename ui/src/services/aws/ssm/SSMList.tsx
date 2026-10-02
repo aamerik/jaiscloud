@@ -1,7 +1,36 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listParameters, putParameter, deleteParameter, getParameter, type Parameter } from '../../../api/ssm'
-import { EmptyState } from '../../../components/EmptyState'
+import {
+  Alert,
+  Badge,
+  Box,
+  Button,
+  ContentLayout,
+  Form,
+  FormField,
+  Header,
+  Input,
+  Modal,
+  Select,
+  SpaceBetween,
+  Textarea,
+} from '@cloudscape-design/components'
+import {
+  listParameters,
+  putParameter,
+  deleteParameter,
+  getParameter,
+  type Parameter,
+} from '../../../api/ssm'
+import { formatDate } from '../../../lib/date'
+import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { useNotifications } from '../../../components/notifications'
+
+const PARAMETER_TYPES = [
+  { value: 'String', label: 'String' },
+  { value: 'StringList', label: 'StringList' },
+  { value: 'SecureString', label: 'SecureString' },
+]
 
 export function SSMList() {
   const [createOpen, setCreateOpen] = useState(false)
@@ -14,6 +43,7 @@ export function SSMList() {
   const [viewValue, setViewValue] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<Parameter | null>(null)
   const qc = useQueryClient()
+  const { notify } = useNotifications()
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['ssm', 'parameters', pathFilter],
@@ -21,23 +51,35 @@ export function SSMList() {
   })
 
   const putMut = useMutation({
-    mutationFn: () => putParameter({ name: newName, value: newValue, type: newType, description: newDesc || undefined }),
+    mutationFn: () =>
+      putParameter({
+        name: newName,
+        value: newValue,
+        type: newType,
+        description: newDesc || undefined,
+      }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['ssm', 'parameters'] })
+      notify({ type: 'success', header: 'Parameter created', content: newName })
       setCreateOpen(false)
       setNewName('')
       setNewValue('')
       setNewType('String')
       setNewDesc('')
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Could not create parameter', content: (err as Error).message }),
   })
 
   const deleteMut = useMutation({
     mutationFn: (name: string) => deleteParameter(name),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['ssm', 'parameters'] })
+      notify({ type: 'success', header: 'Parameter deleted' })
       setConfirmDelete(null)
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Delete failed', content: (err as Error).message }),
   })
 
   const handleView = async (p: Parameter) => {
@@ -51,188 +93,202 @@ export function SSMList() {
     }
   }
 
-  if (isLoading) return <div style={{ padding: '2rem', color: '#5f6b7a' }}>Loading parameters…</div>
-  if (error) return <div style={{ padding: '2rem', color: '#d13212' }}>Failed to load: {(error as Error).message}</div>
-
   const params = data?.items ?? []
 
+  const columns: ResourceColumn<Parameter>[] = [
+    {
+      id: 'name',
+      header: 'Name',
+      filterLabel: 'Name',
+      filterValue: (p) => p.name,
+      cell: (p) => <Box variant="code">{p.name}</Box>,
+    },
+    {
+      id: 'type',
+      header: 'Type',
+      filterLabel: 'Type',
+      filterValue: (p) => p.type,
+      cell: (p) => (
+        <Badge color={p.type === 'SecureString' ? 'red' : 'blue'}>{p.type}</Badge>
+      ),
+    },
+    {
+      id: 'version',
+      header: 'Version',
+      cell: (p) => p.version,
+    },
+    {
+      id: 'lastModified',
+      header: 'Last modified',
+      cell: (p) => formatDate(p.lastModifiedDate),
+    },
+    {
+      id: 'actions',
+      header: 'Actions',
+      cell: (p) => (
+        <div onClick={(event) => event.stopPropagation()}>
+          <SpaceBetween direction="horizontal" size="xs">
+            <Button variant="link" onClick={() => void handleView(p)}>
+              View
+            </Button>
+            <Button variant="link" onClick={() => setConfirmDelete(p)}>
+              Delete
+            </Button>
+          </SpaceBetween>
+        </div>
+      ),
+    },
+  ]
+
   return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-        <div>
-          <h2 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 600 }}>SSM Parameter Store</h2>
-          <span style={{ fontSize: '0.85em', color: '#5f6b7a' }}>{params.length} parameter{params.length !== 1 ? 's' : ''}</span>
-        </div>
-        <button onClick={() => setCreateOpen(true)} style={btnPrimary}>Create parameter</button>
-      </div>
-
-      <div style={{ marginBottom: '1rem' }}>
-        <input style={{ ...inputStyle, marginBottom: 0, maxWidth: 340 }}
-          placeholder="Filter by path prefix (e.g. /myapp/)" value={pathFilter}
-          onChange={e => setPathFilter(e.target.value)} />
-      </div>
-
-      {params.length === 0 ? (
-        <EmptyState
-          title="No parameters"
-          description="Store configuration values and secrets as SSM parameters."
-          cta="Create Parameter"
-          onCta={() => setCreateOpen(true)}
-        />
+    <ContentLayout header={<Header variant="h1">SSM Parameter Store</Header>}>
+      {error ? (
+        <Alert type="error" header="Failed to load parameters">
+          {(error as Error).message}
+        </Alert>
       ) : (
-        <div style={{ border: '1px solid #e7e9ec', borderRadius: 8, overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9em' }}>
-            <thead>
-              <tr style={{ background: '#f4f5f7', borderBottom: '2px solid #e7e9ec' }}>
-                <th style={th}>Name</th>
-                <th style={th}>Type</th>
-                <th style={th}>Version</th>
-                <th style={th}>Last modified</th>
-                <th style={{ ...th, textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {params.map((p, i) => (
-                <tr key={p.name} style={{ borderBottom: i < params.length - 1 ? '1px solid #e7e9ec' : 'none' }}>
-                  <td style={{ ...td, fontFamily: 'monospace', fontSize: '0.88em', color: '#0972d3' }}>{p.name}</td>
-                  <td style={td}>
-                    <span style={{
-                      display: 'inline-block', padding: '1px 8px', borderRadius: 10, fontSize: '0.8em',
-                      background: p.type === 'SecureString' ? '#8a611622' : '#0972d322',
-                      color: p.type === 'SecureString' ? '#8a6116' : '#0972d3',
-                    }}>
-                      {p.type}
-                    </span>
-                  </td>
-                  <td style={td}>{p.version}</td>
-                  <td style={td}>{p.lastModifiedDate || '—'}</td>
-                  <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <button onClick={() => handleView(p)} style={btnSmall}>View</button>
-                    <button onClick={() => setConfirmDelete(p)} style={{ ...btnSmall, marginLeft: 6, color: '#d13212', borderColor: '#d13212' }}>
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <SpaceBetween size="m">
+          <FormField label="Path prefix" description="Filter parameters by path prefix, e.g. /myapp/">
+            <Input
+              value={pathFilter}
+              onChange={({ detail }) => setPathFilter(detail.value)}
+              placeholder="/myapp/"
+              ariaLabel="Filter by path prefix"
+            />
+          </FormField>
+          <ResourceTable
+            items={params}
+            columns={columns}
+            trackBy={(p) => p.name}
+            title="Parameters"
+            loading={isLoading}
+            actions={
+              <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                Create parameter
+              </Button>
+            }
+            emptyTitle="No parameters"
+            emptyBody="Store configuration values and secrets as SSM parameters."
+          />
+        </SpaceBetween>
       )}
 
-      {/* Create dialog */}
-      {createOpen && (
-        <div style={overlay}>
-          <div style={dialog}>
-            <h3 style={{ margin: '0 0 1rem' }}>Create Parameter</h3>
-            <label style={labelStyle}>Name *</label>
-            <input style={inputStyle} value={newName} onChange={e => setNewName(e.target.value)} placeholder="/myapp/db-password" autoFocus />
-            <label style={labelStyle}>Type</label>
-            <select style={inputStyle} value={newType} onChange={e => setNewType(e.target.value)}>
-              <option value="String">String</option>
-              <option value="StringList">StringList</option>
-              <option value="SecureString">SecureString</option>
-            </select>
-            <label style={labelStyle}>Value *</label>
-            <textarea style={{ ...inputStyle, height: 80, fontFamily: 'monospace', fontSize: '0.85em', resize: 'vertical' }}
-              value={newValue} onChange={e => setNewValue(e.target.value)} placeholder="parameter value" />
-            <label style={labelStyle}>Description (optional)</label>
-            <input style={inputStyle} value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="My parameter description" />
-            {putMut.error && (
-              <div style={{ color: '#d13212', marginBottom: '0.5rem', fontSize: '0.85em' }}>
-                {(putMut.error as Error).message}
-              </div>
-            )}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-              <button style={btnSecondary} onClick={() => setCreateOpen(false)}>Cancel</button>
-              <button style={btnPrimary} onClick={() => putMut.mutate()} disabled={!newName || !newValue || putMut.isPending}>
-                {putMut.isPending ? 'Creating…' : 'Create'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal
+        visible={createOpen}
+        onDismiss={() => setCreateOpen(false)}
+        header="Create parameter"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setCreateOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={putMut.isPending}
+                disabled={!newName || !newValue}
+                onClick={() => putMut.mutate()}
+              >
+                Create
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        <Form>
+          <SpaceBetween size="l">
+            <FormField label="Name">
+              <Input
+                autoFocus
+                value={newName}
+                onChange={({ detail }) => setNewName(detail.value)}
+                placeholder="/myapp/db-password"
+              />
+            </FormField>
+            <FormField label="Type">
+              <Select
+                selectedOption={PARAMETER_TYPES.find((o) => o.value === newType) ?? PARAMETER_TYPES[0]!}
+                onChange={({ detail }) => setNewType(detail.selectedOption.value ?? 'String')}
+                options={PARAMETER_TYPES}
+                ariaLabel="Parameter type"
+              />
+            </FormField>
+            <FormField label="Value">
+              <Textarea
+                value={newValue}
+                onChange={({ detail }) => setNewValue(detail.value)}
+                placeholder="parameter value"
+              />
+            </FormField>
+            <FormField label="Description" description="Optional">
+              <Input
+                value={newDesc}
+                onChange={({ detail }) => setNewDesc(detail.value)}
+                placeholder="My parameter description"
+              />
+            </FormField>
+          </SpaceBetween>
+        </Form>
+      </Modal>
 
-      {/* View value dialog */}
-      {viewParam && (
-        <div style={overlay}>
-          <div style={dialog}>
-            <h3 style={{ margin: '0 0 0.5rem' }}>{viewParam.name}</h3>
-            <div style={{ color: '#5f6b7a', fontSize: '0.85em', marginBottom: '0.75rem' }}>
-              Type: {viewParam.type} · Version: {viewParam.version}
-            </div>
-            {viewParam.description && (
-              <div style={{ marginBottom: '0.75rem', fontSize: '0.9em' }}>{viewParam.description}</div>
+      <Modal
+        visible={viewParam !== null}
+        onDismiss={() => {
+          setViewParam(null)
+          setViewValue(null)
+        }}
+        header={viewParam?.name ?? 'Parameter'}
+        footer={
+          <Box float="right">
+            <Button
+              onClick={() => {
+                setViewParam(null)
+                setViewValue(null)
+              }}
+            >
+              Close
+            </Button>
+          </Box>
+        }
+      >
+        <SpaceBetween size="m">
+          <Box color="text-body-secondary">
+            Type: {viewParam?.type} · Version: {viewParam?.version}
+          </Box>
+          {viewParam?.description && <Box>{viewParam.description}</Box>}
+          <FormField label="Value">
+            {viewValue === null ? (
+              <Box color="text-status-inactive">Loading…</Box>
+            ) : (
+              <Box variant="pre">{viewValue}</Box>
             )}
-            <label style={labelStyle}>Value</label>
-            <pre style={{
-              background: '#f4f5f7', borderRadius: 6, padding: '0.75rem', fontFamily: 'monospace',
-              fontSize: '0.85em', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-              margin: '0 0 1rem',
-            }}>
-              {viewValue === null ? 'Loading…' : viewValue}
-            </pre>
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button style={btnSecondary} onClick={() => { setViewParam(null); setViewValue(null) }}>Close</button>
-            </div>
-          </div>
-        </div>
-      )}
+          </FormField>
+        </SpaceBetween>
+      </Modal>
 
-      {/* Confirm delete */}
-      {confirmDelete && (
-        <div style={overlay}>
-          <div style={dialog}>
-            <h3 style={{ margin: '0 0 0.75rem' }}>Delete parameter?</h3>
-            <p style={{ margin: '0 0 1rem', color: '#5f6b7a', fontSize: '0.9em' }}>
-              Delete <code>{confirmDelete.name}</code>? This cannot be undone.
-            </p>
-            {deleteMut.error && (
-              <div style={{ color: '#d13212', marginBottom: '0.5rem', fontSize: '0.85em' }}>
-                {(deleteMut.error as Error).message}
-              </div>
-            )}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button style={btnSecondary} onClick={() => setConfirmDelete(null)}>Cancel</button>
-              <button style={{ ...btnPrimary, background: '#d13212', borderColor: '#d13212' }}
-                onClick={() => deleteMut.mutate(confirmDelete.name)}
-                disabled={deleteMut.isPending}>
-                {deleteMut.isPending ? 'Deleting…' : 'Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      <Modal
+        visible={confirmDelete !== null}
+        onDismiss={() => setConfirmDelete(null)}
+        header="Delete parameter"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setConfirmDelete(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={deleteMut.isPending}
+                onClick={() => deleteMut.mutate(confirmDelete?.name ?? '')}
+              >
+                Delete
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        Delete <b>{confirmDelete?.name}</b>? This cannot be undone.
+      </Modal>
+    </ContentLayout>
   )
-}
-
-const btnPrimary: React.CSSProperties = {
-  background: '#e87600', color: '#fff', border: '1px solid #e87600',
-  borderRadius: 6, padding: '0.4rem 1rem', cursor: 'pointer', fontWeight: 500, fontSize: '0.9em',
-}
-const btnSecondary: React.CSSProperties = {
-  background: 'transparent', color: '#5f6b7a', border: '1px solid #ccc',
-  borderRadius: 6, padding: '0.4rem 1rem', cursor: 'pointer', fontSize: '0.9em',
-}
-const btnSmall: React.CSSProperties = {
-  background: 'transparent', color: '#0972d3', border: '1px solid #0972d3',
-  borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: '0.8em',
-}
-const th: React.CSSProperties = {
-  padding: '0.6rem 1rem', textAlign: 'left', fontWeight: 600, fontSize: '0.82em',
-  color: '#5f6b7a', textTransform: 'uppercase', letterSpacing: '0.05em',
-}
-const td: React.CSSProperties = { padding: '0.7rem 1rem', verticalAlign: 'middle' }
-const overlay: React.CSSProperties = {
-  position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex',
-  alignItems: 'center', justifyContent: 'center', zIndex: 1000,
-}
-const dialog: React.CSSProperties = {
-  background: '#fff', borderRadius: 10, padding: '1.5rem', minWidth: 440, maxWidth: 560,
-  boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
-}
-const labelStyle: React.CSSProperties = { display: 'block', fontSize: '0.82em', fontWeight: 600, marginBottom: 4, color: '#2d3748' }
-const inputStyle: React.CSSProperties = {
-  width: '100%', padding: '0.4rem 0.6rem', border: '1px solid #ccc', borderRadius: 6,
-  marginBottom: '0.75rem', fontSize: '0.9em', boxSizing: 'border-box',
 }

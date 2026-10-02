@@ -1,101 +1,210 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listStreams, createStream, deleteStream } from '../../../api/kinesis'
+import {
+  Alert,
+  Box,
+  Button,
+  ButtonDropdown,
+  ContentLayout,
+  Form,
+  FormField,
+  Header,
+  Input,
+  Modal,
+  SpaceBetween,
+  StatusIndicator,
+} from '@cloudscape-design/components'
+import { listStreams, createStream, deleteStream, type Stream } from '../../../api/kinesis'
+import { resourceStatus } from '../../../lib/status'
+import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
+import { useNotifications } from '../../../components/notifications'
 
 export function KinesisStreams() {
   const qc = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
+  const [selected, setSelected] = useState<Stream[]>([])
+  const [details, setDetails] = useState<Stream | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [form, setForm] = useState({ name: '', shardCount: 1 })
+  const { notify } = useNotifications()
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['kinesis', 'streams'],
     queryFn: listStreams,
   })
 
   const create = useMutation({
     mutationFn: () => createStream(form),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['kinesis', 'streams'] }); setCreateOpen(false) },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['kinesis', 'streams'] })
+      notify({ type: 'success', header: 'Stream creating', content: form.name })
+      setCreateOpen(false)
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Create failed', content: (err as Error).message }),
   })
 
   const del = useMutation({
-    mutationFn: (name: string) => deleteStream(name),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['kinesis', 'streams'] }),
+    mutationFn: async (streams: Stream[]) => {
+      for (const stream of streams) await deleteStream(stream.name)
+    },
+    onSuccess: (_r, streams) => {
+      void qc.invalidateQueries({ queryKey: ['kinesis', 'streams'] })
+      notify({ type: 'success', header: `Deleted ${streams.length} stream(s)` })
+      setSelected([])
+      setConfirmDelete(false)
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Delete failed', content: (err as Error).message }),
   })
 
   const items = data?.items ?? []
 
+  const columns: ResourceColumn<Stream>[] = [
+    { id: 'name', header: 'Stream name', filterLabel: 'Stream name', filterValue: (s) => s.name, cell: (s) => s.name },
+    {
+      id: 'status',
+      header: 'Status',
+      filterLabel: 'Status',
+      filterValue: (s) => s.status,
+      cell: (s) => (
+        <StatusIndicator type={resourceStatus(s.status)}>{s.status || '—'}</StatusIndicator>
+      ),
+    },
+    { id: 'mode', header: 'Mode', filterLabel: 'Mode', filterValue: (s) => s.mode, cell: (s) => s.mode || '—' },
+    { id: 'arn', header: 'ARN', cell: (s) => <Box variant="code">{s.arn || '—'}</Box> },
+    {
+      id: 'actions',
+      header: '',
+      cell: (s) => (
+        <Button variant="inline-link" onClick={() => setDetails(s)}>
+          View details
+        </Button>
+      ),
+    },
+  ]
+
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold">Kinesis Data Streams</h1>
-        <button onClick={() => setCreateOpen(true)} className="px-3 py-1.5 text-sm rounded bg-orange-500 text-white hover:bg-orange-600">
-          Create Stream
-        </button>
-      </div>
-
-      {isLoading && <p className="text-gray-500">Loading...</p>}
-      {!isLoading && items.length === 0 && (
-        <div className="text-center py-16 text-gray-400">No Kinesis streams found</div>
+    <ContentLayout header={<Header variant="h1">Kinesis streams</Header>}>
+      {error ? (
+        <Alert type="error" header="Failed to load streams">
+          {(error as Error).message}
+        </Alert>
+      ) : (
+        <ResourceTable
+          items={items}
+          columns={columns}
+          trackBy={(s) => s.name}
+          title="Streams"
+          loading={isLoading}
+          selectionType="multi"
+          selectedItems={selected}
+          onSelectionChange={setSelected}
+          actions={
+            <SpaceBetween direction="horizontal" size="xs">
+              <ButtonDropdown
+                items={[{ id: 'delete', text: 'Delete', disabled: selected.length === 0 }]}
+                onItemClick={() => setConfirmDelete(true)}
+                disabled={selected.length === 0}
+              >
+                Actions
+              </ButtonDropdown>
+              <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                Create stream
+              </Button>
+            </SpaceBetween>
+          }
+          emptyTitle="No streams"
+          emptyBody="Create a Kinesis data stream to start ingesting records."
+        />
       )}
 
-      {items.length > 0 && (
-        <div className="overflow-x-auto rounded border border-gray-200">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50 text-gray-600 uppercase text-xs">
-              <tr>
-                <th className="px-4 py-2 text-left">Stream Name</th>
-                <th className="px-4 py-2 text-left">Status</th>
-                <th className="px-4 py-2 text-left">Mode</th>
-                <th className="px-4 py-2 text-left">ARN</th>
-                <th className="px-4 py-2 text-left">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {items.map(s => (
-                <tr key={s.name} className="hover:bg-gray-50">
-                  <td className="px-4 py-2 font-medium">{s.name}</td>
-                  <td className="px-4 py-2">
-                    <span className={`text-xs px-2 py-0.5 rounded ${s.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                      {s.status || '—'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2">{s.mode || '—'}</td>
-                  <td className="px-4 py-2 font-mono text-xs truncate max-w-xs">{s.arn || '—'}</td>
-                  <td className="px-4 py-2">
-                    <button onClick={() => del.mutate(s.name)} className="text-xs px-2 py-0.5 rounded bg-red-100 text-red-700 hover:bg-red-200">Delete</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.name ?? 'Stream'}
+        items={
+          details
+            ? [
+                { label: 'Stream name', value: details.name },
+                {
+                  label: 'Status',
+                  value: (
+                    <StatusIndicator type={resourceStatus(details.status)}>
+                      {details.status || '—'}
+                    </StatusIndicator>
+                  ),
+                },
+                { label: 'Mode', value: details.mode || '—' },
+                { label: 'ARN', value: <Box variant="code">{details.arn || '—'}</Box> },
+              ]
+            : []
+        }
+      />
 
-      {createOpen && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 w-[420px]">
-            <h2 className="text-lg font-semibold mb-4">Create Kinesis Stream</h2>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Stream Name</label>
-                <input className="w-full border border-gray-300 rounded px-3 py-2 text-sm" placeholder="my-stream" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Shard Count</label>
-                <input type="number" min={1} className="w-full border border-gray-300 rounded px-3 py-2 text-sm" value={form.shardCount} onChange={e => setForm(p => ({ ...p, shardCount: Number(e.target.value) }))} />
-              </div>
-            </div>
-            <div className="flex gap-2 justify-end mt-4">
-              <button onClick={() => setCreateOpen(false)} className="px-4 py-2 text-sm rounded border border-gray-300 hover:bg-gray-50">Cancel</button>
-              <button
-                onClick={() => create.mutate()}
+      <Modal
+        visible={createOpen}
+        onDismiss={() => setCreateOpen(false)}
+        header="Create Kinesis stream"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setCreateOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={create.isPending}
                 disabled={!form.name.trim()}
-                className="px-4 py-2 text-sm rounded bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50"
-              >Create</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+                onClick={() => create.mutate()}
+              >
+                Create
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        <Form>
+          <SpaceBetween size="m">
+            <FormField label="Stream name">
+              <Input
+                autoFocus
+                value={form.name}
+                onChange={({ detail }) => setForm({ ...form, name: detail.value })}
+                placeholder="my-stream"
+              />
+            </FormField>
+            <FormField label="Shard count">
+              <Input
+                type="number"
+                value={String(form.shardCount)}
+                onChange={({ detail }) => setForm({ ...form, shardCount: Number(detail.value) })}
+              />
+            </FormField>
+          </SpaceBetween>
+        </Form>
+      </Modal>
+
+      <Modal
+        visible={confirmDelete}
+        onDismiss={() => setConfirmDelete(false)}
+        header="Delete streams"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setConfirmDelete(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" loading={del.isPending} onClick={() => del.mutate(selected)}>
+                Delete
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        Permanently delete {selected.length} stream{selected.length !== 1 ? 's' : ''}?
+      </Modal>
+    </ContentLayout>
   )
 }

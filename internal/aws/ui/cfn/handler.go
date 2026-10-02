@@ -33,7 +33,7 @@ func (h *Handler) ListStacks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawStacks, _ := resp.Data["StackSummaries"].([]any)
+	rawStacks := uihelper.AsSlice(resp.Data["StackSummaries"])
 	items := make([]Stack, 0, len(rawStacks))
 	for _, raw := range rawStacks {
 		if m, ok := raw.(map[string]any); ok {

@@ -1,16 +1,40 @@
-import { Fragment, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useState } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { getFunction } from '../../../api/lambda'
+import {
+  Alert,
+  Box,
+  Button,
+  Container,
+  ContentLayout,
+  Header,
+  KeyValuePairs,
+  Link,
+  Select,
+  SpaceBetween,
+  StatusIndicator,
+  Table,
+  Tabs,
+} from '@cloudscape-design/components'
+import type { TableProps } from '@cloudscape-design/components'
+import { getFunction, type LambdaFunction } from '../../../api/lambda'
 import { listLogStreams, getLogEvents } from '../../../api/logs'
 import { formatDate } from '../../../lib/date'
+import { resourceStatus } from '../../../lib/status'
 import { LambdaTest } from './LambdaTest'
 
-type Tab = 'configuration' | 'test' | 'logs'
+type Tab = 'test' | 'logs' | 'configuration'
+
+const TAB_LABELS: Record<Tab, string> = {
+  test: 'Test',
+  logs: 'Logs',
+  configuration: 'Configuration',
+}
 
 export function LambdaDetail() {
   const { name: encodedName } = useParams<{ name: string }>()
   const name = encodedName ? decodeURIComponent(encodedName) : ''
+  const navigate = useNavigate()
   const [tab, setTab] = useState<Tab>('test')
 
   const { data: fn, isLoading, error } = useQuery({
@@ -19,108 +43,101 @@ export function LambdaDetail() {
     enabled: !!name,
   })
 
-  if (isLoading) return <div style={{ padding: '2rem', color: '#5f6b7a' }}>Loading…</div>
-
-  if (error || !fn) {
+  if (isLoading) {
     return (
-      <div>
-        <Link to="/aws/lambda" style={{ color: '#0972d3', fontSize: '0.9em', textDecoration: 'none' }}>← Lambda</Link>
-        <p style={{ color: '#d13212' }}>{error ? (error as Error).message : 'Function not found.'}</p>
-      </div>
+      <ContentLayout header={<Header variant="h1">Lambda function</Header>}>
+        <Box color="text-body-secondary">Loading…</Box>
+      </ContentLayout>
     )
   }
 
-  const configRows: [string, string][] = [
-    ['ARN', fn.arn],
-    ['Runtime', fn.runtime],
-    ['Handler', fn.handler],
-    ['Role ARN', fn.roleArn],
-    ['Timeout', `${fn.timeout}s`],
-    ['Memory', `${fn.memorySize} MB`],
-    ['State', fn.state],
-    ['Description', fn.description || '—'],
-    ['Last modified', formatDate(fn.lastModified)],
+  if (error || !fn) {
+    return (
+      <ContentLayout header={<Header variant="h1">Lambda function</Header>}>
+        <Alert type="error" header="Failed to load function">
+          {error ? (error as Error).message : 'Function not found.'}
+        </Alert>
+      </ContentLayout>
+    )
+  }
+
+  return (
+    <ContentLayout
+      header={
+        <Header
+          variant="h1"
+          description={
+            <Link
+              href="/ui/aws/lambda"
+              onFollow={(event) => {
+                event.preventDefault()
+                navigate('/aws/lambda')
+              }}
+            >
+              ← Lambda functions
+            </Link>
+          }
+          actions={<StatusIndicator type={resourceStatus(fn.state)}>{fn.state}</StatusIndicator>}
+        >
+          {fn.name}
+        </Header>
+      }
+    >
+      <Tabs
+        tabs={(Object.keys(TAB_LABELS) as Tab[]).map((id) => ({ id, label: TAB_LABELS[id] }))}
+        activeTabId={tab}
+        onChange={({ detail }) => setTab(detail.activeTabId as Tab)}
+      />
+
+      <Box margin={{ top: 'l' }}>
+        {tab === 'test' && <LambdaTest name={name} />}
+        {tab === 'logs' && <LambdaLogs name={name} />}
+        {tab === 'configuration' && <LambdaConfig fn={fn} />}
+      </Box>
+    </ContentLayout>
+  )
+}
+
+function LambdaConfig({ fn }: { fn: LambdaFunction }) {
+  const configItems = [
+    { label: 'ARN', value: fn.arn },
+    { label: 'Runtime', value: fn.runtime },
+    { label: 'Handler', value: fn.handler },
+    { label: 'Role ARN', value: fn.roleArn },
+    { label: 'Timeout', value: `${fn.timeout}s` },
+    { label: 'Memory', value: `${fn.memorySize} MB` },
+    { label: 'State', value: fn.state },
+    { label: 'Description', value: fn.description || '—' },
+    { label: 'Last modified', value: formatDate(fn.lastModified) },
+  ]
+
+  const envVars = fn.envVars ?? {}
+  const envEntries = Object.entries(envVars)
+  const envColumns: TableProps.ColumnDefinition<{ key: string; value: string }>[] = [
+    { id: 'key', header: 'Key', cell: (item) => <Box variant="code">{item.key}</Box> },
+    { id: 'value', header: 'Value', cell: (item) => <Box variant="code">{item.value}</Box> },
   ]
 
   return (
-    <div>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <Link to="/aws/lambda" style={{ color: '#0972d3', fontSize: '0.85em', textDecoration: 'none' }}>
-          ← Lambda Functions
-        </Link>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-          <h2 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 600 }}>{fn.name}</h2>
-          <code style={{ fontSize: '0.75em', color: '#8d9daa', background: '#f4f5f7', padding: '0.2em 0.5em', borderRadius: 3 }}>
-            {fn.runtime}
-          </code>
-          <span style={{
-            fontSize: '0.8em', fontWeight: 500,
-            color: fn.state === 'Active' ? '#1d8102' : fn.state === 'Pending' ? '#e77600' : '#d13212',
-          }}>
-            {fn.state}
-          </span>
-        </div>
-      </div>
+    <SpaceBetween size="l">
+      <Container header={<Header variant="h2">Configuration</Header>}>
+        <KeyValuePairs columns={2} items={configItems} />
+      </Container>
 
-      <div style={{ display: 'flex', borderBottom: '2px solid #e7e9ec', marginBottom: '1.5rem' }}>
-        {([['test', 'Test'], ['logs', 'Logs'], ['configuration', 'Configuration']] as [Tab, string][]).map(([t, label]) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{
-              background: 'none', border: 'none', padding: '0.6rem 1.25rem', cursor: 'pointer',
-              fontSize: '0.9em', fontWeight: tab === t ? 600 : 400,
-              color: tab === t ? '#e77600' : '#5f6b7a',
-              borderBottom: `2px solid ${tab === t ? '#e77600' : 'transparent'}`,
-              marginBottom: -2,
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'test' && <LambdaTest name={name} />}
-
-      {tab === 'logs' && <LambdaLogs name={name} />}
-
-      {tab === 'configuration' && (
-        <div>
-          <dl style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '0 2rem', margin: '0 0 1.5rem', fontSize: '0.9em' }}>
-            {configRows.map(([label, value]) => (
-              <Fragment key={label}>
-                <dt style={{ color: '#5f6b7a', fontWeight: 500, padding: '0.5rem 0', borderBottom: '1px solid #f4f5f7', whiteSpace: 'nowrap' }}>{label}</dt>
-                <dd style={{ margin: 0, padding: '0.5rem 0', borderBottom: '1px solid #f4f5f7', wordBreak: 'break-all' }}>{value}</dd>
-              </Fragment>
-            ))}
-          </dl>
-
-          {fn.envVars && Object.keys(fn.envVars).length > 0 && (
-            <div style={{ marginBottom: '1.5rem' }}>
-              <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem', fontWeight: 600 }}>Environment variables</h4>
-              <div style={{ border: '1px solid #e7e9ec', borderRadius: 6, overflow: 'hidden' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85em' }}>
-                  <thead>
-                    <tr style={{ background: '#f4f5f7', borderBottom: '2px solid #e7e9ec' }}>
-                      <th style={{ padding: '0.5rem 1rem', textAlign: 'left', color: '#5f6b7a', fontSize: '0.82em', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Key</th>
-                      <th style={{ padding: '0.5rem 1rem', textAlign: 'left', color: '#5f6b7a', fontSize: '0.82em', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Value</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(fn.envVars).map(([k, v]) => (
-                      <tr key={k} style={{ borderBottom: '1px solid #e7e9ec' }}>
-                        <td style={{ padding: '0.6rem 1rem' }}><code style={{ background: '#f4f5f7', padding: '0.2em 0.4em', borderRadius: 3 }}>{k}</code></td>
-                        <td style={{ padding: '0.6rem 1rem', fontFamily: 'monospace', fontSize: '0.9em' }}>{v}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </div>
+      {envEntries.length > 0 && (
+        <Table
+          items={envEntries.map(([key, value]) => ({ key, value }))}
+          columnDefinitions={envColumns}
+          trackBy={(item) => item.key}
+          header={
+            <Header variant="h2" counter={`(${envEntries.length})`}>
+              Environment variables
+            </Header>
+          }
+          empty={<Box textAlign="center">No environment variables.</Box>}
+        />
       )}
-    </div>
+    </SpaceBetween>
   )
 }
 
@@ -139,69 +156,88 @@ function LambdaLogs({ name }: { name: string }) {
 
   const { data: eventsData, isLoading: eventsLoading } = useQuery({
     queryKey: ['logs', 'lambda', name, 'events', activeStream],
-    queryFn: () => getLogEvents(logGroupName, activeStream!, {
-      limit: 200,
-      startTime: Date.now() - 24 * 60 * 60 * 1000,
-      endTime: Date.now(),
-    }),
+    queryFn: () =>
+      getLogEvents(logGroupName, activeStream!, {
+        limit: 200,
+        startTime: Date.now() - 24 * 60 * 60 * 1000,
+        endTime: Date.now(),
+      }),
     enabled: !!activeStream,
   })
 
-  function colorLine(line: string): string {
-    if (/^START /.test(line)) return '#4caf78'
-    if (/^END /.test(line)) return '#79b8ff'
-    if (/^REPORT /.test(line)) return '#9da8b5'
-    if (/^ERROR/.test(line)) return '#ff6b6b'
-    if (/^WARN/.test(line)) return '#ffa94d'
-    return '#e0e0e0'
-  }
-
-  if (streamsLoading) return <div style={{ color: '#5f6b7a', fontSize: '0.9em' }}>Loading log streams…</div>
+  if (streamsLoading) return <Box color="text-body-secondary">Loading log streams…</Box>
 
   if (streams.length === 0) {
     return (
-      <div style={{ color: '#5f6b7a', fontSize: '0.9em' }}>
-        <p>No log streams found for <code>/aws/lambda/{name}</code>.</p>
-        <p style={{ fontSize: '0.85em' }}>Invoke the function to generate logs.</p>
-        <button onClick={() => refetch()} style={btnSmall}>Refresh</button>
-      </div>
+      <SpaceBetween size="s">
+        <Box color="text-body-secondary">
+          No log streams found for <Box variant="code">/aws/lambda/{name}</Box>.
+        </Box>
+        <Box color="text-body-secondary">Invoke the function to generate logs.</Box>
+        <Button onClick={() => refetch()}>Refresh</Button>
+      </SpaceBetween>
     )
   }
 
   return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
-        <label style={{ fontSize: '0.9em', fontWeight: 500 }}>Log stream</label>
-        <select
-          value={activeStream ?? ''}
-          onChange={(e) => setSelectedStream(e.target.value)}
-          style={{ border: '1px solid #c9cdd4', borderRadius: 4, padding: '0.3rem 0.5rem', fontSize: '0.85em', flex: 1, maxWidth: 480 }}
+    <Container
+      header={
+        <Header
+          variant="h2"
+          actions={
+            <SpaceBetween direction="horizontal" size="xs">
+              <Select
+                selectedOption={{ value: activeStream ?? '', label: activeStream ?? '' }}
+                onChange={({ detail }) => setSelectedStream(detail.selectedOption.value ?? null)}
+                options={streams.map((stream) => ({ value: stream.name, label: stream.name }))}
+                ariaLabel="Log stream"
+              />
+              <Button onClick={() => refetch()}>Refresh</Button>
+            </SpaceBetween>
+          }
         >
-          {streams.map((s) => (
-            <option key={s.name} value={s.name}>{s.name}</option>
-          ))}
-        </select>
-        <button onClick={() => refetch()} style={btnSmall}>Refresh</button>
-      </div>
-
-      <div style={{ border: '1px solid #2d3748', borderRadius: 6, overflow: 'hidden' }}>
-        <pre style={{ margin: 0, padding: '0.75rem 1rem', background: '#1e1e1e', overflow: 'auto', maxHeight: 500, fontSize: '0.8em', fontFamily: 'monospace', lineHeight: 1.6 }}>
-          {eventsLoading ? (
-            <span style={{ color: '#5f6b7a' }}>Loading…</span>
-          ) : !eventsData || eventsData.events.length === 0 ? (
-            <span style={{ color: '#5f6b7a' }}>No events in this stream.</span>
-          ) : (
-            eventsData.events.map((ev, i) => (
-              <div key={i} style={{ color: colorLine(ev.message) }}>{ev.message}</div>
-            ))
-          )}
-        </pre>
-      </div>
-    </div>
+          Log stream
+        </Header>
+      }
+    >
+      <pre style={logPreStyle}>
+        {eventsLoading ? (
+          <span style={{ color: '#9da8b5' }}>Loading…</span>
+        ) : !eventsData || eventsData.events.length === 0 ? (
+          <span style={{ color: '#9da8b5' }}>No events in this stream.</span>
+        ) : (
+          eventsData.events.map((event, index) => (
+            <div key={index} style={colorLogLine(event.message)}>
+              {event.message}
+            </div>
+          ))
+        )}
+      </pre>
+    </Container>
   )
 }
 
-const btnSmall: React.CSSProperties = {
-  background: 'none', border: '1px solid #c9cdd4', color: '#16191f',
-  borderRadius: 4, padding: '0.3rem 0.75rem', cursor: 'pointer', fontSize: '0.82em',
+function logColor(line: string): string {
+  if (/^START /.test(line)) return '#4caf78'
+  if (/^END /.test(line)) return '#79b8ff'
+  if (/^REPORT /.test(line)) return '#9da8b5'
+  if (/^ERROR/.test(line)) return '#ff6b6b'
+  if (/^WARN/.test(line)) return '#ffa94d'
+  return '#e0e0e0'
+}
+
+function colorLogLine(line: string): React.CSSProperties {
+  return { color: logColor(line) }
+}
+
+const logPreStyle: React.CSSProperties = {
+  margin: 0,
+  padding: '0.75rem 1rem',
+  background: '#1e1e1e',
+  borderRadius: 6,
+  overflow: 'auto',
+  maxHeight: 500,
+  fontSize: '0.8em',
+  fontFamily: 'monospace',
+  lineHeight: 1.6,
 }

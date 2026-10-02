@@ -48,7 +48,7 @@ func (h *Handler) ListLogGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawGroups, _ := resp.Data["logGroups"].([]any)
+	rawGroups := uihelper.AsSlice(resp.Data["logGroups"])
 	nextTok, _ := resp.Data["nextToken"].(string)
 
 	groups := make([]LogGroup, 0, len(rawGroups))
@@ -157,7 +157,7 @@ func (h *Handler) ListLogStreams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawStreams, _ := resp.Data["logStreams"].([]any)
+	rawStreams := uihelper.AsSlice(resp.Data["logStreams"])
 	nextTok, _ := resp.Data["nextToken"].(string)
 
 	streams := make([]LogStream, 0, len(rawStreams))
@@ -218,7 +218,7 @@ func (h *Handler) GetLogEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawEvents, _ := resp.Data["events"].([]any)
+	rawEvents := uihelper.AsSlice(resp.Data["events"])
 	nextFwd, _ := resp.Data["nextForwardToken"].(string)
 	nextBwd, _ := resp.Data["nextBackwardToken"].(string)
 	truncated := len(rawEvents) >= 10000
@@ -277,7 +277,7 @@ func (h *Handler) FilterLogEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawEvents, _ := resp.Data["events"].([]any)
+	rawEvents := uihelper.AsSlice(resp.Data["events"])
 	nextTok, _ := resp.Data["nextToken"].(string)
 
 	events := make([]LogEvent, 0, len(rawEvents))

@@ -1,4 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { Alert, Box, ContentLayout, Header, Spinner } from '@cloudscape-design/components'
 import { useMeta } from './hooks/useMeta'
 import { Layout } from './components/Layout'
 import { ConsoleHome } from './components/ConsoleHome'
@@ -39,17 +40,19 @@ export default function App() {
 
   if (isLoading) {
     return (
-      <div style={{ padding: '2rem', fontFamily: 'monospace' }}>
-        Connecting to JaisCloud…
-      </div>
+      <Box padding="l">
+        <Spinner size="large" /> Connecting to JaisCloud…
+      </Box>
     )
   }
 
   if (!meta) {
     return (
-      <div style={{ padding: '2rem', fontFamily: 'monospace', color: '#e53' }}>
-        Could not connect to JaisCloud. Is the server running on port 4567?
-      </div>
+      <ContentLayout header={<Header variant="h1">JaisCloud</Header>}>
+        <Alert type="error" header="Could not connect to JaisCloud">
+          Is the server running?
+        </Alert>
+      </ContentLayout>
     )
   }
 

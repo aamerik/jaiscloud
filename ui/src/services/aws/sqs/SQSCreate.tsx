@@ -1,11 +1,29 @@
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
+import {
+  Alert,
+  Box,
+  Button,
+  ExpandableSection,
+  Form,
+  FormField,
+  Input,
+  Modal,
+  Select,
+  SpaceBetween,
+} from '@cloudscape-design/components'
 import { createQueue, type CreateQueueRequest } from '../../../api/sqs'
+import { useNotifications } from '../../../components/notifications'
 
 interface Props {
   onClose: () => void
   onCreated: () => void
 }
+
+const TYPE_OPTIONS = [
+  { value: 'Standard', label: 'Standard' },
+  { value: 'FIFO', label: 'FIFO' },
+]
 
 export function SQSCreate({ onClose, onCreated }: Props) {
   const [name, setName] = useState('')
@@ -17,10 +35,13 @@ export function SQSCreate({ onClose, onCreated }: Props) {
   const [tagKey, setTagKey] = useState('')
   const [tagVal, setTagVal] = useState('')
   const [tags, setTags] = useState<Record<string, string>>({})
+  const { notify } = useNotifications()
 
   const mut = useMutation({
     mutationFn: (req: CreateQueueRequest) => createQueue(req),
     onSuccess: () => onCreated(),
+    onError: (err) =>
+      notify({ type: 'error', header: 'Could not create queue', content: (err as Error).message }),
   })
 
   function addTag() {
@@ -32,11 +53,14 @@ export function SQSCreate({ onClose, onCreated }: Props) {
   }
 
   function removeTag(k: string) {
-    setTags((t) => { const n = { ...t }; delete n[k]; return n })
+    setTags((t) => {
+      const n = { ...t }
+      delete n[k]
+      return n
+    })
   }
 
-  function submit(e: React.FormEvent) {
-    e.preventDefault()
+  function submit() {
     const queueName = type === 'FIFO' && !name.endsWith('.fifo') ? `${name}.fifo` : name
     const req: CreateQueueRequest = {
       name: queueName,
@@ -50,137 +74,129 @@ export function SQSCreate({ onClose, onCreated }: Props) {
   }
 
   return (
-    <div style={overlay}>
-      <div style={dialog} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
-          <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Create queue</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.1rem', color: '#5f6b7a', lineHeight: 1 }}>✕</button>
-        </div>
-
-        <form onSubmit={submit}>
-          <label style={labelStyle}>
-            Queue name
-            <input
-              required
+    <Modal
+      visible
+      onDismiss={onClose}
+      header="Create queue"
+      footer={
+        <Box float="right">
+          <SpaceBetween direction="horizontal" size="xs">
+            <Button variant="link" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              loading={mut.isPending}
+              disabled={!name.trim()}
+              onClick={submit}
+            >
+              Create queue
+            </Button>
+          </SpaceBetween>
+        </Box>
+      }
+    >
+      <Form>
+        <SpaceBetween size="m">
+          <FormField
+            label="Queue name"
+            constraintText={
+              type === 'FIFO' && name && !name.endsWith('.fifo')
+                ? `Will be created as ${name}.fifo`
+                : undefined
+            }
+          >
+            <Input
+              autoFocus
               value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={type === 'FIFO' ? 'my-queue  (.fifo appended automatically)' : 'my-queue'}
-              style={inputStyle}
+              onChange={({ detail }) => setName(detail.value)}
+              placeholder="my-queue"
             />
-            {type === 'FIFO' && name && !name.endsWith('.fifo') && (
-              <span style={{ fontSize: '0.78em', color: '#5f6b7a' }}>
-                Will be created as <strong>{name}.fifo</strong>
-              </span>
-            )}
-          </label>
+          </FormField>
 
-          <label style={labelStyle}>
-            Type
-            <select value={type} onChange={(e) => setType(e.target.value as 'Standard' | 'FIFO')} style={inputStyle}>
-              <option value="Standard">Standard</option>
-              <option value="FIFO">FIFO</option>
-            </select>
-          </label>
+          <FormField label="Type">
+            <Select
+              selectedOption={TYPE_OPTIONS.find((option) => option.value === type) ?? TYPE_OPTIONS[0]!}
+              onChange={({ detail }) => setType(detail.selectedOption.value as 'Standard' | 'FIFO')}
+              options={TYPE_OPTIONS}
+            />
+          </FormField>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-            <label style={labelStyle}>
-              Visibility timeout (s)
-              <input type="number" min={0} max={43200} value={visibility}
-                onChange={(e) => setVisibility(Number(e.target.value))} style={inputStyle} />
-            </label>
-            <label style={labelStyle}>
-              Retention period (s)
-              <input type="number" min={60} max={1209600} value={retention}
-                onChange={(e) => setRetention(Number(e.target.value))} style={inputStyle} />
-            </label>
-          </div>
+          <SpaceBetween direction="horizontal" size="xs">
+            <FormField label="Visibility timeout (s)">
+              <Input
+                type="number"
+                value={String(visibility)}
+                onChange={({ detail }) => setVisibility(Number(detail.value))}
+              />
+            </FormField>
+            <FormField label="Retention period (s)">
+              <Input
+                type="number"
+                value={String(retention)}
+                onChange={({ detail }) => setRetention(Number(detail.value))}
+              />
+            </FormField>
+          </SpaceBetween>
 
-          <details style={{ marginTop: '0.75rem' }}>
-            <summary style={{ cursor: 'pointer', color: '#0972d3', fontSize: '0.9em', marginBottom: '0.75rem' }}>
-              Dead-letter queue (optional)
-            </summary>
-            <label style={labelStyle}>
-              DLQ ARN
-              <input value={dlqArn} onChange={(e) => setDlqArn(e.target.value)}
-                placeholder="arn:aws:sqs:us-east-1:000000000000:my-dlq" style={inputStyle} />
-            </label>
-            {dlqArn && (
-              <label style={labelStyle}>
-                Max receive count
-                <input type="number" min={1} max={1000} value={dlqMaxReceive}
-                  onChange={(e) => setDlqMaxReceive(Number(e.target.value))} style={inputStyle} />
-              </label>
-            )}
-          </details>
+          <ExpandableSection headerText="Dead-letter queue (optional)">
+            <SpaceBetween size="s">
+              <FormField label="DLQ ARN">
+                <Input
+                  value={dlqArn}
+                  onChange={({ detail }) => setDlqArn(detail.value)}
+                  placeholder="arn:aws:sqs:us-east-1:000000000000:my-dlq"
+                />
+              </FormField>
+              {dlqArn && (
+                <FormField label="Max receive count">
+                  <Input
+                    type="number"
+                    value={String(dlqMaxReceive)}
+                    onChange={({ detail }) => setDlqMaxReceive(Number(detail.value))}
+                  />
+                </FormField>
+              )}
+            </SpaceBetween>
+          </ExpandableSection>
 
-          <details style={{ marginTop: '0.75rem' }}>
-            <summary style={{ cursor: 'pointer', color: '#0972d3', fontSize: '0.9em', marginBottom: '0.75rem' }}>
-              Tags (optional)
-            </summary>
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', alignItems: 'flex-end' }}>
-              <input placeholder="Key" value={tagKey} onChange={(e) => setTagKey(e.target.value)}
-                style={{ ...inputStyle, flex: 1, marginBottom: 0 }} />
-              <input placeholder="Value" value={tagVal} onChange={(e) => setTagVal(e.target.value)}
-                style={{ ...inputStyle, flex: 1, marginBottom: 0 }} />
-              <button type="button" onClick={addTag} style={btnSecondary}>Add</button>
-            </div>
-            {Object.entries(tags).map(([k, v]) => (
-              <div key={k} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.85em', marginBottom: '0.3rem' }}>
-                <code style={{ background: '#f4f5f7', padding: '0.2em 0.5em', borderRadius: 3 }}>{k}</code>
-                <span style={{ color: '#5f6b7a' }}>=</span>
-                <code style={{ background: '#f4f5f7', padding: '0.2em 0.5em', borderRadius: 3 }}>{v}</code>
-                <button type="button" onClick={() => removeTag(k)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#d13212', fontSize: '0.85em', padding: '0 0.25rem' }}>
-                  Remove
-                </button>
-              </div>
-            ))}
-          </details>
+          <ExpandableSection headerText="Tags (optional)">
+            <SpaceBetween size="s">
+              <SpaceBetween direction="horizontal" size="xs">
+                <Input
+                  value={tagKey}
+                  onChange={({ detail }) => setTagKey(detail.value)}
+                  placeholder="Key"
+                />
+                <Input
+                  value={tagVal}
+                  onChange={({ detail }) => setTagVal(detail.value)}
+                  placeholder="Value"
+                />
+                <Button onClick={addTag}>Add</Button>
+              </SpaceBetween>
+              {Object.entries(tags).map(([k, v]) => (
+                <SpaceBetween key={k} direction="horizontal" size="xs">
+                  <Box variant="code">{k}</Box>
+                  <Box variant="span" color="text-body-secondary">
+                    =
+                  </Box>
+                  <Box variant="code">{v}</Box>
+                  <Button variant="inline-link" onClick={() => removeTag(k)}>
+                    Remove
+                  </Button>
+                </SpaceBetween>
+              ))}
+            </SpaceBetween>
+          </ExpandableSection>
 
           {mut.error && (
-            <p style={{ color: '#d13212', margin: '1rem 0 0', fontSize: '0.9em' }}>
+            <Alert type="error" header="Could not create queue">
               {(mut.error as Error).message}
-            </p>
+            </Alert>
           )}
-
-          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '1.5rem' }}>
-            <button type="button" onClick={onClose} style={btnSecondary}>Cancel</button>
-            <button type="submit" disabled={mut.isPending}
-              style={{ ...btnPrimary, opacity: mut.isPending ? 0.6 : 1 }}>
-              {mut.isPending ? 'Creating…' : 'Create queue'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        </SpaceBetween>
+      </Form>
+    </Modal>
   )
-}
-
-const overlay: React.CSSProperties = {
-  position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-  display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
-}
-const dialog: React.CSSProperties = {
-  background: '#fff', borderRadius: 8, padding: '1.5rem',
-  width: 520, maxHeight: '90vh', overflowY: 'auto',
-  boxShadow: '0 4px 24px rgba(0,0,0,0.15)',
-}
-const labelStyle: React.CSSProperties = {
-  display: 'flex', flexDirection: 'column', gap: '0.3rem',
-  marginBottom: '0.75rem', fontSize: '0.9em', fontWeight: 500, color: '#16191f',
-}
-const inputStyle: React.CSSProperties = {
-  border: '1px solid #c9cdd4', borderRadius: 4,
-  padding: '0.4rem 0.6rem', fontSize: '0.9em',
-  width: '100%', boxSizing: 'border-box', outline: 'none',
-}
-const btnSecondary: React.CSSProperties = {
-  background: '#fff', border: '1px solid #c9cdd4',
-  borderRadius: 4, padding: '0.45rem 1rem',
-  cursor: 'pointer', fontSize: '0.9em', whiteSpace: 'nowrap',
-}
-const btnPrimary: React.CSSProperties = {
-  background: '#e77600', color: '#fff', border: 'none',
-  borderRadius: 4, padding: '0.5rem 1.25rem',
-  cursor: 'pointer', fontSize: '0.9em', fontWeight: 500,
 }

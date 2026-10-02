@@ -37,7 +37,7 @@ func (h *Handler) ListDatabases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawDBs, _ := resp.Data["DatabaseList"].([]any)
+	rawDBs := uihelper.AsSlice(resp.Data["DatabaseList"])
 	items := make([]Database, 0, len(rawDBs))
 	for _, raw := range rawDBs {
 		if m, ok := raw.(map[string]any); ok {
@@ -120,7 +120,7 @@ func (h *Handler) ListTables(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawTables, _ := resp.Data["TableList"].([]any)
+	rawTables := uihelper.AsSlice(resp.Data["TableList"])
 	items := make([]Table, 0, len(rawTables))
 	for _, raw := range rawTables {
 		if m, ok := raw.(map[string]any); ok {
@@ -214,7 +214,7 @@ func (h *Handler) ListJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawJobs, _ := resp.Data["Jobs"].([]any)
+	rawJobs := uihelper.AsSlice(resp.Data["Jobs"])
 	items := make([]Job, 0, len(rawJobs))
 	for _, raw := range rawJobs {
 		if m, ok := raw.(map[string]any); ok {
@@ -315,7 +315,7 @@ func (h *Handler) ListJobRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawRuns, _ := resp.Data["JobRuns"].([]any)
+	rawRuns := uihelper.AsSlice(resp.Data["JobRuns"])
 	items := make([]JobRun, 0, len(rawRuns))
 	for _, raw := range rawRuns {
 		if m, ok := raw.(map[string]any); ok {
@@ -343,7 +343,7 @@ func (h *Handler) ListCrawlers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawCrawlers, _ := resp.Data["Crawlers"].([]any)
+	rawCrawlers := uihelper.AsSlice(resp.Data["Crawlers"])
 	items := make([]Crawler, 0, len(rawCrawlers))
 	for _, raw := range rawCrawlers {
 		if m, ok := raw.(map[string]any); ok {

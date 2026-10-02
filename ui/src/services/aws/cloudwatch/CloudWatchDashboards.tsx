@@ -1,13 +1,35 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
+  Alert,
+  Box,
+  Button,
+  ButtonDropdown,
+  ContentLayout,
+  Container,
+  Form,
+  FormField,
+  Header,
+  Input,
+  LineChart,
+  Modal,
+  SpaceBetween,
+  Spinner,
+  Tabs,
+} from '@cloudscape-design/components'
+import {
+  getMetricStatistics,
   listDashboards,
   getDashboard,
   putDashboard,
   deleteDashboard,
   type CWDashboard,
 } from '../../../api/cloudwatch'
-import { EmptyState } from '../../../components/EmptyState'
+import { formatDate } from '../../../lib/date'
+import { rangeToWindow } from '../../../lib/timeRange'
+import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { JsonEditor } from '../../../components/JsonEditor'
+import { useNotifications } from '../../../components/notifications'
 
 const DEFAULT_BODY = JSON.stringify({ widgets: [] }, null, 2)
 
@@ -21,6 +43,7 @@ export function CloudWatchDashboards() {
   const [loadingView, setLoadingView] = useState(false)
 
   const qc = useQueryClient()
+  const { notify } = useNotifications()
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['cloudwatch', 'dashboards'],
@@ -31,18 +54,24 @@ export function CloudWatchDashboards() {
     mutationFn: () => putDashboard({ dashboardName: newName, dashboardBody: newBody }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['cloudwatch', 'dashboards'] })
+      notify({ type: 'success', header: 'Dashboard created', content: newName })
       setCreateOpen(false)
       setNewName('')
       setNewBody(DEFAULT_BODY)
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Could not create dashboard', content: (err as Error).message }),
   })
 
   const deleteMut = useMutation({
     mutationFn: (name: string) => deleteDashboard(name),
-    onSuccess: () => {
+    onSuccess: (_result, name) => {
       void qc.invalidateQueries({ queryKey: ['cloudwatch', 'dashboards'] })
+      notify({ type: 'success', header: 'Dashboard deleted', content: name })
       setDeleteTarget(null)
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Could not delete dashboard', content: (err as Error).message }),
   })
 
   async function viewDashboard(d: CWDashboard) {
@@ -63,120 +92,288 @@ export function CloudWatchDashboards() {
     }
   }
 
-  if (isLoading) return <div style={{ padding: '2rem', color: '#5f6b7a' }}>Loading dashboards…</div>
-  if (error) return <div style={{ padding: '2rem', color: '#d13212' }}>Failed to load: {(error as Error).message}</div>
-
   const dashboards = data?.items ?? []
 
+  const columns: ResourceColumn<CWDashboard>[] = [
+    {
+      id: 'name',
+      header: 'Name',
+      filterLabel: 'Name',
+      filterValue: (d) => d.dashboardName,
+      cell: (d) => d.dashboardName,
+    },
+    {
+      id: 'lastModified',
+      header: 'Last modified',
+      cell: (d) => formatDate(d.lastModified),
+    },
+    {
+      id: 'rowActions',
+      header: '',
+      cell: (d) => (
+        <ButtonDropdown
+          variant="icon"
+          ariaLabel={`Actions for ${d.dashboardName}`}
+          items={[
+            { id: 'view', text: 'View' },
+            { id: 'delete', text: 'Delete' },
+          ]}
+          onItemClick={({ detail }) => {
+            if (detail.id === 'view') void viewDashboard(d)
+            else if (detail.id === 'delete') setDeleteTarget(d)
+          }}
+        />
+      ),
+    },
+  ]
+
   return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-        <div>
-          <h2 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 600 }}>CloudWatch Dashboards</h2>
-          <span style={{ fontSize: '0.85em', color: '#5f6b7a' }}>{dashboards.length} dashboard{dashboards.length !== 1 ? 's' : ''}</span>
-        </div>
-        <button onClick={() => setCreateOpen(true)} style={primaryBtnStyle}>Create Dashboard</button>
-      </div>
-
-      {dashboards.length === 0 ? (
-        <EmptyState title="No dashboards found." />
+    <ContentLayout header={<Header variant="h1">CloudWatch dashboards</Header>}>
+      {error ? (
+        <Alert type="error" header="Failed to load dashboards">
+          {(error as Error).message}
+        </Alert>
       ) : (
-        <table style={tableStyle}>
-          <thead>
-            <tr>
-              {['Name', 'Last Modified', ''].map(h => (
-                <th key={h} style={thStyle}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {dashboards.map(d => (
-              <tr key={d.dashboardName} style={{ borderBottom: '1px solid #2d3748' }}>
-                <td style={tdStyle}>{d.dashboardName}</td>
-                <td style={tdStyle}>{d.lastModified ?? '—'}</td>
-                <td style={{ ...tdStyle, textAlign: 'right' }}>
-                  <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-                    <button onClick={() => viewDashboard(d)} style={actionBtnStyle}>View</button>
-                    <button onClick={() => setDeleteTarget(d)} style={{ ...actionBtnStyle, color: '#d13212', borderColor: '#d13212' }}>Delete</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ResourceTable
+          items={dashboards}
+          columns={columns}
+          trackBy={(d) => d.dashboardName}
+          title="Dashboards"
+          loading={isLoading}
+          actions={
+            <Button variant="primary" onClick={() => setCreateOpen(true)}>
+              Create dashboard
+            </Button>
+          }
+          emptyTitle="No dashboards"
+          emptyBody="Create a dashboard to visualize your CloudWatch metrics."
+        />
       )}
 
-      {/* Create dialog */}
-      {createOpen && (
-        <div style={overlayStyle}>
-          <div style={{ ...dialogStyle, minWidth: 520 }}>
-            <h3 style={{ margin: '0 0 1rem', color: '#e2e8f0' }}>Create Dashboard</h3>
-            <label style={labelStyle}>
-              Dashboard Name *
-              <input type="text" value={newName} onChange={e => setNewName(e.target.value)} style={inputStyle} placeholder="my-dashboard" />
-            </label>
-            <label style={labelStyle}>
-              Dashboard Body (JSON)
-              <textarea
-                value={newBody}
-                onChange={e => setNewBody(e.target.value)}
-                rows={8}
-                style={{ ...inputStyle, fontFamily: 'monospace', resize: 'vertical' }}
+      <Modal
+        visible={createOpen}
+        onDismiss={() => setCreateOpen(false)}
+        header="Create dashboard"
+        size="large"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setCreateOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={createMut.isPending}
+                disabled={!newName}
+                onClick={() => createMut.mutate()}
+              >
+                Create
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        <Form>
+          <SpaceBetween size="m">
+            <FormField label="Dashboard name">
+              <Input
+                autoFocus
+                value={newName}
+                onChange={({ detail }) => setNewName(detail.value)}
+                placeholder="my-dashboard"
               />
-            </label>
-            {createMut.error && <div style={{ color: '#d13212', fontSize: '0.85em' }}>{(createMut.error as Error).message}</div>}
-            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem' }}>
-              <button onClick={() => createMut.mutate()} disabled={!newName} style={primaryBtnStyle}>Create</button>
-              <button onClick={() => setCreateOpen(false)} style={cancelBtnStyle}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
+            </FormField>
+            <FormField label="Dashboard body" description="CloudWatch dashboard definition as JSON.">
+              <JsonEditor value={newBody} onChange={setNewBody} height={280} ariaLabel="Dashboard body" />
+            </FormField>
+          </SpaceBetween>
+        </Form>
+      </Modal>
 
-      {/* View dialog */}
-      {viewDash && (
-        <div style={overlayStyle}>
-          <div style={{ ...dialogStyle, minWidth: 560, maxWidth: 700 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-              <h3 style={{ margin: 0, color: '#e2e8f0' }}>{viewDash.dashboardName}</h3>
-              <button onClick={() => setViewDash(null)} style={closeBtnStyle}>✕</button>
-            </div>
-            {loadingView ? (
-              <div style={{ color: '#5f6b7a' }}>Loading…</div>
-            ) : (
-              <pre style={{ background: '#0d1a26', border: '1px solid #2d3748', borderRadius: 4, padding: '0.75rem', color: '#c9cdd4', fontSize: '0.82em', overflow: 'auto', maxHeight: 360, margin: 0 }}>
-                {viewBody}
-              </pre>
-            )}
-          </div>
-        </div>
-      )}
+      <Modal
+        visible={viewDash != null}
+        onDismiss={() => setViewDash(null)}
+        header={viewDash?.dashboardName ?? 'Dashboard'}
+        size="large"
+        footer={
+          <Box float="right">
+            <Button variant="link" onClick={() => setViewDash(null)}>
+              Close
+            </Button>
+          </Box>
+        }
+      >
+        {loadingView ? (
+          <Spinner size="large" />
+        ) : (
+          <Tabs
+            tabs={[
+              {
+                id: 'charts',
+                label: 'Charts',
+                content: <DashboardCharts body={viewBody} />,
+              },
+              {
+                id: 'json',
+                label: 'JSON',
+                content: (
+                  <JsonEditor value={viewBody} onChange={() => {}} height={360} ariaLabel="Dashboard body" />
+                ),
+              },
+            ]}
+          />
+        )}
+      </Modal>
 
-      {/* Delete confirm */}
-      {deleteTarget && (
-        <div style={overlayStyle}>
-          <div style={dialogStyle}>
-            <h3 style={{ margin: '0 0 0.75rem', color: '#e2e8f0' }}>Delete Dashboard?</h3>
-            <p style={{ color: '#8892a4', fontSize: '0.88em' }}>Delete <strong style={{ color: '#e2e8f0' }}>{deleteTarget.dashboardName}</strong>? This cannot be undone.</p>
-            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem' }}>
-              <button onClick={() => deleteMut.mutate(deleteTarget.dashboardName)} style={{ ...primaryBtnStyle, background: '#d13212', borderColor: '#d13212' }}>Delete</button>
-              <button onClick={() => setDeleteTarget(null)} style={cancelBtnStyle}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      <Modal
+        visible={deleteTarget != null}
+        onDismiss={() => setDeleteTarget(null)}
+        header="Delete dashboard"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setDeleteTarget(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={deleteMut.isPending}
+                onClick={() => deleteTarget && deleteMut.mutate(deleteTarget.dashboardName)}
+              >
+                Delete
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        Delete <b>{deleteTarget?.dashboardName}</b>? This action cannot be undone.
+      </Modal>
+    </ContentLayout>
   )
 }
 
-const tableStyle: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: '0.88em' }
-const thStyle: React.CSSProperties = { textAlign: 'left', padding: '0.5rem 0.75rem', color: '#8892a4', fontWeight: 500, borderBottom: '1px solid #2d3748', fontSize: '0.8em', textTransform: 'uppercase', letterSpacing: '0.05em' }
-const tdStyle: React.CSSProperties = { padding: '0.6rem 0.75rem', color: '#c9cdd4', verticalAlign: 'middle' }
-const primaryBtnStyle: React.CSSProperties = { background: '#0972d3', border: '1px solid #0972d3', borderRadius: 4, color: '#fff', cursor: 'pointer', padding: '0.4rem 1rem', fontSize: '0.85em', fontWeight: 500 }
-const cancelBtnStyle: React.CSSProperties = { background: 'none', border: '1px solid #2d3748', borderRadius: 4, color: '#c9cdd4', cursor: 'pointer', padding: '0.4rem 1rem', fontSize: '0.85em' }
-const actionBtnStyle: React.CSSProperties = { background: 'none', border: '1px solid #2d3748', borderRadius: 4, color: '#0972d3', cursor: 'pointer', padding: '0.25rem 0.75rem', fontSize: '0.82em' }
-const overlayStyle: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }
-const dialogStyle: React.CSSProperties = { background: '#1b2530', border: '1px solid #2d3748', borderRadius: 8, padding: '1.75rem', minWidth: 400, maxWidth: 560 }
-const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '0.75rem', color: '#c9cdd4', fontSize: '0.85em' }
-const inputStyle: React.CSSProperties = { background: '#0d1a26', border: '1px solid #2d3748', borderRadius: 4, color: '#e2e8f0', padding: '0.4rem 0.75rem', fontSize: '0.9em' }
-const closeBtnStyle: React.CSSProperties = { background: 'none', border: 'none', color: '#8892a4', cursor: 'pointer', fontSize: '1rem' }
+interface DashboardWidgetDef {
+  type?: string
+  properties?: Record<string, unknown>
+}
+
+function DashboardCharts({ body }: { body: string }) {
+  let widgets: DashboardWidgetDef[] = []
+  try {
+    const parsed = JSON.parse(body) as { widgets?: DashboardWidgetDef[] }
+    widgets = parsed.widgets ?? []
+  } catch {
+    widgets = []
+  }
+
+  if (widgets.length === 0) {
+    return <Box color="text-body-secondary">No widgets defined in this dashboard.</Box>
+  }
+
+  return (
+    <SpaceBetween size="l">
+      {widgets.map((widget, index) => (
+        <DashboardWidget key={index} widget={widget} />
+      ))}
+    </SpaceBetween>
+  )
+}
+
+function DashboardWidget({ widget }: { widget: DashboardWidgetDef }) {
+  const properties = widget.properties ?? {}
+  const title = typeof properties.title === 'string' ? properties.title : undefined
+
+  if (widget.type === 'text') {
+    return (
+      <Container header={<Header variant="h2">{title ?? 'Text'}</Header>}>
+        <Box variant="p">
+          {typeof properties.markdown === 'string' ? properties.markdown : ''}
+        </Box>
+      </Container>
+    )
+  }
+
+  const rawMetrics = Array.isArray(properties.metrics) ? properties.metrics : []
+  const metrics = rawMetrics.filter(
+    (m): m is unknown[] => Array.isArray(m) && m.length >= 2,
+  )
+
+  return (
+    <Container header={<Header variant="h2">{title ?? 'Metric'}</Header>}>
+      {metrics.length === 0 ? (
+        <Box color="text-body-secondary">No metrics defined for this widget.</Box>
+      ) : (
+        <SpaceBetween size="l">
+          {metrics.map((metric, index) => (
+            <MetricSeries
+              key={index}
+              namespace={String(metric[0])}
+              metricName={String(metric[1])}
+            />
+          ))}
+        </SpaceBetween>
+      )}
+    </Container>
+  )
+}
+
+function MetricSeries({ namespace, metricName }: { namespace: string; metricName: string }) {
+  const { start, end } = useMemo(
+    () => rangeToWindow({ type: 'relative', amount: 3, unit: 'hour' }),
+    [],
+  )
+  const { data, isLoading } = useQuery({
+    queryKey: ['cloudwatch', 'stats', namespace, metricName, start.toISOString(), end.toISOString()],
+    queryFn: () =>
+      getMetricStatistics({
+        namespace,
+        metricName,
+        startTime: start.toISOString(),
+        endTime: end.toISOString(),
+        period: 300,
+        statistics: ['Average', 'Maximum'],
+      }),
+  })
+
+  const datapoints = data?.datapoints ?? []
+  const series = [
+    {
+      title: 'Average',
+      type: 'line' as const,
+      data: datapoints
+        .filter((d) => d.average != null)
+        .map((d) => ({ x: new Date(d.timestamp), y: d.average as number })),
+    },
+    {
+      title: 'Maximum',
+      type: 'line' as const,
+      data: datapoints
+        .filter((d) => d.maximum != null)
+        .map((d) => ({ x: new Date(d.timestamp), y: d.maximum as number })),
+    },
+  ].filter((s) => s.data.length > 0)
+
+  return (
+    <div>
+      <Box variant="h4" margin={{ bottom: 'xs' }}>
+        {namespace} · {metricName}
+      </Box>
+      <LineChart
+        series={series}
+        xScaleType="time"
+        yScaleType="linear"
+        height={240}
+        statusType={isLoading ? 'loading' : 'finished'}
+        empty={<span>No datapoints in the last 3 hours.</span>}
+        ariaLabel={`${metricName} chart`}
+        i18nStrings={{
+          xTickFormatter: (value) =>
+            new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          yTickFormatter: (value) => value.toLocaleString(),
+          filterLabel: 'Filter series',
+          filterPlaceholder: 'Filter series',
+        }}
+      />
+    </div>
+  )
+}

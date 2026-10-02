@@ -1,48 +1,46 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Alert,
   Container,
   ContentLayout,
+  DateRangePicker,
   Header,
   LineChart,
-  Select,
   SpaceBetween,
 } from '@cloudscape-design/components'
+import type { DateRangePickerProps } from '@cloudscape-design/components'
 import { listMetrics, getMetricStatistics, type CWMetric } from '../../../api/cloudwatch'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
-
-const RANGES = [
-  { value: '1', label: 'Last 1 hour' },
-  { value: '3', label: 'Last 3 hours' },
-  { value: '12', label: 'Last 12 hours' },
-  { value: '24', label: 'Last 24 hours' },
-]
+import { RELATIVE_OPTIONS, rangeToWindow } from '../../../lib/timeRange'
 
 export function CloudWatchMetrics() {
   const [selected, setSelected] = useState<CWMetric | null>(null)
-  const [range, setRange] = useState('3')
+  const [range, setRange] = useState<DateRangePickerProps.Value | null>({
+    type: 'relative',
+    amount: 3,
+    unit: 'hour',
+  })
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['cloudwatch', 'metrics'],
     queryFn: () => listMetrics(),
   })
 
+  const { start, end } = useMemo(() => rangeToWindow(range), [range])
+
   const stats = useQuery({
-    queryKey: ['cloudwatch', 'stats', selected?.namespace, selected?.metricName, range],
+    queryKey: ['cloudwatch', 'stats', selected?.namespace, selected?.metricName, start.toISOString(), end.toISOString()],
     enabled: selected != null,
-    queryFn: () => {
-      const now = new Date()
-      const start = new Date(now.getTime() - Number(range) * 60 * 60 * 1000)
-      return getMetricStatistics({
+    queryFn: () =>
+      getMetricStatistics({
         namespace: selected!.namespace,
         metricName: selected!.metricName,
         startTime: start.toISOString(),
-        endTime: now.toISOString(),
+        endTime: end.toISOString(),
         period: 300,
         statistics: ['Sum', 'Average', 'Maximum', 'SampleCount'],
-      })
-    },
+      }),
   })
 
   const metrics = data?.items ?? []
@@ -108,42 +106,41 @@ export function CloudWatchMetrics() {
           {selected && (
             <Container
               header={
-                <Header
-                  variant="h2"
-                  description={`${selected.namespace} · last ${range}h · 5-minute periods`}
-                  actions={
-                    <Select
-                      selectedOption={RANGES.find((r) => r.value === range) ?? RANGES[1]!}
-                      onChange={({ detail }) => setRange(detail.selectedOption.value ?? '3')}
-                      options={RANGES}
-                      ariaLabel="Time range"
-                    />
-                  }
-                >
+                <Header variant="h2" description={`${selected.namespace} · 5-minute periods`}>
                   {selected.metricName}
                 </Header>
               }
             >
-              <LineChart
-                series={series}
-                xScaleType="time"
-                yScaleType="linear"
-                xTitle="Time"
-                yTitle="Value"
-                height={320}
-                statusType={stats.isLoading ? 'loading' : 'finished'}
-                loadingText="Loading statistics"
-                errorText="Failed to load statistics"
-                empty={
-                  <span>No datapoints in the selected range.</span>
-                }
-                ariaLabel={`Statistics for ${selected.metricName}`}
-                i18nStrings={{
-                  xTickFormatter: (value) =>
-                    new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                  yTickFormatter: (value) => value.toLocaleString(),
-                }}
-              />
+              <SpaceBetween size="m">
+                <DateRangePicker
+                  value={range}
+                  onChange={({ detail }) => setRange(detail.value)}
+                  relativeOptions={RELATIVE_OPTIONS}
+                  isValidRange={() => ({ valid: true })}
+                  placeholder="Filter by a date and time range"
+                  ariaLabel="Time range"
+                />
+                <LineChart
+                  series={series}
+                  xScaleType="time"
+                  yScaleType="linear"
+                  xTitle="Time"
+                  yTitle="Value"
+                  height={320}
+                  statusType={stats.isLoading ? 'loading' : 'finished'}
+                  loadingText="Loading statistics"
+                  errorText="Failed to load statistics"
+                  empty={<span>No datapoints in the selected range.</span>}
+                  ariaLabel={`Statistics for ${selected.metricName}`}
+                  i18nStrings={{
+                    xTickFormatter: (value) =>
+                      new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    yTickFormatter: (value) => value.toLocaleString(),
+                    filterLabel: 'Filter series',
+                    filterPlaceholder: 'Filter series',
+                  }}
+                />
+              </SpaceBetween>
             </Container>
           )}
         </SpaceBetween>

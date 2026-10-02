@@ -34,6 +34,13 @@ func (m *mockSFNProvider) ListStateMachines(_ context.Context, nr *model.Normali
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{"stateMachines": []any{}}}, nil
 }
 
+func (m *mockSFNProvider) DescribeStateMachine(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
 func (m *mockSFNProvider) CreateStateMachine(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	m.capture(nr)
 	if m.err != nil {

@@ -33,7 +33,7 @@ func (h *Handler) ListClusters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawNames, _ := resp.Data["clusters"].([]any)
+	rawNames := uihelper.AsSlice(resp.Data["clusters"])
 	items := make([]Cluster, 0, len(rawNames))
 	for _, raw := range rawNames {
 		if name, ok := raw.(string); ok {

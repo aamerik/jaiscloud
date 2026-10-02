@@ -33,7 +33,7 @@ func (h *Handler) ListLoadBalancers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawLBs, _ := resp.Data["LoadBalancers"].([]any)
+	rawLBs := uihelper.AsSlice(resp.Data["LoadBalancers"])
 	items := make([]LoadBalancer, 0, len(rawLBs))
 	for _, raw := range rawLBs {
 		if m, ok := raw.(map[string]any); ok {

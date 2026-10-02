@@ -194,13 +194,13 @@ func (h *Handler) ListSecretVersions(w http.ResponseWriter, r *http.Request) {
 	versions := make([]SecretVersion, 0, len(rawVersions))
 	for _, v := range rawVersions {
 		sv := SecretVersion{
-			VersionID:    strAny(v, "VersionId"),
-			CreatedDate:  strAny(v, "CreatedDate"),
+			VersionID:        strAny(v, "VersionId"),
+			CreatedDate:      strAny(v, "CreatedDate"),
 			LastAccessedDate: strAny(v, "LastAccessedDate"),
 		}
 		if stages, ok := v["VersionStages"].([]string); ok {
 			sv.VersionStages = stages
-		} else if stages, ok := v["VersionStages"].([]any); ok {
+		} else if stages := uihelper.AsSlice(v["VersionStages"]); len(stages) > 0 {
 			for _, s := range stages {
 				if str, ok := s.(string); ok {
 					sv.VersionStages = append(sv.VersionStages, str)

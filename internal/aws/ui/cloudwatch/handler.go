@@ -43,7 +43,7 @@ func (h *Handler) ListMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawMetrics, _ := resp.Data["Metrics"].([]any)
+	rawMetrics := uihelper.AsSlice(resp.Data["Metrics"])
 	nextToken, _ := resp.Data["NextToken"].(string)
 
 	items := make([]Metric, 0, len(rawMetrics))
@@ -114,7 +114,7 @@ func (h *Handler) GetMetricStatistics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	label, _ := resp.Data["Label"].(string)
-	rawDPs, _ := resp.Data["Datapoints"].([]any)
+	rawDPs := uihelper.AsSlice(resp.Data["Datapoints"])
 
 	dps := make([]Datapoint, 0, len(rawDPs))
 	for _, raw := range rawDPs {
@@ -167,7 +167,7 @@ func (h *Handler) ListAlarms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawAlarms, _ := resp.Data["MetricAlarms"].([]any)
+	rawAlarms := uihelper.AsSlice(resp.Data["MetricAlarms"])
 	nextToken, _ := resp.Data["NextToken"].(string)
 
 	alarms := make([]Alarm, 0, len(rawAlarms))
@@ -338,7 +338,7 @@ func (h *Handler) ListDashboards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawEntries, _ := resp.Data["DashboardEntries"].([]any)
+	rawEntries := uihelper.AsSlice(resp.Data["DashboardEntries"])
 	items := make([]Dashboard, 0, len(rawEntries))
 	for _, raw := range rawEntries {
 		if m, ok := raw.(map[string]any); ok {

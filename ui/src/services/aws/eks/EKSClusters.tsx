@@ -17,6 +17,7 @@ import { listClusters, createCluster, deleteCluster, type EKSCluster } from '../
 import { formatDate } from '../../../lib/date'
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
 import { useNotifications } from '../../../components/notifications'
 
 export function EKSClusters() {
@@ -25,6 +26,7 @@ export function EKSClusters() {
   const [createOpen, setCreateOpen] = useState(false)
   const [selected, setSelected] = useState<EKSCluster[]>([])
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [details, setDetails] = useState<EKSCluster | null>(null)
   const { notify } = useNotifications()
 
   const { data, isLoading, error } = useQuery({
@@ -72,6 +74,15 @@ export function EKSClusters() {
     },
     { id: 'version', header: 'Version', cell: (c) => c.version || '—' },
     { id: 'created', header: 'Created', cell: (c) => formatDate(c.createdAt) },
+    {
+      id: 'actions',
+      header: '',
+      cell: (c) => (
+        <Button variant="inline-link" onClick={() => setDetails(c)}>
+          View details
+        </Button>
+      ),
+    },
   ]
 
   return (
@@ -108,6 +119,30 @@ export function EKSClusters() {
           emptyBody="Create an EKS cluster to get started."
         />
       )}
+
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.name ?? 'Cluster'}
+        items={
+          details
+            ? [
+                { label: 'Name', value: details.name },
+                {
+                  label: 'Status',
+                  value: (
+                    <StatusIndicator type={resourceStatus(details.status)}>
+                      {details.status || '—'}
+                    </StatusIndicator>
+                  ),
+                },
+                { label: 'Version', value: details.version || '—' },
+                { label: 'ARN', value: <Box variant="code">{details.arn}</Box> },
+                { label: 'Created', value: formatDate(details.createdAt) },
+              ]
+            : []
+        }
+      />
 
       <Modal
         visible={createOpen}

@@ -1,6 +1,24 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
+  Alert,
+  Box,
+  Button,
+  ButtonDropdown,
+  Container,
+  ContentLayout,
+  Form,
+  FormField,
+  Header,
+  Input,
+  Modal,
+  Select,
+  SpaceBetween,
+  StatusIndicator,
+  Table,
+} from '@cloudscape-design/components'
+import type { TableProps } from '@cloudscape-design/components'
+import {
   listRules,
   putRule,
   deleteRule,
@@ -12,28 +30,30 @@ import {
   type Rule,
   type Target,
 } from '../../../api/eventbridge'
-import { EmptyState } from '../../../components/EmptyState'
+import { resourceStatus } from '../../../lib/status'
+import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { useNotifications } from '../../../components/notifications'
 
-const tableStyle: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }
-const thStyle: React.CSSProperties = { textAlign: 'left', padding: '0.6rem 1rem', borderBottom: '2px solid #2d3748', color: '#b0bec5', fontWeight: 600, fontSize: '0.78rem', textTransform: 'uppercase' }
-const tdStyle: React.CSSProperties = { padding: '0.6rem 1rem', verticalAlign: 'middle' }
-const btnStyle: React.CSSProperties = { padding: '0.4rem 1rem', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: '0.85rem', background: '#0073bb', color: '#fff' }
-const inputStyle: React.CSSProperties = { padding: '0.4rem 0.75rem', borderRadius: 4, border: '1px solid #2d3748', background: '#1a2332', color: '#e8eaf0', fontSize: '0.85rem', width: '100%', boxSizing: 'border-box' }
-const overlayStyle: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }
-const modalStyle: React.CSSProperties = { background: '#1a2332', borderRadius: 8, padding: '2rem', minWidth: 440, maxWidth: 580 }
-
-const stateColor = (s?: string) => s === 'ENABLED' ? '#2ecc71' : '#e74c3c'
+const EMPTY_FORM = {
+  name: '',
+  eventPattern: '',
+  scheduleExpression: '',
+  state: 'ENABLED',
+  description: '',
+}
+const EMPTY_TARGET_FORM = { id: '', arn: '' }
 
 export function EventBridgeRules() {
   const qc = useQueryClient()
+  const { notify } = useNotifications()
   const [selectedRule, setSelectedRule] = useState<Rule | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Rule | null>(null)
   const [addTargetOpen, setAddTargetOpen] = useState(false)
-  const [form, setForm] = useState({ name: '', eventPattern: '', scheduleExpression: '', state: 'ENABLED', description: '' })
-  const [targetForm, setTargetForm] = useState({ id: '', arn: '' })
+  const [form, setForm] = useState(EMPTY_FORM)
+  const [targetForm, setTargetForm] = useState(EMPTY_TARGET_FORM)
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['eventbridge', 'rules'],
     queryFn: () => listRules(),
   })
@@ -45,199 +65,345 @@ export function EventBridgeRules() {
   })
 
   const createMut = useMutation({
-    mutationFn: () => putRule({ name: form.name, eventPattern: form.eventPattern || undefined, scheduleExpression: form.scheduleExpression || undefined, state: form.state, description: form.description || undefined }),
+    mutationFn: () =>
+      putRule({
+        name: form.name,
+        eventPattern: form.eventPattern || undefined,
+        scheduleExpression: form.scheduleExpression || undefined,
+        state: form.state,
+        description: form.description || undefined,
+      }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['eventbridge', 'rules'] })
+      notify({ type: 'success', header: 'Rule created', content: form.name })
       setCreateOpen(false)
-      setForm({ name: '', eventPattern: '', scheduleExpression: '', state: 'ENABLED', description: '' })
+      setForm(EMPTY_FORM)
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Create failed', content: (err as Error).message }),
   })
 
   const deleteMut = useMutation({
     mutationFn: (name: string) => deleteRule(name),
-    onSuccess: () => {
+    onSuccess: (_result, name) => {
       void qc.invalidateQueries({ queryKey: ['eventbridge', 'rules'] })
+      notify({ type: 'success', header: 'Rule deleted', content: name })
       if (deleteTarget?.name === selectedRule?.name) setSelectedRule(null)
       setDeleteTarget(null)
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Delete failed', content: (err as Error).message }),
   })
 
   const toggleMut = useMutation({
     mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
       enabled ? disableRule(name) : enableRule(name),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['eventbridge', 'rules'] }) },
+    onSuccess: (_result, { name, enabled }) => {
+      void qc.invalidateQueries({ queryKey: ['eventbridge', 'rules'] })
+      notify({ type: 'success', header: `${enabled ? 'Disabled' : 'Enabled'} rule`, content: name })
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Update failed', content: (err as Error).message }),
   })
 
   const addTargetMut = useMutation({
-    mutationFn: () => putTargets(selectedRule!.name, [{ id: targetForm.id, arn: targetForm.arn }]),
+    mutationFn: () =>
+      putTargets(selectedRule!.name, [{ id: targetForm.id, arn: targetForm.arn }]),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['eventbridge', 'targets', selectedRule?.name] })
+      notify({ type: 'success', header: 'Target added', content: targetForm.id })
       setAddTargetOpen(false)
-      setTargetForm({ id: '', arn: '' })
+      setTargetForm(EMPTY_TARGET_FORM)
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Failed to add target', content: (err as Error).message }),
   })
 
   const removeTargetMut = useMutation({
     mutationFn: ({ rule, id }: { rule: string; id: string }) => removeTarget(rule, id),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['eventbridge', 'targets', selectedRule?.name] }) },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['eventbridge', 'targets', selectedRule?.name] })
+      notify({ type: 'success', header: 'Target removed' })
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Failed to remove target', content: (err as Error).message }),
   })
-
-  if (isLoading) return <div style={{ padding: '2rem', color: '#5f6b7a' }}>Loading rules…</div>
 
   const rules = data?.items ?? []
   const targets: Target[] = targetsData?.items ?? []
 
-  return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-        <div>
-          <h2 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 600 }}>EventBridge Rules</h2>
-          <span style={{ fontSize: '0.85em', color: '#5f6b7a' }}>{rules.length} rule{rules.length !== 1 ? 's' : ''}</span>
-        </div>
-        <button style={btnStyle} onClick={() => setCreateOpen(true)}>Create Rule</button>
-      </div>
+  const columns: ResourceColumn<Rule>[] = [
+    {
+      id: 'name',
+      header: 'Name',
+      filterLabel: 'Name',
+      filterValue: (r) => r.name,
+      cell: (r) => <Box fontWeight="bold">{r.name}</Box>,
+    },
+    {
+      id: 'state',
+      header: 'State',
+      filterLabel: 'State',
+      filterValue: (r) => r.state ?? '',
+      cell: (r) => <StatusIndicator type={resourceStatus(r.state)}>{r.state || '—'}</StatusIndicator>,
+    },
+    {
+      id: 'pattern',
+      header: 'Pattern / schedule',
+      cell: (r) => (
+        <Box variant="code">{r.scheduleExpression || r.eventPattern || '—'}</Box>
+      ),
+    },
+  ]
 
-      <div style={{ display: 'grid', gridTemplateColumns: selectedRule ? '1fr 1fr' : '1fr', gap: '1.5rem' }}>
-        <div>
-          {rules.length === 0 ? (
-            <EmptyState title="No rules. Create one to route events to targets." />
-          ) : (
-            <table style={tableStyle}>
-              <thead>
-                <tr>{['Name', 'State', 'Pattern / Schedule', ''].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr>
-              </thead>
-              <tbody>
-                {rules.map(rule => (
-                  <tr
-                    key={rule.name}
-                    style={{ borderBottom: '1px solid #2d3748', cursor: 'pointer', background: selectedRule?.name === rule.name ? '#1e2d3d' : 'transparent' }}
-                    onClick={() => setSelectedRule(rule)}
-                  >
-                    <td style={{ ...tdStyle, fontWeight: 600 }}>{rule.name}</td>
-                    <td style={tdStyle}>
-                      <span style={{ color: stateColor(rule.state), fontSize: '0.8rem', fontWeight: 600 }}>{rule.state ?? '—'}</span>
-                    </td>
-                    <td style={{ ...tdStyle, color: '#b0bec5', fontSize: '0.8rem', fontFamily: 'monospace', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {rule.scheduleExpression || rule.eventPattern || '—'}
-                    </td>
-                    <td style={{ ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
-                      <button
-                        style={{ ...btnStyle, background: 'transparent', color: rule.state === 'ENABLED' ? '#e87600' : '#2ecc71', border: `1px solid ${rule.state === 'ENABLED' ? '#e87600' : '#2ecc71'}`, padding: '0.25rem 0.6rem', fontSize: '0.78rem', marginRight: '0.4rem' }}
-                        onClick={() => toggleMut.mutate({ name: rule.name, enabled: rule.state === 'ENABLED' })}
-                      >
-                        {rule.state === 'ENABLED' ? 'Disable' : 'Enable'}
-                      </button>
-                      <button style={{ ...btnStyle, background: 'transparent', color: '#d13212', border: '1px solid #d13212', padding: '0.25rem 0.6rem', fontSize: '0.78rem' }} onClick={() => setDeleteTarget(rule)}>Delete</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+  const targetColumns: TableProps.ColumnDefinition<Target>[] = [
+    { id: 'id', header: 'ID', cell: (t) => t.id },
+    { id: 'arn', header: 'ARN', cell: (t) => <Box variant="code">{t.arn}</Box> },
+    {
+      id: 'actions',
+      header: '',
+      cell: (t) => (
+        <Button
+          onClick={() =>
+            selectedRule && removeTargetMut.mutate({ rule: selectedRule.name, id: t.id })
+          }
+        >
+          Remove
+        </Button>
+      ),
+    },
+  ]
+
+  return (
+    <ContentLayout header={<Header variant="h1">EventBridge rules</Header>}>
+      <SpaceBetween size="l">
+        {error ? (
+          <Alert type="error" header="Failed to load rules">
+            {(error as Error).message}
+          </Alert>
+        ) : (
+          <ResourceTable
+            items={rules}
+            columns={columns}
+            trackBy={(r) => r.name}
+            title="Rules"
+            loading={isLoading}
+            onRowClick={(r) => setSelectedRule(r)}
+            selectionType="single"
+            selectedItems={selectedRule ? [selectedRule] : []}
+            onSelectionChange={(items) => setSelectedRule(items[0] ?? null)}
+            actions={
+              <SpaceBetween direction="horizontal" size="xs">
+                <ButtonDropdown
+                  items={[
+                    {
+                      id: 'enable',
+                      text: 'Enable',
+                      disabled: !selectedRule || selectedRule.state === 'ENABLED',
+                    },
+                    {
+                      id: 'disable',
+                      text: 'Disable',
+                      disabled: !selectedRule || selectedRule.state !== 'ENABLED',
+                    },
+                    { id: 'delete', text: 'Delete', disabled: !selectedRule },
+                  ]}
+                  onItemClick={({ detail }) => {
+                    if (!selectedRule) return
+                    if (detail.id === 'enable')
+                      toggleMut.mutate({ name: selectedRule.name, enabled: false })
+                    else if (detail.id === 'disable')
+                      toggleMut.mutate({ name: selectedRule.name, enabled: true })
+                    else if (detail.id === 'delete') setDeleteTarget(selectedRule)
+                  }}
+                  disabled={!selectedRule}
+                >
+                  Actions
+                </ButtonDropdown>
+                <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                  Create rule
+                </Button>
+              </SpaceBetween>
+            }
+            emptyTitle="No rules"
+            emptyBody="Create a rule to route events to targets."
+          />
+        )}
 
         {selectedRule && (
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-              <h3 style={{ margin: 0, fontWeight: 600, fontSize: '1rem' }}>Targets for <em>{selectedRule.name}</em> ({targets.length})</h3>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0', padding: '0.3rem 0.6rem', fontSize: '0.8rem' }} onClick={() => setSelectedRule(null)}>✕</button>
-                <button style={{ ...btnStyle, fontSize: '0.8rem', padding: '0.3rem 0.75rem' }} onClick={() => setAddTargetOpen(true)}>Add Target</button>
-              </div>
-            </div>
-            {targets.length === 0 ? (
-              <EmptyState title="No targets for this rule." />
-            ) : (
-              <table style={tableStyle}>
-                <thead>
-                  <tr>{['ID', 'ARN', ''].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {targets.map(t => (
-                    <tr key={t.id} style={{ borderBottom: '1px solid #2d3748' }}>
-                      <td style={{ ...tdStyle, fontWeight: 600 }}>{t.id}</td>
-                      <td style={{ ...tdStyle, color: '#b0bec5', fontSize: '0.8rem', fontFamily: 'monospace' }}>{t.arn}</td>
-                      <td style={{ ...tdStyle, textAlign: 'right' }}>
-                        <button style={{ ...btnStyle, background: 'transparent', color: '#d13212', border: '1px solid #d13212', padding: '0.25rem 0.6rem', fontSize: '0.78rem' }} onClick={() => removeTargetMut.mutate({ rule: selectedRule.name, id: t.id })}>Remove</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+          <Container
+            header={
+              <Header
+                variant="h2"
+                counter={`(${targets.length})`}
+                actions={
+                  <SpaceBetween direction="horizontal" size="xs">
+                    <Button
+                      iconName="close"
+                      variant="icon"
+                      ariaLabel="Close targets"
+                      onClick={() => setSelectedRule(null)}
+                    />
+                    <Button variant="primary" onClick={() => setAddTargetOpen(true)}>
+                      Add target
+                    </Button>
+                  </SpaceBetween>
+                }
+              >
+                Targets for {selectedRule.name}
+              </Header>
+            }
+          >
+            <Table
+              variant="embedded"
+              items={targets}
+              trackBy={(t) => t.id}
+              columnDefinitions={targetColumns}
+              empty={
+                <Box textAlign="center" color="inherit">
+                  <b>No targets</b>
+                  <Box variant="p" color="inherit">
+                    Add a target to route matching events.
+                  </Box>
+                </Box>
+              }
+            />
+          </Container>
         )}
-      </div>
+      </SpaceBetween>
 
-      {createOpen && (
-        <div style={overlayStyle} onClick={() => setCreateOpen(false)}>
-          <div style={modalStyle} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 1.5rem', fontWeight: 600 }}>Create Rule</h3>
-            {[
-              { key: 'name', label: 'Name *', placeholder: 'my-rule' },
-              { key: 'eventPattern', label: 'Event Pattern (JSON)', placeholder: '{"source":["aws.ec2"]}' },
-              { key: 'scheduleExpression', label: 'Schedule Expression', placeholder: 'rate(5 minutes)' },
-              { key: 'description', label: 'Description', placeholder: '' },
-            ].map(f => (
-              <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '1rem' }}>
-                <label style={{ fontSize: '0.8rem', color: '#b0bec5' }}>{f.label}</label>
-                <input style={inputStyle} placeholder={f.placeholder} value={(form as Record<string, string>)[f.key]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} />
-              </div>
-            ))}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '1.5rem' }}>
-              <label style={{ fontSize: '0.8rem', color: '#b0bec5' }}>State</label>
-              <select style={inputStyle} value={form.state} onChange={e => setForm(p => ({ ...p, state: e.target.value }))}>
-                <option value="ENABLED">ENABLED</option>
-                <option value="DISABLED">DISABLED</option>
-              </select>
-            </div>
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0' }} onClick={() => setCreateOpen(false)}>Cancel</button>
-              <button style={btnStyle} disabled={!form.name || createMut.isPending} onClick={() => createMut.mutate()}>
-                {createMut.isPending ? 'Creating…' : 'Create'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal
+        visible={createOpen}
+        onDismiss={() => setCreateOpen(false)}
+        header="Create rule"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setCreateOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={createMut.isPending}
+                disabled={!form.name.trim()}
+                onClick={() => createMut.mutate()}
+              >
+                Create
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        <Form>
+          <SpaceBetween size="m">
+            <FormField label="Name" constraintText="Required">
+              <Input
+                value={form.name}
+                placeholder="my-rule"
+                onChange={({ detail }) => setForm({ ...form, name: detail.value })}
+              />
+            </FormField>
+            <FormField label="Event pattern (JSON)">
+              <Input
+                value={form.eventPattern}
+                placeholder={'{"source":["aws.ec2"]}'}
+                onChange={({ detail }) => setForm({ ...form, eventPattern: detail.value })}
+              />
+            </FormField>
+            <FormField label="Schedule expression">
+              <Input
+                value={form.scheduleExpression}
+                placeholder="rate(5 minutes)"
+                onChange={({ detail }) => setForm({ ...form, scheduleExpression: detail.value })}
+              />
+            </FormField>
+            <FormField label="Description">
+              <Input
+                value={form.description}
+                onChange={({ detail }) => setForm({ ...form, description: detail.value })}
+              />
+            </FormField>
+            <FormField label="State">
+              <Select
+                selectedOption={{ value: form.state, label: form.state }}
+                onChange={({ detail }) =>
+                  setForm({ ...form, state: detail.selectedOption.value ?? 'ENABLED' })
+                }
+                options={[
+                  { value: 'ENABLED', label: 'ENABLED' },
+                  { value: 'DISABLED', label: 'DISABLED' },
+                ]}
+              />
+            </FormField>
+          </SpaceBetween>
+        </Form>
+      </Modal>
 
-      {deleteTarget && (
-        <div style={overlayStyle} onClick={() => setDeleteTarget(null)}>
-          <div style={modalStyle} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 1rem', fontWeight: 600 }}>Delete Rule?</h3>
-            <p style={{ color: '#b0bec5', marginBottom: '1.5rem' }}>Delete rule <strong>{deleteTarget.name}</strong>?</p>
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0' }} onClick={() => setDeleteTarget(null)}>Cancel</button>
-              <button style={{ ...btnStyle, background: '#d13212' }} disabled={deleteMut.isPending} onClick={() => deleteMut.mutate(deleteTarget.name)}>
-                {deleteMut.isPending ? 'Deleting…' : 'Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal
+        visible={!!deleteTarget}
+        onDismiss={() => setDeleteTarget(null)}
+        header="Delete rule"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setDeleteTarget(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={deleteMut.isPending}
+                onClick={() => deleteTarget && deleteMut.mutate(deleteTarget.name)}
+              >
+                Delete
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        Delete rule <b>{deleteTarget?.name}</b>? This action cannot be undone.
+      </Modal>
 
-      {addTargetOpen && selectedRule && (
-        <div style={overlayStyle} onClick={() => setAddTargetOpen(false)}>
-          <div style={modalStyle} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 1.5rem', fontWeight: 600 }}>Add Target to {selectedRule.name}</h3>
-            {[
-              { key: 'id', label: 'Target ID *', placeholder: 'target-1' },
-              { key: 'arn', label: 'ARN *', placeholder: 'arn:aws:sqs:us-east-1:000000000000:my-queue' },
-            ].map(f => (
-              <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '1rem' }}>
-                <label style={{ fontSize: '0.8rem', color: '#b0bec5' }}>{f.label}</label>
-                <input style={inputStyle} placeholder={f.placeholder} value={(targetForm as Record<string, string>)[f.key]} onChange={e => setTargetForm(p => ({ ...p, [f.key]: e.target.value }))} />
-              </div>
-            ))}
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0' }} onClick={() => setAddTargetOpen(false)}>Cancel</button>
-              <button style={btnStyle} disabled={!targetForm.id || !targetForm.arn || addTargetMut.isPending} onClick={() => addTargetMut.mutate()}>
-                {addTargetMut.isPending ? 'Adding…' : 'Add'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      <Modal
+        visible={addTargetOpen && !!selectedRule}
+        onDismiss={() => setAddTargetOpen(false)}
+        header={selectedRule ? `Add target to ${selectedRule.name}` : 'Add target'}
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setAddTargetOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={addTargetMut.isPending}
+                disabled={!targetForm.id.trim() || !targetForm.arn.trim()}
+                onClick={() => addTargetMut.mutate()}
+              >
+                Add
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        <Form>
+          <SpaceBetween size="m">
+            <FormField label="Target ID" constraintText="Required">
+              <Input
+                value={targetForm.id}
+                placeholder="target-1"
+                onChange={({ detail }) => setTargetForm({ ...targetForm, id: detail.value })}
+              />
+            </FormField>
+            <FormField label="ARN" constraintText="Required">
+              <Input
+                value={targetForm.arn}
+                placeholder="arn:aws:sqs:us-east-1:000000000000:my-queue"
+                onChange={({ detail }) => setTargetForm({ ...targetForm, arn: detail.value })}
+              />
+            </FormField>
+          </SpaceBetween>
+        </Form>
+      </Modal>
+    </ContentLayout>
   )
 }

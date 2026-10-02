@@ -34,7 +34,7 @@ func (h *Handler) ListClusters(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ListClusters returns ARNs; describe them to get full info.
-	rawARNs, _ := resp.Data["clusterArns"].([]any)
+	rawARNs := uihelper.AsSlice(resp.Data["clusterArns"])
 	arns := make([]any, 0, len(rawARNs))
 	for _, arn := range rawARNs {
 		arns = append(arns, arn)
@@ -46,7 +46,7 @@ func (h *Handler) ListClusters(w http.ResponseWriter, r *http.Request) {
 		descNR.Params["clusters"] = arns
 		descResp, err := h.provider.DescribeClusters(r.Context(), descNR)
 		if err == nil {
-			rawClusters, _ := descResp.Data["clusters"].([]any)
+			rawClusters := uihelper.AsSlice(descResp.Data["clusters"])
 			for _, raw := range rawClusters {
 				if m, ok := raw.(map[string]any); ok {
 					items = append(items, mapCluster(m))
@@ -113,7 +113,7 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawARNs, _ := resp.Data["taskArns"].([]any)
+	rawARNs := uihelper.AsSlice(resp.Data["taskArns"])
 	items := make([]ECSTask, 0, len(rawARNs))
 	for _, arn := range rawARNs {
 		if s, ok := arn.(string); ok {
@@ -186,7 +186,7 @@ func (h *Handler) ListServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawARNs, _ := resp.Data["serviceArns"].([]any)
+	rawARNs := uihelper.AsSlice(resp.Data["serviceArns"])
 	items := make([]ECSService, 0, len(rawARNs))
 	for _, arn := range rawARNs {
 		if s, ok := arn.(string); ok {

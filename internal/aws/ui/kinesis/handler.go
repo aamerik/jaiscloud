@@ -50,7 +50,7 @@ func (h *Handler) ListStreams(w http.ResponseWriter, r *http.Request) {
 
 	// Fall back to StreamNames if StreamSummaries is empty
 	if len(items) == 0 {
-		rawNames, _ := resp.Data["StreamNames"].([]any)
+		rawNames := uihelper.AsSlice(resp.Data["StreamNames"])
 		for _, raw := range rawNames {
 			if name, ok := raw.(string); ok {
 				items = append(items, Stream{Name: name})

@@ -55,7 +55,7 @@ type MetaResponse struct {
 
 // ServicesResponse is the payload for GET /api/ui/v1/services.
 type ServicesResponse struct {
-	Services []string `json:"services"`
+	Services []ServiceDescriptor `json:"services"`
 }
 
 // BuildRouter builds the UI chi router.
@@ -82,7 +82,7 @@ func BuildRouter(
 	// Not auth-protected — SPA probes these before the session cookie is set.
 	r.Get("/api/ui/v1/meta", buildMetaHandler(adminHandler, cfg, version))
 	r.Get("/api/ui/v1/meta/accounts", buildAccountsHandler(cfg))
-	r.Get("/api/ui/v1/services", buildServicesHandler(providers))
+	r.Get("/api/ui/v1/services", buildServicesHandler(providers, cfg.Cloud))
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(token))

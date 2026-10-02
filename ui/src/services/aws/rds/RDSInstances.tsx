@@ -24,6 +24,7 @@ import {
 } from '../../../api/rds'
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { ResourceDetailsModal } from '../../../components/ResourceDetailsModal'
 import { useNotifications } from '../../../components/notifications'
 
 export function RDSInstances() {
@@ -31,6 +32,7 @@ export function RDSInstances() {
   const [selected, setSelected] = useState<DBInstance[]>([])
   const [createOpen, setCreateOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [details, setDetails] = useState<DBInstance | null>(null)
   const [form, setForm] = useState({
     id: '',
     engine: 'mysql',
@@ -113,6 +115,15 @@ export function RDSInstances() {
       header: 'Endpoint',
       cell: (i) => <Box variant="code">{i.endpoint ? `${i.endpoint}:${i.port}` : '—'}</Box>,
     },
+    {
+      id: 'actions',
+      header: '',
+      cell: (i) => (
+        <Button variant="inline-link" onClick={() => setDetails(i)}>
+          View details
+        </Button>
+      ),
+    },
   ]
 
   const hasStopped = selected.some((i) => i.status === 'stopped')
@@ -161,6 +172,37 @@ export function RDSInstances() {
           emptyBody="Create an RDS instance to get started."
         />
       )}
+
+      <ResourceDetailsModal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.id ?? 'Database'}
+        items={
+          details
+            ? [
+                { label: 'Identifier', value: details.id },
+                {
+                  label: 'Status',
+                  value: (
+                    <StatusIndicator type={resourceStatus(details.status)}>
+                      {details.status}
+                    </StatusIndicator>
+                  ),
+                },
+                { label: 'Engine', value: details.engine },
+                { label: 'Class', value: details.class },
+                {
+                  label: 'Endpoint',
+                  value: (
+                    <Box variant="code">
+                      {details.endpoint ? `${details.endpoint}:${details.port}` : '—'}
+                    </Box>
+                  ),
+                },
+              ]
+            : []
+        }
+      />
 
       <Modal
         visible={createOpen}

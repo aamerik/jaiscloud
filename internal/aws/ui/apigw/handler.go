@@ -35,7 +35,7 @@ func (h *Handler) ListRestAPIs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawAPIs, _ := resp.Data["item"].([]any)
+	rawAPIs := uihelper.AsSlice(resp.Data["item"])
 	items := make([]RestAPI, 0, len(rawAPIs))
 	for _, raw := range rawAPIs {
 		if m, ok := raw.(map[string]any); ok {
@@ -110,7 +110,7 @@ func (h *Handler) ListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawResources, _ := resp.Data["item"].([]any)
+	rawResources := uihelper.AsSlice(resp.Data["item"])
 	items := make([]Resource, 0, len(rawResources))
 	for _, raw := range rawResources {
 		if m, ok := raw.(map[string]any); ok {
@@ -136,7 +136,7 @@ func (h *Handler) ListStages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawStages, _ := resp.Data["item"].([]any)
+	rawStages := uihelper.AsSlice(resp.Data["item"])
 	items := make([]Stage, 0, len(rawStages))
 	for _, raw := range rawStages {
 		if m, ok := raw.(map[string]any); ok {
@@ -196,7 +196,7 @@ func (h *Handler) ListDeployments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawDeps, _ := resp.Data["item"].([]any)
+	rawDeps := uihelper.AsSlice(resp.Data["item"])
 	items := make([]Deployment, 0, len(rawDeps))
 	for _, raw := range rawDeps {
 		if m, ok := raw.(map[string]any); ok {

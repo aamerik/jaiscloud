@@ -2,28 +2,41 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import {
+  Alert,
+  Box,
+  Button,
+  ButtonDropdown,
+  Container,
+  ContentLayout,
+  Form,
+  FormField,
+  Header,
+  Input,
+  Modal,
+  SpaceBetween,
+  StatusIndicator,
+  Table,
+  Textarea,
+} from '@cloudscape-design/components'
+import type { TableProps } from '@cloudscape-design/components'
+import {
   listExecutions,
   startExecution,
   stopExecution,
   getExecutionHistory,
   type Execution,
+  type HistoryEvent,
 } from '../../../api/sfn'
-import { EmptyState } from '../../../components/EmptyState'
+import { formatDate } from '../../../lib/date'
+import { resourceStatus } from '../../../lib/status'
+import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { useNotifications } from '../../../components/notifications'
 
-const tableStyle: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }
-const thStyle: React.CSSProperties = { textAlign: 'left', padding: '0.6rem 1rem', borderBottom: '2px solid #2d3748', color: '#b0bec5', fontWeight: 600, fontSize: '0.78rem', textTransform: 'uppercase' }
-const tdStyle: React.CSSProperties = { padding: '0.6rem 1rem', verticalAlign: 'middle' }
-const btnStyle: React.CSSProperties = { padding: '0.4rem 1rem', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: '0.85rem', background: '#0073bb', color: '#fff' }
-const inputStyle: React.CSSProperties = { padding: '0.4rem 0.75rem', borderRadius: 4, border: '1px solid #2d3748', background: '#1a2332', color: '#e8eaf0', fontSize: '0.85rem', width: '100%', boxSizing: 'border-box' }
-const overlayStyle: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }
-const modalStyle: React.CSSProperties = { background: '#1a2332', borderRadius: 8, padding: '2rem', minWidth: 440, maxWidth: 620 }
-
-const statusColor = (s: string) => {
-  if (s === 'RUNNING') return '#3498db'
-  if (s === 'SUCCEEDED') return '#2ecc71'
-  if (s === 'FAILED' || s === 'TIMED_OUT' || s === 'ABORTED') return '#e74c3c'
-  return '#b0bec5'
-}
+const historyColumns: TableProps.ColumnDefinition<HistoryEvent>[] = [
+  { id: 'id', header: 'ID', cell: (ev) => ev.id },
+  { id: 'type', header: 'Type', cell: (ev) => ev.type },
+  { id: 'timestamp', header: 'Timestamp', cell: (ev) => formatDate(ev.timestamp) },
+]
 
 export function SFNExecutions() {
   const qc = useQueryClient()
@@ -32,16 +45,18 @@ export function SFNExecutions() {
   const smArn = searchParams.get('arn') ?? ''
 
   const [startOpen, setStartOpen] = useState(false)
+  const [selected, setSelected] = useState<Execution[]>([])
   const [historyExec, setHistoryExec] = useState<Execution | null>(null)
   const [form, setForm] = useState({ name: '', input: '{}' })
+  const { notify } = useNotifications()
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['sfn', 'executions', smArn],
     queryFn: () => listExecutions(smArn),
     enabled: !!smArn,
   })
 
-  const { data: historyData } = useQuery({
+  const { data: historyData, isLoading: historyLoading } = useQuery({
     queryKey: ['sfn', 'history', historyExec?.arn],
     queryFn: () => getExecutionHistory(historyExec!.arn),
     enabled: !!historyExec,
@@ -51,127 +66,177 @@ export function SFNExecutions() {
     mutationFn: () => startExecution(smArn, { name: form.name || undefined, input: form.input }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['sfn', 'executions', smArn] })
+      notify({ type: 'success', header: 'Execution started', content: form.name || undefined })
       setStartOpen(false)
       setForm({ name: '', input: '{}' })
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Start failed', content: (err as Error).message }),
   })
 
   const stopMut = useMutation({
-    mutationFn: (arn: string) => stopExecution(arn),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['sfn', 'executions', smArn] }) },
+    mutationFn: async (executions: Execution[]) => {
+      for (const execution of executions) await stopExecution(execution.arn)
+    },
+    onSuccess: (_r, executions) => {
+      void qc.invalidateQueries({ queryKey: ['sfn', 'executions', smArn] })
+      notify({ type: 'success', header: `Stopping ${executions.length} execution(s)` })
+      setSelected([])
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Stop failed', content: (err as Error).message }),
   })
 
   if (!smArn) {
     return (
-      <div style={{ padding: '2rem' }}>
-        <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0', marginBottom: '1rem' }} onClick={() => navigate('../state-machines')}>← State Machines</button>
-        <EmptyState title="No state machine selected." />
-      </div>
+      <ContentLayout header={<Header variant="h1">Executions</Header>}>
+        <SpaceBetween size="l">
+          <Button variant="link" onClick={() => navigate('../state-machines')}>
+            ← State machines
+          </Button>
+          <Alert type="info" header="No state machine selected">
+            Open a state machine to view and start its executions.
+          </Alert>
+        </SpaceBetween>
+      </ContentLayout>
     )
   }
 
-  if (isLoading) return <div style={{ padding: '2rem', color: '#5f6b7a' }}>Loading executions…</div>
-
   const executions = data?.items ?? []
   const events = historyData?.events ?? []
+  const hasRunning = selected.some((e) => e.status === 'RUNNING')
+
+  const columns: ResourceColumn<Execution>[] = [
+    { id: 'name', header: 'Name', filterLabel: 'Name', filterValue: (e) => e.name, cell: (e) => e.name },
+    {
+      id: 'status',
+      header: 'Status',
+      filterLabel: 'Status',
+      filterValue: (e) => e.status,
+      cell: (e) => (
+        <StatusIndicator type={resourceStatus(e.status)}>{e.status}</StatusIndicator>
+      ),
+    },
+    { id: 'started', header: 'Started', filterLabel: 'Started', filterValue: (e) => formatDate(e.startDate), cell: (e) => formatDate(e.startDate) },
+  ]
 
   return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-        <div>
-          <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0', padding: '0.3rem 0.75rem', fontSize: '0.82rem', marginBottom: '0.5rem' }} onClick={() => navigate('../state-machines')}>← State Machines</button>
-          <h2 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 600 }}>Executions</h2>
-          <span style={{ fontSize: '0.8rem', color: '#5f6b7a', fontFamily: 'monospace' }}>{smArn}</span>
-        </div>
-        <button style={btnStyle} onClick={() => setStartOpen(true)}>Start Execution</button>
-      </div>
+    <ContentLayout
+      header={
+        <Header
+          variant="h1"
+          description={<Box variant="code">{smArn}</Box>}
+          actions={
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button onClick={() => navigate('../state-machines')}>← State machines</Button>
+              <Button variant="primary" onClick={() => setStartOpen(true)}>
+                Start execution
+              </Button>
+            </SpaceBetween>
+          }
+        >
+          Executions
+        </Header>
+      }
+    >
+      {error ? (
+        <Alert type="error" header="Failed to load executions">
+          {(error as Error).message}
+        </Alert>
+      ) : (
+        <SpaceBetween size="l">
+          <ResourceTable
+            items={executions}
+            columns={columns}
+            trackBy={(e) => e.arn}
+            title="Executions"
+            loading={isLoading}
+            onRowClick={(e) => setHistoryExec(e)}
+            selectionType="multi"
+            selectedItems={selected}
+            onSelectionChange={setSelected}
+            actions={
+              <ButtonDropdown
+                items={[{ id: 'stop', text: 'Stop', disabled: !hasRunning }]}
+                onItemClick={() => stopMut.mutate(selected.filter((e) => e.status === 'RUNNING'))}
+                disabled={selected.length === 0}
+              >
+                Actions
+              </ButtonDropdown>
+            }
+            emptyTitle="No executions"
+            emptyBody="Start an execution to run this state machine."
+          />
 
-      <div style={{ display: 'grid', gridTemplateColumns: historyExec ? '1fr 1fr' : '1fr', gap: '1.5rem' }}>
-        <div>
-          {executions.length === 0 ? (
-            <EmptyState title="No executions. Start one to run this state machine." />
-          ) : (
-            <table style={tableStyle}>
-              <thead>
-                <tr>{['Name', 'Status', 'Started', ''].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr>
-              </thead>
-              <tbody>
-                {executions.map(exec => (
-                  <tr
-                    key={exec.arn}
-                    style={{ borderBottom: '1px solid #2d3748', cursor: 'pointer', background: historyExec?.arn === exec.arn ? '#1e2d3d' : 'transparent' }}
-                    onClick={() => setHistoryExec(exec)}
-                  >
-                    <td style={{ ...tdStyle, fontWeight: 600, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{exec.name}</td>
-                    <td style={tdStyle}>
-                      <span style={{ color: statusColor(exec.status), fontSize: '0.8rem', fontWeight: 600 }}>{exec.status}</span>
-                    </td>
-                    <td style={{ ...tdStyle, color: '#b0bec5', fontSize: '0.82rem' }}>
-                      {exec.startDate ? new Date(exec.startDate * 1000).toLocaleString() : '—'}
-                    </td>
-                    <td style={{ ...tdStyle, textAlign: 'right' }} onClick={e => e.stopPropagation()}>
-                      {exec.status === 'RUNNING' && (
-                        <button style={{ ...btnStyle, background: 'transparent', color: '#e87600', border: '1px solid #e87600', padding: '0.25rem 0.6rem', fontSize: '0.78rem' }} onClick={() => stopMut.mutate(exec.arn)}>Stop</button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        {historyExec && (
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-              <h3 style={{ margin: 0, fontWeight: 600, fontSize: '1rem' }}>History ({events.length})</h3>
-              <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0', padding: '0.3rem 0.6rem', fontSize: '0.8rem' }} onClick={() => setHistoryExec(null)}>✕</button>
-            </div>
-            {events.length === 0 ? <EmptyState title="No events." /> : (
-              <table style={tableStyle}>
-                <thead><tr>{['ID', 'Type', 'Timestamp'].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr></thead>
-                <tbody>
-                  {events.map(ev => (
-                    <tr key={ev.id} style={{ borderBottom: '1px solid #2d3748' }}>
-                      <td style={{ ...tdStyle, color: '#b0bec5', fontSize: '0.82rem' }}>{ev.id}</td>
-                      <td style={{ ...tdStyle, fontSize: '0.85rem' }}>{ev.type}</td>
-                      <td style={{ ...tdStyle, color: '#b0bec5', fontSize: '0.82rem' }}>
-                        {ev.timestamp ? new Date(ev.timestamp * 1000).toLocaleString() : '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        )}
-      </div>
-
-      {startOpen && (
-        <div style={overlayStyle} onClick={() => setStartOpen(false)}>
-          <div style={modalStyle} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 1.5rem', fontWeight: 600 }}>Start Execution</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '1rem' }}>
-              <label style={{ fontSize: '0.8rem', color: '#b0bec5' }}>Execution Name (optional)</label>
-              <input style={inputStyle} placeholder="my-execution" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '1.5rem' }}>
-              <label style={{ fontSize: '0.8rem', color: '#b0bec5' }}>Input (JSON)</label>
-              <textarea
-                style={{ ...inputStyle, minHeight: 100, resize: 'vertical', fontFamily: 'monospace' }}
-                value={form.input}
-                onChange={e => setForm(p => ({ ...p, input: e.target.value }))}
+          {historyExec && (
+            <Container
+              header={
+                <Header
+                  variant="h2"
+                  actions={
+                    <Button variant="link" onClick={() => setHistoryExec(null)}>
+                      Close
+                    </Button>
+                  }
+                >
+                  History ({events.length})
+                </Header>
+              }
+            >
+              <Table
+                items={events}
+                columnDefinitions={historyColumns}
+                loading={historyLoading}
+                loadingText="Loading history"
+                trackBy={(ev) => String(ev.id)}
+                empty={<Box textAlign="center">No events</Box>}
               />
-            </div>
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0' }} onClick={() => setStartOpen(false)}>Cancel</button>
-              <button style={btnStyle} disabled={startMut.isPending} onClick={() => startMut.mutate()}>
-                {startMut.isPending ? 'Starting…' : 'Start'}
-              </button>
-            </div>
-          </div>
-        </div>
+            </Container>
+          )}
+        </SpaceBetween>
       )}
-    </div>
+
+      <Modal
+        visible={startOpen}
+        onDismiss={() => setStartOpen(false)}
+        header="Start execution"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setStartOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={startMut.isPending}
+                onClick={() => startMut.mutate()}
+              >
+                Start
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        <Form>
+          <SpaceBetween size="m">
+            <FormField label="Execution name (optional)">
+              <Input
+                autoFocus
+                value={form.name}
+                onChange={({ detail }) => setForm({ ...form, name: detail.value })}
+                placeholder="my-execution"
+              />
+            </FormField>
+            <FormField label="Input (JSON)">
+              <Textarea
+                rows={6}
+                value={form.input}
+                onChange={({ detail }) => setForm({ ...form, input: detail.value })}
+              />
+            </FormField>
+          </SpaceBetween>
+        </Form>
+      </Modal>
+    </ContentLayout>
   )
 }

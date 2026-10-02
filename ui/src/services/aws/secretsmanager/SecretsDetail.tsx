@@ -1,16 +1,43 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getSecretValue, putSecretValue, listSecretVersions } from '../../../api/secretsmanager'
+import {
+  Alert,
+  Box,
+  Button,
+  Container,
+  ContentLayout,
+  Form,
+  FormField,
+  Header,
+  Link,
+  Modal,
+  SpaceBetween,
+  Table,
+  Tabs,
+  Textarea,
+} from '@cloudscape-design/components'
+import {
+  getSecretValue,
+  putSecretValue,
+  listSecretVersions,
+  type SecretVersion,
+} from '../../../api/secretsmanager'
+import { formatDate } from '../../../lib/date'
+import { useNotifications } from '../../../components/notifications'
+
+type Tab = 'value' | 'versions'
 
 export function SecretsDetail() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
   const qc = useQueryClient()
   const decodedName = decodeURIComponent(name ?? '')
+  const [tab, setTab] = useState<Tab>('value')
   const [editOpen, setEditOpen] = useState(false)
   const [newValue, setNewValue] = useState('')
   const [showValue, setShowValue] = useState(false)
+  const { notify } = useNotifications()
 
   const { data: valueData, isLoading, error } = useQuery({
     queryKey: ['secretsmanager', 'value', decodedName],
@@ -29,136 +56,150 @@ export function SecretsDetail() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['secretsmanager', 'value', decodedName] })
       void qc.invalidateQueries({ queryKey: ['secretsmanager', 'versions', decodedName] })
+      notify({ type: 'success', header: 'Secret value updated' })
       setEditOpen(false)
       setNewValue('')
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Update failed', content: (err as Error).message }),
   })
 
+  const versions = versionsData?.items ?? []
+
   return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: '1.5rem' }}>
-        <button onClick={() => navigate('/aws/secretsmanager')} style={btnBack}>← Back</button>
-        <h2 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 600 }}>{decodedName}</h2>
-      </div>
+    <ContentLayout
+      breadcrumbs={
+        <Link
+          href="/ui/aws/secretsmanager"
+          onFollow={(event) => {
+            event.preventDefault()
+            navigate('/aws/secretsmanager')
+          }}
+        >
+          Secrets
+        </Link>
+      }
+      header={
+        <Header
+          variant="h1"
+          actions={
+            <Button
+              variant="primary"
+              onClick={() => {
+                setNewValue('')
+                setEditOpen(true)
+              }}
+            >
+              Update
+            </Button>
+          }
+        >
+          {decodedName}
+        </Header>
+      }
+    >
+      <Tabs
+        tabs={[
+          { id: 'value', label: 'Secret value' },
+          { id: 'versions', label: `Versions (${versions.length})` },
+        ]}
+        activeTabId={tab}
+        onChange={({ detail }) => setTab(detail.activeTabId as Tab)}
+      />
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-        {/* Secret value card */}
-        <div style={card}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-            <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Secret Value</h3>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button style={btnSecondary} onClick={() => setShowValue(v => !v)}>
-                {showValue ? 'Hide' : 'Reveal'}
-              </button>
-              <button style={btnPrimary} onClick={() => setEditOpen(true)}>Update</button>
-            </div>
-          </div>
-          {showValue && (
-            isLoading ? (
-              <div style={{ color: '#5f6b7a', fontSize: '0.9em' }}>Loading…</div>
-            ) : error ? (
-              <div style={{ color: '#d13212', fontSize: '0.9em' }}>{(error as Error).message}</div>
-            ) : (
-              <pre style={{
-                background: '#f4f5f7', borderRadius: 6, padding: '0.75rem',
-                fontFamily: 'monospace', fontSize: '0.82em', overflowX: 'auto',
-                whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0,
-              }}>
-                {valueData?.SecretString ?? '(binary)'}
-              </pre>
-            )
-          )}
-          {!showValue && (
-            <div style={{ color: '#8d9daa', fontSize: '0.9em' }}>Click Reveal to view the secret value.</div>
-          )}
-        </div>
-
-        {/* Versions card */}
-        <div style={card}>
-          <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 600 }}>Versions</h3>
-          {(versionsData?.items ?? []).length === 0 ? (
-            <div style={{ color: '#8d9daa', fontSize: '0.9em' }}>No versions yet.</div>
+      {tab === 'value' && (
+        <Container
+          header={
+            <Header
+              variant="h2"
+              actions={
+                <Button onClick={() => setShowValue((v) => !v)}>
+                  {showValue ? 'Hide' : 'Reveal'}
+                </Button>
+              }
+            >
+              Secret value
+            </Header>
+          }
+        >
+          {!showValue ? (
+            <Box color="text-body-secondary">Click Reveal to view the secret value.</Box>
+          ) : isLoading ? (
+            <Box color="text-status-inactive">Loading…</Box>
+          ) : error ? (
+            <Alert type="error" header="Could not retrieve secret value">
+              {(error as Error).message}
+            </Alert>
           ) : (
-            <div style={{ border: '1px solid #e7e9ec', borderRadius: 6, overflow: 'hidden', fontSize: '0.85em' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ background: '#f4f5f7', borderBottom: '1px solid #e7e9ec' }}>
-                    <th style={th}>Version ID</th>
-                    <th style={th}>Stages</th>
-                    <th style={th}>Created</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(versionsData?.items ?? []).map((v, i) => (
-                    <tr key={v.versionId} style={{ borderBottom: i < (versionsData?.items ?? []).length - 1 ? '1px solid #e7e9ec' : 'none' }}>
-                      <td style={td}><code style={{ fontSize: '0.9em' }}>{v.versionId.slice(0, 8)}…</code></td>
-                      <td style={td}>{(v.versionStages ?? []).join(', ')}</td>
-                      <td style={td}>{v.createdDate || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <Box variant="pre">{valueData?.SecretString ?? '(binary)'}</Box>
           )}
-        </div>
-      </div>
-
-      {/* Update value dialog */}
-      {editOpen && (
-        <div style={overlay}>
-          <div style={dialog}>
-            <h3 style={{ margin: '0 0 1rem' }}>Update secret value</h3>
-            <label style={labelStyle}>New secret value</label>
-            <textarea style={{ ...inputStyle, height: 120, fontFamily: 'monospace', fontSize: '0.85em' }}
-              value={newValue} onChange={e => setNewValue(e.target.value)}
-              placeholder='{"username":"admin","password":"new-secret"}' autoFocus />
-            {putMut.error && (
-              <div style={{ color: '#d13212', marginBottom: '0.5rem', fontSize: '0.85em' }}>
-                {(putMut.error as Error).message}
-              </div>
-            )}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-              <button style={btnSecondary} onClick={() => setEditOpen(false)}>Cancel</button>
-              <button style={btnPrimary} onClick={() => putMut.mutate()} disabled={!newValue || putMut.isPending}>
-                {putMut.isPending ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-          </div>
-        </div>
+        </Container>
       )}
-    </div>
-  )
-}
 
-const card: React.CSSProperties = {
-  border: '1px solid #e7e9ec', borderRadius: 8, padding: '1.25rem', background: '#fff',
-}
-const btnBack: React.CSSProperties = {
-  background: 'transparent', color: '#5f6b7a', border: 'none', cursor: 'pointer', fontSize: '0.9em', padding: 0,
-}
-const btnPrimary: React.CSSProperties = {
-  background: '#e87600', color: '#fff', border: '1px solid #e87600',
-  borderRadius: 6, padding: '0.3rem 0.75rem', cursor: 'pointer', fontSize: '0.85em', fontWeight: 500,
-}
-const btnSecondary: React.CSSProperties = {
-  background: 'transparent', color: '#5f6b7a', border: '1px solid #ccc',
-  borderRadius: 6, padding: '0.3rem 0.75rem', cursor: 'pointer', fontSize: '0.85em',
-}
-const th: React.CSSProperties = {
-  padding: '0.5rem 0.75rem', textAlign: 'left', fontWeight: 600, fontSize: '0.8em',
-  color: '#5f6b7a', textTransform: 'uppercase',
-}
-const td: React.CSSProperties = { padding: '0.5rem 0.75rem', verticalAlign: 'middle' }
-const overlay: React.CSSProperties = {
-  position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex',
-  alignItems: 'center', justifyContent: 'center', zIndex: 1000,
-}
-const dialog: React.CSSProperties = {
-  background: '#fff', borderRadius: 10, padding: '1.5rem', minWidth: 440, maxWidth: 560,
-  boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
-}
-const labelStyle: React.CSSProperties = { display: 'block', fontSize: '0.82em', fontWeight: 600, marginBottom: 4, color: '#2d3748' }
-const inputStyle: React.CSSProperties = {
-  width: '100%', padding: '0.4rem 0.6rem', border: '1px solid #ccc', borderRadius: 6,
-  marginBottom: '0.75rem', boxSizing: 'border-box',
+      {tab === 'versions' && (
+        <Container header={<Header variant="h2">Versions</Header>}>
+          <Table
+            items={versions}
+            columnDefinitions={[
+              {
+                id: 'versionId',
+                header: 'Version ID',
+                cell: (v: SecretVersion) => <Box variant="code">{v.versionId.slice(0, 8)}…</Box>,
+              },
+              {
+                id: 'stages',
+                header: 'Stages',
+                cell: (v: SecretVersion) => (v.versionStages ?? []).join(', ') || '—',
+              },
+              {
+                id: 'created',
+                header: 'Created',
+                cell: (v: SecretVersion) => formatDate(v.createdDate),
+              },
+            ]}
+            trackBy={(v) => v.versionId}
+            empty={
+              <Box textAlign="center" color="inherit">
+                <b>No versions</b>
+              </Box>
+            }
+          />
+        </Container>
+      )}
+
+      <Modal
+        visible={editOpen}
+        onDismiss={() => setEditOpen(false)}
+        header="Update secret value"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setEditOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={putMut.isPending}
+                disabled={!newValue}
+                onClick={() => putMut.mutate()}
+              >
+                Save
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        <Form>
+          <FormField label="New secret value">
+            <Textarea
+              autoFocus
+              value={newValue}
+              onChange={({ detail }) => setNewValue(detail.value)}
+              placeholder='{"username":"admin","password":"new-secret"}'
+            />
+          </FormField>
+        </Form>
+      </Modal>
+    </ContentLayout>
+  )
 }
