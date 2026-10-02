@@ -16,7 +16,6 @@ export function DynamoDBDetail() {
   const qc = useQueryClient()
 
   const [limit, setLimit] = useState(50)
-  const [nextToken, setNextToken] = useState<string | undefined>()
   const [page, setPage] = useState(0)
   const [pages, setPages] = useState<Array<string | undefined>>([undefined])
   const [editItem, setEditItem] = useState<Record<string, unknown> | null>(null)
@@ -64,7 +63,6 @@ export function DynamoDBDetail() {
       const next = page + 1
       if (next >= pages.length) setPages([...pages, tok])
       setPage(next)
-      setNextToken(tok)
     }
   }
 
@@ -72,7 +70,6 @@ export function DynamoDBDetail() {
     if (page > 0) {
       const prev = page - 1
       setPage(prev)
-      setNextToken(pages[prev])
     }
   }
 
