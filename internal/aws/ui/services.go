@@ -1,6 +1,10 @@
 package ui
 
-import "net/http"
+import (
+	"net/http"
+
+	"jaiscloud/internal/model"
+)
 
 // ServiceChild is a sub-page of a service (e.g. S3 → Buckets).
 type ServiceChild struct {
@@ -18,8 +22,16 @@ type ServiceDescriptor struct {
 	Children []ServiceChild `json:"children"`
 }
 
-// buildServicesHandler reports the services this binary supports.
-func buildServicesHandler(providers *AWSProviders) http.HandlerFunc {
+// buildServicesHandler reports the services this binary supports. The AWS
+// service catalog is only served by an AWS build; other clouds return an
+// empty list until their own UI implementation is added.
+func buildServicesHandler(providers *AWSProviders, cloud model.Cloud) http.HandlerFunc {
+	if cloud != model.CloudAWS {
+		return func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, ServicesResponse{Services: []ServiceDescriptor{}})
+		}
+	}
+
 	// Ordered by AWS console category so the client can group by first-seen
 	// category without needing its own ordering.
 	descriptors := []struct {
