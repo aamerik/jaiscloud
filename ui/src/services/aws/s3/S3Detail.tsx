@@ -2,17 +2,13 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listObjects, deleteObject, deleteObjects, downloadObjectUrl, type S3Object } from '../../../api/s3'
+import { formatDate } from '../../../lib/date'
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
-
-function fmtDate(s?: string): string {
-  if (!s) return '—'
-  try { return new Date(s).toLocaleString() } catch { return s }
 }
 
 export function S3Detail() {
@@ -187,7 +183,7 @@ export function S3Detail() {
                   <td style={{ ...td, textAlign: 'right', color: '#5f6b7a', fontVariantNumeric: 'tabular-nums' }}>
                     {fmtSize(obj.size)}
                   </td>
-                  <td style={{ ...td, color: '#5f6b7a' }}>{fmtDate(obj.lastModified)}</td>
+                  <td style={{ ...td, color: '#5f6b7a' }}>{formatDate(obj.lastModified)}</td>
                   <td style={{ ...td, display: 'flex', gap: '0.4rem' }}>
                     <a
                       href={downloadObjectUrl(bucket, obj.key)}

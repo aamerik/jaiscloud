@@ -2,6 +2,7 @@ import { Fragment, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getQueue, purgeQueue, listDLQSources, getTags, peekMessages, type PeekedMessage } from '../../../api/sqs'
+import { formatDate } from '../../../lib/date'
 import { SQSMessageSend } from './SQSMessageSend'
 
 type Tab = 'overview' | 'messages' | 'dlq' | 'tags'
@@ -80,7 +81,7 @@ export function SQSDetail() {
     ['Max message size', `${Math.round(queue.maxMessageSize / 1024)} KB`],
     ['Dead-letter queue', queue.dlqArn || '—'],
     ['Max receive count', queue.dlqMaxReceive ? String(queue.dlqMaxReceive) : '—'],
-    ['Created', queue.createdAt ? new Date(queue.createdAt).toLocaleString() : '—'],
+    ['Created', formatDate(queue.createdAt)],
   ]
 
   return (
@@ -226,7 +227,7 @@ export function SQSDetail() {
                         </td>
                         <td style={{ ...td, textAlign: 'right', color: '#5f6b7a' }}>{m.receiveCount}</td>
                         <td style={{ ...td, color: '#5f6b7a', whiteSpace: 'nowrap' }}>
-                          {m.sentAt ? new Date(m.sentAt).toLocaleString() : '—'}
+                          {formatDate(m.sentAt)}
                         </td>
                         {queue.type === 'FIFO' && <td style={{ ...td, fontFamily: 'monospace', fontSize: '0.82em' }}>{m.groupId ?? '—'}</td>}
                       </tr>

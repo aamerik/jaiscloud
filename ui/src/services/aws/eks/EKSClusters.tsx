@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listClusters, createCluster, deleteCluster } from '../../../api/eks'
+import { formatDate } from '../../../lib/date'
 
 export function EKSClusters() {
   const qc = useQueryClient()
@@ -63,7 +64,7 @@ export function EKSClusters() {
                     </span>
                   </td>
                   <td className="px-4 py-2">{c.version || '—'}</td>
-                  <td className="px-4 py-2 text-gray-500">{c.createdAt ? new Date(c.createdAt).toLocaleString() : '—'}</td>
+                  <td className="px-4 py-2 text-gray-500">{formatDate(c.createdAt)}</td>
                   <td className="px-4 py-2">
                     <button
                       onClick={() => del.mutate(c.name)}

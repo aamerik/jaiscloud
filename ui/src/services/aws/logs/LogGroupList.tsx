@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { listLogGroups, createLogGroup, deleteLogGroup } from '../../../api/logs'
 import { EmptyState } from '../../../components/EmptyState'
+import { formatDate } from '../../../lib/date'
 
 function fmtBytes(n: number): string {
   if (n === 0) return '0 B'
@@ -10,11 +11,6 @@ function fmtBytes(n: number): string {
   if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`
   if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`
   return `${(n / 1073741824).toFixed(2)} GB`
-}
-
-function fmtDate(ms: number): string {
-  if (!ms) return '—'
-  return new Date(ms).toLocaleString()
 }
 
 export function LogGroupList() {
@@ -91,7 +87,7 @@ export function LogGroupList() {
                     {g.retentionDays ? `${g.retentionDays}d` : 'Never expire'}
                   </td>
                   <td style={{ ...td, textAlign: 'right', color: '#5f6b7a' }}>{fmtBytes(g.storedBytes)}</td>
-                  <td style={{ ...td, color: '#5f6b7a' }}>{fmtDate(g.createdAt)}</td>
+                  <td style={{ ...td, color: '#5f6b7a' }}>{formatDate(g.createdAt)}</td>
                   <td style={td} onClick={(e) => e.stopPropagation()}>
                     <button onClick={() => setConfirmDelete(g.name)} style={btnSmall}>Delete</button>
                   </td>

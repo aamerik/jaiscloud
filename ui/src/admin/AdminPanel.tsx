@@ -12,6 +12,7 @@ import {
   type ClockState,
   type Snapshot,
 } from '../api/admin'
+import { formatDate } from '../lib/date'
 
 export function AdminPanel() {
   const qc = useQueryClient()
@@ -284,7 +285,7 @@ function SnapshotsSection({ snapshots, onChanged }: { snapshots: Snapshot[]; onC
                   <td style={td}><span style={{ fontWeight: 500 }}>{s.name}</span></td>
                   <td style={{ ...td, color: '#5f6b7a' }}>{s.description ?? '—'}</td>
                   <td style={{ ...td, color: '#8d9daa', fontSize: '0.85em' }}>
-                    {s.createdAt ? new Date(s.createdAt).toLocaleString() : '—'}
+                    {formatDate(s.createdAt)}
                   </td>
                   <td style={{ ...td, display: 'flex', gap: '0.4rem' }}>
                     <button onClick={() => setConfirmRevert(s)} style={btnSmall}>Revert</button>

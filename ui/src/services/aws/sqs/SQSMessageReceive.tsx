@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { receiveMessages, deleteMessage, type Message } from '../../../api/sqs'
+import { formatDate } from '../../../lib/date'
 
 interface Props {
   queueUrl: string
@@ -79,7 +80,7 @@ export function SQSMessageReceive({ queueUrl }: Props) {
                 </code>
                 {m.sentAt && (
                   <span style={{ fontSize: '0.75em', color: '#8d9daa', flexShrink: 0 }}>
-                    {new Date(m.sentAt).toLocaleString()}
+                    {formatDate(m.sentAt)}
                   </span>
                 )}
                 <div style={{ display: 'flex', gap: '0.4rem', marginLeft: 'auto', flexShrink: 0 }}>

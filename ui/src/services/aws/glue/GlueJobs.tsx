@@ -10,6 +10,7 @@ import {
   type JobRun,
 } from '../../../api/glue'
 import { EmptyState } from '../../../components/EmptyState'
+import { formatDate } from '../../../lib/date'
 
 const STATE_COLOR: Record<string, string> = {
   SUCCEEDED: '#037f0c',
@@ -28,11 +29,6 @@ const btnStyle: React.CSSProperties = { padding: '0.4rem 1rem', borderRadius: 4,
 const inputStyle: React.CSSProperties = { padding: '0.4rem 0.75rem', borderRadius: 4, border: '1px solid #2d3748', background: '#1a2332', color: '#e8eaf0', fontSize: '0.85rem', width: '100%', boxSizing: 'border-box' }
 const overlayStyle: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }
 const modalStyle: React.CSSProperties = { background: '#1a2332', borderRadius: 8, padding: '2rem', minWidth: 420, maxWidth: 560 }
-
-function fmtDate(s: string | undefined): string {
-  if (!s) return '—'
-  try { return new Date(s).toLocaleString() } catch { return s }
-}
 
 export function GlueJobs() {
   const qc = useQueryClient()
@@ -143,8 +139,8 @@ export function GlueJobs() {
                       <td style={tdStyle}>
                         <span style={{ color: STATE_COLOR[r.state] ?? '#5f6b7a', fontWeight: 600 }}>{r.state}</span>
                       </td>
-                      <td style={{ ...tdStyle, fontSize: '0.82rem', color: '#b0bec5' }}>{fmtDate(r.startedOn)}</td>
-                      <td style={{ ...tdStyle, fontSize: '0.82rem', color: '#b0bec5' }}>{fmtDate(r.completedOn)}</td>
+                      <td style={{ ...tdStyle, fontSize: '0.82rem', color: '#b0bec5' }}>{formatDate(r.startedOn)}</td>
+                      <td style={{ ...tdStyle, fontSize: '0.82rem', color: '#b0bec5' }}>{formatDate(r.completedOn)}</td>
                     </tr>
                   ))}
                 </tbody>
