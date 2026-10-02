@@ -4,8 +4,10 @@
 // .../clusters/{name}/topics/{topic}). A cluster record carries the caller's
 // metadata; a real Kafka-wire broker behind its bootstrapAddress is optional
 // (broker modes k8s/native) and its live endpoint is runtime state, not stored
-// here. Consumer groups are not tracked (their list endpoint always returns an
-// empty list). Cluster mutations persist a done
+// here. Consumer groups are not stored either: they live on the cluster's Kafka
+// broker (its group coordinator is the source of truth) and the core reads them
+// through the injected broker, so with no live broker the list is empty.
+// Cluster mutations persist a done
 // google.longrunning.Operation under .../locations/{location}/operations/{id}
 // so it can be read back via GetOperation/ListOperations.
 package managedkafka

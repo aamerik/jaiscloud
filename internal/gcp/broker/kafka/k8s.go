@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"jaiscloud/internal/clock"
+	core "jaiscloud/internal/gcp/service/managedkafka"
 )
 
 const (
@@ -84,6 +85,32 @@ func (b *k8sBroker) AddTopicPartitions(ctx context.Context, project, location, c
 // DeleteBrokerTopic removes the topic from the live broker.
 func (b *k8sBroker) DeleteBrokerTopic(ctx context.Context, project, location, cluster, topic string) error {
 	return deleteBrokerTopic(ctx, b.admins, b.Endpoint(project, location, cluster), topic)
+}
+
+// ListConsumerGroups returns the live broker's consumer groups, or an empty set
+// when no broker is running.
+func (b *k8sBroker) ListConsumerGroups(ctx context.Context, project, location, cluster string) ([]string, error) {
+	return listGroups(ctx, b.admins, b.Endpoint(project, location, cluster))
+}
+
+// ConsumerGroupOffsets returns the group's committed offsets on the live broker.
+func (b *k8sBroker) ConsumerGroupOffsets(ctx context.Context, project, location, cluster, group string) ([]core.ConsumerGroupOffset, bool, error) {
+	return groupOffsets(ctx, b.admins, b.Endpoint(project, location, cluster), group)
+}
+
+// ConsumerGroupMembers returns the group's active member count on the live broker.
+func (b *k8sBroker) ConsumerGroupMembers(ctx context.Context, project, location, cluster, group string) (int, bool, error) {
+	return groupMembers(ctx, b.admins, b.Endpoint(project, location, cluster), group)
+}
+
+// DeleteConsumerGroup removes the group from the live broker.
+func (b *k8sBroker) DeleteConsumerGroup(ctx context.Context, project, location, cluster, group string) (bool, error) {
+	return deleteGroup(ctx, b.admins, b.Endpoint(project, location, cluster), group)
+}
+
+// CommitConsumerGroupOffsets sets the group's committed offsets on the live broker.
+func (b *k8sBroker) CommitConsumerGroupOffsets(ctx context.Context, project, location, cluster, group string, offsets []core.ConsumerGroupOffset) error {
+	return commitGroupOffsets(ctx, b.admins, b.Endpoint(project, location, cluster), group, offsets)
 }
 
 func (b *k8sBroker) EnsureCluster(ctx context.Context, project, location, cluster string) (string, error) {

@@ -77,6 +77,45 @@ func aclToProto(a mkstore.Acl, project string) *managedkafkapb.Acl {
 	return out
 }
 
+// consumerGroupToProto renders a core consumer group as the proto ConsumerGroup.
+// The topics map is keyed by the full topic resource name, as the proto
+// documents.
+func consumerGroupToProto(g core.ConsumerGroup, project string) *managedkafkapb.ConsumerGroup {
+	out := &managedkafkapb.ConsumerGroup{Name: core.ConsumerGroupName(project, g.Location, g.Cluster, g.Name)}
+	if len(g.Topics) == 0 {
+		return out
+	}
+	out.Topics = make(map[string]*managedkafkapb.ConsumerTopicMetadata, len(g.Topics))
+	for topic, t := range g.Topics {
+		ct := &managedkafkapb.ConsumerTopicMetadata{Partitions: make(map[int32]*managedkafkapb.ConsumerPartitionMetadata, len(t.Partitions))}
+		for partition, meta := range t.Partitions {
+			ct.Partitions[partition] = &managedkafkapb.ConsumerPartitionMetadata{
+				Offset:   meta.Offset,
+				Metadata: meta.Metadata,
+			}
+		}
+		out.Topics[topic] = ct
+	}
+	return out
+}
+
+// consumerGroupInputFromProto builds a core ConsumerGroupInput from a request
+// ConsumerGroup: its topics/partitions/offset+metadata map.
+func consumerGroupInputFromProto(g *managedkafkapb.ConsumerGroup) core.ConsumerGroupInput {
+	var in core.ConsumerGroupInput
+	for topic, tm := range g.GetTopics() {
+		for partition, pm := range tm.GetPartitions() {
+			in.Offsets = append(in.Offsets, core.ConsumerGroupOffset{
+				Topic:     topic,
+				Partition: partition,
+				Offset:    pm.GetOffset(),
+				Metadata:  pm.GetMetadata(),
+			})
+		}
+	}
+	return in
+}
+
 // operationToProto renders a stored operation as the proto
 // google.longrunning.Operation, packing the already-rendered metadata and the
 // caller-supplied response message (a Cluster, or Empty for delete). The result

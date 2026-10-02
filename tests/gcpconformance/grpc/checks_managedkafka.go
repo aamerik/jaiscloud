@@ -20,7 +20,11 @@ import (
 // cloud.google.com/go/managedkafka/apiv1 client: cluster CRUD (create/update/
 // delete are long-running operations with the response packed inline, so the
 // client's Wait observes it without polling), topic CRUD, ACL CRUD plus
-// add/remove entry, and the (always empty) consumer-group list.
+// add/remove entry, and consumer-group list/get/update/delete. Consumer groups
+// have no create RPC — a client creates one by committing offsets to a live
+// broker — so in the hermetic (mock-broker) conformance environment the list is
+// empty and the item methods report NotFound; the broker-backed data plane is
+// exercised by tests/persistent_mode/gcp/managedkafka-broker (the MK6 gate).
 //
 // Every probe is self-contained: it ensures a run-unique cluster exists and
 // then exercises one RPC. Names are run-unique via cfg.ResourceName, so a
@@ -45,6 +49,9 @@ func managedKafkaChecks() []Check {
 		{Service: "managedkafka", RPC: "AddAclEntry", Method: "AddAclEntry", KeyField: "entry appended", Run: checkMKAddAclEntry},
 		{Service: "managedkafka", RPC: "RemoveAclEntry", Method: "RemoveAclEntry", KeyField: "last entry deletes acl", Run: checkMKRemoveAclEntry},
 		{Service: "managedkafka", RPC: "ListConsumerGroups", Method: "ListConsumerGroups", KeyField: "empty set (no broker)", Run: checkMKListConsumerGroups},
+		{Service: "managedkafka", RPC: "GetConsumerGroup", Method: "GetConsumerGroup", KeyField: "NotFound for an absent group", Run: checkMKGetConsumerGroup},
+		{Service: "managedkafka", RPC: "UpdateConsumerGroup", Method: "UpdateConsumerGroup", KeyField: "NotFound for an absent group", Run: checkMKUpdateConsumerGroup},
+		{Service: "managedkafka", RPC: "DeleteConsumerGroup", Method: "DeleteConsumerGroup", KeyField: "NotFound for an absent group", Run: checkMKDeleteConsumerGroup},
 	}
 }
 
@@ -662,6 +669,66 @@ func checkMKListConsumerGroups(ctx context.Context, cfg Config) error {
 	}
 	if groups != 0 {
 		return fmt.Errorf("ListConsumerGroups returned %d groups, want 0", groups)
+	}
+	return nil
+}
+
+// Check 19: GetConsumerGroup on an absent group is NotFound. There is no create
+// RPC, so the hermetic (mock-broker) environment has no groups.
+func checkMKGetConsumerGroup(ctx context.Context, cfg Config) error {
+	client, err := newManagedKafkaClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	cluster, err := ensureManagedKafkaCluster(ctx, client, cfg)
+	if err != nil {
+		return err
+	}
+	name := cluster + "/consumerGroups/" + cfg.ResourceName("gcpc-grpc-cg-get")
+	if _, err := client.GetConsumerGroup(ctx, &managedkafkapb.GetConsumerGroupRequest{Name: name}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("GetConsumerGroup = %v, want NotFound", err)
+	}
+	return nil
+}
+
+// Check 20: UpdateConsumerGroup on an absent group is NotFound (the group must
+// be created by a committing consumer on a live broker).
+func checkMKUpdateConsumerGroup(ctx context.Context, cfg Config) error {
+	client, err := newManagedKafkaClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	cluster, err := ensureManagedKafkaCluster(ctx, client, cfg)
+	if err != nil {
+		return err
+	}
+	name := cluster + "/consumerGroups/" + cfg.ResourceName("gcpc-grpc-cg-upd")
+	_, err = client.UpdateConsumerGroup(ctx, &managedkafkapb.UpdateConsumerGroupRequest{
+		ConsumerGroup: &managedkafkapb.ConsumerGroup{Name: name},
+		UpdateMask:    &fieldmaskpb.FieldMask{Paths: []string{"topics"}},
+	})
+	if status.Code(err) != codes.NotFound {
+		return fmt.Errorf("UpdateConsumerGroup = %v, want NotFound", err)
+	}
+	return nil
+}
+
+// Check 21: DeleteConsumerGroup on an absent group is NotFound.
+func checkMKDeleteConsumerGroup(ctx context.Context, cfg Config) error {
+	client, err := newManagedKafkaClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	cluster, err := ensureManagedKafkaCluster(ctx, client, cfg)
+	if err != nil {
+		return err
+	}
+	name := cluster + "/consumerGroups/" + cfg.ResourceName("gcpc-grpc-cg-del")
+	if err := client.DeleteConsumerGroup(ctx, &managedkafkapb.DeleteConsumerGroupRequest{Name: name}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("DeleteConsumerGroup = %v, want NotFound", err)
 	}
 	return nil
 }

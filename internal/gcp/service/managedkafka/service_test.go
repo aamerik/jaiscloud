@@ -423,14 +423,14 @@ func TestDeriveAclPattern(t *testing.T) {
 	}
 }
 
-func TestConsumerGroups(t *testing.T) {
+func TestConsumerGroupsNoBroker(t *testing.T) {
 	ctx := context.Background()
 	s := newCore()
 	if _, _, err := s.CreateCluster(ctx, "proj", "us-central1", "c1", clusterIn(nil)); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
 
-	groups, next, err := s.ListConsumerGroups(ctx, "proj", "us-central1", "c1", 0, "")
+	groups, next, err := s.ListConsumerGroups(ctx, "proj", "us-central1", "c1", "", "", 0, "")
 	if err != nil {
 		t.Fatalf("ListConsumerGroups: %v", err)
 	}
@@ -439,15 +439,15 @@ func TestConsumerGroups(t *testing.T) {
 	}
 
 	// Listing under a missing cluster is NotFound.
-	if _, _, err := s.ListConsumerGroups(ctx, "proj", "us-central1", "missing", 0, ""); err == nil {
+	if _, _, err := s.ListConsumerGroups(ctx, "proj", "us-central1", "missing", "", "", 0, ""); err == nil {
 		t.Error("expected NotFound for a missing cluster")
 	} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "NotFound" {
 		t.Errorf("expected NotFound, got %v", err)
 	}
 
 	for _, err := range []error{
-		s.GetConsumerGroup(ctx, "proj", "us-central1", "c1", "g1"),
-		s.UpdateConsumerGroup(ctx, "proj", "us-central1", "c1", "g1"),
+		groupErr(s.GetConsumerGroup(ctx, "proj", "us-central1", "c1", "g1")),
+		groupErr(s.UpdateConsumerGroup(ctx, "proj", "us-central1", "c1", "g1", ConsumerGroupInput{}, nil)),
 		s.DeleteConsumerGroup(ctx, "proj", "us-central1", "c1", "g1"),
 	} {
 		var perr *model.ProviderError
@@ -455,6 +455,166 @@ func TestConsumerGroups(t *testing.T) {
 			t.Errorf("expected NotFound, got %v", err)
 		}
 	}
+}
+
+// groupErr discards a ConsumerGroup so Get/Update can be asserted in a list.
+func groupErr(_ ConsumerGroup, err error) error { return err }
+
+func TestConsumerGroupsFromBroker(t *testing.T) {
+	ctx := context.Background()
+	t1 := TopicName("proj", "us-central1", "c1", "t1")
+	t2 := TopicName("proj", "us-central1", "c1", "t2")
+	fb := &fakeBroker{
+		endpoint:   "broker:9092",
+		listGroups: []string{"g2", "g1"},
+		groupState: map[string]fakeGroup{
+			"g1": {members: 2, offsets: []ConsumerGroupOffset{
+				{Topic: "t1", Partition: 0, Offset: 7, Metadata: "seen"},
+				{Topic: "t1", Partition: 1, Offset: 3},
+			}},
+			"g2": {offsets: []ConsumerGroupOffset{{Topic: "t2", Partition: 0, Offset: 1}}},
+		},
+	}
+	s := NewService(mkstore.NewMemoryStore(), WithBroker(fb))
+	withCluster(t, s)
+
+	// FULL view: sorted by id, offsets expanded to resource names.
+	groups, _, err := s.ListConsumerGroups(ctx, "proj", "us-central1", "c1", ConsumerGroupViewFull, "", 0, "")
+	if err != nil {
+		t.Fatalf("ListConsumerGroups: %v", err)
+	}
+	if len(groups) != 2 || groups[0].Name != "g1" || groups[1].Name != "g2" {
+		t.Fatalf("groups = %+v, want sorted [g1 g2]", groups)
+	}
+	if got := groups[0].Topics[t1].Partitions[0]; got.Offset != 7 || got.Metadata != "seen" {
+		t.Errorf("g1 partition 0 = %+v", got)
+	}
+
+	// BASIC view hides the topics map.
+	groups, _, err = s.ListConsumerGroups(ctx, "proj", "us-central1", "c1", ConsumerGroupViewBasic, "", 0, "")
+	if err != nil {
+		t.Fatalf("ListConsumerGroups(BASIC): %v", err)
+	}
+	if len(groups) != 2 || groups[0].Topics != nil {
+		t.Errorf("BASIC groups = %+v, want names only", groups)
+	}
+
+	// Filter keeps only groups holding the topic.
+	groups, _, err = s.ListConsumerGroups(ctx, "proj", "us-central1", "c1", ConsumerGroupViewFull, t1, 0, "")
+	if err != nil {
+		t.Fatalf("ListConsumerGroups(filter): %v", err)
+	}
+	if len(groups) != 1 || groups[0].Name != "g1" {
+		t.Errorf("filtered groups = %+v, want [g1]", groups)
+	}
+
+	// Get round-trips committed offsets.
+	g, err := s.GetConsumerGroup(ctx, "proj", "us-central1", "c1", "g1")
+	if err != nil {
+		t.Fatalf("GetConsumerGroup: %v", err)
+	}
+	if got := g.Topics[t1].Partitions[1].Offset; got != 3 {
+		t.Errorf("g1 partition 1 offset = %d, want 3", got)
+	}
+	if _, err := s.GetConsumerGroup(ctx, "proj", "us-central1", "c1", "missing"); !isNotFound(err) {
+		t.Errorf("GetConsumerGroup(missing) = %v, want NotFound", err)
+	}
+
+	// Update resets offsets for an inactive group; the topic arrives as a full
+	// resource name and is normalized to the bare id for the broker.
+	updated, err := s.UpdateConsumerGroup(ctx, "proj", "us-central1", "c1", "g2", ConsumerGroupInput{Offsets: []ConsumerGroupOffset{
+		{Topic: t2, Partition: 0, Offset: 9, Metadata: "reset"},
+	}}, nil)
+	if err != nil {
+		t.Fatalf("UpdateConsumerGroup: %v", err)
+	}
+	if fb.committed["g2"][0].Topic != "t2" || fb.committed["g2"][0].Offset != 9 {
+		t.Errorf("broker commit = %+v, want bare t2 offset 9", fb.committed["g2"])
+	}
+	if got := updated.Topics[t2].Partitions[0]; got.Offset != 9 || got.Metadata != "reset" {
+		t.Errorf("updated g2 = %+v", got)
+	}
+
+	// Resetting an active group is FailedPrecondition.
+	if _, err := s.UpdateConsumerGroup(ctx, "proj", "us-central1", "c1", "g1", ConsumerGroupInput{}, nil); err == nil {
+		t.Error("expected FailedPrecondition for an active group")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "FailedPrecondition" {
+		t.Errorf("error = %v, want FailedPrecondition", err)
+	}
+
+	// Delete removes the group, then reports NotFound.
+	if err := s.DeleteConsumerGroup(ctx, "proj", "us-central1", "c1", "g2"); err != nil {
+		t.Fatalf("DeleteConsumerGroup: %v", err)
+	}
+	if err := s.DeleteConsumerGroup(ctx, "proj", "us-central1", "c1", "g2"); !isNotFound(err) {
+		t.Errorf("second DeleteConsumerGroup = %v, want NotFound", err)
+	}
+}
+
+func TestConsumerGroupViewMaskAndErrors(t *testing.T) {
+	ctx := context.Background()
+	t1 := TopicName("proj", "us-central1", "c1", "t1")
+	fb := &fakeBroker{
+		endpoint:   "broker:9092",
+		listGroups: []string{"g1", "g2"},
+		groupState: map[string]fakeGroup{
+			"g1": {offsets: []ConsumerGroupOffset{{Topic: "t1", Partition: 0, Offset: 5}}},
+			"g2": {offsets: []ConsumerGroupOffset{{Topic: "t1", Partition: 0, Offset: -1}}},
+		},
+	}
+	s := NewService(mkstore.NewMemoryStore(), WithBroker(fb))
+	withCluster(t, s)
+
+	// An unknown view is InvalidArgument.
+	if _, _, err := s.ListConsumerGroups(ctx, "proj", "us-central1", "c1", "BOGUS", "", 0, ""); err == nil {
+		t.Error("expected InvalidArgument for an unknown view")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidArgument" {
+		t.Errorf("error = %v, want InvalidArgument", err)
+	}
+
+	// BASIC + filter still hides the topics map.
+	groups, _, err := s.ListConsumerGroups(ctx, "proj", "us-central1", "c1", ConsumerGroupViewBasic, t1, 0, "")
+	if err != nil {
+		t.Fatalf("List(BASIC,filter): %v", err)
+	}
+	if len(groups) != 2 || groups[0].Topics != nil {
+		t.Errorf("BASIC+filter groups = %+v, want names only", groups)
+	}
+
+	// A negative committed offset (Kafka's "no commit") renders as 0.
+	g, err := s.GetConsumerGroup(ctx, "proj", "us-central1", "c1", "g2")
+	if err != nil {
+		t.Fatalf("Get g2: %v", err)
+	}
+	if got := g.Topics[t1].Partitions[0].Offset; got != 0 {
+		t.Errorf("negative offset = %d, want 0", got)
+	}
+
+	// A mask that does not select topics leaves the committed offsets unchanged.
+	unchanged, err := s.UpdateConsumerGroup(ctx, "proj", "us-central1", "c1", "g2",
+		ConsumerGroupInput{Offsets: []ConsumerGroupOffset{{Topic: t1, Partition: 0, Offset: 99}}}, []string{"labels"})
+	if err != nil {
+		t.Fatalf("Update(mask=labels): %v", err)
+	}
+	if _, ok := fb.committed["g2"]; ok {
+		t.Error("update with a non-topics mask committed offsets")
+	}
+	if got := unchanged.Topics[t1].Partitions[0].Offset; got != 0 {
+		t.Errorf("unchanged offset = %d, want 0", got)
+	}
+
+	// Deleting a group with active members is FailedPrecondition.
+	fb.deleteGroupErr = ErrConsumerGroupNotEmpty
+	if err := s.DeleteConsumerGroup(ctx, "proj", "us-central1", "c1", "g1"); err == nil {
+		t.Error("expected FailedPrecondition for a non-empty group")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "FailedPrecondition" {
+		t.Errorf("error = %v, want FailedPrecondition", err)
+	}
+}
+
+func isNotFound(err error) bool {
+	var perr *model.ProviderError
+	return errors.As(err, &perr) && perr.Code == "NotFound"
 }
 
 func TestReset(t *testing.T) {

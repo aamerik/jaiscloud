@@ -84,8 +84,16 @@ func bodyInt(body map[string]any, key string) int {
 		return int(v)
 	case int:
 		return v
+	case int64:
+		return int(v)
 	case json.Number:
 		if n, err := v.Int64(); err == nil {
+			return int(n)
+		}
+	case string:
+		// GCP int64 fields are rendered as JSON strings; official clients send
+		// e.g. {"offset":"9"}. ParseInt keeps full 64-bit precision.
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 			return int(n)
 		}
 	}

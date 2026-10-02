@@ -164,15 +164,15 @@ func (s *Service) DeleteTopic(ctx context.Context, req *managedkafkapb.DeleteTop
 func (s *Service) ListConsumerGroups(ctx context.Context, req *managedkafkapb.ListConsumerGroupsRequest) (*managedkafkapb.ListConsumerGroupsResponse, error) {
 	project := s.projectFor(ctx, req.GetParent())
 	rn := core.ParseName(req.GetParent())
-	page, next, err := s.core.ListConsumerGroups(ctx, project, rn.Location, rn.Cluster, int(req.GetPageSize()), req.GetPageToken())
+	// The pinned proto has no view/filter; the documented default view is FULL,
+	// so the core is asked for committed offsets.
+	page, next, err := s.core.ListConsumerGroups(ctx, project, rn.Location, rn.Cluster, core.ConsumerGroupViewFull, "", int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, mapError(err)
 	}
 	out := &managedkafkapb.ListConsumerGroupsResponse{NextPageToken: next}
 	for _, g := range page {
-		out.ConsumerGroups = append(out.ConsumerGroups, &managedkafkapb.ConsumerGroup{
-			Name: core.ConsumerGroupName(project, rn.Location, rn.Cluster, g),
-		})
+		out.ConsumerGroups = append(out.ConsumerGroups, consumerGroupToProto(g, project))
 	}
 	return out, nil
 }
@@ -180,20 +180,23 @@ func (s *Service) ListConsumerGroups(ctx context.Context, req *managedkafkapb.Li
 func (s *Service) GetConsumerGroup(ctx context.Context, req *managedkafkapb.GetConsumerGroupRequest) (*managedkafkapb.ConsumerGroup, error) {
 	project := s.projectFor(ctx, req.GetName())
 	rn := core.ParseName(req.GetName())
-	if err := s.core.GetConsumerGroup(ctx, project, rn.Location, rn.Cluster, rn.ConsumerGroup); err != nil {
+	g, err := s.core.GetConsumerGroup(ctx, project, rn.Location, rn.Cluster, rn.ConsumerGroup)
+	if err != nil {
 		return nil, mapError(err)
 	}
-	return &managedkafkapb.ConsumerGroup{Name: req.GetName()}, nil
+	return consumerGroupToProto(g, project), nil
 }
 
 func (s *Service) UpdateConsumerGroup(ctx context.Context, req *managedkafkapb.UpdateConsumerGroupRequest) (*managedkafkapb.ConsumerGroup, error) {
 	name := req.GetConsumerGroup().GetName()
 	project := s.projectFor(ctx, name)
 	rn := core.ParseName(name)
-	if err := s.core.UpdateConsumerGroup(ctx, project, rn.Location, rn.Cluster, rn.ConsumerGroup); err != nil {
+	g, err := s.core.UpdateConsumerGroup(ctx, project, rn.Location, rn.Cluster, rn.ConsumerGroup,
+		consumerGroupInputFromProto(req.GetConsumerGroup()), req.GetUpdateMask().GetPaths())
+	if err != nil {
 		return nil, mapError(err)
 	}
-	return req.GetConsumerGroup(), nil
+	return consumerGroupToProto(g, project), nil
 }
 
 func (s *Service) DeleteConsumerGroup(ctx context.Context, req *managedkafkapb.DeleteConsumerGroupRequest) (*emptypb.Empty, error) {

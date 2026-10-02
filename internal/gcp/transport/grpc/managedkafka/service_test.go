@@ -249,3 +249,99 @@ func TestConsumerGroupsGRPC(t *testing.T) {
 
 // compile-time assertion that the adapter implements the generated server.
 var _ managedkafkapb.ManagedKafkaServer = (*Service)(nil)
+
+// grpcStubBroker embeds core.Broker so only the methods exercised here need
+// implementing.
+type grpcStubBroker struct {
+	core.Broker
+	groups    []string
+	offsets   map[string][]core.ConsumerGroupOffset
+	members   map[string]int
+	committed map[string][]core.ConsumerGroupOffset
+}
+
+func (b *grpcStubBroker) EnsureCluster(context.Context, string, string, string) (string, error) {
+	return "broker:9092", nil
+}
+func (b *grpcStubBroker) Endpoint(string, string, string) string { return "broker:9092" }
+func (b *grpcStubBroker) ListConsumerGroups(context.Context, string, string, string) ([]string, error) {
+	return b.groups, nil
+}
+func (b *grpcStubBroker) ConsumerGroupOffsets(_ context.Context, _, _, _, g string) ([]core.ConsumerGroupOffset, bool, error) {
+	o, ok := b.offsets[g]
+	return o, ok, nil
+}
+func (b *grpcStubBroker) ConsumerGroupMembers(_ context.Context, _, _, _, g string) (int, bool, error) {
+	_, ok := b.offsets[g]
+	return b.members[g], ok, nil
+}
+func (b *grpcStubBroker) CommitConsumerGroupOffsets(_ context.Context, _, _, _, g string, offs []core.ConsumerGroupOffset) error {
+	if b.committed == nil {
+		b.committed = map[string][]core.ConsumerGroupOffset{}
+	}
+	b.committed[g] = offs
+	return nil
+}
+func (b *grpcStubBroker) DeleteConsumerGroup(_ context.Context, _, _, _, g string) (bool, error) {
+	_, ok := b.offsets[g]
+	delete(b.offsets, g)
+	return ok, nil
+}
+
+func TestConsumerGroupsGRPCBroker(t *testing.T) {
+	ctx := context.Background()
+	t1 := core.TopicName("proj", "us-central1", "c1", "t1")
+	fb := &grpcStubBroker{
+		groups:  []string{"g1"},
+		offsets: map[string][]core.ConsumerGroupOffset{"g1": {{Topic: "t1", Partition: 0, Offset: 5, Metadata: "m"}}},
+		members: map[string]int{"g1": 0},
+	}
+	s := NewService(core.NewService(mkstore.NewMemoryStore(), core.WithBroker(fb)), "proj")
+	if _, err := s.CreateCluster(ctx, &managedkafkapb.CreateClusterRequest{
+		Parent: "projects/proj/locations/us-central1", ClusterId: "c1", Cluster: &managedkafkapb.Cluster{},
+	}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+
+	list, err := s.ListConsumerGroups(ctx, &managedkafkapb.ListConsumerGroupsRequest{
+		Parent: "projects/proj/locations/us-central1/clusters/c1",
+	})
+	if err != nil {
+		t.Fatalf("ListConsumerGroups: %v", err)
+	}
+	if len(list.GetConsumerGroups()) != 1 {
+		t.Fatalf("consumerGroups = %v", list.GetConsumerGroups())
+	}
+	got := list.GetConsumerGroups()[0].GetTopics()[t1].GetPartitions()[0]
+	if got.GetOffset() != 5 || got.GetMetadata() != "m" {
+		t.Errorf("partition = %+v", got)
+	}
+
+	name := "projects/proj/locations/us-central1/clusters/c1/consumerGroups/g1"
+	upd, err := s.UpdateConsumerGroup(ctx, &managedkafkapb.UpdateConsumerGroupRequest{
+		ConsumerGroup: &managedkafkapb.ConsumerGroup{
+			Name: name,
+			Topics: map[string]*managedkafkapb.ConsumerTopicMetadata{
+				t1: {Partitions: map[int32]*managedkafkapb.ConsumerPartitionMetadata{
+					0: {Offset: 11, Metadata: "reset"},
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateConsumerGroup: %v", err)
+	}
+	if fb.committed["g1"][0].Topic != "t1" || fb.committed["g1"][0].Offset != 11 {
+		t.Errorf("committed = %+v", fb.committed["g1"])
+	}
+	if upd.GetTopics()[t1].GetPartitions()[0].GetOffset() != 11 {
+		t.Errorf("updated = %+v", upd)
+	}
+
+	if _, err := s.DeleteConsumerGroup(ctx, &managedkafkapb.DeleteConsumerGroupRequest{Name: name}); err != nil {
+		t.Fatalf("DeleteConsumerGroup: %v", err)
+	}
+	if _, err := s.GetConsumerGroup(ctx, &managedkafkapb.GetConsumerGroupRequest{Name: name}); status.Code(err) != codes.NotFound {
+		t.Errorf("GetConsumerGroup after delete: code = %v, want NotFound", status.Code(err))
+	}
+}
