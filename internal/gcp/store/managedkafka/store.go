@@ -1,9 +1,11 @@
 // Package managedkafka provides the Apache Kafka for BigQuery (Managed Kafka)
 // store. Resources are project+location scoped with canonical names
 // projects/{project}/locations/{location}/clusters/{name} (and
-// .../clusters/{name}/topics/{topic}). A cluster is a logical record only — the
-// emulator never stands up a real broker. Consumer groups are not tracked (their
-// list endpoint always returns an empty list). Cluster mutations persist a done
+// .../clusters/{name}/topics/{topic}). A cluster record carries the caller's
+// metadata; a real Kafka-wire broker behind its bootstrapAddress is optional
+// (broker modes k8s/native) and its live endpoint is runtime state, not stored
+// here. Consumer groups are not tracked (their list endpoint always returns an
+// empty list). Cluster mutations persist a done
 // google.longrunning.Operation under .../locations/{location}/operations/{id}
 // so it can be read back via GetOperation/ListOperations.
 package managedkafka
@@ -34,6 +36,14 @@ type Cluster struct {
 	Labels     map[string]string `json:"labels,omitempty"`
 	CreateTime time.Time         `json:"createTime"`
 	UpdateTime time.Time         `json:"updateTime"`
+
+	// BootstrapAddress is the live endpoint of the cluster's real broker when
+	// one is running (k8s/native broker modes). It is runtime state owned by
+	// the broker manager, not persisted metadata: json:"-" keeps it out of
+	// snapshots, and the core sets it on the copies it returns for rendering.
+	// When empty, rendering falls back to the synthesized cloud.goog name
+	// (BootstrapAddress in the service package) — the mock topology.
+	BootstrapAddress string `json:"-"`
 }
 
 // Topic is a logical Managed Kafka topic under a cluster. PartitionCount and

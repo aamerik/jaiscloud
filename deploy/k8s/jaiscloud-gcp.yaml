@@ -80,6 +80,15 @@ spec:
               value: http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080
             - name: JAISCLOUD_PLATFORM_TLS_ENABLED
               value: "false"
+            # Managed Kafka broker topology: k8s starts a single-node Redpanda
+            # (rpk) Pod + Service per cluster (namespace jaiscloud) and renders
+            # its in-cluster endpoint as bootstrapAddress. The jaiscloud
+            # ServiceAccount already has pod/service create+delete from
+            # rbac.yaml, and the emulator's in-cluster config supplies the
+            # client. Set to mock to disable (no broker; synthesized cloud.goog
+            # address).
+            - name: JAISCLOUD_KAFKA_BROKER_MODE
+              value: k8s
           readinessProbe:
             httpGet:
               path: /_jaiscloud/health

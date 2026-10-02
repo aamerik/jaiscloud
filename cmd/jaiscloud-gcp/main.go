@@ -23,6 +23,7 @@ import (
 	"jaiscloud/internal/gateway"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
 	gcauth "jaiscloud/internal/gcp/auth"
+	kafkabroker "jaiscloud/internal/gcp/broker/kafka"
 	"jaiscloud/internal/gcp/crypto"
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
@@ -495,10 +496,18 @@ func startCmd() *cobra.Command {
 			}
 			dataprocP := restdataproc.NewProvider(dataprocCore, cfg.ProjectID)
 
+			// Managed Kafka's optional real broker. In the default mock mode no
+			// broker is started and bootstrapAddress stays the synthesized
+			// cloud.goog name; k8s/native start a Redpanda broker per cluster
+			// and the core renders its live endpoint. Brokers are runtime state,
+			// reaped on shutdown (reset/orphan sweep is the planned MK5).
+			mkBroker := buildManagedKafkaBroker(cfg)
+			defer mkBroker.Shutdown(context.Background())
+
 			// Managed Kafka's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports run
 			// against one store and cannot drift.
-			managedKafkaCore := managedkafkacore.NewService(stores.managedkafka, managedkafkacore.WithLROMode(lroMode))
+			managedKafkaCore := managedkafkacore.NewService(stores.managedkafka, managedkafkacore.WithLROMode(lroMode), managedkafkacore.WithBroker(mkBroker))
 			managedkafkaP := restmanagedkafka.NewProvider(managedKafkaCore, cfg.ProjectID)
 
 			icebergP := icebergprovider.New(stores.iceberg)
@@ -1353,6 +1362,36 @@ func versionCmd() *cobra.Command {
 			fmt.Printf("jaiscloud-gcp %s\n", version)
 		},
 	}
+}
+
+// buildManagedKafkaBroker builds the optional real Kafka broker behind Managed
+// Kafka clusters from the environment:
+//
+//	JAISCLOUD_KAFKA_BROKER_MODE   mock (default) | k8s | native
+//	JAISCLOUD_KAFKA_BROKER_IMAGE  Redpanda image for k8s mode
+//	JAISCLOUD_KAFKA_BROKER_BIN    Redpanda CLI (rpk) path for native mode
+//
+// k8s mode needs a Kubernetes client; native mode needs a resolvable binary.
+// Both degrade to the mock topology (no broker) when unavailable, mirroring the
+// Dataproc executor wiring. Broker endpoint durability and reaping are the
+// planned MK5 session.
+func buildManagedKafkaBroker(cfg *config.Config) kafkabroker.Broker {
+	mode := os.Getenv("JAISCLOUD_KAFKA_BROKER_MODE")
+	bcfg := kafkabroker.Config{
+		Mode:       mode,
+		Namespace:  cfg.K8sNamespace,
+		Image:      os.Getenv("JAISCLOUD_KAFKA_BROKER_IMAGE"),
+		BinaryPath: os.Getenv("JAISCLOUD_KAFKA_BROKER_BIN"),
+		DataDir:    cfg.DataDir,
+	}
+	if kafkabroker.Mode(mode) == kafkabroker.ModeK8s {
+		if client, err := buildK8sClient(); err != nil {
+			slog.Warn("managedkafka: failed to build k8s client; broker falls back to mock", "err", err)
+		} else {
+			bcfg.Client = client
+		}
+	}
+	return kafkabroker.New(bcfg)
 }
 
 // buildK8sClient constructs a kubernetes.Interface using in-cluster config if

@@ -10,8 +10,10 @@
 // That is the dual-protocol invariant: one core, one piece of state, so the
 // transports cannot drift.
 //
-// A cluster is a logical record only — the emulator never stands up a real
-// broker. Cluster create/update/delete return a done google.longrunning.Operation
+// A cluster's metadata is the source of truth for wire read-back; a real
+// Kafka-wire broker behind its bootstrapAddress is optional and injected via
+// WithBroker (the default mock topology starts none). Cluster
+// create/update/delete return a done google.longrunning.Operation
 // inline so official clients that read done+response from the body succeed
 // without polling; the operation is also persisted under
 // projects/{project}/locations/{location}/operations/{id}. The LRO timing is
@@ -28,6 +30,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/lro"
@@ -36,6 +39,22 @@ import (
 	"jaiscloud/internal/model"
 )
 
+// Broker starts and tracks the real Kafka-wire broker backing a cluster's
+// bootstrapAddress. It is optional: when nil (the default) the service is the
+// pure metadata control plane and renders the synthesized cloud.goog address.
+// The concrete implementation is internal/gcp/broker/kafka; the plain-string
+// method set keeps this package free of any Kubernetes dependency.
+type Broker interface {
+	// EnsureCluster starts (or reuses) the broker and returns its bootstrap
+	// endpoint. An empty endpoint with a nil error means no broker (mock); an
+	// error means the caller should degrade to the synthesized address.
+	EnsureCluster(ctx context.Context, project, location, cluster string) (string, error)
+	// Endpoint returns the live endpoint, or "" when no broker is running.
+	Endpoint(project, location, cluster string) string
+	// StopCluster stops and reaps the broker when the cluster is deleted.
+	StopCluster(ctx context.Context, project, location, cluster string) error
+}
+
 // Service is the transport-neutral Managed Kafka v1 service.
 type Service struct {
 	store mkstore.Store
@@ -43,6 +62,8 @@ type Service struct {
 	// operation is stored done=true inline, matching the v1.1.0 contract. An
 	// enabled mode stores operations done=false and settles them lazily on read.
 	lroMode lro.Mode
+	// broker is the optional real broker manager. Nil means mock-only.
+	broker Broker
 }
 
 // Option configures Service.
@@ -55,6 +76,16 @@ func WithLROMode(m lro.Mode) Option {
 	return func(s *Service) { s.lroMode = m }
 }
 
+// WithBroker injects the broker manager that backs cluster bootstrapAddresses.
+// A nil broker is ignored, leaving the mock topology.
+func WithBroker(b Broker) Option {
+	return func(s *Service) {
+		if b != nil {
+			s.broker = b
+		}
+	}
+}
+
 // NewService returns a Managed Kafka core backed by the given store.
 func NewService(s mkstore.Store, opts ...Option) *Service {
 	svc := &Service{store: s}
@@ -64,8 +95,44 @@ func NewService(s mkstore.Store, opts ...Option) *Service {
 	return svc
 }
 
-// Reset wipes the store.
+// Reset wipes the store. Broker teardown on reset is deliberately out of scope
+// here: a running broker is runtime state, and reaping it (plus the orphan
+// sweep for a restarted emulator) is the planned MK5 session.
 func (s *Service) Reset(ctx context.Context) { s.store.Reset(ctx) }
+
+// ensureBroker starts the real broker for a newly created cluster and returns
+// its endpoint. A broker failure degrades to the mock topology: the cluster
+// still exists and renders the synthesized address, and the failure is logged.
+func (s *Service) ensureBroker(ctx context.Context, project, location, cluster string) string {
+	if s.broker == nil {
+		return ""
+	}
+	ep, err := s.broker.EnsureCluster(ctx, project, location, cluster)
+	if err != nil {
+		slog.Warn("managedkafka: broker unavailable; serving synthesized bootstrapAddress", "cluster", cluster, "err", err)
+		return ""
+	}
+	return ep
+}
+
+// brokerEndpoint resolves the live endpoint without starting a broker.
+func (s *Service) brokerEndpoint(project, location, cluster string) string {
+	if s.broker == nil {
+		return ""
+	}
+	return s.broker.Endpoint(project, location, cluster)
+}
+
+// stopBroker reaps the broker for a deleted cluster. Failures are logged, not
+// surfaced: the metadata delete has already succeeded.
+func (s *Service) stopBroker(ctx context.Context, project, location, cluster string) {
+	if s.broker == nil {
+		return
+	}
+	if err := s.broker.StopCluster(ctx, project, location, cluster); err != nil {
+		slog.Warn("managedkafka: broker stop failed", "cluster", cluster, "err", err)
+	}
+}
 
 // ClusterInput carries the caller-supplied fields of a cluster create/update.
 // Config is the caller's resource body stored verbatim (capacityConfig,
@@ -120,6 +187,7 @@ func (s *Service) CreateCluster(ctx context.Context, project, location, clusterI
 	if err := s.store.CreateCluster(ctx, project, location, c); err != nil {
 		return mkstore.Cluster{}, mkstore.Operation{}, mapStoreError(err)
 	}
+	c.BootstrapAddress = s.ensureBroker(ctx, project, location, clusterID)
 	target := ClusterName(project, c.Location, c.Name)
 	op, err := s.storeOperation(ctx, project, location, "create", target, ClusterJSON(c, project))
 	if err != nil {
@@ -137,6 +205,7 @@ func (s *Service) GetCluster(ctx context.Context, project, location, clusterID s
 	if err != nil {
 		return mkstore.Cluster{}, mapStoreError(err)
 	}
+	c.BootstrapAddress = s.brokerEndpoint(project, c.Location, c.Name)
 	return c, nil
 }
 
@@ -150,6 +219,9 @@ func (s *Service) ListClusters(ctx context.Context, project, location string, pa
 		return nil, "", err
 	}
 	page, next := paging.Page(clusters, func(c mkstore.Cluster) string { return c.Name }, pageParams(pageSize, pageToken))
+	for i := range page {
+		page[i].BootstrapAddress = s.brokerEndpoint(project, page[i].Location, page[i].Name)
+	}
 	return page, next, nil
 }
 
@@ -184,6 +256,7 @@ func (s *Service) UpdateCluster(ctx context.Context, project, location, clusterI
 	if err != nil {
 		return mkstore.Cluster{}, mkstore.Operation{}, mapStoreError(err)
 	}
+	c.BootstrapAddress = s.brokerEndpoint(project, c.Location, c.Name)
 	target := ClusterName(project, c.Location, c.Name)
 	op, err := s.storeOperation(ctx, project, location, "update", target, ClusterJSON(c, project))
 	if err != nil {
@@ -201,6 +274,7 @@ func (s *Service) DeleteCluster(ctx context.Context, project, location, clusterI
 	if err := s.store.DeleteCluster(ctx, project, location, clusterID); err != nil {
 		return mkstore.Operation{}, mapStoreError(err)
 	}
+	s.stopBroker(ctx, project, location, clusterID)
 	target := ClusterName(project, location, clusterID)
 	op, err := s.storeOperation(ctx, project, location, "delete", target, map[string]any{})
 	if err != nil {
