@@ -1,7 +1,7 @@
 # JaisCloud UI — handoff
 
 Context for picking up further UI work. Current as of branch `feat/aws-console-ui-main`
-(tip `4e7740eb`).
+(tip `a8ce3798`).
 
 ## Repo & branch
 
@@ -51,6 +51,8 @@ Context for picking up further UI work. Current as of branch `feat/aws-console-u
   - `lib/timeRange.ts` — `rangeToWindow()` / `RELATIVE_OPTIONS` for DateRangePicker
   - `components/JsonEditor.tsx` — lazy Cloudscape CodeEditor (ace)
   - `components/ServiceTierBadge.tsx` — Popover explaining metadata-only/preview
+  - `components/ResourceDetailsModal.tsx` — shared read-only "View details" dialog
+    (`{ visible, onDismiss, header, items: {label,value}[], columns? }`)
 - No Tailwind (never installed). Avoid raw `<table>/<button>/<input>`; use Cloudscape.
   Intentional exceptions: dark log viewers (`<pre>`) in Lambda test / Log stream view.
 
@@ -67,15 +69,24 @@ Context for picking up further UI work. Current as of branch `feat/aws-console-u
   - SQS tag writes (TagQueue/UntagQueue) + GetTags type fix + CreateQueue tag persistence
   - CloudWatch `GetMetricStatistics` comma-split fix
   - S3 object upload exposed to the UI
-- The SplitPanel "inspector" was added then **removed** (duplicated detail pages). EC2/RDS/EKS use a
-  row **"View details"** Modal (read-only). Keep the Modal approach.
+  - UI list handlers coerce typed provider slices via `uihelper.AsSlice` (fixes empty lists —
+    RDS/EKS/Glue/etc. — after pagination preserves the element type; commit `84112a54`)
+  - KMS key mapping reads `CreationDate` (int64 Unix) so Created renders
+  - SFN `ListStateMachines` enriches each machine via `DescribeStateMachine`
+    (roleArn/status/definition) and maps `creationDate` as int64/float64
+- The SplitPanel "inspector" was added then **removed** (duplicated detail pages). Keep the Modal approach.
+- **"View details" modals** (`ResourceDetailsModal`) on every list-only service: EC2, RDS, EKS,
+  CloudWatch alarms, KMS, CloudFormation stacks, ELBv2, EventBridge buses, Step Functions state
+  machines, ElastiCache, Kinesis, SES, Glue crawlers, Firehose. EC2/RDS/EKS were migrated onto the
+  shared component. Alarms/KMS expose it as the first row-actions item; the rest use a trailing
+  inline-link column. Services with a real detail route (EMR, EMR on EKS, DynamoDB, Lambda, Logs,
+  S3, SNS, SQS, Secrets Manager) keep their routes and were not given modals.
 
 ## Open work
 
-1. **Emulator bug**: RDS and EKS list endpoints return empty even after a successful create
-   (a retry says "already exists"). Investigate `internal/aws/provider/rds`, `.../eks` and their UI handlers.
-2. **View details**: only EC2/RDS/EKS have it. Other list-only metadata services could get the same,
-   or be promoted to detail routes if they gain real behaviour.
+1. ~~Emulator bug: RDS/EKS list endpoints return empty after a successful create.~~
+   **Fixed** in `84112a54` (`uihelper.AsSlice`).
+2. ~~"View details" only on EC2/RDS/EKS.~~ **Done** — see the Done section.
 3. **GCP UI (next)**: non-AWS the catalog returns empty. Placeholder pages: `ui/src/services/gcp/index.tsx`,
    `azure/index.tsx`. When GCP lands, add GCP descriptors behind `cfg.Cloud == "gcp"` (per-cloud descriptor builder
    behind `/api/ui/v1/services`).
