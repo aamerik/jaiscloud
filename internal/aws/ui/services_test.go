@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"jaiscloud/internal/aws/provider/compute"
 	"jaiscloud/internal/aws/provider/queue"
 	"jaiscloud/internal/model"
 )
@@ -45,5 +46,27 @@ func TestServicesHandler_NoProvidersIsEmpty(t *testing.T) {
 	resp := servicesFor(t, model.CloudAWS, &AWSProviders{})
 	if len(resp.Services) != 0 {
 		t.Fatalf("expected no services, got %d", len(resp.Services))
+	}
+}
+
+func TestServicesHandler_TiersAreReported(t *testing.T) {
+	resp := servicesFor(t, model.CloudAWS, &AWSProviders{
+		Queue:   &queue.QueueProvider{},
+		Compute: &compute.ComputeProvider{},
+	})
+
+	byID := map[string]ServiceDescriptor{}
+	for _, service := range resp.Services {
+		byID[service.ID] = service
+	}
+
+	if got := byID["sqs"].Tier; got != TierFull {
+		t.Fatalf("sqs tier = %q, want %q", got, TierFull)
+	}
+	if got := byID["ec2"].Tier; got != TierMetadata {
+		t.Fatalf("ec2 tier = %q, want %q", got, TierMetadata)
+	}
+	if byID["ec2"].Note == "" {
+		t.Fatal("metadata service should carry a note")
 	}
 }

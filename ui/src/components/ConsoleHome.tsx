@@ -10,6 +10,7 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { useServices } from '../hooks/useServices'
 import { groupByCategory, type NavSection } from './nav'
+import { ServiceTierBadge } from './ServiceTierBadge'
 
 function recentIds(): string[] {
   try {
@@ -60,7 +61,12 @@ export function ConsoleHome() {
           <Cards
             items={recent}
             cardDefinition={{
-              header: (item) => renderLink(item),
+              header: (item) => (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                  {renderLink(item)}
+                  <ServiceTierBadge service={item} />
+                </span>
+              ),
               sections: [
                 {
                   id: 'category',
@@ -90,7 +96,13 @@ export function ConsoleHome() {
               }}
             >
               {group.services.map((service) => (
-                <span key={service.id}>{renderLink(service)}</span>
+                <span
+                  key={service.id}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+                >
+                  {renderLink(service)}
+                  <ServiceTierBadge service={service} />
+                </span>
               ))}
             </div>
           </Container>

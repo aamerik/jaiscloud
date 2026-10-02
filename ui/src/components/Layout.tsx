@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { applyMode, Mode } from '@cloudscape-design/global-styles'
 import {
+  Alert,
   AppLayout,
   BreadcrumbGroup,
   Flashbar,
@@ -23,6 +24,8 @@ import { useEventStream } from '../hooks/useEventStream'
 import { useServices } from '../hooks/useServices'
 import { groupByCategory, serviceForPath, type NavSection } from './nav'
 import { NotificationsProvider, useNotifications } from './notifications'
+import { ServiceTierBadge } from './ServiceTierBadge'
+import { tierDescription, tierLabel } from '../lib/tier'
 
 /** Router basename; links must include it so they also work without JS. */
 const BASE = '/ui'
@@ -49,7 +52,12 @@ function serviceItem(service: NavSection, expand: boolean): NavItem {
       })),
     }
   }
-  return { type: 'link', text: service.label, href: href(service.rootPath) }
+  return {
+    type: 'link',
+    text: service.label,
+    href: href(service.rootPath),
+    info: <ServiceTierBadge service={service} />,
+  }
 }
 
 function useConsoleNav(services: NavSection[]) {
@@ -237,7 +245,16 @@ function Shell({ children }: Props) {
           <BreadcrumbGroup items={breadcrumbItems} onFollow={onFollow} ariaLabel="Breadcrumbs" />
         }
         content={children}
-        notifications={<Flashbar items={notifications} />}
+        notifications={
+          <SpaceBetween size="xs">
+            {currentService && currentService.tier !== 'full' && (
+              <Alert type="info" header={tierLabel(currentService)}>
+                {tierDescription(currentService)}
+              </Alert>
+            )}
+            <Flashbar items={notifications} />
+          </SpaceBetween>
+        }
         stickyNotifications
         tools={
           currentService ? (

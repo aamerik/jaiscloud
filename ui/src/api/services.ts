@@ -11,6 +11,8 @@ export interface ServiceDescriptor {
   category: string
   rootPath: string
   children: ServiceChild[]
+  tier: 'full' | 'metadata' | 'stub'
+  note?: string
 }
 
 export interface ServicesResponse {
