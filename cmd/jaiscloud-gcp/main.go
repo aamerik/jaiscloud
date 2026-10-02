@@ -59,6 +59,7 @@ import (
 	metastorecore "jaiscloud/internal/gcp/service/metastore"
 	monitoringcore "jaiscloud/internal/gcp/service/monitoring"
 	resourcemanagercore "jaiscloud/internal/gcp/service/resourcemanager"
+	runcore "jaiscloud/internal/gcp/service/run"
 	schedulercore "jaiscloud/internal/gcp/service/scheduler"
 	serviceusagecore "jaiscloud/internal/gcp/service/serviceusage"
 	taskscore "jaiscloud/internal/gcp/service/tasks"
@@ -82,6 +83,7 @@ import (
 	metastorestore "jaiscloud/internal/gcp/store/metastore"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
+	runstore "jaiscloud/internal/gcp/store/run"
 	schedulerstore "jaiscloud/internal/gcp/store/scheduler"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	tasksstore "jaiscloud/internal/gcp/store/tasks"
@@ -113,6 +115,7 @@ import (
 	restmetastore "jaiscloud/internal/gcp/transport/rest/metastore"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
 	restresourcemanager "jaiscloud/internal/gcp/transport/rest/resourcemanager"
+	restrun "jaiscloud/internal/gcp/transport/rest/run"
 	restscheduler "jaiscloud/internal/gcp/transport/rest/scheduler"
 	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
 	resttasks "jaiscloud/internal/gcp/transport/rest/tasks"
@@ -565,6 +568,20 @@ func startCmd() *cobra.Command {
 			containerCore := containercore.NewService(stores.container)
 			containerP := restcontainer.NewProvider(containerCore)
 
+			// Cloud Run Admin v2's behavioural control plane. REST-first (gRPC
+			// deferred, CR4): W1.1 ships a mock runtime (a service is a stored
+			// record), W1.2 adds the k8s executor that launches the template
+			// image. The seam is resolved once at startup.
+			runExecutorMode, runExecutorSource := config.ExecutorMode("cloudrun", "mock")
+			if runExecutorMode != "mock" {
+				slog.Warn("cloudrun: executor mode not supported in this build; using mock",
+					"mode", runExecutorMode, "source", runExecutorSource)
+			}
+			runCore := runcore.NewService(stores.run, stores.resources,
+				runcore.WithLROMode(lroMode),
+				runcore.WithURLSuffix(os.Getenv("JAISCLOUD_CLOUDRUN_URL_SUFFIX")))
+			runP := restrun.NewProvider(runCore)
+
 			// Service Usage v1's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports run
 			// against one store and cannot drift.
@@ -649,6 +666,7 @@ func startCmd() *cobra.Command {
 				{"sqladmin", cloudsqlP},
 				{"compute", computeP},
 				{"container", containerP},
+				{"run", runP},
 				{"serviceusage", serviceusageP},
 				{"scheduler", schedulerP},
 				{"tasks", tasksP},
@@ -880,6 +898,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterTasksTicker(tasksEngine)
 			adminHandler.RegisterResetter(stores.resources)
 			adminHandler.RegisterResetter(containerCore)
+			adminHandler.RegisterResetter(runCore)
 			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
 			adminHandler.RegisterResetter(storageGRPC)
@@ -954,6 +973,9 @@ func startCmd() *cobra.Command {
 			}
 			if snap, ok := stores.container.(admin.Snapshotter); ok {
 				adminHandler.RegisterSnapshotter("container", snap)
+			}
+			if snap, ok := stores.run.(admin.Snapshotter); ok {
+				adminHandler.RegisterSnapshotter("run", snap)
 			}
 			if sb, ok := stores.blobs.(admin.SnapshotBlobStore); ok {
 				adminHandler.RegisterBlobStore(sb)
@@ -1275,6 +1297,7 @@ type stores struct {
 	scheduler    schedulerstore.Store
 	tasks        tasksstore.Store
 	container    containerstore.Store
+	run          runstore.Store
 	resources    store.ResourceStore
 	blobs        blobfs.BlobStore
 	close        func()
@@ -1316,6 +1339,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			scheduler:    schedulerstore.NewPostgresStore(pg.Pool()),
 			tasks:        tasksstore.NewPostgresStore(pg.Pool()),
 			container:    containerstore.NewPostgresStore(pg.Pool()),
+			run:          runstore.NewPostgresStore(pg.Pool()),
 			resources:    pg,
 			blobs:        blobs,
 			close:        func() { pg.Close() },
@@ -1343,6 +1367,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 			scheduler:    schedulerstore.NewMemoryStore(),
 			tasks:        tasksstore.NewMemoryStore(),
 			container:    containerstore.NewMemoryStore(),
+			run:          runstore.NewMemoryStore(),
 			resources:    store.NewMemoryResourceStore(),
 			blobs:        blobfs.NewMemoryBlobStore(),
 			close:        func() {},
@@ -1373,6 +1398,7 @@ func initStores(ctx context.Context, cfg *config.Config, instanceID string) (*st
 		scheduler:    schedulerstore.NewMemoryStore(),
 		tasks:        tasksstore.NewMemoryStore(),
 		container:    containerstore.NewMemoryStore(),
+		run:          runstore.NewMemoryStore(),
 		resources:    store.NewMemoryResourceStore(),
 		blobs:        blobs,
 		close:        func() {},

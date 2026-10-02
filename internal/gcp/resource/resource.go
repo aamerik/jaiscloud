@@ -314,6 +314,26 @@ var formatters = map[string]func(project, name string) string{
 		loc, job := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/jobs/%s", p, loc, job)
 	},
+	// Cloud Run Admin v2 (run.googleapis.com) — a service is
+	// "projects/{project}/locations/{location}/services/{service}" (callers pass
+	// "location/service"), a revision nests under it (callers pass
+	// "location/service/revision"), and a google.longrunning Operation is
+	// "projects/{project}/locations/{location}/operations/{operation}" (callers
+	// pass "location/operation"). Distinct resource types from the
+	// cloud-function backing-service formatters above so the two surfaces can
+	// evolve independently.
+	"run-service": func(p, n string) string {
+		loc, s := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/services/%s", p, loc, s)
+	},
+	"run-revision": func(p, n string) string {
+		loc, s, r := wfExec(n)
+		return fmt.Sprintf("projects/%s/locations/%s/services/%s/revisions/%s", p, loc, s, r)
+	},
+	"run-operation": func(p, n string) string {
+		loc, op := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
+	},
 	// Google Kubernetes Engine (GKE) v1 — a cluster is
 	// "projects/{project}/locations/{location}/clusters/{cluster}" (callers pass
 	// "location/cluster") and the GKE Operation is

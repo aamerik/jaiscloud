@@ -12,6 +12,7 @@ import (
 	restmetastore "jaiscloud/internal/gcp/transport/rest/metastore"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
 	restresourcemanager "jaiscloud/internal/gcp/transport/rest/resourcemanager"
+	restrun "jaiscloud/internal/gcp/transport/rest/run"
 	restscheduler "jaiscloud/internal/gcp/transport/rest/scheduler"
 	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
 	resttasks "jaiscloud/internal/gcp/transport/rest/tasks"
@@ -226,6 +227,19 @@ var gcpServices = []ServiceDescriptor{
 		ServiceName:    "tasks",
 		ProviderPrefix: "Tasks",
 		Codec:          func() adapter.Codec { return resttasks.NewCodec() },
+	},
+	{
+		// Cloud Run Admin v2 shares the /v2/ prefix and the canonical
+		// /v2/projects/{p}/locations/{l}/services path with Cloud Functions and
+		// Cloud Tasks on the single emulator origin, so it is claimed by segment
+		// detection (detectV2Service) on the services/revisions resource family
+		// and on run-prefixed operation ids. Terraform/gcloud use the "/run/"
+		// path prefix. The codec lives with the REST transport package that
+		// adapts it to the shared core. REST only — gRPC is deferred (CR4).
+		ServiceName:    "run",
+		PathPrefixes:   []string{"/run/"},
+		ProviderPrefix: "Run",
+		Codec:          func() adapter.Codec { return restrun.NewCodec() },
 	},
 	{
 		// Cloud Logging v2 shares the /v2/ namespace; its REST data methods are

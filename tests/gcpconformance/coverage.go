@@ -88,6 +88,26 @@ var actionOverrides = map[string]string{
 	"ManagedKafka.AddAclEntry":    "managedkafka.projects.locations.clusters.acls.addAclEntry",
 	"ManagedKafka.RemoveAclEntry": "managedkafka.projects.locations.clusters.acls.removeAclEntry",
 
+	// Cloud Run v2 (run.googleapis.com) nested method ids that the CamelCase
+	// heuristic cannot derive from the flat registry action names.
+	"Run.CreateService":      "run.projects.locations.services.create",
+	"Run.GetService":         "run.projects.locations.services.get",
+	"Run.ListServices":       "run.projects.locations.services.list",
+	"Run.UpdateService":      "run.projects.locations.services.patch",
+	"Run.DeleteService":      "run.projects.locations.services.delete",
+	"Run.GetIamPolicy":       "run.projects.locations.services.getIamPolicy",
+	"Run.SetIamPolicy":       "run.projects.locations.services.setIamPolicy",
+	"Run.TestIamPermissions": "run.projects.locations.services.testIamPermissions",
+	"Run.ListRevisions":      "run.projects.locations.services.revisions.list",
+	"Run.GetRevision":        "run.projects.locations.services.revisions.get",
+	// The REST :wait custom method maps to operations.get. CancelOperation is
+	// served for direct dispatch but real run v2 has no operations.cancel
+	// discovery method, so it stays uncovered.
+	"Run.WaitOperation":   "run.projects.locations.operations.get",
+	"Run.GetOperation":    "run.projects.locations.operations.get",
+	"Run.ListOperations":  "run.projects.locations.operations.list",
+	"Run.DeleteOperation": "run.projects.locations.operations.delete",
+
 	// Cloud Resource Manager v1 project surface (the discovery document's
 	// service is "cloudresourcemanager"; the vendored snapshot is keyed by the
 	// emulator's wire service name "resourcemanager").
