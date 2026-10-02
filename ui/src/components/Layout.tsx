@@ -4,6 +4,7 @@ import { applyMode, Mode } from '@cloudscape-design/global-styles'
 import {
   Alert,
   AppLayout,
+  Box,
   BreadcrumbGroup,
   Flashbar,
   HelpPanel,
@@ -11,6 +12,7 @@ import {
   Link,
   SideNavigation,
   SpaceBetween,
+  SplitPanel,
   TopNavigation,
 } from '@cloudscape-design/components'
 import type {
@@ -25,6 +27,7 @@ import { useServices } from '../hooks/useServices'
 import { groupByCategory, serviceForPath, type NavSection } from './nav'
 import { NotificationsProvider, useNotifications } from './notifications'
 import { ServiceTierBadge } from './ServiceTierBadge'
+import { SplitPanelProvider, useSplitPanel } from './splitPanel'
 import { tierDescription, tierLabel } from '../lib/tier'
 
 /** Router basename; links must include it so they also work without JS. */
@@ -102,6 +105,7 @@ function Shell({ children }: Props) {
   const currentService = serviceForPath(services, pathname)
   const { breadcrumbItems, onFollow } = useConsoleNav(services)
   const { items: notifications } = useNotifications()
+  const splitPanel = useSplitPanel()
 
   useEffect(() => {
     applyMode(mode)
@@ -282,6 +286,16 @@ function Shell({ children }: Props) {
         toolsOpen={toolsOpen}
         onToolsChange={({ detail }) => setToolsOpen(detail.open)}
         toolsHide={!currentService}
+        splitPanel={
+          <SplitPanel header={splitPanel.state?.header ?? 'Details'}>
+            {splitPanel.state?.content ?? (
+              <Box color="text-body-secondary">Select a resource to see its details.</Box>
+            )}
+          </SplitPanel>
+        }
+        splitPanelOpen={splitPanel.open}
+        onSplitPanelToggle={({ detail }) => splitPanel.setOpen(detail.open)}
+        splitPanelPreferences={{ position: 'side' }}
         contentType="default"
       />
     </>
@@ -292,7 +306,9 @@ export function Layout({ children }: Props) {
   return (
     <AccountProvider>
       <NotificationsProvider>
-        <Shell>{children}</Shell>
+        <SplitPanelProvider>
+          <Shell>{children}</Shell>
+        </SplitPanelProvider>
       </NotificationsProvider>
     </AccountProvider>
   )

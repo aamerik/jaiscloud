@@ -10,6 +10,7 @@ import {
   FileUpload,
   Header,
   Input,
+  KeyValuePairs,
   Link,
   Modal,
   SpaceBetween,
@@ -26,6 +27,7 @@ import {
 } from '../../../api/s3'
 import { formatDate } from '../../../lib/date'
 import { useNotifications } from '../../../components/notifications'
+import { useSplitPanel } from '../../../components/splitPanel'
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -47,6 +49,26 @@ export function S3Detail() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [files, setFiles] = useState<File[]>([])
   const { notify } = useNotifications()
+  const splitPanel = useSplitPanel()
+
+  const showObjectDetails = (object: S3Object) => {
+    splitPanel.show({
+      header: object.key.split('/').pop() ?? object.key,
+      content: (
+        <KeyValuePairs
+          columns={1}
+          items={[
+            { label: 'Key', value: <Box variant="code">{object.key}</Box> },
+            { label: 'Size', value: fmtSize(object.size) },
+            { label: 'Last modified', value: formatDate(object.lastModified) },
+            { label: 'Storage class', value: object.storageClass ?? '—' },
+            { label: 'ETag', value: <Box variant="code">{object.etag ?? '—'}</Box> },
+            { label: 'Bucket', value: bucket },
+          ]}
+        />
+      ),
+    })
+  }
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['s3', 'objects', bucket, prefix],
@@ -247,6 +269,7 @@ export function S3Detail() {
             trackBy={(object) => object.key}
             loading={isLoading}
             loadingText="Loading objects"
+            onRowClick={({ detail }) => showObjectDetails(detail.item)}
             selectionType="multi"
             selectedItems={selectedItems}
             onSelectionChange={({ detail }) =>

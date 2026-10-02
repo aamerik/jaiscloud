@@ -35,6 +35,8 @@ interface ResourceTableProps<T> {
   selectedItems?: T[]
   onSelectionChange?: (items: T[]) => void
   defaultPageSize?: number
+  stickyHeader?: boolean
+  expandableRows?: TableProps.ExpandableRows<T>
 }
 
 /**
@@ -56,6 +58,8 @@ export function ResourceTable<T>({
   selectedItems,
   onSelectionChange,
   defaultPageSize = 10,
+  stickyHeader = true,
+  expandableRows,
 }: ResourceTableProps<T>) {
   const [prefs, setPrefs] = useState<CollectionPreferencesProps.Preferences>({
     pageSize: defaultPageSize,
@@ -101,7 +105,24 @@ export function ResourceTable<T>({
     sorting: {},
   })
 
-  const shownColumns = columns.filter((column) => visibleColumns.includes(String(column.id)))
+  const shownColumns = columns
+    .filter((column) => visibleColumns.includes(String(column.id)))
+    .map((column) => {
+      // Auto-enable sorting for any filterable column by comparing the text
+      // used for filtering (unless the column already defines sorting).
+      if (column.filterValue && !column.sortingField && !column.sortingComparator) {
+        const filterValue = column.filterValue
+        return {
+          ...column,
+          sortingComparator: (a: T, b: T) =>
+            String(filterValue(a)).localeCompare(String(filterValue(b)), undefined, {
+              numeric: true,
+              sensitivity: 'base',
+            }),
+        }
+      }
+      return column
+    })
 
   return (
     <Table
@@ -111,6 +132,8 @@ export function ResourceTable<T>({
       loading={loading}
       loadingText="Loading resources"
       trackBy={trackBy}
+      stickyHeader={stickyHeader}
+      expandableRows={expandableRows}
       selectionType={selectionType}
       selectedItems={selectedItems}
       onSelectionChange={({ detail }) => onSelectionChange?.(detail.selectedItems)}

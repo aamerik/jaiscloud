@@ -9,6 +9,7 @@ import {
   FormField,
   Header,
   Input,
+  KeyValuePairs,
   Modal,
   SpaceBetween,
   StatusIndicator,
@@ -18,6 +19,7 @@ import { formatDate } from '../../../lib/date'
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
 import { useNotifications } from '../../../components/notifications'
+import { useSplitPanel } from '../../../components/splitPanel'
 
 export function EKSClusters() {
   const qc = useQueryClient()
@@ -26,6 +28,32 @@ export function EKSClusters() {
   const [selected, setSelected] = useState<EKSCluster[]>([])
   const [confirmDelete, setConfirmDelete] = useState(false)
   const { notify } = useNotifications()
+  const splitPanel = useSplitPanel()
+
+  const showDetails = (cluster: EKSCluster) => {
+    splitPanel.show({
+      header: cluster.name,
+      content: (
+        <KeyValuePairs
+          columns={1}
+          items={[
+            { label: 'Name', value: cluster.name },
+            {
+              label: 'Status',
+              value: (
+                <StatusIndicator type={resourceStatus(cluster.status)}>
+                  {cluster.status || '—'}
+                </StatusIndicator>
+              ),
+            },
+            { label: 'Version', value: cluster.version || '—' },
+            { label: 'ARN', value: <Box variant="code">{cluster.arn}</Box> },
+            { label: 'Created', value: formatDate(cluster.createdAt) },
+          ]}
+        />
+      ),
+    })
+  }
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['eks', 'clusters'],
@@ -88,6 +116,7 @@ export function EKSClusters() {
           title="Clusters"
           description="metadata only"
           loading={isLoading}
+          onRowClick={showDetails}
           selectionType="multi"
           selectedItems={selected}
           onSelectionChange={setSelected}

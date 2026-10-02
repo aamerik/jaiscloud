@@ -1,20 +1,23 @@
 import { useState, useRef } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   Alert,
+  Autosuggest,
   Box,
   Button,
   ContentLayout,
+  DateRangePicker,
   Form,
   FormField,
   Header,
-  Input,
   SpaceBetween,
   StatusIndicator,
   Table,
   Textarea,
 } from '@cloudscape-design/components'
-import type { StatusIndicatorProps } from '@cloudscape-design/components'
-import { startQuery, getQueryResults, stopQuery, type QueryResult } from '../../../api/logs'
+import type { DateRangePickerProps, StatusIndicatorProps } from '@cloudscape-design/components'
+import { listLogGroups, startQuery, getQueryResults, stopQuery, type QueryResult } from '../../../api/logs'
+import { RELATIVE_OPTIONS, rangeToWindow } from '../../../lib/timeRange'
 
 function queryStatusType(status: string): StatusIndicatorProps.Type {
   switch (status) {
@@ -42,7 +45,18 @@ export function LogInsights() {
   const [result, setResult] = useState<QueryResult | null>(null)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
+  const [range, setRange] = useState<DateRangePickerProps.Value | null>({
+    type: 'relative',
+    amount: 3,
+    unit: 'hour',
+  })
   const queryIdRef = useRef<string | null>(null)
+
+  const { data: logGroups } = useQuery({
+    queryKey: ['logs', 'groups'],
+    queryFn: () => listLogGroups(),
+  })
+  const groupOptions = (logGroups?.items ?? []).map((group) => ({ value: group.name }))
 
   async function run() {
     if (!queryString.trim()) return
@@ -50,12 +64,12 @@ export function LogInsights() {
     setError('')
     setResult(null)
     try {
-      const now = Date.now()
+      const { start, end } = rangeToWindow(range)
       const { queryId } = await startQuery({
         queryString,
         logGroupName: logGroupName || undefined,
-        startTime: Math.floor((now - 3 * 60 * 60 * 1000) / 1000),
-        endTime: Math.floor(now / 1000),
+        startTime: Math.floor(start.getTime() / 1000),
+        endTime: Math.floor(end.getTime() / 1000),
       })
       queryIdRef.current = queryId
       // Poll for results
@@ -106,10 +120,25 @@ export function LogInsights() {
         >
           <SpaceBetween size="m">
             <FormField label="Log group" description="Leave blank to query all log groups in the account.">
-              <Input
+              <Autosuggest
                 value={logGroupName}
                 onChange={({ detail }) => setLogGroupName(detail.value)}
+                options={groupOptions}
+                filteringType="auto"
                 placeholder="/aws/lambda/my-function"
+                empty="No log groups"
+                enteredTextLabel={(value) => `Use "${value}"`}
+                ariaLabel="Log group"
+              />
+            </FormField>
+            <FormField label="Time range">
+              <DateRangePicker
+                value={range}
+                onChange={({ detail }) => setRange(detail.value)}
+                relativeOptions={RELATIVE_OPTIONS}
+                isValidRange={() => ({ valid: true })}
+                placeholder="Filter by a date and time range"
+                ariaLabel="Time range"
               />
             </FormField>
             <FormField label="Query">

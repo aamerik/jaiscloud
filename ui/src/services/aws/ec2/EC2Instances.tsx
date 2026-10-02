@@ -8,6 +8,7 @@ import {
   ContentLayout,
   CopyToClipboard,
   Header,
+  KeyValuePairs,
   Modal,
   SpaceBetween,
   StatusIndicator,
@@ -22,12 +23,40 @@ import {
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
 import { useNotifications } from '../../../components/notifications'
+import { useSplitPanel } from '../../../components/splitPanel'
 
 export function EC2Instances() {
   const qc = useQueryClient()
   const [selected, setSelected] = useState<Instance[]>([])
   const [confirmTerminate, setConfirmTerminate] = useState(false)
   const { notify } = useNotifications()
+  const splitPanel = useSplitPanel()
+
+  const showDetails = (instance: Instance) => {
+    splitPanel.show({
+      header: `Instance ${instance.id}`,
+      content: (
+        <KeyValuePairs
+          columns={1}
+          items={[
+            { label: 'Instance ID', value: <Box variant="code">{instance.id}</Box> },
+            {
+              label: 'State',
+              value: (
+                <StatusIndicator type={resourceStatus(instance.state)}>
+                  {instance.state}
+                </StatusIndicator>
+              ),
+            },
+            { label: 'Instance type', value: instance.instanceType },
+            { label: 'AMI ID', value: <Box variant="code">{instance.imageId}</Box> },
+            { label: 'Private IP', value: <Box variant="code">{instance.privateIp || '—'}</Box> },
+            { label: 'Public IP', value: <Box variant="code">{instance.publicIp || '—'}</Box> },
+          ]}
+        />
+      ),
+    })
+  }
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['ec2', 'instances'],
@@ -131,6 +160,7 @@ export function EC2Instances() {
           title="Instances"
           description="EC2 instances (metadata only)"
           loading={isLoading}
+          onRowClick={showDetails}
           selectionType="multi"
           selectedItems={selected}
           onSelectionChange={setSelected}

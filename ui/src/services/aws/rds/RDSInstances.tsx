@@ -10,6 +10,7 @@ import {
   FormField,
   Header,
   Input,
+  KeyValuePairs,
   Modal,
   SpaceBetween,
   StatusIndicator,
@@ -25,6 +26,7 @@ import {
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
 import { useNotifications } from '../../../components/notifications'
+import { useSplitPanel } from '../../../components/splitPanel'
 
 export function RDSInstances() {
   const qc = useQueryClient()
@@ -39,6 +41,35 @@ export function RDSInstances() {
     password: '',
   })
   const { notify } = useNotifications()
+  const splitPanel = useSplitPanel()
+
+  const showDetails = (instance: DBInstance) => {
+    splitPanel.show({
+      header: instance.id,
+      content: (
+        <KeyValuePairs
+          columns={1}
+          items={[
+            { label: 'Identifier', value: instance.id },
+            {
+              label: 'Status',
+              value: (
+                <StatusIndicator type={resourceStatus(instance.status)}>
+                  {instance.status}
+                </StatusIndicator>
+              ),
+            },
+            { label: 'Engine', value: instance.engine },
+            { label: 'Class', value: instance.class },
+            {
+              label: 'Endpoint',
+              value: <Box variant="code">{instance.endpoint ? `${instance.endpoint}:${instance.port}` : '—'}</Box>,
+            },
+          ]}
+        />
+      ),
+    })
+  }
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['rds', 'instances'],
@@ -132,6 +163,7 @@ export function RDSInstances() {
           title="Databases"
           description="metadata only"
           loading={isLoading}
+          onRowClick={showDetails}
           selectionType="multi"
           selectedItems={selected}
           onSelectionChange={setSelected}

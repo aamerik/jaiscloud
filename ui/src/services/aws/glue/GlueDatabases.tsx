@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueries, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
   Box,
@@ -14,6 +14,7 @@ import {
   Modal,
   SpaceBetween,
   Table,
+  TreeView,
 } from '@cloudscape-design/components'
 import type { TableProps } from '@cloudscape-design/components'
 import {
@@ -187,6 +188,8 @@ export function GlueDatabases() {
             emptyBody="Create a database to store your Glue tables."
           />
         )}
+
+        <GlueCatalogTree databases={databases} />
 
         {selectedDB && (
           <Container
@@ -387,5 +390,51 @@ export function GlueDatabases() {
         Delete table <b>{deleteTableTarget?.name}</b>? This action cannot be undone.
       </Modal>
     </ContentLayout>
+  )
+}
+
+interface CatalogNode {
+  id: string
+  label: string
+  children?: CatalogNode[]
+}
+
+function GlueCatalogTree({ databases }: { databases: Database[] }) {
+  const [expanded, setExpanded] = useState<string[]>([])
+
+  const tableQueries = useQueries({
+    queries: databases.map((db) => ({
+      queryKey: ['glue', 'tables', db.name],
+      queryFn: () => listTables(db.name),
+    })),
+  })
+
+  if (databases.length === 0) return null
+
+  const items: CatalogNode[] = databases.map((db, index) => ({
+    id: `db:${db.name}`,
+    label: db.name,
+    children: (tableQueries[index]?.data?.items ?? []).map((table) => ({
+      id: `table:${db.name}:${table.name}`,
+      label: table.name,
+    })),
+  }))
+
+  return (
+    <Container header={<Header variant="h2">Catalog tree</Header>}>
+      <TreeView
+        items={items}
+        getItemId={(item) => item.id}
+        getItemChildren={(item) => item.children}
+        renderItem={(item) => ({ content: item.label })}
+        expandedItems={expanded}
+        onItemToggle={({ detail }) =>
+          setExpanded((prev) =>
+            detail.expanded ? [...prev, detail.id] : prev.filter((id) => id !== detail.id),
+          )
+        }
+        ariaLabel="Glue catalog tree"
+      />
+    </Container>
   )
 }

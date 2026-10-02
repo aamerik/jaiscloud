@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
@@ -6,15 +6,19 @@ import {
   Button,
   ButtonDropdown,
   ContentLayout,
+  Container,
   Form,
   FormField,
   Header,
   Input,
+  LineChart,
   Modal,
   SpaceBetween,
   Spinner,
+  Tabs,
 } from '@cloudscape-design/components'
 import {
+  getMetricStatistics,
   listDashboards,
   getDashboard,
   putDashboard,
@@ -22,6 +26,7 @@ import {
   type CWDashboard,
 } from '../../../api/cloudwatch'
 import { formatDate } from '../../../lib/date'
+import { rangeToWindow } from '../../../lib/timeRange'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
 import { JsonEditor } from '../../../components/JsonEditor'
 import { useNotifications } from '../../../components/notifications'
@@ -201,7 +206,22 @@ export function CloudWatchDashboards() {
         {loadingView ? (
           <Spinner size="large" />
         ) : (
-          <JsonEditor value={viewBody} onChange={() => {}} height={360} ariaLabel="Dashboard body" />
+          <Tabs
+            tabs={[
+              {
+                id: 'charts',
+                label: 'Charts',
+                content: <DashboardCharts body={viewBody} />,
+              },
+              {
+                id: 'json',
+                label: 'JSON',
+                content: (
+                  <JsonEditor value={viewBody} onChange={() => {}} height={360} ariaLabel="Dashboard body" />
+                ),
+              },
+            ]}
+          />
         )}
       </Modal>
 
@@ -229,5 +249,131 @@ export function CloudWatchDashboards() {
         Delete <b>{deleteTarget?.dashboardName}</b>? This action cannot be undone.
       </Modal>
     </ContentLayout>
+  )
+}
+
+interface DashboardWidgetDef {
+  type?: string
+  properties?: Record<string, unknown>
+}
+
+function DashboardCharts({ body }: { body: string }) {
+  let widgets: DashboardWidgetDef[] = []
+  try {
+    const parsed = JSON.parse(body) as { widgets?: DashboardWidgetDef[] }
+    widgets = parsed.widgets ?? []
+  } catch {
+    widgets = []
+  }
+
+  if (widgets.length === 0) {
+    return <Box color="text-body-secondary">No widgets defined in this dashboard.</Box>
+  }
+
+  return (
+    <SpaceBetween size="l">
+      {widgets.map((widget, index) => (
+        <DashboardWidget key={index} widget={widget} />
+      ))}
+    </SpaceBetween>
+  )
+}
+
+function DashboardWidget({ widget }: { widget: DashboardWidgetDef }) {
+  const properties = widget.properties ?? {}
+  const title = typeof properties.title === 'string' ? properties.title : undefined
+
+  if (widget.type === 'text') {
+    return (
+      <Container header={<Header variant="h2">{title ?? 'Text'}</Header>}>
+        <Box variant="p">
+          {typeof properties.markdown === 'string' ? properties.markdown : ''}
+        </Box>
+      </Container>
+    )
+  }
+
+  const rawMetrics = Array.isArray(properties.metrics) ? properties.metrics : []
+  const metrics = rawMetrics.filter(
+    (m): m is unknown[] => Array.isArray(m) && m.length >= 2,
+  )
+
+  return (
+    <Container header={<Header variant="h2">{title ?? 'Metric'}</Header>}>
+      {metrics.length === 0 ? (
+        <Box color="text-body-secondary">No metrics defined for this widget.</Box>
+      ) : (
+        <SpaceBetween size="l">
+          {metrics.map((metric, index) => (
+            <MetricSeries
+              key={index}
+              namespace={String(metric[0])}
+              metricName={String(metric[1])}
+            />
+          ))}
+        </SpaceBetween>
+      )}
+    </Container>
+  )
+}
+
+function MetricSeries({ namespace, metricName }: { namespace: string; metricName: string }) {
+  const { start, end } = useMemo(
+    () => rangeToWindow({ type: 'relative', amount: 3, unit: 'hour' }),
+    [],
+  )
+  const { data, isLoading } = useQuery({
+    queryKey: ['cloudwatch', 'stats', namespace, metricName, start.toISOString(), end.toISOString()],
+    queryFn: () =>
+      getMetricStatistics({
+        namespace,
+        metricName,
+        startTime: start.toISOString(),
+        endTime: end.toISOString(),
+        period: 300,
+        statistics: ['Average', 'Maximum'],
+      }),
+  })
+
+  const datapoints = data?.datapoints ?? []
+  const series = [
+    {
+      title: 'Average',
+      type: 'line' as const,
+      data: datapoints
+        .filter((d) => d.average != null)
+        .map((d) => ({ x: new Date(d.timestamp), y: d.average as number })),
+    },
+    {
+      title: 'Maximum',
+      type: 'line' as const,
+      data: datapoints
+        .filter((d) => d.maximum != null)
+        .map((d) => ({ x: new Date(d.timestamp), y: d.maximum as number })),
+    },
+  ].filter((s) => s.data.length > 0)
+
+  return (
+    <div>
+      <Box variant="h4" margin={{ bottom: 'xs' }}>
+        {namespace} · {metricName}
+      </Box>
+      <LineChart
+        series={series}
+        xScaleType="time"
+        yScaleType="linear"
+        height={240}
+        statusType={isLoading ? 'loading' : 'finished'}
+        empty={<span>No datapoints in the last 3 hours.</span>}
+        ariaLabel={`${metricName} chart`}
+        i18nStrings={{
+          xTickFormatter: (value) =>
+            new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          yTickFormatter: (value) => value.toLocaleString(),
+          filterLabel: 'Filter series',
+          filterPlaceholder: 'Filter series',
+        }}
+      />
+    </div>
   )
 }
