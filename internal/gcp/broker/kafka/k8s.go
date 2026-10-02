@@ -84,8 +84,14 @@ func (b *k8sBroker) Endpoint(project, location, cluster string) string {
 
 // EnsureTopic provisions the topic on the live broker, or no-ops when no broker
 // is running for the cluster (metadata-only topology).
-func (b *k8sBroker) EnsureTopic(ctx context.Context, project, location, cluster, topic string, partitions int) error {
-	return ensureTopic(ctx, b.admins, b.Endpoint(project, location, cluster), topic, partitions)
+func (b *k8sBroker) EnsureTopic(ctx context.Context, project, location, cluster, topic string, partitions int, configs map[string]string) error {
+	return ensureTopic(ctx, b.admins, b.Endpoint(project, location, cluster), topic, partitions, configs)
+}
+
+// AlterTopicConfigs applies an incremental topic-config change on the live
+// broker, or no-ops when no broker is running for the cluster.
+func (b *k8sBroker) AlterTopicConfigs(ctx context.Context, project, location, cluster, topic string, set map[string]string, remove []string) error {
+	return alterTopicConfigs(ctx, b.admins, b.Endpoint(project, location, cluster), topic, set, remove)
 }
 
 // AddTopicPartitions raises the topic's partition count on the live broker.

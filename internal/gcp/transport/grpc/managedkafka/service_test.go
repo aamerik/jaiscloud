@@ -118,13 +118,20 @@ func TestTopicCRUD(t *testing.T) {
 	tp, err := s.CreateTopic(ctx, &managedkafkapb.CreateTopicRequest{
 		Parent:  "projects/proj/locations/us-central1/clusters/c1",
 		TopicId: "t1",
-		Topic:   &managedkafkapb.Topic{PartitionCount: 3, ReplicationFactor: 2},
+		Topic: &managedkafkapb.Topic{
+			PartitionCount:    3,
+			ReplicationFactor: 2,
+			Configs:           map[string]string{"cleanup.policy": "compact"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateTopic: %v", err)
 	}
 	if tp.GetName() != "projects/proj/locations/us-central1/clusters/c1/topics/t1" || tp.GetPartitionCount() != 3 {
 		t.Errorf("topic = %+v", tp)
+	}
+	if tp.GetConfigs()["cleanup.policy"] != "compact" {
+		t.Errorf("created configs = %v, want cleanup.policy=compact", tp.GetConfigs())
 	}
 
 	got, err := s.GetTopic(ctx, &managedkafkapb.GetTopicRequest{Name: tp.GetName()})
@@ -135,10 +142,14 @@ func TestTopicCRUD(t *testing.T) {
 		t.Errorf("replicationFactor = %d", got.GetReplicationFactor())
 	}
 
-	if _, err := s.UpdateTopic(ctx, &managedkafkapb.UpdateTopicRequest{
-		Topic: &managedkafkapb.Topic{Name: tp.GetName(), PartitionCount: 6},
-	}); err != nil {
+	updTopic, err := s.UpdateTopic(ctx, &managedkafkapb.UpdateTopicRequest{
+		Topic: &managedkafkapb.Topic{Name: tp.GetName(), PartitionCount: 6, Configs: map[string]string{"cleanup.policy": "delete"}},
+	})
+	if err != nil {
 		t.Fatalf("UpdateTopic: %v", err)
+	}
+	if updTopic.GetConfigs()["cleanup.policy"] != "delete" {
+		t.Errorf("updated configs = %v, want cleanup.policy=delete", updTopic.GetConfigs())
 	}
 
 	list, err := s.ListTopics(ctx, &managedkafkapb.ListTopicsRequest{Parent: "projects/proj/locations/us-central1/clusters/c1"})

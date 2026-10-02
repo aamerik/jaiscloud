@@ -40,14 +40,15 @@ import (
 // kafkaProbeResult mirrors the JSON line the emulator's `kafka-probe` command
 // prints. The probe's integer-keyed maps render as strings on the wire.
 type kafkaProbeResult struct {
-	OK         bool             `json:"probe_ok"`
-	Topic      string           `json:"topic"`
-	Group      string           `json:"group"`
-	Produced   int              `json:"produced"`
-	Consumed   int              `json:"consumed"`
-	Partitions map[string]int   `json:"partitions"`
-	Committed  map[string]int64 `json:"committed"`
-	Lag        map[string]int64 `json:"lag"`
+	OK         bool              `json:"probe_ok"`
+	Topic      string            `json:"topic"`
+	Group      string            `json:"group"`
+	Produced   int               `json:"produced"`
+	Consumed   int               `json:"consumed"`
+	Partitions map[string]int    `json:"partitions"`
+	Committed  map[string]int64  `json:"committed"`
+	Lag        map[string]int64  `json:"lag"`
+	Configs    map[string]string `json:"configs"`
 }
 
 func TestManagedKafkaKafkaE2eK3d(t *testing.T) {
@@ -63,6 +64,12 @@ func TestManagedKafkaKafkaE2eK3d(t *testing.T) {
 		topic      = "orders"
 		partitions = 3
 		records    = 12
+		// topicConfig is a property override the API must apply to the real
+		// broker (MK7), proven below by the probe's DescribeTopicConfigs.
+		topicConfig = "retention.ms"
+		// topicConfigValue must differ from the broker default so the override
+		// is unambiguous.
+		topicConfigValue = "86400000"
 	)
 
 	// Delete any cluster left by a prior run, then clean this one up.
@@ -78,11 +85,16 @@ func TestManagedKafkaKafkaE2eK3d(t *testing.T) {
 		t.Fatalf("create cluster: HTTP %d: %v", code, body)
 	}
 
-	// Create a multi-partition topic through the GCP API; the core provisions it
-	// on the live broker so the probe can produce to it.
+	// Create a multi-partition topic with a property override through the GCP
+	// API; the core provisions it on the live broker so the probe can produce to
+	// it and read the override back.
 	code, topicBody := api(t, httpClient, http.MethodPost,
 		base+clusterPath(cluster)+"/topics?topicId="+topic,
-		map[string]any{"partitionCount": partitions, "replicationFactor": 1})
+		map[string]any{
+			"partitionCount":    partitions,
+			"replicationFactor": 1,
+			"configs":           map[string]any{topicConfig: topicConfigValue},
+		})
 	if code < 200 || code >= 300 {
 		t.Fatalf("create topic: HTTP %d: %v", code, topicBody)
 	}
@@ -129,6 +141,12 @@ func TestManagedKafkaKafkaE2eK3d(t *testing.T) {
 		if probe.Lag[key] != 0 {
 			t.Errorf("partition %s lag=%d, want 0", key, probe.Lag[key])
 		}
+	}
+
+	// MK7: the configs the API accepted must be honored by the real broker, not
+	// merely echoed. The probe reads them back over the Kafka wire.
+	if got := probe.Configs[topicConfig]; got != topicConfigValue {
+		t.Fatalf("broker %s = %q, want the API-applied %q (broker configs: %v)", topicConfig, got, topicConfigValue, probe.Configs)
 	}
 
 	// The control plane must surface the group and offsets the broker holds.

@@ -2,9 +2,14 @@ package managedkafka
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"sort"
+	"strings"
 	"testing"
+	"time"
 
 	mkstore "jaiscloud/internal/gcp/store/managedkafka"
 	"jaiscloud/internal/model"
@@ -20,12 +25,16 @@ type fakeBroker struct {
 	reset    bool
 
 	// Topic data-plane behaviour + call recording.
-	ensureTopicErr   error
-	addPartitionsErr error
-	deleteTopicErr   error
-	ensuredTopics    []string // "project/location/cluster/topic:partitions"
-	addedPartitions  []string // "project/location/cluster/topic:total"
-	deletedTopics    []string // "project/location/cluster/topic"
+	ensureTopicErr    error
+	addPartitionsErr  error
+	deleteTopicErr    error
+	alterConfigsErr   error
+	ensuredTopics     []string // "project/location/cluster/topic:partitions"
+	ensureConfigs     []map[string]string
+	addedPartitions   []string // "project/location/cluster/topic:total"
+	deletedTopics     []string // "project/location/cluster/topic"
+	alteredConfigs    []fakeConfigAlter
+	beforeAlterConfig func()
 
 	// Consumer-group data-plane behaviour + call recording.
 	listGroups       []string
@@ -51,6 +60,13 @@ type fakeBroker struct {
 type fakeGroup struct {
 	offsets []ConsumerGroupOffset
 	members int
+}
+
+// fakeConfigAlter records one topic-config alter call.
+type fakeConfigAlter struct {
+	Topic  string // "project/location/cluster/topic"
+	Set    map[string]string
+	Remove []string
 }
 
 // fakeAclCall records one ACL mirror call.
@@ -85,11 +101,25 @@ func (f *fakeBroker) Reset(_ context.Context) error {
 	return f.err
 }
 
-func (f *fakeBroker) EnsureTopic(_ context.Context, project, location, cluster, topic string, partitions int) error {
+func (f *fakeBroker) EnsureTopic(_ context.Context, project, location, cluster, topic string, partitions int, configs map[string]string) error {
 	f.ensuredTopics = append(f.ensuredTopics, fmt.Sprintf("%s/%s:%d", f.key(project, location, cluster), topic, partitions))
+	f.ensureConfigs = append(f.ensureConfigs, configs)
 	err := f.ensureTopicErr
 	if f.beforeEnsureTopic != nil {
 		f.beforeEnsureTopic()
+	}
+	return err
+}
+
+func (f *fakeBroker) AlterTopicConfigs(_ context.Context, project, location, cluster, topic string, set map[string]string, remove []string) error {
+	f.alteredConfigs = append(f.alteredConfigs, fakeConfigAlter{
+		Topic:  f.key(project, location, cluster) + "/" + topic,
+		Set:    set,
+		Remove: remove,
+	})
+	err := f.alterConfigsErr
+	if f.beforeAlterConfig != nil {
+		f.beforeAlterConfig()
 	}
 	return err
 }
@@ -402,6 +432,389 @@ func TestTopicUpdateRollsBackOnBrokerFailure(t *testing.T) {
 	assertInternal(t, err)
 	if got, _ := s.GetTopic(ctx, "proj", "us-central1", "c1", "t1"); got.PartitionCount != 3 {
 		t.Fatalf("partitionCount = %d, want 3 after rollback", got.PartitionCount)
+	}
+}
+
+// topicConfigsIn builds the wire "configs" body a topic create/update carries.
+func topicConfigsIn(configs map[string]string) json.RawMessage {
+	if configs == nil {
+		return nil
+	}
+	b, _ := json.Marshal(map[string]any{"configs": configs})
+	return b
+}
+
+func TestTopicCreatePassesConfigsToBroker(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBroker{endpoint: "broker:9092"}
+	s := NewService(mkstore.NewMemoryStore(), WithBroker(fb))
+	withCluster(t, s)
+
+	in := topicIn(3, 1)
+	in.Config = topicConfigsIn(map[string]string{"cleanup.policy": "compact", "retention.ms": "1000"})
+	if _, err := s.CreateTopic(ctx, "proj", "us-central1", "c1", "t1", in); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if len(fb.ensureConfigs) != 1 {
+		t.Fatalf("EnsureTopic configs = %v, want one call", fb.ensureConfigs)
+	}
+	if got := fb.ensureConfigs[0]; got["cleanup.policy"] != "compact" || got["retention.ms"] != "1000" {
+		t.Fatalf("EnsureTopic configs = %v, want cleanup.policy=compact retention.ms=1000", got)
+	}
+}
+
+func TestTopicUpdateAltersChangedConfigs(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBroker{endpoint: "broker:9092"}
+	s := NewService(mkstore.NewMemoryStore(), WithBroker(fb))
+	withCluster(t, s)
+	in := topicIn(3, 1)
+	in.Config = topicConfigsIn(map[string]string{"cleanup.policy": "delete", "retention.ms": "1000"})
+	if _, err := s.CreateTopic(ctx, "proj", "us-central1", "c1", "t1", in); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	upd := topicIn(0, 0)
+	upd.Config = topicConfigsIn(map[string]string{"cleanup.policy": "compact", "retention.ms": "1000"})
+	if _, err := s.UpdateTopic(ctx, "proj", "us-central1", "c1", "t1", upd); err != nil {
+		t.Fatalf("UpdateTopic: %v", err)
+	}
+	if len(fb.alteredConfigs) != 1 {
+		t.Fatalf("AlterTopicConfigs calls = %+v, want one", fb.alteredConfigs)
+	}
+	got := fb.alteredConfigs[0]
+	if got.Set["cleanup.policy"] != "compact" {
+		t.Errorf("set = %v, want cleanup.policy=compact", got.Set)
+	}
+	if _, ok := got.Set["retention.ms"]; ok {
+		t.Errorf("unchanged retention.ms re-sent: %v", got.Set)
+	}
+	if len(got.Remove) != 0 {
+		t.Errorf("remove = %v, want none", got.Remove)
+	}
+}
+
+func TestTopicUpdateClearsRemovedConfigs(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBroker{endpoint: "broker:9092"}
+	s := NewService(mkstore.NewMemoryStore(), WithBroker(fb))
+	withCluster(t, s)
+	in := topicIn(3, 1)
+	in.Config = topicConfigsIn(map[string]string{"cleanup.policy": "compact", "retention.ms": "1000"})
+	if _, err := s.CreateTopic(ctx, "proj", "us-central1", "c1", "t1", in); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	// The store replaces the configs object wholesale, so a dropped key must be
+	// cleared on the broker too.
+	upd := topicIn(0, 0)
+	upd.Config = topicConfigsIn(map[string]string{"retention.ms": "1000"})
+	if _, err := s.UpdateTopic(ctx, "proj", "us-central1", "c1", "t1", upd); err != nil {
+		t.Fatalf("UpdateTopic: %v", err)
+	}
+	if len(fb.alteredConfigs) != 1 {
+		t.Fatalf("AlterTopicConfigs calls = %+v, want one", fb.alteredConfigs)
+	}
+	got := fb.alteredConfigs[0]
+	if len(got.Set) != 0 {
+		t.Errorf("set = %v, want none", got.Set)
+	}
+	if len(got.Remove) != 1 || got.Remove[0] != "cleanup.policy" {
+		t.Errorf("remove = %v, want [cleanup.policy]", got.Remove)
+	}
+	tp, _ := s.GetTopic(ctx, "proj", "us-central1", "c1", "t1")
+	if strings.Contains(string(tp.Config), "cleanup.policy") {
+		t.Errorf("dropped key still stored: %s", tp.Config)
+	}
+}
+
+func TestTopicUpdateSkipsUnchangedConfigs(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBroker{endpoint: "broker:9092"}
+	s := NewService(mkstore.NewMemoryStore(), WithBroker(fb))
+	withCluster(t, s)
+	in := topicIn(3, 1)
+	in.Config = topicConfigsIn(map[string]string{"cleanup.policy": "compact"})
+	if _, err := s.CreateTopic(ctx, "proj", "us-central1", "c1", "t1", in); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	upd := topicIn(0, 0)
+	upd.Config = topicConfigsIn(map[string]string{"cleanup.policy": "compact"})
+	if _, err := s.UpdateTopic(ctx, "proj", "us-central1", "c1", "t1", upd); err != nil {
+		t.Fatalf("UpdateTopic: %v", err)
+	}
+	if len(fb.alteredConfigs) != 0 {
+		t.Fatalf("broker contacted for an unchanged config set: %+v", fb.alteredConfigs)
+	}
+}
+
+func TestTopicInvalidConfigIsInvalidArgument(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBroker{endpoint: "broker:9092", ensureTopicErr: fmt.Errorf("%w: unknown key", ErrInvalidTopicConfig)}
+	s := NewService(mkstore.NewMemoryStore(), WithBroker(fb))
+	withCluster(t, s)
+
+	in := topicIn(3, 1)
+	in.Config = topicConfigsIn(map[string]string{"not.a.config": "x"})
+	_, err := s.CreateTopic(ctx, "proj", "us-central1", "c1", "t1", in)
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("error = %v, want InvalidArgument(400)", err)
+	}
+	if _, err := s.GetTopic(ctx, "proj", "us-central1", "c1", "t1"); err == nil {
+		t.Fatal("topic survived a broker-rejected config")
+	}
+}
+
+func TestTopicUpdateConfigRollsBackOnBrokerFailure(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBroker{endpoint: "broker:9092", alterConfigsErr: errors.New("boom")}
+	s := NewService(mkstore.NewMemoryStore(), WithBroker(fb))
+	withCluster(t, s)
+	in := topicIn(3, 1)
+	in.Config = topicConfigsIn(map[string]string{"cleanup.policy": "delete"})
+	if _, err := s.CreateTopic(ctx, "proj", "us-central1", "c1", "t1", in); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	upd := topicIn(0, 0)
+	upd.Config = topicConfigsIn(map[string]string{"cleanup.policy": "compact"})
+	assertInternal(t, func() error {
+		_, err := s.UpdateTopic(ctx, "proj", "us-central1", "c1", "t1", upd)
+		return err
+	}())
+	got, err := s.GetTopic(ctx, "proj", "us-central1", "c1", "t1")
+	if err != nil {
+		t.Fatalf("GetTopic: %v", err)
+	}
+	if c := topicConfigs(got.Config); c["cleanup.policy"] != "delete" {
+		t.Fatalf("config = %v, want pre-image cleanup.policy=delete after rollback", c)
+	}
+}
+
+func TestTopicUpdateConfigInvalidIsInvalidArgument(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBroker{endpoint: "broker:9092", alterConfigsErr: fmt.Errorf("%w: bad value", ErrInvalidTopicConfig)}
+	s := NewService(mkstore.NewMemoryStore(), WithBroker(fb))
+	withCluster(t, s)
+	if _, err := s.CreateTopic(ctx, "proj", "us-central1", "c1", "t1", topicIn(3, 1)); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	upd := topicIn(0, 0)
+	upd.Config = topicConfigsIn(map[string]string{"retention.ms": "abc"})
+	_, err := s.UpdateTopic(ctx, "proj", "us-central1", "c1", "t1", upd)
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("error = %v, want InvalidArgument(400)", err)
+	}
+	got, _ := s.GetTopic(ctx, "proj", "us-central1", "c1", "t1")
+	if topicConfigs(got.Config) != nil {
+		t.Fatalf("invalid config persisted: %s", got.Config)
+	}
+}
+
+func TestTopicConfigDiff(t *testing.T) {
+	tests := []struct {
+		name       string
+		old, next  map[string]string
+		wantSet    map[string]string
+		wantRemove []string
+	}{
+		{"nil to added", nil, map[string]string{"a": "1"}, map[string]string{"a": "1"}, nil},
+		{"added and changed", map[string]string{"a": "1"}, map[string]string{"a": "2", "b": "3"}, map[string]string{"a": "2", "b": "3"}, nil},
+		{"removed", map[string]string{"a": "1", "b": "2"}, map[string]string{"a": "1"}, nil, []string{"b"}},
+		{"empty clears all", map[string]string{"a": "1"}, nil, nil, []string{"a"}},
+		{"unchanged", map[string]string{"a": "1"}, map[string]string{"a": "1"}, nil, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			set, remove := topicConfigDiff(tt.old, tt.next)
+			if !maps.Equal(set, tt.wantSet) {
+				t.Errorf("set = %v, want %v", set, tt.wantSet)
+			}
+			sort.Strings(remove)
+			wantRemove := append([]string(nil), tt.wantRemove...)
+			sort.Strings(wantRemove)
+			if strings.Join(remove, ",") != strings.Join(wantRemove, ",") {
+				t.Errorf("remove = %v, want %v", remove, tt.wantRemove)
+			}
+		})
+	}
+}
+
+func TestParseTopicConfigsRejectsNonStringValue(t *testing.T) {
+	_, err := parseTopicConfigs(json.RawMessage(`{"configs":{"retention.ms":1000}}`))
+	if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("error = %v, want InvalidArgument(400)", err)
+	}
+	// An absent/missing configs field is not an error.
+	if c, err := parseTopicConfigs(nil); err != nil || c != nil {
+		t.Fatalf("nil body = %v, %v; want nil, nil", c, err)
+	}
+}
+
+// TestSameTopicVersionIgnoresEncodingAndTimePrecision guards the --dsn
+// rollback hole: Postgres round-trips UpdateTime at microsecond precision and
+// normalizes JSON, so the guard must compare parsed config maps, not bytes.
+func TestSameTopicVersionIgnoresEncodingAndTimePrecision(t *testing.T) {
+	post := mkstore.Topic{
+		PartitionCount:    3,
+		ReplicationFactor: 1,
+		UpdateTime:        time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC),
+		Config:            json.RawMessage(`{"configs":{"b":"2","a":"1"}}`),
+	}
+	cur := mkstore.Topic{
+		PartitionCount:    3,
+		ReplicationFactor: 1,
+		// Microsecond-truncated, i.e. what a TIMESTAMPTZ read returns.
+		UpdateTime: post.UpdateTime.Truncate(time.Microsecond),
+		// JSONB-normalized: keys sorted, spacing added.
+		Config: json.RawMessage("{\n  \"configs\": {\n    \"a\": \"1\",\n    \"b\": \"2\"\n  }\n}"),
+	}
+	if !sameTopicVersion(cur, post) {
+		t.Fatal("normalized JSON / truncated timestamp should still match")
+	}
+	cur.PartitionCount = 4
+	if sameTopicVersion(cur, post) {
+		t.Fatal("a different partition count must not match")
+	}
+	cur.PartitionCount = 3
+	cur.Config = json.RawMessage(`{"configs":{"b":"9","a":"1"}}`)
+	if sameTopicVersion(cur, post) {
+		t.Fatal("a different config value must not match")
+	}
+}
+
+// normalizingStore mimics a --dsn store: timestamps are truncated to
+// microseconds and the stored JSON is re-encoded, so a byte/timestamp rollback
+// guard would never match and the rollback would silently no-op.
+type normalizingStore struct{ mkstore.Store }
+
+func normalizeStoredTopic(t mkstore.Topic) mkstore.Topic {
+	t.UpdateTime = t.UpdateTime.Truncate(time.Microsecond)
+	if len(t.Config) > 0 {
+		var m map[string]any
+		if json.Unmarshal(t.Config, &m) == nil {
+			if b, err := json.MarshalIndent(m, "", "  "); err == nil {
+				t.Config = b
+			}
+		}
+	}
+	return t
+}
+
+func (s normalizingStore) CreateTopic(ctx context.Context, projectID, location, clusterName string, t mkstore.Topic) error {
+	return s.Store.CreateTopic(ctx, projectID, location, clusterName, normalizeStoredTopic(t))
+}
+
+func (s normalizingStore) GetTopic(ctx context.Context, projectID, location, clusterName, topicName string) (mkstore.Topic, error) {
+	t, err := s.Store.GetTopic(ctx, projectID, location, clusterName, topicName)
+	return normalizeStoredTopic(t), err
+}
+
+// TestTopicCreateRollbackUnderNormalizingStore proves the create rollback still
+// removes the metadata when the store round-trips timestamps/JSON the way a
+// --dsn (Postgres) store does.
+func TestTopicCreateRollbackUnderNormalizingStore(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBroker{endpoint: "broker:9092", ensureTopicErr: fmt.Errorf("%w: unknown key", ErrInvalidTopicConfig)}
+	s := NewService(normalizingStore{Store: mkstore.NewMemoryStore()}, WithBroker(fb))
+	withCluster(t, s)
+
+	in := topicIn(3, 1)
+	in.Config = topicConfigsIn(map[string]string{"bogus": "x"})
+	if _, err := s.CreateTopic(ctx, "proj", "us-central1", "c1", "t1", in); err == nil {
+		t.Fatal("expected the broker rejection to surface")
+	}
+	if _, err := s.GetTopic(ctx, "proj", "us-central1", "c1", "t1"); err == nil {
+		t.Fatal("metadata survived a failed create under a normalizing store")
+	}
+}
+
+func TestTopicCreateRejectsNonStringConfig(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBroker{endpoint: "broker:9092"}
+	s := NewService(mkstore.NewMemoryStore(), WithBroker(fb))
+	withCluster(t, s)
+
+	in := topicIn(3, 1)
+	in.Config = json.RawMessage(`{"configs":{"retention.ms":1000}}`)
+	_, err := s.CreateTopic(ctx, "proj", "us-central1", "c1", "t1", in)
+	if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidArgument" {
+		t.Fatalf("error = %v, want InvalidArgument", err)
+	}
+	if _, err := s.GetTopic(ctx, "proj", "us-central1", "c1", "t1"); err == nil {
+		t.Fatal("rejected create persisted metadata")
+	}
+	if len(fb.ensuredTopics) != 0 {
+		t.Fatalf("rejected create reached the broker: %v", fb.ensuredTopics)
+	}
+}
+
+func TestTopicUpdateRejectsNonStringConfig(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBroker{endpoint: "broker:9092"}
+	s := NewService(mkstore.NewMemoryStore(), WithBroker(fb))
+	withCluster(t, s)
+	in := topicIn(3, 1)
+	in.Config = topicConfigsIn(map[string]string{"cleanup.policy": "compact"})
+	if _, err := s.CreateTopic(ctx, "proj", "us-central1", "c1", "t1", in); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	upd := topicIn(0, 0)
+	upd.Config = json.RawMessage(`{"configs":{"retention.ms":1000}}`)
+	_, err := s.UpdateTopic(ctx, "proj", "us-central1", "c1", "t1", upd)
+	if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidArgument" {
+		t.Fatalf("error = %v, want InvalidArgument", err)
+	}
+	if len(fb.alteredConfigs) != 0 {
+		t.Fatalf("rejected update reached the broker: %+v", fb.alteredConfigs)
+	}
+	got, _ := s.GetTopic(ctx, "proj", "us-central1", "c1", "t1")
+	if c := topicConfigs(got.Config); c["cleanup.policy"] != "compact" {
+		t.Fatalf("stored config = %v, want the pre-image unchanged", c)
+	}
+}
+
+// TestTopicUpdatePartitionFailureCompensatesConfig guards the combined
+// config+growth update: when the partition grow fails after the config alter
+// succeeded, the broker override must be reverted too.
+func TestTopicUpdatePartitionFailureCompensatesConfig(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBroker{endpoint: "broker:9092", addPartitionsErr: errors.New("boom")}
+	s := NewService(mkstore.NewMemoryStore(), WithBroker(fb))
+	withCluster(t, s)
+	in := topicIn(3, 1)
+	in.Config = topicConfigsIn(map[string]string{"cleanup.policy": "delete"})
+	if _, err := s.CreateTopic(ctx, "proj", "us-central1", "c1", "t1", in); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	upd := topicIn(6, 0)
+	upd.Config = topicConfigsIn(map[string]string{"cleanup.policy": "compact"})
+	assertInternal(t, func() error {
+		_, err := s.UpdateTopic(ctx, "proj", "us-central1", "c1", "t1", upd)
+		return err
+	}())
+
+	if len(fb.alteredConfigs) != 2 {
+		t.Fatalf("altered configs = %+v, want the alter plus its compensation", fb.alteredConfigs)
+	}
+	if fb.alteredConfigs[0].Set["cleanup.policy"] != "compact" {
+		t.Errorf("first alter = %+v, want cleanup.policy=compact", fb.alteredConfigs[0])
+	}
+	if fb.alteredConfigs[1].Set["cleanup.policy"] != "delete" {
+		t.Errorf("compensation = %+v, want cleanup.policy=delete", fb.alteredConfigs[1])
+	}
+	got, _ := s.GetTopic(ctx, "proj", "us-central1", "c1", "t1")
+	if got.PartitionCount != 3 {
+		t.Errorf("partitionCount = %d, want 3 after rollback", got.PartitionCount)
+	}
+	if c := topicConfigs(got.Config); c["cleanup.policy"] != "delete" {
+		t.Errorf("stored config = %v, want cleanup.policy=delete after rollback", c)
 	}
 }
 

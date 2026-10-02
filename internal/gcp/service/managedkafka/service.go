@@ -39,6 +39,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/lro"
@@ -61,10 +62,17 @@ type Broker interface {
 	Endpoint(project, location, cluster string) string
 	// StopCluster stops and reaps the broker when the cluster is deleted.
 	StopCluster(ctx context.Context, project, location, cluster string) error
-	// EnsureTopic provisions the topic on the cluster's live broker. With no
+	// EnsureTopic provisions the topic on the cluster's live broker with the
+	// caller's property overrides (the Kafka topic configs map). With no
 	// running broker (mock, or a cluster without a live broker) it is a
 	// metadata-only no-op, so hermetic tests need no broker.
-	EnsureTopic(ctx context.Context, project, location, cluster, topic string, partitions int) error
+	EnsureTopic(ctx context.Context, project, location, cluster, topic string, partitions int, configs map[string]string) error
+	// AlterTopicConfigs applies an incremental topic-config change on the
+	// cluster's live broker: every key in set is written and every key in
+	// remove is cleared. With no running broker it is a metadata-only no-op. A
+	// broker failure is returned so the caller can roll the metadata write
+	// back; an invalid key/value is reported as ErrInvalidTopicConfig.
+	AlterTopicConfigs(ctx context.Context, project, location, cluster, topic string, set map[string]string, remove []string) error
 	// AddTopicPartitions raises the topic's broker partition count to
 	// totalPartitions. Lowering the count is rejected by the broker.
 	AddTopicPartitions(ctx context.Context, project, location, cluster, topic string, totalPartitions int) error
@@ -204,16 +212,45 @@ func brokerInternalError(op string, err error) error {
 	return model.NewProviderError("Internal", "managedkafka broker: "+op+": "+err.Error(), 500)
 }
 
+// brokerTopicError maps a topic data-plane failure onto the caller-visible
+// error: a rejected config key/value is a client error (InvalidArgument, 400),
+// while every other broker failure (unreachable, timed out) stays INTERNAL.
+func brokerTopicError(op string, err error) error {
+	if errors.Is(err, ErrInvalidTopicConfig) {
+		return invalidArgument(err.Error())
+	}
+	return brokerInternalError(op, err)
+}
+
+// ErrInvalidTopicConfig reports that the broker rejected a topic's config
+// key/value. The broker package wraps it so the core can surface a 400 instead
+// of a 500 while still rolling the metadata write back.
+var ErrInvalidTopicConfig = errors.New("invalid topic config")
+
 // ensureBrokerTopic provisions the topic on the cluster's broker. It is a no-op
 // when the service has no broker manager (mock topology) or the cluster has no
 // live broker.
-func (s *Service) ensureBrokerTopic(ctx context.Context, project, location, cluster, topic string, partitions int) error {
+func (s *Service) ensureBrokerTopic(ctx context.Context, project, location, cluster, topic string, partitions int, configs map[string]string) error {
 	if s.broker == nil {
 		return nil
 	}
 	s.brokerReady(ctx, project, location, cluster)
-	if err := s.broker.EnsureTopic(ctx, project, location, cluster, topic, partitions); err != nil {
-		return brokerInternalError("ensure topic", err)
+	if err := s.broker.EnsureTopic(ctx, project, location, cluster, topic, partitions, configs); err != nil {
+		return brokerTopicError("ensure topic", err)
+	}
+	return nil
+}
+
+// alterBrokerTopicConfigs applies an incremental config change to the topic on
+// the cluster's broker. It is a no-op when the service has no broker manager
+// (mock topology) or the cluster has no live broker.
+func (s *Service) alterBrokerTopicConfigs(ctx context.Context, project, location, cluster, topic string, set map[string]string, remove []string) error {
+	if s.broker == nil {
+		return nil
+	}
+	s.brokerReady(ctx, project, location, cluster)
+	if err := s.broker.AlterTopicConfigs(ctx, project, location, cluster, topic, set, remove); err != nil {
+		return brokerTopicError("alter topic configs", err)
 	}
 	return nil
 }
@@ -273,6 +310,54 @@ type TopicInput struct {
 	PartitionCount    int
 	ReplicationFactor int
 	Config            json.RawMessage
+}
+
+// parseTopicConfigs extracts the "configs" map (Kafka topic property overrides)
+// from a caller-supplied wire body. A missing body or absent configs field is
+// nil, nil; a configs value that is not a string map (e.g. a number) is
+// rejected as InvalidArgument, matching real GCP.
+func parseTopicConfigs(raw json.RawMessage) (map[string]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var body struct {
+		Configs map[string]string `json:"configs"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, invalidArgument("configs must be a map of string to string")
+	}
+	if len(body.Configs) == 0 {
+		return nil, nil
+	}
+	return body.Configs, nil
+}
+
+// topicConfigs is the lenient form of parseTopicConfigs for stored/rendered
+// values: a body written by the emulator always parses, and a malformed one
+// (e.g. an old record) is treated as no overrides rather than failing a read.
+func topicConfigs(raw json.RawMessage) map[string]string {
+	c, _ := parseTopicConfigs(raw)
+	return c
+}
+
+// topicConfigDiff returns the keys to set and the keys to remove when moving
+// from old to next. A key present in next with a different value (or newly
+// added) is set; a key present only in old is removed.
+func topicConfigDiff(old, next map[string]string) (set map[string]string, remove []string) {
+	for k, v := range next {
+		if ov, ok := old[k]; !ok || ov != v {
+			if set == nil {
+				set = map[string]string{}
+			}
+			set[k] = v
+		}
+	}
+	for k := range old {
+		if _, ok := next[k]; !ok {
+			remove = append(remove, k)
+		}
+	}
+	return set, remove
 }
 
 // randomHex returns n random hexadecimal characters.
@@ -457,6 +542,10 @@ func (s *Service) CreateTopic(ctx context.Context, project, location, clusterID,
 	if in.ReplicationFactor < 1 {
 		return mkstore.Topic{}, invalidArgument("replicationFactor must be at least 1")
 	}
+	configs, err := parseTopicConfigs(in.Config)
+	if err != nil {
+		return mkstore.Topic{}, err
+	}
 	if _, err := s.store.GetCluster(ctx, project, location, clusterID); err != nil {
 		return mkstore.Topic{}, mapStoreError(err)
 	}
@@ -477,7 +566,7 @@ func (s *Service) CreateTopic(ctx context.Context, project, location, clusterID,
 	// Provision the broker topic only after the metadata write. If the broker
 	// rejects it, roll the store write back so an API-visible topic is
 	// guaranteed to exist on the broker.
-	if err := s.ensureBrokerTopic(ctx, project, location, clusterID, topicID, in.PartitionCount); err != nil {
+	if err := s.ensureBrokerTopic(ctx, project, location, clusterID, topicID, in.PartitionCount, configs); err != nil {
 		s.rollbackCreatedTopic(ctx, project, location, clusterID, topicID, t)
 		return mkstore.Topic{}, err
 	}
@@ -485,18 +574,16 @@ func (s *Service) CreateTopic(ctx context.Context, project, location, clusterID,
 }
 
 // rollbackCreatedTopic undoes a topic create whose broker provision failed. It
-// deletes the metadata only when the stored record is still untouched
-// (CreateTime+UpdateTime match the record this call wrote), so a concurrent
-// successful mutation is never clobbered.
+// deletes the metadata only when the stored record still matches the one this
+// call wrote (see sameTopicVersion), so a concurrent successful mutation is
+// never clobbered. The comparison is semantic because a --dsn store truncates
+// timestamps to microseconds and normalizes JSON.
 func (s *Service) rollbackCreatedTopic(ctx context.Context, project, location, clusterID, topicID string, created mkstore.Topic) {
 	cur, err := s.store.GetTopic(ctx, project, location, clusterID, topicID)
 	if err != nil {
 		return // already gone
 	}
-	if !cur.CreateTime.Equal(created.CreateTime) ||
-		!cur.UpdateTime.Equal(created.UpdateTime) ||
-		cur.PartitionCount != created.PartitionCount ||
-		cur.ReplicationFactor != created.ReplicationFactor {
+	if !sameTopicVersion(cur, created) {
 		slog.Warn("managedkafka: skipping topic create rollback; record was modified concurrently", "topic", topicID)
 		return
 	}
@@ -534,23 +621,29 @@ func (s *Service) ListTopics(ctx context.Context, project, location, clusterID s
 }
 
 // UpdateTopic merges the caller's fields into the stored topic. PartitionCount
-// is increase-only, and a broker partition change must succeed for the metadata
-// change to stick.
+// is increase-only, and a broker partition or config change must succeed for
+// the metadata change to stick (the pre-image record is restored on a broker
+// failure).
 func (s *Service) UpdateTopic(ctx context.Context, project, location, clusterID, topicID string, in TopicInput) (mkstore.Topic, error) {
 	if location == "" || clusterID == "" || topicID == "" {
 		return mkstore.Topic{}, invalidArgument("missing location, clusterId, or topicId")
 	}
-	// Captured inside the atomic mutate so the broker call (and its rollback)
-	// can see the pre-image partition count.
-	var prevPartitions int
+	// Reject a malformed configs map before the metadata write, so a non-string
+	// value can never be silently dropped (or, on update, read as "clear all").
+	if _, err := parseTopicConfigs(in.Config); err != nil {
+		return mkstore.Topic{}, err
+	}
+	// Captured inside the atomic mutate so the broker calls (and their
+	// rollback) can see the pre-image record and config set.
+	var prevTopic mkstore.Topic
 	var grew bool
 	t, err := s.store.UpdateTopicAtomic(ctx, project, location, clusterID, topicID, func(t mkstore.Topic) (mkstore.Topic, error) {
+		prevTopic = t
 		if in.PartitionCount != 0 {
 			// Kafka (and real GCP) allow a topic to grow but never shrink.
 			if in.PartitionCount < t.PartitionCount {
 				return mkstore.Topic{}, invalidArgument("partitionCount cannot be decreased")
 			}
-			prevPartitions = t.PartitionCount
 			grew = in.PartitionCount > t.PartitionCount
 			t.PartitionCount = in.PartitionCount
 		}
@@ -583,23 +676,61 @@ func (s *Service) UpdateTopic(ctx context.Context, project, location, clusterID,
 	if err != nil {
 		return mkstore.Topic{}, mapStoreError(err)
 	}
+	// Mirror the metadata change onto the live broker. The merge above replaces
+	// the configs object wholesale, so a key absent from the new set is cleared
+	// on the broker too. Any broker failure restores the pre-image metadata,
+	// unless a concurrent request has since changed the record. Configs are
+	// applied before partition growth: a partition count can never be lowered,
+	// so a failure there is the one that cannot be repaired on the broker.
+	set, remove := topicConfigDiff(topicConfigs(prevTopic.Config), topicConfigs(t.Config))
+	if len(set) > 0 || len(remove) > 0 {
+		if err := s.alterBrokerTopicConfigs(ctx, project, location, clusterID, topicID, set, remove); err != nil {
+			s.rollbackTopicUpdate(ctx, project, location, clusterID, topicID, t, prevTopic)
+			return mkstore.Topic{}, err
+		}
+	}
 	if grew {
 		if err := s.addBrokerPartitions(ctx, project, location, clusterID, topicID, t.PartitionCount); err != nil {
-			// Roll the metadata count back so the API-visible count still
-			// matches the broker — but only if no concurrent request has since
-			// committed a different count, which must not be clobbered.
-			if _, rbErr := s.store.UpdateTopicAtomic(ctx, project, location, clusterID, topicID, func(cur mkstore.Topic) (mkstore.Topic, error) {
-				if cur.PartitionCount == t.PartitionCount {
-					cur.PartitionCount = prevPartitions
+			s.rollbackTopicUpdate(ctx, project, location, clusterID, topicID, t, prevTopic)
+			// The config alter already succeeded; undo it on the broker too so
+			// an override the API no longer reports is not left behind. Growth
+			// is applied last because a partition count can never be lowered.
+			if len(set) > 0 || len(remove) > 0 {
+				back, backRemove := topicConfigDiff(topicConfigs(t.Config), topicConfigs(prevTopic.Config))
+				if cErr := s.alterBrokerTopicConfigs(ctx, project, location, clusterID, topicID, back, backRemove); cErr != nil {
+					slog.Warn("managedkafka: topic config compensation failed after partition error", "topic", topicID, "err", cErr)
 				}
-				return cur, nil
-			}); rbErr != nil {
-				slog.Warn("managedkafka: partition-count rollback failed", "topic", topicID, "err", rbErr)
 			}
 			return mkstore.Topic{}, err
 		}
 	}
 	return t, nil
+}
+
+// rollbackTopicUpdate restores prev over the metadata record a failed broker
+// call left behind (post). It only applies while the record still matches post,
+// so a concurrent successful update is never clobbered.
+func (s *Service) rollbackTopicUpdate(ctx context.Context, project, location, clusterID, topicID string, post, prev mkstore.Topic) {
+	if _, rbErr := s.store.UpdateTopicAtomic(ctx, project, location, clusterID, topicID, func(cur mkstore.Topic) (mkstore.Topic, error) {
+		if sameTopicVersion(cur, post) {
+			return prev, nil
+		}
+		return cur, nil
+	}); rbErr != nil {
+		slog.Warn("managedkafka: topic update rollback failed", "topic", topicID, "err", rbErr)
+	}
+}
+
+// sameTopicVersion reports whether cur is the record post wrote, comparing the
+// semantic mutable fields the rollback would restore rather than raw bytes or
+// timestamps: a --dsn store round-trips UpdateTime at microsecond precision and
+// normalizes the Config JSON (sorted keys, spacing), so a byte/timestamp compare
+// never matches there and the rollback would silently no-op. The parsed config
+// map is precision- and encoding-independent.
+func sameTopicVersion(cur, post mkstore.Topic) bool {
+	return cur.PartitionCount == post.PartitionCount &&
+		cur.ReplicationFactor == post.ReplicationFactor &&
+		maps.Equal(topicConfigs(cur.Config), topicConfigs(post.Config))
 }
 
 // DeleteTopic removes the topic from the broker first, then the store, so a

@@ -21,9 +21,13 @@ import (
 // assert provisioning without a running broker. A future swap of franz-go for
 // another client is a change here, not in the core.
 type kafkaAdmin interface {
-	// EnsureTopic creates the topic if absent. It is idempotent: an existing
-	// topic with the same name is not an error.
-	EnsureTopic(ctx context.Context, topic string, partitions int32, replicationFactor int16) error
+	// EnsureTopic creates the topic if absent, applying the given topic
+	// property overrides. It is idempotent: an existing topic with the same
+	// name is not an error.
+	EnsureTopic(ctx context.Context, topic string, partitions int32, replicationFactor int16, configs map[string]string) error
+	// AlterTopicConfigs incrementally writes set and clears remove on the
+	// topic. An invalid key/value is reported as core.ErrInvalidTopicConfig.
+	AlterTopicConfigs(ctx context.Context, topic string, set map[string]string, remove []string) error
 	// AddPartitions raises the topic's partition count to totalPartitions.
 	AddPartitions(ctx context.Context, topic string, totalPartitions int32) error
 	// DeleteTopic removes the topic. It is idempotent: an absent topic is not
@@ -57,6 +61,7 @@ type kafkaAdminFactory func(endpoint string) (kafkaAdmin, error)
 // (which the top-level error hides) without a running broker.
 type adminAPI interface {
 	CreateTopic(ctx context.Context, partitions int32, replicationFactor int16, configs map[string]*string, topic string) (kadm.CreateTopicResponse, error)
+	AlterTopicConfigs(ctx context.Context, configs []kadm.AlterConfig, topics ...string) (kadm.AlterConfigsResponses, error)
 	UpdatePartitions(ctx context.Context, set int, topics ...string) (kadm.CreatePartitionsResponses, error)
 	DeleteTopic(ctx context.Context, topic string) (kadm.DeleteTopicResponse, error)
 	ListGroups(ctx context.Context, filterStates ...string) (kadm.ListedGroups, error)
@@ -136,7 +141,7 @@ func (p *adminPool) closeAll() {
 
 // ensureTopic provisions endpoint's topic through the pool. An empty endpoint
 // (no live broker) is a metadata-only no-op.
-func ensureTopic(ctx context.Context, pool *adminPool, endpoint, topic string, partitions int) error {
+func ensureTopic(ctx context.Context, pool *adminPool, endpoint, topic string, partitions int, configs map[string]string) error {
 	if endpoint == "" {
 		return nil
 	}
@@ -147,7 +152,21 @@ func ensureTopic(ctx context.Context, pool *adminPool, endpoint, topic string, p
 	if err != nil {
 		return err
 	}
-	return a.EnsureTopic(ctx, topic, int32(partitions), 1)
+	return a.EnsureTopic(ctx, topic, int32(partitions), 1, configs)
+}
+
+// alterTopicConfigs applies an incremental config change to endpoint's topic
+// through the pool. An empty endpoint (no live broker) is a metadata-only
+// no-op.
+func alterTopicConfigs(ctx context.Context, pool *adminPool, endpoint, topic string, set map[string]string, remove []string) error {
+	if endpoint == "" {
+		return nil
+	}
+	a, err := pool.get(endpoint)
+	if err != nil {
+		return err
+	}
+	return a.AlterTopicConfigs(ctx, topic, set, remove)
 }
 
 // addPartitions raises endpoint's topic partition count through the pool. An
@@ -257,18 +276,73 @@ func newFranzAdmin(endpoint string) (kafkaAdmin, error) {
 	return &franzAdmin{client: kadm.NewClient(cl)}, nil
 }
 
-func (a *franzAdmin) EnsureTopic(ctx context.Context, topic string, partitions int32, replicationFactor int16) error {
+func (a *franzAdmin) EnsureTopic(ctx context.Context, topic string, partitions int32, replicationFactor int16, configs map[string]string) error {
 	if partitions < 1 {
 		partitions = 1
 	}
 	if replicationFactor < 1 {
 		replicationFactor = 1
 	}
-	_, err := a.client.CreateTopic(ctx, partitions, replicationFactor, nil, topic)
+	_, err := a.client.CreateTopic(ctx, partitions, replicationFactor, configValues(configs), topic)
 	// Creating a topic that already exists is idempotent: the caller asked for
 	// the topic to exist and it does.
 	if errors.Is(err, kerr.TopicAlreadyExists) {
 		return nil
+	}
+	return classifyConfigError(err)
+}
+
+// AlterTopicConfigs incrementally writes set and clears remove. The
+// incremental (not full-state) alter is used so unrelated broker defaults stay
+// in place. Keys are sorted so the request is deterministic.
+func (a *franzAdmin) AlterTopicConfigs(ctx context.Context, topic string, set map[string]string, remove []string) error {
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	alter := make([]kadm.AlterConfig, 0, len(set)+len(remove))
+	for _, k := range keys {
+		v := set[k]
+		alter = append(alter, kadm.AlterConfig{Op: kadm.SetConfig, Name: k, Value: &v})
+	}
+	del := append([]string(nil), remove...)
+	sort.Strings(del)
+	for _, k := range del {
+		alter = append(alter, kadm.AlterConfig{Op: kadm.DeleteConfig, Name: k})
+	}
+	if len(alter) == 0 {
+		return nil
+	}
+	resps, err := a.client.AlterTopicConfigs(ctx, alter, topic)
+	if err != nil {
+		return err
+	}
+	r, err := resps.On(topic, nil)
+	if err != nil {
+		return err
+	}
+	return classifyConfigError(r.Err)
+}
+
+// configValues converts a plain config map into the pointer map kadm expects.
+func configValues(configs map[string]string) map[string]*string {
+	if len(configs) == 0 {
+		return nil
+	}
+	out := make(map[string]*string, len(configs))
+	for k, v := range configs {
+		val := v
+		out[k] = &val
+	}
+	return out
+}
+
+// classifyConfigError reports a broker-rejected config as the core's sentinel
+// so the API surfaces InvalidArgument (400) rather than Internal (500).
+func classifyConfigError(err error) error {
+	if errors.Is(err, kerr.InvalidConfig) || errors.Is(err, kerr.InvalidRequest) {
+		return fmt.Errorf("%w: %v", core.ErrInvalidTopicConfig, err)
 	}
 	return err
 }

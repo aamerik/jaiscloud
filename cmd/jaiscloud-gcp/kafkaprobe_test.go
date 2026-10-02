@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func TestAssignProbeRecords(t *testing.T) {
@@ -116,5 +117,31 @@ func TestKafkaProbeSummaryJSONPartitionKeys(t *testing.T) {
 	}
 	if decoded.Partitions["0"] != 4 || decoded.Committed["2"] != 4 || decoded.Lag["1"] != 0 {
 		t.Errorf("decoded summary = %s, want partition keys rendered as strings", raw)
+	}
+}
+
+func TestTopicOverridesFiltersDefaultsAndSynonyms(t *testing.T) {
+	str := func(s string) *string { return &s }
+	rc := kadm.ResourceConfig{Name: "orders", Configs: []kadm.Config{
+		{Key: "cleanup.policy", Value: str("compact"), Source: kmsg.ConfigSourceDynamicTopicConfig},
+		{Key: "retention.ms", Value: str("604800000"), Source: kmsg.ConfigSourceDefaultConfig},
+		{Key: "segment.ms", Value: nil, Source: kmsg.ConfigSourceDynamicTopicConfig},
+	}}
+	got := topicOverrides(rc)
+	if len(got) != 2 {
+		t.Fatalf("topicOverrides = %v, want the two dynamic-topic entries", got)
+	}
+	if got["cleanup.policy"] != "compact" {
+		t.Errorf("cleanup.policy = %q, want compact", got["cleanup.policy"])
+	}
+	if v, ok := got["segment.ms"]; !ok || v != "" {
+		t.Errorf("segment.ms = %q (present %v), want empty present", v, ok)
+	}
+	if _, ok := got["retention.ms"]; ok {
+		t.Errorf("default retention.ms leaked into overrides: %v", got)
+	}
+
+	if nilOverrides := topicOverrides(kadm.ResourceConfig{Name: "empty"}); nilOverrides != nil {
+		t.Errorf("no dynamic configs = %v, want nil", nilOverrides)
 	}
 }

@@ -76,11 +76,18 @@ type Broker interface {
 	// deleted).
 	StopCluster(ctx context.Context, project, location, cluster string) error
 	// EnsureTopic provisions the topic on the cluster's live broker with the
-	// given partition count. With no running broker (mock, or a cluster whose
-	// broker is not live) it is a metadata-only no-op, so hermetic tests need
-	// nothing. The emulator broker is single-node, so callers' replication
-	// factor is metadata only and the broker replica count is always 1.
-	EnsureTopic(ctx context.Context, project, location, cluster, topic string, partitions int) error
+	// given partition count and property overrides. With no running broker
+	// (mock, or a cluster whose broker is not live) it is a metadata-only
+	// no-op, so hermetic tests need nothing. The emulator broker is
+	// single-node, so callers' replication factor is metadata only and the
+	// broker replica count is always 1. An invalid config key/value is
+	// reported as an error wrapping the core's ErrInvalidTopicConfig.
+	EnsureTopic(ctx context.Context, project, location, cluster, topic string, partitions int, configs map[string]string) error
+	// AlterTopicConfigs applies an incremental topic-config change: it writes
+	// every key in set and clears every key in remove. With no running broker
+	// it is a metadata-only no-op; an invalid key/value is reported as an
+	// error wrapping the core's ErrInvalidTopicConfig.
+	AlterTopicConfigs(ctx context.Context, project, location, cluster, topic string, set map[string]string, remove []string) error
 	// AddTopicPartitions raises the topic's broker partition count to
 	// totalPartitions. Lowering the count is rejected by the broker.
 	AddTopicPartitions(ctx context.Context, project, location, cluster, topic string, totalPartitions int) error
@@ -202,7 +209,10 @@ func (mockBroker) EnsureCluster(context.Context, string, string, string) (string
 }
 func (mockBroker) Endpoint(string, string, string) string                    { return "" }
 func (mockBroker) StopCluster(context.Context, string, string, string) error { return nil }
-func (mockBroker) EnsureTopic(context.Context, string, string, string, string, int) error {
+func (mockBroker) EnsureTopic(context.Context, string, string, string, string, int, map[string]string) error {
+	return nil
+}
+func (mockBroker) AlterTopicConfigs(context.Context, string, string, string, string, map[string]string, []string) error {
 	return nil
 }
 func (mockBroker) AddTopicPartitions(context.Context, string, string, string, string, int) error {
