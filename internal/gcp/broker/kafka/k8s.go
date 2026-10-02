@@ -43,6 +43,7 @@ type k8sBroker struct {
 
 	mu        sync.Mutex
 	endpoints map[ClusterKey]string // key → "<svc>.<ns>.svc.cluster.local:9092"
+	admins    *adminPool
 
 	// probe reports whether addr is accepting TCP connections. Overridable in
 	// tests; defaults to a one-second TCP dial.
@@ -56,6 +57,7 @@ func newK8sBroker(client kubernetes.Interface, namespace, image string, logger *
 		image:     image,
 		logger:    logger,
 		endpoints: make(map[ClusterKey]string),
+		admins:    newAdminPool(nil),
 		probe:     tcpProbe,
 	}
 }
@@ -66,6 +68,22 @@ func (b *k8sBroker) Endpoint(project, location, cluster string) string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.endpoints[ClusterKey{Project: project, Location: location, Cluster: cluster}]
+}
+
+// EnsureTopic provisions the topic on the live broker, or no-ops when no broker
+// is running for the cluster (metadata-only topology).
+func (b *k8sBroker) EnsureTopic(ctx context.Context, project, location, cluster, topic string, partitions int) error {
+	return ensureTopic(ctx, b.admins, b.Endpoint(project, location, cluster), topic, partitions)
+}
+
+// AddTopicPartitions raises the topic's partition count on the live broker.
+func (b *k8sBroker) AddTopicPartitions(ctx context.Context, project, location, cluster, topic string, totalPartitions int) error {
+	return addPartitions(ctx, b.admins, b.Endpoint(project, location, cluster), topic, totalPartitions)
+}
+
+// DeleteBrokerTopic removes the topic from the live broker.
+func (b *k8sBroker) DeleteBrokerTopic(ctx context.Context, project, location, cluster, topic string) error {
+	return deleteBrokerTopic(ctx, b.admins, b.Endpoint(project, location, cluster), topic)
 }
 
 func (b *k8sBroker) EnsureCluster(ctx context.Context, project, location, cluster string) (string, error) {
@@ -108,16 +126,32 @@ func (b *k8sBroker) StopCluster(ctx context.Context, project, location, cluster 
 	key := ClusterKey{Project: project, Location: location, Cluster: cluster}
 	name := brokerResourceName(key)
 
-	if err := b.client.CoreV1().Pods(b.namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("managedkafka broker: delete pod: %w", err)
+	podErr := b.client.CoreV1().Pods(b.namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if podErr != nil && !k8serrors.IsNotFound(podErr) {
+		podErr = fmt.Errorf("managedkafka broker: delete pod: %w", podErr)
+	} else {
+		podErr = nil
 	}
-	if err := b.client.CoreV1().Services(b.namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("managedkafka broker: delete service: %w", err)
+	svcErr := b.client.CoreV1().Services(b.namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if svcErr != nil && !k8serrors.IsNotFound(svcErr) {
+		svcErr = fmt.Errorf("managedkafka broker: delete service: %w", svcErr)
+	} else {
+		svcErr = nil
 	}
+
+	// Always drop the endpoint and its pooled admin, even if a delete failed:
+	// keeping a dead address advertised is worse than retrying a delete.
 	b.mu.Lock()
+	ep := b.endpoints[key]
 	delete(b.endpoints, key)
 	b.mu.Unlock()
-	return nil
+	if ep != "" {
+		b.admins.close(ep)
+	}
+	if podErr != nil {
+		return podErr
+	}
+	return svcErr
 }
 
 func (b *k8sBroker) Shutdown(ctx context.Context) error {
@@ -134,6 +168,7 @@ func (b *k8sBroker) Shutdown(ctx context.Context) error {
 			firstErr = err
 		}
 	}
+	b.admins.closeAll()
 	return firstErr
 }
 

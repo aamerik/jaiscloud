@@ -12,7 +12,11 @@
 //
 // A cluster's metadata is the source of truth for wire read-back; a real
 // Kafka-wire broker behind its bootstrapAddress is optional and injected via
-// WithBroker (the default mock topology starts none). Cluster
+// WithBroker (the default mock topology starts none). When a live broker is
+// present, topic create/update/delete are mirrored onto it: the metadata write
+// is rolled back if the broker rejects it (and the broker topic is removed
+// before the metadata on delete), so an API-visible topic is guaranteed to
+// exist on the broker. Cluster
 // create/update/delete return a done google.longrunning.Operation
 // inline so official clients that read done+response from the body succeed
 // without polling; the operation is also persisted under
@@ -53,6 +57,16 @@ type Broker interface {
 	Endpoint(project, location, cluster string) string
 	// StopCluster stops and reaps the broker when the cluster is deleted.
 	StopCluster(ctx context.Context, project, location, cluster string) error
+	// EnsureTopic provisions the topic on the cluster's live broker. With no
+	// running broker (mock, or a cluster without a live broker) it is a
+	// metadata-only no-op, so hermetic tests need no broker.
+	EnsureTopic(ctx context.Context, project, location, cluster, topic string, partitions int) error
+	// AddTopicPartitions raises the topic's broker partition count to
+	// totalPartitions. Lowering the count is rejected by the broker.
+	AddTopicPartitions(ctx context.Context, project, location, cluster, topic string, totalPartitions int) error
+	// DeleteBrokerTopic removes the topic from the broker. It is idempotent and
+	// a no-op when no broker is running.
+	DeleteBrokerTopic(ctx context.Context, project, location, cluster, topic string) error
 }
 
 // Service is the transport-neutral Managed Kafka v1 service.
@@ -132,6 +146,50 @@ func (s *Service) stopBroker(ctx context.Context, project, location, cluster str
 	if err := s.broker.StopCluster(ctx, project, location, cluster); err != nil {
 		slog.Warn("managedkafka: broker stop failed", "cluster", cluster, "err", err)
 	}
+}
+
+// brokerInternalError wraps a data-plane failure so both transports render it
+// as INTERNAL (500): the metadata write was not committed, so the API-visible
+// topic and the broker stay consistent.
+func brokerInternalError(op string, err error) error {
+	return model.NewProviderError("Internal", "managedkafka broker: "+op+": "+err.Error(), 500)
+}
+
+// ensureBrokerTopic provisions the topic on the cluster's broker. It is a no-op
+// when the service has no broker manager (mock topology) or the cluster has no
+// live broker.
+func (s *Service) ensureBrokerTopic(ctx context.Context, project, location, cluster, topic string, partitions int) error {
+	if s.broker == nil {
+		return nil
+	}
+	if err := s.broker.EnsureTopic(ctx, project, location, cluster, topic, partitions); err != nil {
+		return brokerInternalError("ensure topic", err)
+	}
+	return nil
+}
+
+// addBrokerPartitions raises the topic's broker partition count, surfacing a
+// data-plane failure as INTERNAL.
+func (s *Service) addBrokerPartitions(ctx context.Context, project, location, cluster, topic string, totalPartitions int) error {
+	if s.broker == nil {
+		return nil
+	}
+	if err := s.broker.AddTopicPartitions(ctx, project, location, cluster, topic, totalPartitions); err != nil {
+		return brokerInternalError("add topic partitions", err)
+	}
+	return nil
+}
+
+// deleteBrokerTopic removes the topic from the cluster's broker, surfacing a
+// data-plane failure as INTERNAL.
+func (s *Service) deleteBrokerTopic(ctx context.Context, project, location, cluster, topic string) error {
+	if s.broker == nil {
+		return nil
+	}
+	if err := s.broker.DeleteBrokerTopic(ctx, project, location, cluster, topic); err != nil {
+		return brokerInternalError("delete topic", err)
+	}
+	return nil
 }
 
 // ClusterInput carries the caller-supplied fields of a cluster create/update.
@@ -321,6 +379,13 @@ func (s *Service) CreateTopic(ctx context.Context, project, location, clusterID,
 	if location == "" || clusterID == "" || topicID == "" {
 		return mkstore.Topic{}, invalidArgument("missing location, clusterId, or topicId")
 	}
+	// partition_count and replication_factor are Required in the proto.
+	if in.PartitionCount < 1 {
+		return mkstore.Topic{}, invalidArgument("partitionCount must be at least 1")
+	}
+	if in.ReplicationFactor < 1 {
+		return mkstore.Topic{}, invalidArgument("replicationFactor must be at least 1")
+	}
 	if _, err := s.store.GetCluster(ctx, project, location, clusterID); err != nil {
 		return mkstore.Topic{}, mapStoreError(err)
 	}
@@ -338,7 +403,35 @@ func (s *Service) CreateTopic(ctx context.Context, project, location, clusterID,
 	if err := s.store.CreateTopic(ctx, project, location, clusterID, t); err != nil {
 		return mkstore.Topic{}, mapStoreError(err)
 	}
+	// Provision the broker topic only after the metadata write. If the broker
+	// rejects it, roll the store write back so an API-visible topic is
+	// guaranteed to exist on the broker.
+	if err := s.ensureBrokerTopic(ctx, project, location, clusterID, topicID, in.PartitionCount); err != nil {
+		s.rollbackCreatedTopic(ctx, project, location, clusterID, topicID, t)
+		return mkstore.Topic{}, err
+	}
 	return t, nil
+}
+
+// rollbackCreatedTopic undoes a topic create whose broker provision failed. It
+// deletes the metadata only when the stored record is still untouched
+// (CreateTime+UpdateTime match the record this call wrote), so a concurrent
+// successful mutation is never clobbered.
+func (s *Service) rollbackCreatedTopic(ctx context.Context, project, location, clusterID, topicID string, created mkstore.Topic) {
+	cur, err := s.store.GetTopic(ctx, project, location, clusterID, topicID)
+	if err != nil {
+		return // already gone
+	}
+	if !cur.CreateTime.Equal(created.CreateTime) ||
+		!cur.UpdateTime.Equal(created.UpdateTime) ||
+		cur.PartitionCount != created.PartitionCount ||
+		cur.ReplicationFactor != created.ReplicationFactor {
+		slog.Warn("managedkafka: skipping topic create rollback; record was modified concurrently", "topic", topicID)
+		return
+	}
+	if rbErr := s.store.DeleteTopic(ctx, project, location, clusterID, topicID); rbErr != nil {
+		slog.Warn("managedkafka: topic create rollback failed", "topic", topicID, "err", rbErr)
+	}
 }
 
 // GetTopic returns one topic.
@@ -369,16 +462,33 @@ func (s *Service) ListTopics(ctx context.Context, project, location, clusterID s
 	return page, next, nil
 }
 
-// UpdateTopic merges the caller's fields into the stored topic.
+// UpdateTopic merges the caller's fields into the stored topic. PartitionCount
+// is increase-only, and a broker partition change must succeed for the metadata
+// change to stick.
 func (s *Service) UpdateTopic(ctx context.Context, project, location, clusterID, topicID string, in TopicInput) (mkstore.Topic, error) {
 	if location == "" || clusterID == "" || topicID == "" {
 		return mkstore.Topic{}, invalidArgument("missing location, clusterId, or topicId")
 	}
+	// Captured inside the atomic mutate so the broker call (and its rollback)
+	// can see the pre-image partition count.
+	var prevPartitions int
+	var grew bool
 	t, err := s.store.UpdateTopicAtomic(ctx, project, location, clusterID, topicID, func(t mkstore.Topic) (mkstore.Topic, error) {
 		if in.PartitionCount != 0 {
+			// Kafka (and real GCP) allow a topic to grow but never shrink.
+			if in.PartitionCount < t.PartitionCount {
+				return mkstore.Topic{}, invalidArgument("partitionCount cannot be decreased")
+			}
+			prevPartitions = t.PartitionCount
+			grew = in.PartitionCount > t.PartitionCount
 			t.PartitionCount = in.PartitionCount
 		}
 		if in.ReplicationFactor != 0 {
+			// replication_factor is Immutable in the proto: a change is
+			// rejected rather than silently persisted.
+			if in.ReplicationFactor != t.ReplicationFactor {
+				return mkstore.Topic{}, invalidArgument("replicationFactor is immutable")
+			}
 			t.ReplicationFactor = in.ReplicationFactor
 		}
 		if len(in.Config) > 0 {
@@ -402,13 +512,36 @@ func (s *Service) UpdateTopic(ctx context.Context, project, location, clusterID,
 	if err != nil {
 		return mkstore.Topic{}, mapStoreError(err)
 	}
+	if grew {
+		if err := s.addBrokerPartitions(ctx, project, location, clusterID, topicID, t.PartitionCount); err != nil {
+			// Roll the metadata count back so the API-visible count still
+			// matches the broker — but only if no concurrent request has since
+			// committed a different count, which must not be clobbered.
+			if _, rbErr := s.store.UpdateTopicAtomic(ctx, project, location, clusterID, topicID, func(cur mkstore.Topic) (mkstore.Topic, error) {
+				if cur.PartitionCount == t.PartitionCount {
+					cur.PartitionCount = prevPartitions
+				}
+				return cur, nil
+			}); rbErr != nil {
+				slog.Warn("managedkafka: partition-count rollback failed", "topic", topicID, "err", rbErr)
+			}
+			return mkstore.Topic{}, err
+		}
+	}
 	return t, nil
 }
 
-// DeleteTopic deletes a topic.
+// DeleteTopic removes the topic from the broker first, then the store, so a
+// broker failure leaves the metadata (and the API-visible topic) intact.
 func (s *Service) DeleteTopic(ctx context.Context, project, location, clusterID, topicID string) error {
 	if location == "" || clusterID == "" || topicID == "" {
 		return invalidArgument("missing location, clusterId, or topicId")
+	}
+	if _, err := s.store.GetTopic(ctx, project, location, clusterID, topicID); err != nil {
+		return mapStoreError(err)
+	}
+	if err := s.deleteBrokerTopic(ctx, project, location, clusterID, topicID); err != nil {
+		return err
 	}
 	if err := s.store.DeleteTopic(ctx, project, location, clusterID, topicID); err != nil {
 		return mapStoreError(err)
