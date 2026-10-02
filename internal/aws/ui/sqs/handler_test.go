@@ -90,6 +90,14 @@ func (m *mockQueueProvider) ListQueueTags(_ context.Context, nr *model.Normalize
 	m.lastNR = nr
 	return m.tagsResp, m.tagsErr
 }
+func (m *mockQueueProvider) TagQueue(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	m.lastNR = nr
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+func (m *mockQueueProvider) UntagQueue(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	m.lastNR = nr
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
 func (m *mockQueueProvider) PeekMessages(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	m.lastNR = nr
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{"Messages": []any{}, "Total": 0}}, nil

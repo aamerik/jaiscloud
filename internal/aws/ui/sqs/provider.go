@@ -20,5 +20,7 @@ type ProviderInterface interface {
 	DeleteMessage(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	ListDeadLetterSourceQueues(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	ListQueueTags(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	TagQueue(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	UntagQueue(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	PeekMessages(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 }

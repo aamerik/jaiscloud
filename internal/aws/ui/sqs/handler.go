@@ -388,13 +388,65 @@ func (h *Handler) GetTags(w http.ResponseWriter, r *http.Request) {
 		uihelper.WriteError(w, err)
 		return
 	}
-	// Provider returns {"Tags": map[string]any{...}} — unwrap to just the tags map.
-	raw, _ := resp.Data["Tags"].(map[string]any)
-	result := make(map[string]string, len(raw))
-	for k, v := range raw {
-		result[k] = fmt.Sprintf("%v", v)
+	// Provider returns Tags as map[string]string (or map[string]any after a
+	// store round-trip) — unwrap to a plain string map and handle both.
+	result := map[string]string{}
+	switch raw := resp.Data["Tags"].(type) {
+	case map[string]string:
+		result = raw
+	case map[string]any:
+		result = make(map[string]string, len(raw))
+		for k, v := range raw {
+			result[k] = fmt.Sprintf("%v", v)
+		}
 	}
 	uihelper.WriteJSON(w, result)
+}
+
+// POST /queues/tags  body: {"url":"<queueUrl>","tags":{"k":"v"}}
+func (h *Handler) TagQueue(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URL  string            `json:"url"`
+		Tags map[string]string `json:"tags"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
+		uihelper.UIError(w, "BadRequest", "url and tags are required", http.StatusBadRequest)
+		return
+	}
+	region := uihelper.RegionFrom(r)
+	account := uihelper.AccountFrom(r)
+	nr := uihelper.NR(r.Context(), h.cfg, "sqs", "TagQueue", region, account)
+	nr.Params["QueueUrl"] = req.URL
+	nr.Params["Tags"] = req.Tags
+
+	if _, err := h.provider.TagQueue(r.Context(), nr); err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, map[string]bool{"ok": true})
+}
+
+// POST /queues/tags/untag  body: {"url":"<queueUrl>","tagKeys":["k"]}
+func (h *Handler) UntagQueue(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URL     string   `json:"url"`
+		TagKeys []string `json:"tagKeys"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
+		uihelper.UIError(w, "BadRequest", "url and tagKeys are required", http.StatusBadRequest)
+		return
+	}
+	region := uihelper.RegionFrom(r)
+	account := uihelper.AccountFrom(r)
+	nr := uihelper.NR(r.Context(), h.cfg, "sqs", "UntagQueue", region, account)
+	nr.Params["QueueUrl"] = req.URL
+	nr.Params["TagKeys"] = req.TagKeys
+
+	if _, err := h.provider.UntagQueue(r.Context(), nr); err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, map[string]bool{"ok": true})
 }
 
 // fetchQueueDetail calls GetQueueAttributes and assembles a Queue struct.

@@ -1,17 +1,20 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getQueue, purgeQueue, listDLQSources, getTags, peekMessages, type PeekedMessage } from '../../../api/sqs'
+import { getQueue, purgeQueue, listDLQSources, getTags, tagQueue, untagQueue, peekMessages, type PeekedMessage } from '../../../api/sqs'
 import {
+  AttributeEditor,
   Box,
   Button,
   ContentLayout,
   Header,
+  Input,
   KeyValuePairs,
+  SpaceBetween,
   Tabs,
-  TokenGroup,
 } from '@cloudscape-design/components'
 import { formatDate } from '../../../lib/date'
+import { useNotifications } from '../../../components/notifications'
 import { SQSMessageSend } from './SQSMessageSend'
 
 type Tab = 'overview' | 'messages' | 'dlq' | 'tags'
@@ -50,6 +53,39 @@ export function SQSDetail() {
     queryKey: ['sqs', 'queue', queueUrl, 'tags'],
     queryFn: () => getTags(queueUrl),
     enabled: tab === 'tags' && !!queueUrl,
+  })
+
+  const [tagItems, setTagItems] = useState<{ key: string; value: string }[]>([])
+  const tagBaseline = useRef<Record<string, string>>({})
+  const { notify } = useNotifications()
+
+  useEffect(() => {
+    if (tags) {
+      tagBaseline.current = tags
+      setTagItems(Object.entries(tags).map(([key, value]) => ({ key, value })))
+    }
+  }, [tags])
+
+  const saveTags = useMutation({
+    mutationFn: async () => {
+      const next: Record<string, string> = {}
+      for (const { key, value } of tagItems) {
+        if (key.trim()) next[key.trim()] = value
+      }
+      const added: Record<string, string> = {}
+      for (const [k, v] of Object.entries(next)) {
+        if (tagBaseline.current[k] !== v) added[k] = v
+      }
+      const removed = Object.keys(tagBaseline.current).filter((k) => !(k in next))
+      if (Object.keys(added).length > 0) await tagQueue(queueUrl, added)
+      if (removed.length > 0) await untagQueue(queueUrl, removed)
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['sqs', 'queue', queueUrl, 'tags'] })
+      notify({ type: 'success', header: 'Tags saved' })
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Failed to save tags', content: (err as Error).message }),
   })
 
   const { data: peekData, isFetching: peekFetching, refetch: refetchPeek } = useQuery({
@@ -299,15 +335,50 @@ export function SQSDetail() {
       )}
 
       {tab === 'tags' && (
-        <div>
-          {!tags || Object.keys(tags).length === 0 ? (
-            <p style={{ color: '#5f6b7a', fontSize: '0.9em', fontStyle: 'italic' }}>No tags on this queue.</p>
-          ) : (
-            <TokenGroup
-              items={Object.entries(tags).map(([key, value]) => ({ label: `${key}: ${value}` }))}
-            />
-          )}
-        </div>
+        <SpaceBetween size="m">
+          <AttributeEditor
+            items={tagItems}
+            onAddButtonClick={() => setTagItems((prev) => [...prev, { key: '', value: '' }])}
+            onRemoveButtonClick={({ detail: { itemIndex } }) =>
+              setTagItems((prev) => prev.filter((_, i) => i !== itemIndex))
+            }
+            addButtonText="Add tag"
+            removeButtonText="Remove"
+            definition={[
+              {
+                label: 'Key',
+                control: (item: { key: string; value: string }, i: number) => (
+                  <Input
+                    value={item.key}
+                    placeholder="Key"
+                    onChange={({ detail }) =>
+                      setTagItems((prev) =>
+                        prev.map((it, idx) => (idx === i ? { ...it, key: detail.value } : it)),
+                      )
+                    }
+                  />
+                ),
+              },
+              {
+                label: 'Value',
+                control: (item: { key: string; value: string }, i: number) => (
+                  <Input
+                    value={item.value}
+                    placeholder="Value"
+                    onChange={({ detail }) =>
+                      setTagItems((prev) =>
+                        prev.map((it, idx) => (idx === i ? { ...it, value: detail.value } : it)),
+                      )
+                    }
+                  />
+                ),
+              },
+            ]}
+          />
+          <Button variant="primary" loading={saveTags.isPending} onClick={() => saveTags.mutate()}>
+            Save tags
+          </Button>
+        </SpaceBetween>
       )}
 
       {/* Purge confirm dialog */}

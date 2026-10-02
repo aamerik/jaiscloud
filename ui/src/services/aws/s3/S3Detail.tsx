@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listObjects, deleteObject, deleteObjects, downloadObjectUrl, type S3Object } from '../../../api/s3'
+import { Box, Button, FileUpload, Modal, SpaceBetween } from '@cloudscape-design/components'
+import { listObjects, deleteObject, deleteObjects, downloadObjectUrl, putObject, type S3Object } from '../../../api/s3'
 import { formatDate } from '../../../lib/date'
+import { useNotifications } from '../../../components/notifications'
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -21,6 +23,9 @@ export function S3Detail() {
   const [prefixInput, setPrefixInput] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [confirmDelete, setConfirmDelete] = useState<S3Object | null>(null)
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [files, setFiles] = useState<File[]>([])
+  const { notify } = useNotifications()
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['s3', 'objects', bucket, prefix],
@@ -41,6 +46,22 @@ export function S3Detail() {
       void qc.invalidateQueries({ queryKey: ['s3', 'objects', bucket] })
       setSelected(new Set())
     },
+  })
+
+  const uploadMut = useMutation({
+    mutationFn: async () => {
+      for (const file of files) {
+        await putObject(bucket, `${prefix}${file.name}`, file)
+      }
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['s3', 'objects', bucket] })
+      notify({ type: 'success', header: `Uploaded ${files.length} object${files.length !== 1 ? 's' : ''}` })
+      setUploadOpen(false)
+      setFiles([])
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Upload failed', content: (err as Error).message }),
   })
 
   const objects = data?.items ?? []
@@ -66,6 +87,11 @@ export function S3Detail() {
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
         <button onClick={() => navigate('/aws/s3')} style={btnBack}>← Buckets</button>
         <h2 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 600 }}>{bucket}</h2>
+        <div style={{ marginLeft: 'auto' }}>
+          <Button variant="primary" onClick={() => setUploadOpen(true)}>
+            Upload
+          </Button>
+        </div>
       </div>
 
       {/* Prefix navigator */}
@@ -238,6 +264,45 @@ export function S3Detail() {
           </div>
         </div>
       )}
+
+      <Modal
+        visible={uploadOpen}
+        onDismiss={() => setUploadOpen(false)}
+        header="Upload objects"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setUploadOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={uploadMut.isPending}
+                disabled={files.length === 0}
+                onClick={() => uploadMut.mutate()}
+              >
+                Upload
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        <FileUpload
+          value={files}
+          onChange={({ detail }) => setFiles(detail.value)}
+          multiple
+          accept="*/*"
+          i18nStrings={{
+            uploadButtonText: (multiple) => (multiple ? 'Choose files' : 'Choose file'),
+            dropzoneText: (multiple) => (multiple ? 'Drop files to upload' : 'Drop file to upload'),
+            removeFileAriaLabel: (fileIndex) => `Remove file ${fileIndex + 1}`,
+            limitShowFewer: 'Show fewer files',
+            limitShowMore: 'Show more files',
+            errorIconAriaLabel: 'Error',
+          }}
+          constraintText={prefix ? `Uploaded under prefix "${prefix}"` : undefined}
+        />
+      </Modal>
     </div>
   )
 }

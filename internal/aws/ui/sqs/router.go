@@ -24,6 +24,8 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Get("/queues/messages/peek", h.PeekMessages)
 	r.Get("/queues/dlq-sources", h.ListDLQSources)
 	r.Get("/queues/tags", h.GetTags)
+	r.Post("/queues/tags", h.TagQueue)
+	r.Post("/queues/tags/untag", h.UntagQueue)
 
 	return r
 }
