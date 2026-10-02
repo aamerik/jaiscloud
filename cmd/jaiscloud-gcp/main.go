@@ -939,13 +939,16 @@ func startCmd() *cobra.Command {
 			}
 
 			cloudAdapter := gcpadapter.NewAdapter(cfg.GCPServiceAccount)
-			if throttleCfg.Enabled() {
-				// The adapter exposes the injector to the gateway as the
-				// optional RequestFilter capability; registering it as a
-				// Resetter clears counters/buckets on /_jaiscloud/reset.
-				cloudAdapter.SetThrottle(throttleInj)
-				adminHandler.RegisterResetter(throttleInj)
-			}
+			// The injector is wired unconditionally (a disabled injector is a
+			// no-op) so POST /_jaiscloud/throttle can arm/retune it at runtime
+			// without an emulator restart. The adapter exposes it to the gateway
+			// as the optional RequestFilter capability and the gRPC interceptors
+			// consult the same instance; registering it as a Resetter clears
+			// counters/buckets on /_jaiscloud/reset, and RegisterThrottle backs
+			// the control endpoint itself.
+			cloudAdapter.SetThrottle(throttleInj)
+			adminHandler.RegisterResetter(throttleInj)
+			adminHandler.RegisterThrottle(throttleInj)
 
 			var certs certstore.CertStore
 			if fsCS, err := certstore.NewFilesystemCertStore(stateDir); err == nil {

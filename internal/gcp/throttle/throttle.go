@@ -123,11 +123,11 @@ func FromEnv() Config {
 
 // Injector holds the per-scope rate buckets and fault counters. It is safe for
 // concurrent use; Reset makes it an admin.Resetter so /_jaiscloud/reset clears
-// accumulated counters between test runs.
+// accumulated counters between test runs. The configuration is mutable at
+// runtime (SetConfig), which is what backs POST /_jaiscloud/throttle.
 type Injector struct {
-	cfg Config
-
 	mu      sync.Mutex
+	cfg     Config
 	buckets map[string]*bucket
 	counts  map[string]int
 }
@@ -143,19 +143,51 @@ func New(cfg Config) *Injector {
 }
 
 // Enabled reports whether the injector is armed. Safe on a nil receiver.
-func (i *Injector) Enabled() bool { return i != nil && i.cfg.Enabled() }
+func (i *Injector) Enabled() bool {
+	if i == nil {
+		return false
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.cfg.Enabled()
+}
+
+// Config returns a copy of the current configuration, including a copy of the
+// Services slice so the caller cannot alias live state.
+func (i *Injector) Config() Config {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	cfg := i.cfg
+	cfg.Services = append([]string(nil), i.cfg.Services...)
+	return cfg
+}
+
+// SetConfig atomically replaces the configuration and clears accumulated rate
+// buckets and fault counters, so a mid-test (re-)arm always starts clean. It
+// backs the runtime control endpoint (POST /_jaiscloud/throttle).
+func (i *Injector) SetConfig(cfg Config) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.cfg = cfg
+	i.buckets = map[string]*bucket{}
+	i.counts = map[string]int{}
+}
 
 // Check decides whether a matching request should be refused. project scopes
 // the rate bucket; service is the REST wire service name (e.g. "storage");
 // action is the dispatch action (e.g. "ObjectsGet"). It returns the injected
 // ProviderError, or nil to allow the request.
 func (i *Injector) Check(project, service, action string) *model.ProviderError {
-	if !i.Enabled() || !i.cfg.allows(service, action) {
+	if i == nil {
 		return nil
 	}
 
 	i.mu.Lock()
 	defer i.mu.Unlock()
+
+	if !i.cfg.Enabled() || !i.cfg.allows(service, action) {
+		return nil
+	}
 
 	if i.cfg.Fault {
 		key := scopeKey(project, service)
