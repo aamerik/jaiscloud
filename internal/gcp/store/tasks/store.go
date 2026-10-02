@@ -155,8 +155,13 @@ type Task struct {
 	DispatchDeadline time.Duration `json:"dispatchDeadline,omitempty"`
 	DispatchCount    int32         `json:"dispatchCount,omitempty"`
 	ResponseCount    int32         `json:"responseCount,omitempty"`
-	FirstAttempt     *Attempt      `json:"firstAttempt,omitempty"`
-	LastAttempt      *Attempt      `json:"lastAttempt,omitempty"`
+	// ExecutionCount is the number of attempts whose handler returned a
+	// response other than 5XX (Cloud Tasks' X-CloudTasks-TaskExecutionCount
+	// header). It is internal: real Cloud Tasks does not expose it on the Task
+	// resource.
+	ExecutionCount int32    `json:"executionCount,omitempty"`
+	FirstAttempt   *Attempt `json:"firstAttempt,omitempty"`
+	LastAttempt    *Attempt `json:"lastAttempt,omitempty"`
 }
 
 // Store is the Cloud Tasks store.
@@ -169,6 +174,10 @@ type Store interface {
 	UpdateQueueAtomic(ctx context.Context, projectID, location, name string, mutate func(Queue) (Queue, error)) (Queue, error)
 	DeleteQueue(ctx context.Context, projectID, location, name string) error
 	ListQueues(ctx context.Context, projectID, location string) ([]Queue, error)
+	// ListAllQueues returns every queue across all projects and locations. The
+	// dispatch engine enumerates queues with it (it has no project/location
+	// input).
+	ListAllQueues(ctx context.Context) ([]Queue, error)
 
 	CreateTask(ctx context.Context, projectID, location, queue string, t Task) error
 	GetTask(ctx context.Context, projectID, location, queue, name string) (Task, error)
