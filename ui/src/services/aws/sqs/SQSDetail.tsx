@@ -2,7 +2,15 @@ import { Fragment, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getQueue, purgeQueue, listDLQSources, getTags, peekMessages, type PeekedMessage } from '../../../api/sqs'
-import { TokenGroup } from '@cloudscape-design/components'
+import {
+  Box,
+  Button,
+  ContentLayout,
+  Header,
+  KeyValuePairs,
+  Tabs,
+  TokenGroup,
+} from '@cloudscape-design/components'
 import { formatDate } from '../../../lib/date'
 import { SQSMessageSend } from './SQSMessageSend'
 
@@ -86,68 +94,29 @@ export function SQSDetail() {
   ]
 
   return (
-    <div>
-      {/* Breadcrumb + header */}
-      <div style={{ marginBottom: '1.5rem' }}>
-        <Link to="/aws/sqs" style={{ color: '#0972d3', fontSize: '0.85em', textDecoration: 'none' }}>
-          ← SQS Queues
-        </Link>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginTop: '0.5rem', gap: '1rem', flexWrap: 'wrap' }}>
-          <div>
-            <h2 style={{ margin: '0 0 0.4rem', fontSize: '1.4rem', fontWeight: 600 }}>{queue.name}</h2>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-              <span style={{
-                background: queue.type === 'FIFO' ? '#e0f0ff' : '#f4f5f7',
-                color: queue.type === 'FIFO' ? '#0972d3' : '#5f6b7a',
-                padding: '0.15em 0.55em', borderRadius: 3, fontSize: '0.8em', fontWeight: 500,
-              }}>
-                {queue.type}
-              </span>
-              <code style={{ fontSize: '0.75em', color: '#8d9daa' }}>{queue.arn}</code>
-            </div>
-          </div>
-          <button
-            onClick={() => setPurgeConfirm(true)}
-            style={{ background: 'none', border: '1px solid #e77600', color: '#e77600', borderRadius: 4, padding: '0.4rem 0.9rem', cursor: 'pointer', fontSize: '0.85em', flexShrink: 0 }}
-          >
-            Purge queue
-          </button>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div style={{ display: 'flex', borderBottom: '2px solid #e7e9ec', marginBottom: '1.5rem' }}>
-        {(Object.keys(TAB_LABELS) as Tab[]).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{
-              background: 'none', border: 'none', padding: '0.6rem 1.25rem', cursor: 'pointer',
-              fontSize: '0.9em', fontWeight: tab === t ? 600 : 400,
-              color: tab === t ? '#e77600' : '#5f6b7a',
-              borderBottom: `2px solid ${tab === t ? '#e77600' : 'transparent'}`,
-              marginBottom: -2, whiteSpace: 'nowrap',
-            }}
-          >
-            {TAB_LABELS[t]}
-          </button>
-        ))}
-      </div>
+    <ContentLayout
+      header={
+        <Header
+          variant="h1"
+          description={<Box variant="code">{queue.arn}</Box>}
+          actions={<Button onClick={() => setPurgeConfirm(true)}>Purge queue</Button>}
+        >
+          {queue.name}
+        </Header>
+      }
+    >
+      <Tabs
+        tabs={(Object.keys(TAB_LABELS) as Tab[]).map((t) => ({ id: t, label: TAB_LABELS[t] }))}
+        activeTabId={tab}
+        onChange={({ detail }) => setTab(detail.activeTabId as Tab)}
+      />
 
       {/* Tab content */}
       {tab === 'overview' && (
-        <dl style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '0 2rem', margin: 0, fontSize: '0.9em' }}>
-          {overviewRows.map(([label, value]) => (
-            <Fragment key={label}>
-              <dt style={{ color: '#5f6b7a', fontWeight: 500, padding: '0.5rem 0', borderBottom: '1px solid #f4f5f7', whiteSpace: 'nowrap' }}>
-                {label}
-              </dt>
-              <dd style={{ margin: 0, padding: '0.5rem 0', borderBottom: '1px solid #f4f5f7', wordBreak: 'break-all', color: '#16191f' }}>
-                {value}
-              </dd>
-            </Fragment>
-          ))}
-        </dl>
+        <KeyValuePairs
+          columns={2}
+          items={overviewRows.map(([label, value]) => ({ label, value }))}
+        />
       )}
 
       {tab === 'messages' && (
@@ -367,7 +336,7 @@ export function SQSDetail() {
           </div>
         </div>
       )}
-    </div>
+    </ContentLayout>
   )
 }
 
