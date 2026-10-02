@@ -28,6 +28,7 @@ import { groupByCategory, serviceForPath, type NavSection } from './nav'
 import { NotificationsProvider, useNotifications } from './notifications'
 import { ServiceTierBadge } from './ServiceTierBadge'
 import { serviceIconName } from './serviceIcons'
+import { GlobalSearch } from './GlobalSearch'
 import { tierDescription, tierLabel } from '../lib/tier'
 
 /** Router basename; links must include it so they also work without JS. */
@@ -268,6 +269,7 @@ function Shell({ children }: Props) {
               navigate('/')
             },
           }}
+          search={<GlobalSearch />}
           utilities={utilities}
         />
       </div>
