@@ -69,6 +69,18 @@ type Broker interface {
 	// StopCluster stops and reaps the broker (called when the cluster itself is
 	// deleted).
 	StopCluster(ctx context.Context, project, location, cluster string) error
+	// EnsureTopic provisions the topic on the cluster's live broker with the
+	// given partition count. With no running broker (mock, or a cluster whose
+	// broker is not live) it is a metadata-only no-op, so hermetic tests need
+	// nothing. The emulator broker is single-node, so callers' replication
+	// factor is metadata only and the broker replica count is always 1.
+	EnsureTopic(ctx context.Context, project, location, cluster, topic string, partitions int) error
+	// AddTopicPartitions raises the topic's broker partition count to
+	// totalPartitions. Lowering the count is rejected by the broker.
+	AddTopicPartitions(ctx context.Context, project, location, cluster, topic string, totalPartitions int) error
+	// DeleteBrokerTopic removes the topic from the broker. It is idempotent and
+	// a no-op when no broker is running.
+	DeleteBrokerTopic(ctx context.Context, project, location, cluster, topic string) error
 	// Shutdown stops every broker this manager owns (called on emulator
 	// shutdown).
 	Shutdown(ctx context.Context) error
@@ -158,8 +170,17 @@ func (mockBroker) EnsureCluster(context.Context, string, string, string) (string
 }
 func (mockBroker) Endpoint(string, string, string) string                    { return "" }
 func (mockBroker) StopCluster(context.Context, string, string, string) error { return nil }
-func (mockBroker) Shutdown(context.Context) error                            { return nil }
-func (mockBroker) Mode() Mode                                                { return ModeMock }
+func (mockBroker) EnsureTopic(context.Context, string, string, string, string, int) error {
+	return nil
+}
+func (mockBroker) AddTopicPartitions(context.Context, string, string, string, string, int) error {
+	return nil
+}
+func (mockBroker) DeleteBrokerTopic(context.Context, string, string, string, string) error {
+	return nil
+}
+func (mockBroker) Shutdown(context.Context) error { return nil }
+func (mockBroker) Mode() Mode                     { return ModeMock }
 
 // defaultRedpandaImage is the single-node Redpanda image used by k8s mode.
 const defaultRedpandaImage = "docker.redpanda.com/redpandadata/redpanda:v24.2.7"

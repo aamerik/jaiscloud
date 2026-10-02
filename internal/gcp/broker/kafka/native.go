@@ -25,6 +25,7 @@ type nativeBroker struct {
 
 	mu        sync.Mutex
 	instances map[ClusterKey]*nativeInstance
+	admins    *adminPool
 
 	// probe reports whether addr is accepting TCP connections. Overridable in
 	// tests; defaults to a one-second TCP dial.
@@ -43,6 +44,7 @@ func newNativeBroker(binary, dataDir string, logger *slog.Logger) *nativeBroker 
 		dataDir:   dataDir,
 		logger:    logger,
 		instances: make(map[ClusterKey]*nativeInstance),
+		admins:    newAdminPool(nil),
 		probe:     tcpProbe,
 	}
 }
@@ -56,6 +58,22 @@ func (b *nativeBroker) Endpoint(project, location, cluster string) string {
 		return inst.addr
 	}
 	return ""
+}
+
+// EnsureTopic provisions the topic on the live broker, or no-ops when no broker
+// is running for the cluster (metadata-only topology).
+func (b *nativeBroker) EnsureTopic(ctx context.Context, project, location, cluster, topic string, partitions int) error {
+	return ensureTopic(ctx, b.admins, b.Endpoint(project, location, cluster), topic, partitions)
+}
+
+// AddTopicPartitions raises the topic's partition count on the live broker.
+func (b *nativeBroker) AddTopicPartitions(ctx context.Context, project, location, cluster, topic string, totalPartitions int) error {
+	return addPartitions(ctx, b.admins, b.Endpoint(project, location, cluster), topic, totalPartitions)
+}
+
+// DeleteBrokerTopic removes the topic from the live broker.
+func (b *nativeBroker) DeleteBrokerTopic(ctx context.Context, project, location, cluster, topic string) error {
+	return deleteBrokerTopic(ctx, b.admins, b.Endpoint(project, location, cluster), topic)
 }
 
 func (b *nativeBroker) EnsureCluster(ctx context.Context, project, location, cluster string) (string, error) {
@@ -119,7 +137,10 @@ func (b *nativeBroker) EnsureCluster(ctx context.Context, project, location, clu
 	}
 
 	if err := b.waitReady(ctx, addr); err != nil {
+		// Reap the failed process and collect it so no zombie or orphaned
+		// child is left behind.
 		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		return "", err
 	}
 
@@ -139,6 +160,8 @@ func (b *nativeBroker) StopCluster(_ context.Context, project, location, cluster
 	if inst == nil {
 		return nil
 	}
+	// Drop the pooled admin client before the process goes away.
+	b.admins.close(inst.addr)
 	return stopProcess(inst.cmd)
 }
 
@@ -156,6 +179,7 @@ func (b *nativeBroker) Shutdown(ctx context.Context) error {
 			firstErr = err
 		}
 	}
+	b.admins.closeAll()
 	return firstErr
 }
 
