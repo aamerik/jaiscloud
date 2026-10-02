@@ -373,6 +373,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   until cancelled, and `Job.scheduling` (`maxFailuresPerHour`/`maxFailuresTotal`, k8s executor mode)
   restarts a failed driver while within both limits and not thrashing, with success strictly driver
   exit `0` (restart counters are per-process and the per-hour window is a fixed-window approximation);
+  the Kafka-source Structured Streaming path is verified against the live opt-in Managed Kafka broker
+  by `make test-dataproc-streaming-kafka` (the `spark-sql-kafka` connector is supplied through
+  `jarFileUris`, since it is not bundled in the deployed Spark image; checkpoint and
+  checkpoint-log consumer offsets are asserted to advance before cancel reaps the driver);
   Dataproc `ListClusters` ignores
   `filter`/`clusterName`, while `ListJobs` honors `clusterName`,
   `jobStateMatcher` and a bounded `filter` subset (`status.state`, `labels.<key>`, `insertTime`),

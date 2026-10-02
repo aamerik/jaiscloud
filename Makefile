@@ -113,7 +113,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-e2e-gcp-persistence test-e2e-iceberg test-e2e-iceberg-gcp \
         test-e2e-lakehouse-k3d \
         test-e2e-gcp-samples-k3d \
-        test-dataproc-streaming-k8s \
+        test-dataproc-streaming-k8s test-dataproc-streaming-kafka \
         test-managedkafka-broker-k8s \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all test-all-gcp \
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
@@ -884,7 +884,12 @@ test-e2e-gcp-samples-k3d: _check-gcp-samples-prereq _refresh-gcp-image ## Spring
 test-dataproc-streaming-k8s: _check-dataproc-streaming-k8s-prereq _refresh-gcp-image ## Real-K8s Dataproc Structured Streaming smoke on k3d (tag: dataproc_streaming_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	go clean -testcache
 	K8S_NAMESPACE=$(K8S_NAMESPACE) \
-	  go test -v -tags dataproc_streaming_e2e -timeout 20m ./tests/persistent_mode/gcp/dataproc-streaming/
+	  go test -v -tags dataproc_streaming_e2e -run '^TestDataprocStreamingK3d$$' -timeout 20m ./tests/persistent_mode/gcp/dataproc-streaming/
+
+test-dataproc-streaming-kafka: _check-dataproc-streaming-k8s-prereq _refresh-gcp-image ## Real-K8s Dataproc Kafka-source streaming e2e on k3d (tag: dataproc_streaming_e2e; needs JAISCLOUD_KAFKA_BROKER_MODE=k8s; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
+	go clean -testcache
+	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	  go test -v -tags dataproc_streaming_e2e -run '^TestDataprocKafkaStreamingK3d$$' -timeout 25m ./tests/persistent_mode/gcp/dataproc-streaming/
 
 test-managedkafka-broker-k8s: _check-managedkafka-broker-k8s-prereq _refresh-gcp-image ## Real-K8s Managed Kafka broker lifecycle smoke on k3d (tag: managedkafka_broker_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	go clean -testcache
