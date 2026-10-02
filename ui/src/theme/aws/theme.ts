@@ -18,11 +18,12 @@ export function applyAwsConsoleTheme() {
         colorTextButtonPrimaryDefault: '#ffffff',
         colorTextButtonPrimaryHover: '#ffffff',
         colorTextButtonPrimaryActive: '#ffffff',
-        // Side navigation: near-black labels with the console's light-blue
-        // active highlight and blue active text.
-        colorTextSideNavigationItemDefault: '#16191f',
-        colorTextSideNavigationItemActive: '#0972d3',
-        colorBackgroundSideNavigationItemActive: '#d1e4fa',
+        // Side navigation: near-black labels in light mode with the
+        // console's light-blue active highlight; mode-aware so labels stay
+        // readable in dark mode.
+        colorTextSideNavigationItemDefault: { light: '#16191f', dark: '#c6cbd1' },
+        colorTextSideNavigationItemActive: { light: '#0972d3', dark: '#539fe5' },
+        colorBackgroundSideNavigationItemActive: { light: '#d1e4fa', dark: '#1b3a5c' },
       },
     },
   })

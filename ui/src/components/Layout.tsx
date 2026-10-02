@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { applyMode, Mode } from '@cloudscape-design/global-styles'
 import {
   AppLayout,
   BreadcrumbGroup,
@@ -74,6 +75,9 @@ function useConsoleNav() {
 function Shell({ children }: Props) {
   const [navOpen, setNavOpen] = useState(true)
   const [search, setSearch] = useState('')
+  const [mode, setMode] = useState<Mode>(() =>
+    localStorage.getItem('jaiscloud-mode') === 'dark' ? Mode.Dark : Mode.Light,
+  )
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const { data: meta } = useMeta()
@@ -81,6 +85,11 @@ function Shell({ children }: Props) {
   const { data: accountsData, refetch: refetchAccounts } = useAccounts()
   const { connected } = useEventStream()
   const { breadcrumbItems, onFollow } = useConsoleNav()
+
+  useEffect(() => {
+    applyMode(mode)
+    localStorage.setItem('jaiscloud-mode', mode)
+  }, [mode])
 
   const accounts = useMemo(
     () => accountsData?.accounts ?? (accountId ? [accountId] : []),
@@ -136,6 +145,19 @@ function Shell({ children }: Props) {
         text: connected ? 'Live' : 'Polling',
         iconName: connected ? 'status-positive' : 'status-pending',
         disableUtilityCollapse: true,
+      },
+      {
+        type: 'menu-dropdown',
+        iconName: 'settings',
+        ariaLabel: 'Appearance',
+        title: 'Appearance',
+        items: [
+          { id: 'light', text: 'Light' },
+          { id: 'dark', text: 'Dark' },
+        ],
+        onItemClick: (event) => {
+          setMode(event.detail.id === 'dark' ? Mode.Dark : Mode.Light)
+        },
       },
     ]
 

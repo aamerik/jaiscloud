@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import '@cloudscape-design/global-styles/index.css'
-import { setThemeClass, Theme } from '@cloudscape-design/global-styles'
+import { applyMode, Mode, setThemeClass, Theme } from '@cloudscape-design/global-styles'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
@@ -10,6 +10,7 @@ import './theme/aws/console.css'
 
 // Current AWS Console visual language + the AWS orange primary palette.
 setThemeClass(Theme.VisualRefresh)
+applyMode(localStorage.getItem('jaiscloud-mode') === 'dark' ? Mode.Dark : Mode.Light)
 applyAwsConsoleTheme()
 
 const queryClient = new QueryClient({
