@@ -1,18 +1,26 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getQueue, purgeQueue, listDLQSources, getTags, tagQueue, untagQueue, peekMessages, type PeekedMessage } from '../../../api/sqs'
 import {
+  Alert,
   AttributeEditor,
+  Badge,
   Box,
   Button,
+  Container,
   ContentLayout,
   Header,
   Input,
   KeyValuePairs,
+  Link,
+  Modal,
+  Pagination,
   SpaceBetween,
+  Table,
   Tabs,
 } from '@cloudscape-design/components'
+import type { TableProps } from '@cloudscape-design/components'
 import { formatDate } from '../../../lib/date'
 import { useNotifications } from '../../../components/notifications'
 import { SQSMessageSend } from './SQSMessageSend'
@@ -31,11 +39,12 @@ export function SQSDetail() {
   const queueUrl = rawParam ? decodeURIComponent(rawParam) : ''
   const [tab, setTab] = useState<Tab>('overview')
   const [msgPage, setMsgPage] = useState(0)
-  const [expandedMsgId, setExpandedMsgId] = useState<string | null>(null)
+  const [viewMessage, setViewMessage] = useState<PeekedMessage | null>(null)
   const [showSend, setShowSend] = useState(false)
   const [purgeConfirm, setPurgeConfirm] = useState(false)
   const PAGE_SIZE = 50
   const qc = useQueryClient()
+  const navigate = useNavigate()
 
   const { data: queue, isLoading, error } = useQuery({
     queryKey: ['sqs', 'queue', queueUrl],
@@ -103,15 +112,20 @@ export function SQSDetail() {
   })
 
   if (isLoading) {
-    return <div style={{ padding: '2rem', color: '#5f6b7a' }}>Loading…</div>
+    return (
+      <ContentLayout header={<Header variant="h1">Queue</Header>}>
+        <Box padding="l">Loading…</Box>
+      </ContentLayout>
+    )
   }
 
   if (error || !queue) {
     return (
-      <div>
-        <Link to="/aws/sqs" style={{ color: '#0972d3', fontSize: '0.9em', textDecoration: 'none' }}>← Queues</Link>
-        <p style={{ color: '#d13212' }}>{error ? (error as Error).message : 'Queue not found.'}</p>
-      </div>
+      <ContentLayout header={<Header variant="h1">Queue</Header>}>
+        <Alert type="error" header="Queue not found">
+          {error ? (error as Error).message : 'Queue not found.'}
+        </Alert>
+      </ContentLayout>
     )
   }
 
@@ -128,6 +142,42 @@ export function SQSDetail() {
     ['Max receive count', queue.dlqMaxReceive ? String(queue.dlqMaxReceive) : '—'],
     ['Created', formatDate(queue.createdAt)],
   ]
+
+  const messageColumns: TableProps.ColumnDefinition<PeekedMessage>[] = [
+    {
+      id: 'status',
+      header: 'Status',
+      cell: (m) => (
+        <Badge
+          color={m.status === 'visible' ? 'green' : m.status === 'in-flight' ? 'blue' : 'grey'}
+        >
+          {m.status}
+        </Badge>
+      ),
+    },
+    { id: 'id', header: 'Message ID', cell: (m) => <Box variant="code">{m.messageId}</Box> },
+    {
+      id: 'body',
+      header: 'Body',
+      cell: (m) => (
+        <Box variant="code">{m.body.length > 80 ? `${m.body.slice(0, 80)}…` : m.body}</Box>
+      ),
+    },
+    { id: 'rcv', header: 'Receive count', cell: (m) => m.receiveCount },
+    { id: 'sent', header: 'Sent at', cell: (m) => formatDate(m.sentAt) },
+  ]
+  if (queue.type === 'FIFO') {
+    messageColumns.push({ id: 'group', header: 'Group', cell: (m) => m.groupId ?? '—' })
+  }
+  messageColumns.push({
+    id: 'actions',
+    header: '',
+    cell: (m) => (
+      <Button variant="inline-link" onClick={() => setViewMessage(m)}>
+        View
+      </Button>
+    ),
+  })
 
   return (
     <ContentLayout
@@ -156,182 +206,131 @@ export function SQSDetail() {
       )}
 
       {tab === 'messages' && (
-        <div>
-          {/* Toolbar */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.88em', color: '#5f6b7a' }}>
-              {peekData ? `${peekData.total.toLocaleString()} message${peekData.total !== 1 ? 's' : ''}` : '—'}
-            </span>
-            <button
-              onClick={() => { setMsgPage(0); void refetchPeek() }}
-              disabled={peekFetching}
-              style={{ ...btnSmall, marginLeft: 'auto', opacity: peekFetching ? 0.6 : 1 }}
+        <SpaceBetween size="m">
+          <SpaceBetween direction="horizontal" size="xs">
+            <Button
+              iconName="refresh"
+              loading={peekFetching}
+              onClick={() => {
+                setMsgPage(0)
+                void refetchPeek()
+              }}
             >
-              {peekFetching ? 'Loading…' : '↻ Refresh'}
-            </button>
-            <button
-              onClick={() => setShowSend((s) => !s)}
-              style={{ ...btnSmall, borderColor: '#e77600', color: '#e77600' }}
-            >
-              {showSend ? 'Hide send form' : '+ Send message'}
-            </button>
-          </div>
+              Refresh
+            </Button>
+            <Button onClick={() => setShowSend((s) => !s)}>
+              {showSend ? 'Hide send form' : 'Send message'}
+            </Button>
+            <Box color="text-body-secondary" variant="span">
+              {peekData
+                ? `${peekData.total.toLocaleString()} message${peekData.total !== 1 ? 's' : ''}`
+                : '—'}
+            </Box>
+          </SpaceBetween>
 
-          {/* Optional send form */}
           {showSend && (
-            <div style={{ marginBottom: '1.25rem' }}>
+            <Container header={<Header variant="h2">Send message</Header>}>
               <SQSMessageSend
                 queueUrl={queueUrl}
                 isFifo={queue.type === 'FIFO'}
-                onSent={() => { void refetchPeek() }}
+                onSent={() => {
+                  void refetchPeek()
+                }}
               />
-            </div>
+            </Container>
           )}
 
-          {/* Messages table */}
-          {!peekData || peekData.messages.length === 0 ? (
-            <p style={{ color: '#5f6b7a', fontSize: '0.9em', fontStyle: 'italic' }}>
-              {peekFetching ? 'Loading messages…' : 'No messages in this queue.'}
-            </p>
-          ) : (
-            <div style={{ border: '1px solid #e7e9ec', borderRadius: 8, overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88em' }}>
-                <thead>
-                  <tr style={{ background: '#f4f5f7', borderBottom: '2px solid #e7e9ec' }}>
-                    <th style={th}>Status</th>
-                    <th style={th}>Message ID</th>
-                    <th style={th}>Body</th>
-                    <th style={{ ...th, textAlign: 'right' }}>Rcv</th>
-                    <th style={th}>Sent At</th>
-                    {queue.type === 'FIFO' && <th style={th}>Group</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {peekData.messages.map((m: PeekedMessage) => (
-                    <Fragment key={m.messageId}>
-                      <tr
-                        style={{ borderBottom: expandedMsgId === m.messageId ? 'none' : '1px solid #e7e9ec', cursor: 'pointer' }}
-                        onClick={() => setExpandedMsgId(expandedMsgId === m.messageId ? null : m.messageId)}
-                        onMouseEnter={(e) => (e.currentTarget.style.background = '#fafbfc')}
-                        onMouseLeave={(e) => (e.currentTarget.style.background = '')}
-                      >
-                        <td style={td}>
-                          <span style={{
-                            display: 'inline-block', padding: '0.1em 0.5em', borderRadius: 3,
-                            fontSize: '0.8em', fontWeight: 500,
-                            background: m.status === 'visible' ? '#d1fae5' : m.status === 'in-flight' ? '#fef3c7' : '#e0f2fe',
-                            color: m.status === 'visible' ? '#065f46' : m.status === 'in-flight' ? '#92400e' : '#0369a1',
-                          }}>
-                            {m.status}
-                          </span>
-                        </td>
-                        <td style={{ ...td, fontFamily: 'monospace', fontSize: '0.8em', color: '#5f6b7a', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {m.messageId}
-                        </td>
-                        <td style={{ ...td, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace', fontSize: '0.82em' }}>
-                          {m.body}
-                        </td>
-                        <td style={{ ...td, textAlign: 'right', color: '#5f6b7a' }}>{m.receiveCount}</td>
-                        <td style={{ ...td, color: '#5f6b7a', whiteSpace: 'nowrap' }}>
-                          {formatDate(m.sentAt)}
-                        </td>
-                        {queue.type === 'FIFO' && <td style={{ ...td, fontFamily: 'monospace', fontSize: '0.82em' }}>{m.groupId ?? '—'}</td>}
-                      </tr>
-                      {expandedMsgId === m.messageId && (
-                        <tr style={{ borderBottom: '1px solid #e7e9ec' }}>
-                          <td colSpan={queue.type === 'FIFO' ? 6 : 5} style={{ padding: '0 1rem 0.75rem' }}>
-                            <pre style={{
-                              margin: 0, padding: '0.75rem', background: '#1e1e1e', color: '#d4d4d4',
-                              borderRadius: 6, overflow: 'auto', fontSize: '0.82em',
-                              whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 300,
-                            }}>
-                              {(() => { try { return JSON.stringify(JSON.parse(m.body), null, 2) } catch { return m.body } })()}
-                            </pre>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  ))}
-                </tbody>
-              </table>
-
-              {/* Pagination */}
-              {peekData.total > PAGE_SIZE && (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 1rem', background: '#f4f5f7', borderTop: '1px solid #e7e9ec', fontSize: '0.85em' }}>
-                  <span style={{ color: '#5f6b7a' }}>
-                    {msgPage * PAGE_SIZE + 1}–{Math.min((msgPage + 1) * PAGE_SIZE, peekData.total)} of {peekData.total.toLocaleString()}
-                  </span>
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button onClick={() => { setMsgPage((p) => p - 1); setExpandedMsgId(null) }} disabled={msgPage === 0} style={btnSmall}>
-                      ← Prev
-                    </button>
-                    <button onClick={() => { setMsgPage((p) => p + 1); setExpandedMsgId(null) }} disabled={(msgPage + 1) * PAGE_SIZE >= peekData.total} style={btnSmall}>
-                      Next →
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+          <Table
+            columnDefinitions={messageColumns}
+            items={peekData?.messages ?? []}
+            loading={peekFetching}
+            loadingText="Loading messages"
+            trackBy="messageId"
+            header={<Header counter={`(${peekData?.total ?? 0})`}>Messages</Header>}
+            empty={
+              <Box textAlign="center" color="inherit">
+                <b>No messages</b>
+              </Box>
+            }
+            pagination={
+              peekData && peekData.total > PAGE_SIZE ? (
+                <Pagination
+                  currentPageIndex={msgPage + 1}
+                  pagesCount={Math.ceil(peekData.total / PAGE_SIZE)}
+                  onChange={({ detail }) => {
+                    setMsgPage(detail.currentPageIndex - 1)
+                    setViewMessage(null)
+                  }}
+                />
+              ) : undefined
+            }
+          />
+        </SpaceBetween>
       )}
 
       {tab === 'dlq' && (
-        <div>
+        <SpaceBetween size="l">
           {queue.dlqArn ? (
-            <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#f4f5f7', borderRadius: 6, fontSize: '0.9em' }}>
-              <div style={{ fontWeight: 500, marginBottom: '0.5rem', color: '#5f6b7a' }}>Dead-letter queue ARN</div>
-              <code style={{ wordBreak: 'break-all' }}>{queue.dlqArn}</code>
-              {queue.dlqMaxReceive && (
-                <div style={{ marginTop: '0.5rem', color: '#5f6b7a' }}>
-                  Max receive count: <strong>{queue.dlqMaxReceive}</strong>
-                </div>
-              )}
-            </div>
+            <Container header={<Header variant="h2">Dead-letter queue</Header>}>
+              <KeyValuePairs
+                columns={1}
+                items={[
+                  { label: 'ARN', value: <Box variant="code">{queue.dlqArn}</Box> },
+                  {
+                    label: 'Max receive count',
+                    value: queue.dlqMaxReceive ? String(queue.dlqMaxReceive) : '—',
+                  },
+                ]}
+              />
+            </Container>
           ) : (
-            <p style={{ color: '#5f6b7a', fontSize: '0.9em', fontStyle: 'italic' }}>
-              No dead-letter queue configured.
-            </p>
+            <Box color="text-body-secondary">No dead-letter queue configured.</Box>
           )}
 
-          {dlqSources && dlqSources.items.length > 0 && (
-            <div>
-              <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem', fontWeight: 600, color: '#16191f' }}>
+          <Container
+            header={
+              <Header variant="h2" counter={`(${dlqSources?.items.length ?? 0})`}>
                 Source queues using this queue as DLQ
-              </h4>
-              <div style={{ border: '1px solid #e7e9ec', borderRadius: 6, overflow: 'hidden' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9em' }}>
-                  <thead>
-                    <tr style={{ background: '#f4f5f7', borderBottom: '2px solid #e7e9ec' }}>
-                      <th style={th}>Name</th>
-                      <th style={th}>Type</th>
-                      <th style={{ ...th, textAlign: 'right' }}>Max Receive Count</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {dlqSources.items.map((q) => (
-                      <tr key={q.url} style={{ borderBottom: '1px solid #e7e9ec' }}>
-                        <td style={td}>
-                          <Link to={`/aws/sqs/${encodeURIComponent(q.url)}`} style={{ color: '#0972d3', textDecoration: 'none' }}>
-                            {q.name}
-                          </Link>
-                        </td>
-                        <td style={td}>{q.type}</td>
-                        <td style={{ ...td, textAlign: 'right' }}>{q.dlqMaxReceive ?? '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {dlqSources && dlqSources.items.length === 0 && (
-            <p style={{ color: '#5f6b7a', fontSize: '0.9em', fontStyle: 'italic' }}>
-              No queues are using this queue as their dead-letter queue.
-            </p>
-          )}
-        </div>
+              </Header>
+            }
+          >
+            <Table
+              columnDefinitions={[
+                {
+                  id: 'name',
+                  header: 'Name',
+                  cell: (q) => (
+                    <Link
+                      href={`/ui/aws/sqs/${encodeURIComponent(q.url)}`}
+                      onFollow={(event) => {
+                        event.preventDefault()
+                        navigate(`/aws/sqs/${encodeURIComponent(q.url)}`)
+                      }}
+                    >
+                      {q.name}
+                    </Link>
+                  ),
+                },
+                { id: 'type', header: 'Type', cell: (q) => q.type },
+                {
+                  id: 'maxReceive',
+                  header: 'Max receive count',
+                  cell: (q) => q.dlqMaxReceive ?? '—',
+                },
+              ]}
+              items={dlqSources?.items ?? []}
+              trackBy="url"
+              empty={
+                <Box textAlign="center" color="inherit">
+                  <b>No source queues</b>
+                  <Box variant="p" color="inherit">
+                    No queues are using this queue as their dead-letter queue.
+                  </Box>
+                </Box>
+              }
+            />
+          </Container>
+        </SpaceBetween>
       )}
 
       {tab === 'tags' && (
@@ -381,39 +380,48 @@ export function SQSDetail() {
         </SpaceBetween>
       )}
 
-      {/* Purge confirm dialog */}
-      {purgeConfirm && (
-        <div style={overlayStyle}>
-          <div style={dialogStyle} onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 0.75rem', fontSize: '1.05rem' }}>Purge queue?</h3>
-            <p style={{ margin: '0 0 1.25rem', color: '#5f6b7a', fontSize: '0.9em' }}>
-              All messages in <strong>{queue.name}</strong> will be permanently deleted. This action cannot be undone.
-            </p>
-            {purgeMut.error && (
-              <p style={{ color: '#d13212', margin: '0 0 0.75rem', fontSize: '0.85em' }}>
-                {(purgeMut.error as Error).message}
-              </p>
-            )}
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button onClick={() => setPurgeConfirm(false)} style={btnSecondary}>Cancel</button>
-              <button
-                onClick={() => purgeMut.mutate()}
-                disabled={purgeMut.isPending}
-                style={{ background: '#e77600', color: '#fff', border: 'none', borderRadius: 4, padding: '0.5rem 1rem', cursor: 'pointer', fontSize: '0.9em', opacity: purgeMut.isPending ? 0.6 : 1 }}
-              >
-                {purgeMut.isPending ? 'Purging…' : 'Purge'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal
+        visible={purgeConfirm}
+        onDismiss={() => setPurgeConfirm(false)}
+        header="Purge queue"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setPurgeConfirm(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" loading={purgeMut.isPending} onClick={() => purgeMut.mutate()}>
+                Purge
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        {purgeMut.error && (
+          <Box color="text-status-error" margin={{ bottom: 's' }}>
+            {(purgeMut.error as Error).message}
+          </Box>
+        )}
+        All messages in <b>{queue.name}</b> will be permanently deleted. This action cannot be
+        undone.
+      </Modal>
+
+      <Modal
+        visible={viewMessage != null}
+        onDismiss={() => setViewMessage(null)}
+        header="Message body"
+        size="large"
+      >
+        <Box variant="pre">{prettyBody(viewMessage?.body ?? '')}</Box>
+      </Modal>
     </ContentLayout>
   )
 }
 
-const th: React.CSSProperties = { padding: '0.55rem 1rem', textAlign: 'left', fontWeight: 600, color: '#5f6b7a', fontSize: '0.82em', textTransform: 'uppercase', letterSpacing: '0.03em' }
-const td: React.CSSProperties = { padding: '0.7rem 1rem' }
-const btnSmall: React.CSSProperties = { background: '#fff', border: '1px solid #c9cdd4', borderRadius: 4, padding: '0.3rem 0.75rem', cursor: 'pointer', fontSize: '0.83em' }
-const btnSecondary: React.CSSProperties = { background: '#fff', border: '1px solid #c9cdd4', borderRadius: 4, padding: '0.5rem 1rem', cursor: 'pointer', fontSize: '0.9em' }
-const overlayStyle: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }
-const dialogStyle: React.CSSProperties = { background: '#fff', borderRadius: 8, padding: '1.5rem', minWidth: 380, maxWidth: 460, boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }
+function prettyBody(body: string): string {
+  try {
+    return JSON.stringify(JSON.parse(body), null, 2)
+  } catch {
+    return body
+  }
+}

@@ -1,5 +1,13 @@
-import { useParams, Link, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import {
+  Alert,
+  Box,
+  ContentLayout,
+  Header,
+  Link,
+  Table,
+} from '@cloudscape-design/components'
 import { listLogStreams, type LogStream } from '../../../api/logs'
 import { formatDate } from '../../../lib/date'
 
@@ -17,56 +25,67 @@ export function LogGroupDetail() {
   const streams: LogStream[] = data?.items ?? []
 
   return (
-    <div>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <Link to="/aws/logs/groups" style={{ color: '#0972d3', fontSize: '0.85em', textDecoration: 'none' }}>
-          ← Log Groups
-        </Link>
-        <h2 style={{ margin: '0.5rem 0 0', fontSize: '1.3rem', fontWeight: 600, fontFamily: 'monospace' }}>{groupName}</h2>
-      </div>
-
-      <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem', fontWeight: 600 }}>Log Streams</h4>
-
-      {isLoading && <div style={{ color: '#5f6b7a', fontSize: '0.9em' }}>Loading streams…</div>}
-      {error && <div style={{ color: '#d13212', fontSize: '0.9em' }}>{(error as Error).message}</div>}
-
-      {!isLoading && streams.length === 0 && (
-        <p style={{ color: '#5f6b7a', fontSize: '0.9em', fontStyle: 'italic' }}>No log streams in this group.</p>
-      )}
-
-      {streams.length > 0 && (
-        <div style={{ border: '1px solid #e7e9ec', borderRadius: 8, overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9em' }}>
-            <thead>
-              <tr style={{ background: '#f4f5f7', borderBottom: '2px solid #e7e9ec' }}>
-                <th style={th}>Stream name</th>
-                <th style={th}>First event</th>
-                <th style={th}>Last event</th>
-              </tr>
-            </thead>
-            <tbody>
-              {streams.map((s) => (
-                <tr
-                  key={s.name}
-                  style={{ borderBottom: '1px solid #e7e9ec', cursor: 'pointer' }}
-                  onClick={() => navigate(`/aws/logs/groups/${encodeURIComponent(groupName)}/streams/${encodeURIComponent(s.name)}`)}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = '#fafbfc')}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = '')}
+    <ContentLayout
+      header={
+        <Header variant="h1" description="CloudWatch log group">
+          {groupName}
+        </Header>
+      }
+    >
+      {error ? (
+        <Alert type="error" header="Failed to load log streams">
+          {(error as Error).message}
+        </Alert>
+      ) : (
+        <Table
+          items={streams}
+          loading={isLoading}
+          loadingText="Loading log streams"
+          trackBy={(s) => s.name}
+          header={
+            <Header variant="h2" counter={`(${streams.length})`}>
+              Log streams
+            </Header>
+          }
+          columnDefinitions={[
+            {
+              id: 'name',
+              header: 'Stream name',
+              cell: (s: LogStream) => (
+                <Link
+                  href={`/ui/aws/logs/groups/${encodeURIComponent(groupName)}/streams/${encodeURIComponent(s.name)}`}
+                  onFollow={(event) => {
+                    event.preventDefault()
+                    navigate(
+                      `/aws/logs/groups/${encodeURIComponent(groupName)}/streams/${encodeURIComponent(s.name)}`,
+                    )
+                  }}
                 >
-                  <td style={td}>
-                    <span style={{ color: '#0972d3', fontFamily: 'monospace', fontSize: '0.88em' }}>{s.name}</span>
-                  </td>
-                  <td style={{ ...td, color: '#5f6b7a' }}>{formatDate(s.firstEventAt)}</td>
-                  <td style={{ ...td, color: '#5f6b7a' }}>{formatDate(s.lastEventAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  {s.name}
+                </Link>
+              ),
+            },
+            {
+              id: 'firstEvent',
+              header: 'First event',
+              cell: (s: LogStream) => formatDate(s.firstEventAt),
+            },
+            {
+              id: 'lastEvent',
+              header: 'Last event',
+              cell: (s: LogStream) => formatDate(s.lastEventAt),
+            },
+          ]}
+          empty={
+            <Box textAlign="center" color="inherit">
+              <b>No log streams</b>
+              <Box variant="p" color="inherit">
+                This log group has no streams yet.
+              </Box>
+            </Box>
+          }
+        />
       )}
-    </div>
+    </ContentLayout>
   )
 }
-
-const th: React.CSSProperties = { padding: '0.6rem 1rem', textAlign: 'left', fontWeight: 600, color: '#5f6b7a', fontSize: '0.82em', textTransform: 'uppercase', letterSpacing: '0.03em' }
-const td: React.CSSProperties = { padding: '0.75rem 1rem' }

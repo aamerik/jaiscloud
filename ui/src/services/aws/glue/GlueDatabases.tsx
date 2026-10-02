@@ -1,6 +1,22 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
+  Alert,
+  Box,
+  Button,
+  ButtonDropdown,
+  Container,
+  ContentLayout,
+  Form,
+  FormField,
+  Header,
+  Input,
+  Modal,
+  SpaceBetween,
+  Table,
+} from '@cloudscape-design/components'
+import type { TableProps } from '@cloudscape-design/components'
+import {
   listDatabases,
   createDatabase,
   deleteDatabase,
@@ -8,29 +24,26 @@ import {
   createTable,
   deleteTable,
   type Database,
-  type Table,
+  type Table as GlueTable,
 } from '../../../api/glue'
-import { EmptyState } from '../../../components/EmptyState'
+import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { useNotifications } from '../../../components/notifications'
 
-const tableStyle: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }
-const thStyle: React.CSSProperties = { textAlign: 'left', padding: '0.6rem 1rem', borderBottom: '2px solid #2d3748', color: '#b0bec5', fontWeight: 600, fontSize: '0.78rem', textTransform: 'uppercase' }
-const tdStyle: React.CSSProperties = { padding: '0.6rem 1rem', verticalAlign: 'middle' }
-const btnStyle: React.CSSProperties = { padding: '0.4rem 1rem', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: '0.85rem', background: '#0073bb', color: '#fff' }
-const inputStyle: React.CSSProperties = { padding: '0.4rem 0.75rem', borderRadius: 4, border: '1px solid #2d3748', background: '#1a2332', color: '#e8eaf0', fontSize: '0.85rem', width: '100%', boxSizing: 'border-box' }
-const overlayStyle: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }
-const modalStyle: React.CSSProperties = { background: '#1a2332', borderRadius: 8, padding: '2rem', minWidth: 420, maxWidth: 560 }
+const EMPTY_DB_FORM = { name: '', description: '', locationUri: '' }
+const EMPTY_TABLE_FORM = { name: '', description: '', location: '', storageType: '' }
 
 export function GlueDatabases() {
   const qc = useQueryClient()
+  const { notify } = useNotifications()
   const [selectedDB, setSelectedDB] = useState<Database | null>(null)
   const [createDBOpen, setCreateDBOpen] = useState(false)
   const [deleteDBTarget, setDeleteDBTarget] = useState<Database | null>(null)
   const [createTableOpen, setCreateTableOpen] = useState(false)
-  const [deleteTableTarget, setDeleteTableTarget] = useState<Table | null>(null)
-  const [dbForm, setDbForm] = useState({ name: '', description: '', locationUri: '' })
-  const [tableForm, setTableForm] = useState({ name: '', description: '', location: '', storageType: '' })
+  const [deleteTableTarget, setDeleteTableTarget] = useState<GlueTable | null>(null)
+  const [dbForm, setDbForm] = useState(EMPTY_DB_FORM)
+  const [tableForm, setTableForm] = useState(EMPTY_TABLE_FORM)
 
-  const { data: dbData, isLoading } = useQuery({
+  const { data: dbData, isLoading, error } = useQuery({
     queryKey: ['glue', 'databases'],
     queryFn: () => listDatabases(),
   })
@@ -42,194 +55,337 @@ export function GlueDatabases() {
   })
 
   const createDBMut = useMutation({
-    mutationFn: () => createDatabase({ name: dbForm.name, description: dbForm.description || undefined, locationUri: dbForm.locationUri || undefined }),
+    mutationFn: () =>
+      createDatabase({
+        name: dbForm.name,
+        description: dbForm.description || undefined,
+        locationUri: dbForm.locationUri || undefined,
+      }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['glue', 'databases'] })
+      notify({ type: 'success', header: 'Database created', content: dbForm.name })
       setCreateDBOpen(false)
-      setDbForm({ name: '', description: '', locationUri: '' })
+      setDbForm(EMPTY_DB_FORM)
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Create failed', content: (err as Error).message }),
   })
 
   const deleteDBMut = useMutation({
     mutationFn: (name: string) => deleteDatabase(name),
-    onSuccess: () => {
+    onSuccess: (_result, name) => {
       void qc.invalidateQueries({ queryKey: ['glue', 'databases'] })
+      notify({ type: 'success', header: 'Database deleted', content: name })
       if (deleteDBTarget?.name === selectedDB?.name) setSelectedDB(null)
       setDeleteDBTarget(null)
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Delete failed', content: (err as Error).message }),
   })
 
   const createTableMut = useMutation({
-    mutationFn: () => createTable(selectedDB!.name, { name: tableForm.name, description: tableForm.description || undefined, location: tableForm.location || undefined, storageType: tableForm.storageType || undefined }),
+    mutationFn: () =>
+      createTable(selectedDB!.name, {
+        name: tableForm.name,
+        description: tableForm.description || undefined,
+        location: tableForm.location || undefined,
+        storageType: tableForm.storageType || undefined,
+      }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['glue', 'tables', selectedDB?.name] })
+      notify({ type: 'success', header: 'Table created', content: tableForm.name })
       setCreateTableOpen(false)
-      setTableForm({ name: '', description: '', location: '', storageType: '' })
+      setTableForm(EMPTY_TABLE_FORM)
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Create failed', content: (err as Error).message }),
   })
 
   const deleteTableMut = useMutation({
     mutationFn: ({ db, name }: { db: string; name: string }) => deleteTable(db, name),
-    onSuccess: () => {
+    onSuccess: (_result, { name }) => {
       void qc.invalidateQueries({ queryKey: ['glue', 'tables', selectedDB?.name] })
+      notify({ type: 'success', header: 'Table deleted', content: name })
       setDeleteTableTarget(null)
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Delete failed', content: (err as Error).message }),
   })
-
-  if (isLoading) return <div style={{ padding: '2rem', color: '#5f6b7a' }}>Loading databases…</div>
 
   const databases = dbData?.items ?? []
   const tables = tableData?.items ?? []
 
-  return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-        <div>
-          <h2 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 600 }}>Glue Databases</h2>
-          <span style={{ fontSize: '0.85em', color: '#5f6b7a' }}>{databases.length} database{databases.length !== 1 ? 's' : ''}</span>
-        </div>
-        <button style={btnStyle} onClick={() => setCreateDBOpen(true)}>Create Database</button>
-      </div>
+  const columns: ResourceColumn<Database>[] = [
+    {
+      id: 'name',
+      header: 'Name',
+      filterLabel: 'Name',
+      filterValue: (db) => db.name,
+      cell: (db) => <Box fontWeight="bold">{db.name}</Box>,
+    },
+    {
+      id: 'description',
+      header: 'Description',
+      filterLabel: 'Description',
+      filterValue: (db) => db.description ?? '',
+      cell: (db) => db.description || '—',
+    },
+    {
+      id: 'location',
+      header: 'Location URI',
+      cell: (db) => (db.locationUri ? <Box variant="code">{db.locationUri}</Box> : '—'),
+    },
+  ]
 
-      <div style={{ display: 'grid', gridTemplateColumns: selectedDB ? '1fr 1fr' : '1fr', gap: '1.5rem' }}>
-        <div>
-          {databases.length === 0 ? (
-            <EmptyState title="No databases. Create one to store your Glue tables." />
-          ) : (
-            <table style={tableStyle}>
-              <thead>
-                <tr>{['Name', 'Description', ''].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr>
-              </thead>
-              <tbody>
-                {databases.map(db => (
-                  <tr
-                    key={db.name}
-                    style={{ borderBottom: '1px solid #2d3748', cursor: 'pointer', background: selectedDB?.name === db.name ? '#1e2d3d' : 'transparent' }}
-                    onClick={() => setSelectedDB(db)}
-                  >
-                    <td style={{ ...tdStyle, fontWeight: 600 }}>{db.name}</td>
-                    <td style={{ ...tdStyle, color: '#b0bec5', fontSize: '0.85rem' }}>{db.description || '—'}</td>
-                    <td style={{ ...tdStyle, textAlign: 'right' }} onClick={e => e.stopPropagation()}>
-                      <button style={{ ...btnStyle, background: 'transparent', color: '#d13212', border: '1px solid #d13212', padding: '0.25rem 0.6rem', fontSize: '0.8rem' }} onClick={() => setDeleteDBTarget(db)}>Delete</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+  const tableColumns: TableProps.ColumnDefinition<GlueTable>[] = [
+    { id: 'name', header: 'Name', cell: (t) => t.name },
+    {
+      id: 'location',
+      header: 'Location',
+      cell: (t) => (t.location ? <Box variant="code">{t.location}</Box> : '—'),
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: (t) => <Button onClick={() => setDeleteTableTarget(t)}>Delete</Button>,
+    },
+  ]
+
+  return (
+    <ContentLayout header={<Header variant="h1">Glue databases</Header>}>
+      <SpaceBetween size="l">
+        {error ? (
+          <Alert type="error" header="Failed to load databases">
+            {(error as Error).message}
+          </Alert>
+        ) : (
+          <ResourceTable
+            items={databases}
+            columns={columns}
+            trackBy={(db) => db.name}
+            title="Databases"
+            loading={isLoading}
+            onRowClick={(db) => setSelectedDB(db)}
+            selectionType="single"
+            selectedItems={selectedDB ? [selectedDB] : []}
+            onSelectionChange={(items) => setSelectedDB(items[0] ?? null)}
+            actions={
+              <SpaceBetween direction="horizontal" size="xs">
+                <ButtonDropdown
+                  items={[{ id: 'delete', text: 'Delete', disabled: !selectedDB }]}
+                  onItemClick={() => selectedDB && setDeleteDBTarget(selectedDB)}
+                  disabled={!selectedDB}
+                >
+                  Actions
+                </ButtonDropdown>
+                <Button variant="primary" onClick={() => setCreateDBOpen(true)}>
+                  Create database
+                </Button>
+              </SpaceBetween>
+            }
+            emptyTitle="No databases"
+            emptyBody="Create a database to store your Glue tables."
+          />
+        )}
 
         {selectedDB && (
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-              <h3 style={{ margin: 0, fontWeight: 600, fontSize: '1rem' }}>Tables in <em>{selectedDB.name}</em> ({tables.length})</h3>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0', padding: '0.3rem 0.6rem', fontSize: '0.8rem' }} onClick={() => setSelectedDB(null)}>✕</button>
-                <button style={{ ...btnStyle, fontSize: '0.8rem', padding: '0.3rem 0.75rem' }} onClick={() => setCreateTableOpen(true)}>Create Table</button>
-              </div>
-            </div>
-            {tables.length === 0 ? (
-              <EmptyState title="No tables in this database." />
-            ) : (
-              <table style={tableStyle}>
-                <thead>
-                  <tr>{['Name', 'Location', ''].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {tables.map(t => (
-                    <tr key={t.name} style={{ borderBottom: '1px solid #2d3748' }}>
-                      <td style={{ ...tdStyle, fontWeight: 600 }}>{t.name}</td>
-                      <td style={{ ...tdStyle, color: '#b0bec5', fontSize: '0.82rem', fontFamily: 'monospace' }}>{t.location || '—'}</td>
-                      <td style={{ ...tdStyle, textAlign: 'right' }}>
-                        <button style={{ ...btnStyle, background: 'transparent', color: '#d13212', border: '1px solid #d13212', padding: '0.25rem 0.6rem', fontSize: '0.8rem' }} onClick={() => setDeleteTableTarget(t)}>Delete</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+          <Container
+            header={
+              <Header
+                variant="h2"
+                counter={`(${tables.length})`}
+                actions={
+                  <SpaceBetween direction="horizontal" size="xs">
+                    <Button
+                      iconName="close"
+                      variant="icon"
+                      ariaLabel="Close tables"
+                      onClick={() => setSelectedDB(null)}
+                    />
+                    <Button variant="primary" onClick={() => setCreateTableOpen(true)}>
+                      Create table
+                    </Button>
+                  </SpaceBetween>
+                }
+              >
+                Tables in {selectedDB.name}
+              </Header>
+            }
+          >
+            <Table
+              variant="embedded"
+              items={tables}
+              trackBy={(t) => t.name}
+              columnDefinitions={tableColumns}
+              empty={
+                <Box textAlign="center" color="inherit">
+                  <b>No tables</b>
+                  <Box variant="p" color="inherit">
+                    No tables in this database.
+                  </Box>
+                </Box>
+              }
+            />
+          </Container>
         )}
-      </div>
+      </SpaceBetween>
 
-      {createDBOpen && (
-        <div style={overlayStyle} onClick={() => setCreateDBOpen(false)}>
-          <div style={modalStyle} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 1.5rem', fontWeight: 600 }}>Create Database</h3>
-            {[
-              { key: 'name', label: 'Name *', placeholder: 'my_database' },
-              { key: 'description', label: 'Description', placeholder: '' },
-              { key: 'locationUri', label: 'Location URI', placeholder: 's3://bucket/prefix' },
-            ].map(f => (
-              <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '1rem' }}>
-                <label style={{ fontSize: '0.8rem', color: '#b0bec5' }}>{f.label}</label>
-                <input style={inputStyle} placeholder={f.placeholder} value={(dbForm as Record<string, string>)[f.key]} onChange={e => setDbForm(p => ({ ...p, [f.key]: e.target.value }))} />
-              </div>
-            ))}
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0' }} onClick={() => setCreateDBOpen(false)}>Cancel</button>
-              <button style={btnStyle} disabled={!dbForm.name || createDBMut.isPending} onClick={() => createDBMut.mutate()}>
-                {createDBMut.isPending ? 'Creating…' : 'Create'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal
+        visible={createDBOpen}
+        onDismiss={() => setCreateDBOpen(false)}
+        header="Create database"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setCreateDBOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={createDBMut.isPending}
+                disabled={!dbForm.name.trim()}
+                onClick={() => createDBMut.mutate()}
+              >
+                Create
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        <Form>
+          <SpaceBetween size="m">
+            <FormField label="Name" constraintText="Required">
+              <Input
+                value={dbForm.name}
+                placeholder="my_database"
+                onChange={({ detail }) => setDbForm({ ...dbForm, name: detail.value })}
+              />
+            </FormField>
+            <FormField label="Description">
+              <Input
+                value={dbForm.description}
+                onChange={({ detail }) => setDbForm({ ...dbForm, description: detail.value })}
+              />
+            </FormField>
+            <FormField label="Location URI">
+              <Input
+                value={dbForm.locationUri}
+                placeholder="s3://bucket/prefix"
+                onChange={({ detail }) => setDbForm({ ...dbForm, locationUri: detail.value })}
+              />
+            </FormField>
+          </SpaceBetween>
+        </Form>
+      </Modal>
 
-      {deleteDBTarget && (
-        <div style={overlayStyle} onClick={() => setDeleteDBTarget(null)}>
-          <div style={modalStyle} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 1rem', fontWeight: 600 }}>Delete Database?</h3>
-            <p style={{ color: '#b0bec5', marginBottom: '1.5rem' }}>Delete database <strong>{deleteDBTarget.name}</strong>?</p>
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0' }} onClick={() => setDeleteDBTarget(null)}>Cancel</button>
-              <button style={{ ...btnStyle, background: '#d13212' }} disabled={deleteDBMut.isPending} onClick={() => deleteDBMut.mutate(deleteDBTarget.name)}>
-                {deleteDBMut.isPending ? 'Deleting…' : 'Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal
+        visible={!!deleteDBTarget}
+        onDismiss={() => setDeleteDBTarget(null)}
+        header="Delete database"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setDeleteDBTarget(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={deleteDBMut.isPending}
+                onClick={() => deleteDBTarget && deleteDBMut.mutate(deleteDBTarget.name)}
+              >
+                Delete
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        Delete database <b>{deleteDBTarget?.name}</b>? This action cannot be undone.
+      </Modal>
 
-      {createTableOpen && selectedDB && (
-        <div style={overlayStyle} onClick={() => setCreateTableOpen(false)}>
-          <div style={modalStyle} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 1.5rem', fontWeight: 600 }}>Create Table in {selectedDB.name}</h3>
-            {[
-              { key: 'name', label: 'Name *', placeholder: 'my_table' },
-              { key: 'description', label: 'Description', placeholder: '' },
-              { key: 'location', label: 'S3 Location', placeholder: 's3://bucket/prefix/' },
-              { key: 'storageType', label: 'Input Format', placeholder: 'org.apache.hadoop.mapred.TextInputFormat' },
-            ].map(f => (
-              <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '1rem' }}>
-                <label style={{ fontSize: '0.8rem', color: '#b0bec5' }}>{f.label}</label>
-                <input style={inputStyle} placeholder={f.placeholder} value={(tableForm as Record<string, string>)[f.key]} onChange={e => setTableForm(p => ({ ...p, [f.key]: e.target.value }))} />
-              </div>
-            ))}
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0' }} onClick={() => setCreateTableOpen(false)}>Cancel</button>
-              <button style={btnStyle} disabled={!tableForm.name || createTableMut.isPending} onClick={() => createTableMut.mutate()}>
-                {createTableMut.isPending ? 'Creating…' : 'Create'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal
+        visible={createTableOpen && !!selectedDB}
+        onDismiss={() => setCreateTableOpen(false)}
+        header={selectedDB ? `Create table in ${selectedDB.name}` : 'Create table'}
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setCreateTableOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={createTableMut.isPending}
+                disabled={!tableForm.name.trim()}
+                onClick={() => createTableMut.mutate()}
+              >
+                Create
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        <Form>
+          <SpaceBetween size="m">
+            <FormField label="Name" constraintText="Required">
+              <Input
+                value={tableForm.name}
+                placeholder="my_table"
+                onChange={({ detail }) => setTableForm({ ...tableForm, name: detail.value })}
+              />
+            </FormField>
+            <FormField label="Description">
+              <Input
+                value={tableForm.description}
+                onChange={({ detail }) => setTableForm({ ...tableForm, description: detail.value })}
+              />
+            </FormField>
+            <FormField label="S3 location">
+              <Input
+                value={tableForm.location}
+                placeholder="s3://bucket/prefix/"
+                onChange={({ detail }) => setTableForm({ ...tableForm, location: detail.value })}
+              />
+            </FormField>
+            <FormField label="Input format">
+              <Input
+                value={tableForm.storageType}
+                placeholder="org.apache.hadoop.mapred.TextInputFormat"
+                onChange={({ detail }) => setTableForm({ ...tableForm, storageType: detail.value })}
+              />
+            </FormField>
+          </SpaceBetween>
+        </Form>
+      </Modal>
 
-      {deleteTableTarget && (
-        <div style={overlayStyle} onClick={() => setDeleteTableTarget(null)}>
-          <div style={modalStyle} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 1rem', fontWeight: 600 }}>Delete Table?</h3>
-            <p style={{ color: '#b0bec5', marginBottom: '1.5rem' }}>Delete table <strong>{deleteTableTarget.name}</strong>?</p>
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0' }} onClick={() => setDeleteTableTarget(null)}>Cancel</button>
-              <button style={{ ...btnStyle, background: '#d13212' }} disabled={deleteTableMut.isPending} onClick={() => deleteTableMut.mutate({ db: deleteTableTarget.databaseName, name: deleteTableTarget.name })}>
-                {deleteTableMut.isPending ? 'Deleting…' : 'Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      <Modal
+        visible={!!deleteTableTarget}
+        onDismiss={() => setDeleteTableTarget(null)}
+        header="Delete table"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setDeleteTableTarget(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={deleteTableMut.isPending}
+                onClick={() =>
+                  deleteTableTarget &&
+                  deleteTableMut.mutate({
+                    db: deleteTableTarget.databaseName,
+                    name: deleteTableTarget.name,
+                  })
+                }
+              >
+                Delete
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        Delete table <b>{deleteTableTarget?.name}</b>? This action cannot be undone.
+      </Modal>
+    </ContentLayout>
   )
 }

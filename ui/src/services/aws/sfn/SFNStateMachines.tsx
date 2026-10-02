@@ -2,136 +2,236 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
+  Alert,
+  Box,
+  Button,
+  ButtonDropdown,
+  ContentLayout,
+  Form,
+  FormField,
+  Header,
+  Input,
+  Link,
+  Modal,
+  Select,
+  SpaceBetween,
+  StatusIndicator,
+  Textarea,
+} from '@cloudscape-design/components'
+import {
   listStateMachines,
   createStateMachine,
   deleteStateMachine,
   type StateMachine,
 } from '../../../api/sfn'
-import { EmptyState } from '../../../components/EmptyState'
+import { resourceStatus } from '../../../lib/status'
+import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
+import { useNotifications } from '../../../components/notifications'
 
-const tableStyle: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }
-const thStyle: React.CSSProperties = { textAlign: 'left', padding: '0.6rem 1rem', borderBottom: '2px solid #2d3748', color: '#b0bec5', fontWeight: 600, fontSize: '0.78rem', textTransform: 'uppercase' }
-const tdStyle: React.CSSProperties = { padding: '0.6rem 1rem', verticalAlign: 'middle' }
-const btnStyle: React.CSSProperties = { padding: '0.4rem 1rem', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: '0.85rem', background: '#0073bb', color: '#fff' }
-const inputStyle: React.CSSProperties = { padding: '0.4rem 0.75rem', borderRadius: 4, border: '1px solid #2d3748', background: '#1a2332', color: '#e8eaf0', fontSize: '0.85rem', width: '100%', boxSizing: 'border-box' }
-const overlayStyle: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }
-const modalStyle: React.CSSProperties = { background: '#1a2332', borderRadius: 8, padding: '2rem', minWidth: 440, maxWidth: 580 }
+const TYPE_OPTIONS = [
+  { label: 'STANDARD', value: 'STANDARD' },
+  { label: 'EXPRESS', value: 'EXPRESS' },
+]
 
 export function SFNStateMachines() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [createOpen, setCreateOpen] = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState<StateMachine | null>(null)
+  const [selected, setSelected] = useState<StateMachine[]>([])
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [form, setForm] = useState({ name: '', definition: '', roleArn: '', type: 'STANDARD' })
+  const { notify } = useNotifications()
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['sfn', 'state-machines'],
     queryFn: () => listStateMachines(),
   })
 
   const createMut = useMutation({
-    mutationFn: () => createStateMachine({ name: form.name, definition: form.definition || undefined, roleArn: form.roleArn || undefined, type: form.type || undefined }),
+    mutationFn: () =>
+      createStateMachine({
+        name: form.name,
+        definition: form.definition || undefined,
+        roleArn: form.roleArn || undefined,
+        type: form.type || undefined,
+      }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['sfn', 'state-machines'] })
+      notify({ type: 'success', header: 'State machine creating', content: form.name })
       setCreateOpen(false)
       setForm({ name: '', definition: '', roleArn: '', type: 'STANDARD' })
     },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Create failed', content: (err as Error).message }),
   })
 
   const deleteMut = useMutation({
-    mutationFn: (arn: string) => deleteStateMachine(arn),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['sfn', 'state-machines'] })
-      setDeleteTarget(null)
+    mutationFn: async (machines: StateMachine[]) => {
+      for (const machine of machines) await deleteStateMachine(machine.arn)
     },
+    onSuccess: (_r, machines) => {
+      void qc.invalidateQueries({ queryKey: ['sfn', 'state-machines'] })
+      notify({ type: 'success', header: `Deleted ${machines.length} state machine(s)` })
+      setSelected([])
+      setConfirmDelete(false)
+    },
+    onError: (err) =>
+      notify({ type: 'error', header: 'Delete failed', content: (err as Error).message }),
   })
-
-  if (isLoading) return <div style={{ padding: '2rem', color: '#5f6b7a' }}>Loading state machines…</div>
 
   const machines = data?.items ?? []
 
+  const goToExecutions = (arn: string) => navigate(`executions?arn=${encodeURIComponent(arn)}`)
+
+  const columns: ResourceColumn<StateMachine>[] = [
+    {
+      id: 'name',
+      header: 'Name',
+      filterLabel: 'Name',
+      filterValue: (sm) => sm.name,
+      cell: (sm) => (
+        <Link
+          href={`/ui/aws/sfn/executions?arn=${encodeURIComponent(sm.arn)}`}
+          onFollow={(event) => {
+            event.preventDefault()
+            goToExecutions(sm.arn)
+          }}
+        >
+          {sm.name}
+        </Link>
+      ),
+    },
+    { id: 'type', header: 'Type', filterLabel: 'Type', filterValue: (sm) => sm.type ?? '', cell: (sm) => sm.type || '—' },
+    {
+      id: 'status',
+      header: 'Status',
+      filterLabel: 'Status',
+      filterValue: (sm) => sm.status ?? '',
+      cell: (sm) => (
+        <StatusIndicator type={resourceStatus(sm.status)}>{sm.status || '—'}</StatusIndicator>
+      ),
+    },
+    { id: 'arn', header: 'ARN', cell: (sm) => <Box variant="code">{sm.arn}</Box> },
+  ]
+
   return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-        <div>
-          <h2 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 600 }}>Step Functions</h2>
-          <span style={{ fontSize: '0.85em', color: '#5f6b7a' }}>{machines.length} state machine{machines.length !== 1 ? 's' : ''}</span>
-        </div>
-        <button style={btnStyle} onClick={() => setCreateOpen(true)}>Create State Machine</button>
-      </div>
-
-      {machines.length === 0 ? (
-        <EmptyState title="No state machines. Create one to orchestrate workflows." />
+    <ContentLayout header={<Header variant="h1">Step Functions state machines</Header>}>
+      {error ? (
+        <Alert type="error" header="Failed to load state machines">
+          {(error as Error).message}
+        </Alert>
       ) : (
-        <table style={tableStyle}>
-          <thead>
-            <tr>{['Name', 'Type', 'Status', 'ARN', ''].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr>
-          </thead>
-          <tbody>
-            {machines.map(sm => (
-              <tr
-                key={sm.arn}
-                style={{ borderBottom: '1px solid #2d3748', cursor: 'pointer' }}
-                onClick={() => navigate(`executions?arn=${encodeURIComponent(sm.arn)}`)}
+        <ResourceTable
+          items={machines}
+          columns={columns}
+          trackBy={(sm) => sm.arn}
+          title="State machines"
+          loading={isLoading}
+          onRowClick={(sm) => goToExecutions(sm.arn)}
+          selectionType="multi"
+          selectedItems={selected}
+          onSelectionChange={setSelected}
+          actions={
+            <SpaceBetween direction="horizontal" size="xs">
+              <ButtonDropdown
+                items={[{ id: 'delete', text: 'Delete', disabled: selected.length === 0 }]}
+                onItemClick={() => setConfirmDelete(true)}
+                disabled={selected.length === 0}
               >
-                <td style={{ ...tdStyle, fontWeight: 600 }}>{sm.name}</td>
-                <td style={{ ...tdStyle, color: '#b0bec5', fontSize: '0.85rem' }}>{sm.type || '—'}</td>
-                <td style={{ ...tdStyle, color: '#b0bec5', fontSize: '0.85rem' }}>{sm.status || '—'}</td>
-                <td style={{ ...tdStyle, color: '#b0bec5', fontSize: '0.78rem', fontFamily: 'monospace', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sm.arn}</td>
-                <td style={{ ...tdStyle, textAlign: 'right' }} onClick={e => e.stopPropagation()}>
-                  <button style={{ ...btnStyle, background: 'transparent', color: '#d13212', border: '1px solid #d13212', padding: '0.25rem 0.6rem', fontSize: '0.8rem' }} onClick={() => setDeleteTarget(sm)}>Delete</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                Actions
+              </ButtonDropdown>
+              <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                Create state machine
+              </Button>
+            </SpaceBetween>
+          }
+          emptyTitle="No state machines"
+          emptyBody="Create a state machine to orchestrate workflows."
+        />
       )}
 
-      {createOpen && (
-        <div style={overlayStyle} onClick={() => setCreateOpen(false)}>
-          <div style={modalStyle} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 1.5rem', fontWeight: 600 }}>Create State Machine</h3>
-            {[
-              { key: 'name', label: 'Name *', placeholder: 'my-workflow' },
-              { key: 'roleArn', label: 'Role ARN', placeholder: 'arn:aws:iam:::role/step-functions-role' },
-              { key: 'definition', label: 'Definition (JSON, optional)', placeholder: '' },
-            ].map(f => (
-              <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '1rem' }}>
-                <label style={{ fontSize: '0.8rem', color: '#b0bec5' }}>{f.label}</label>
-                <input style={inputStyle} placeholder={f.placeholder} value={(form as Record<string, string>)[f.key]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} />
-              </div>
-            ))}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '1.5rem' }}>
-              <label style={{ fontSize: '0.8rem', color: '#b0bec5' }}>Type</label>
-              <select style={inputStyle} value={form.type} onChange={e => setForm(p => ({ ...p, type: e.target.value }))}>
-                <option value="STANDARD">STANDARD</option>
-                <option value="EXPRESS">EXPRESS</option>
-              </select>
-            </div>
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0' }} onClick={() => setCreateOpen(false)}>Cancel</button>
-              <button style={btnStyle} disabled={!form.name || createMut.isPending} onClick={() => createMut.mutate()}>
-                {createMut.isPending ? 'Creating…' : 'Create'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal
+        visible={createOpen}
+        onDismiss={() => setCreateOpen(false)}
+        header="Create state machine"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setCreateOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={createMut.isPending}
+                disabled={!form.name.trim()}
+                onClick={() => createMut.mutate()}
+              >
+                Create
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        <Form>
+          <SpaceBetween size="m">
+            <FormField label="Name">
+              <Input
+                autoFocus
+                value={form.name}
+                onChange={({ detail }) => setForm({ ...form, name: detail.value })}
+                placeholder="my-workflow"
+              />
+            </FormField>
+            <FormField label="Role ARN">
+              <Input
+                value={form.roleArn}
+                onChange={({ detail }) => setForm({ ...form, roleArn: detail.value })}
+                placeholder="arn:aws:iam::123456789012:role/step-functions-role"
+              />
+            </FormField>
+            <FormField label="Definition (JSON, optional)">
+              <Textarea
+                rows={6}
+                value={form.definition}
+                onChange={({ detail }) => setForm({ ...form, definition: detail.value })}
+              />
+            </FormField>
+            <FormField label="Type">
+              <Select
+                selectedOption={TYPE_OPTIONS.find((o) => o.value === form.type) ?? TYPE_OPTIONS[0]!}
+                onChange={({ detail }) =>
+                  setForm({ ...form, type: detail.selectedOption.value ?? 'STANDARD' })
+                }
+                options={TYPE_OPTIONS}
+              />
+            </FormField>
+          </SpaceBetween>
+        </Form>
+      </Modal>
 
-      {deleteTarget && (
-        <div style={overlayStyle} onClick={() => setDeleteTarget(null)}>
-          <div style={modalStyle} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 1rem', fontWeight: 600 }}>Delete State Machine?</h3>
-            <p style={{ color: '#b0bec5', marginBottom: '1.5rem' }}>Delete <strong>{deleteTarget.name}</strong>?</p>
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button style={{ ...btnStyle, background: '#2d3748', color: '#e8eaf0' }} onClick={() => setDeleteTarget(null)}>Cancel</button>
-              <button style={{ ...btnStyle, background: '#d13212' }} disabled={deleteMut.isPending} onClick={() => deleteMut.mutate(deleteTarget.arn)}>
-                {deleteMut.isPending ? 'Deleting…' : 'Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      <Modal
+        visible={confirmDelete}
+        onDismiss={() => setConfirmDelete(false)}
+        header="Delete state machines"
+        footer={
+          <Box float="right">
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="link" onClick={() => setConfirmDelete(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={deleteMut.isPending}
+                onClick={() => deleteMut.mutate(selected)}
+              >
+                Delete
+              </Button>
+            </SpaceBetween>
+          </Box>
+        }
+      >
+        Permanently delete {selected.length} state machine{selected.length !== 1 ? 's' : ''}?
+      </Modal>
+    </ContentLayout>
   )
 }

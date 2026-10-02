@@ -1,5 +1,40 @@
 import { useState, useRef } from 'react'
+import {
+  Alert,
+  Box,
+  Button,
+  ContentLayout,
+  Form,
+  FormField,
+  Header,
+  Input,
+  SpaceBetween,
+  StatusIndicator,
+  Table,
+  Textarea,
+} from '@cloudscape-design/components'
+import type { StatusIndicatorProps } from '@cloudscape-design/components'
 import { startQuery, getQueryResults, stopQuery, type QueryResult } from '../../../api/logs'
+
+function queryStatusType(status: string): StatusIndicatorProps.Type {
+  switch (status) {
+    case 'Complete':
+      return 'success'
+    case 'Failed':
+      return 'error'
+    case 'Cancelled':
+      return 'stopped'
+    case 'Running':
+      return 'in-progress'
+    default:
+      return 'info'
+  }
+}
+
+interface ResultRow {
+  id: string
+  cells: Array<{ field: string; value: string }>
+}
 
 export function LogInsights() {
   const [queryString, setQueryString] = useState('fields @timestamp, @message\n| sort @timestamp desc\n| limit 20')
@@ -49,94 +84,88 @@ export function LogInsights() {
     setRunning(false)
   }
 
-  const columns = result?.results[0]?.map(f => f.field) ?? []
+  const fields = result?.results[0]?.map((f) => f.field) ?? []
+  const rows: ResultRow[] = (result?.results ?? []).map((cells, index) => ({
+    id: String(index),
+    cells,
+  }))
 
   return (
-    <div>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <h2 style={{ margin: '0 0 0.25rem', fontSize: '1.4rem', fontWeight: 600 }}>Log Insights</h2>
-        <span style={{ fontSize: '0.85em', color: '#5f6b7a' }}>Run CloudWatch Logs Insights queries</span>
-      </div>
+    <ContentLayout header={<Header variant="h1">Log Insights</Header>}>
+      <SpaceBetween size="l">
+        <Form
+          header={<Header variant="h2">Query</Header>}
+          actions={
+            <SpaceBetween direction="horizontal" size="xs">
+              <Button variant="primary" loading={running} disabled={!queryString.trim()} onClick={run}>
+                Run query
+              </Button>
+              {running && <Button onClick={stop}>Stop</Button>}
+            </SpaceBetween>
+          }
+        >
+          <SpaceBetween size="m">
+            <FormField label="Log group" description="Leave blank to query all log groups in the account.">
+              <Input
+                value={logGroupName}
+                onChange={({ detail }) => setLogGroupName(detail.value)}
+                placeholder="/aws/lambda/my-function"
+              />
+            </FormField>
+            <FormField label="Query">
+              <Textarea
+                value={queryString}
+                onChange={({ detail }) => setQueryString(detail.value)}
+                rows={6}
+              />
+            </FormField>
+          </SpaceBetween>
+        </Form>
 
-      <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem' }}>
-        <label style={{ flex: 1, ...labelStyle }}>
-          Log Group
-          <input
-            type="text"
-            value={logGroupName}
-            onChange={e => setLogGroupName(e.target.value)}
-            placeholder="/aws/lambda/my-function (optional)"
-            style={inputStyle}
-          />
-        </label>
-      </div>
-
-      <label style={labelStyle}>
-        Query
-        <textarea
-          value={queryString}
-          onChange={e => setQueryString(e.target.value)}
-          rows={5}
-          style={{ ...inputStyle, fontFamily: 'monospace', resize: 'vertical' }}
-        />
-      </label>
-
-      <div style={{ display: 'flex', gap: '0.75rem', margin: '0.75rem 0 1.5rem' }}>
-        <button onClick={run} disabled={running || !queryString.trim()} style={primaryBtnStyle}>
-          {running ? 'Running…' : 'Run Query'}
-        </button>
-        {running && (
-          <button onClick={stop} style={cancelBtnStyle}>Stop</button>
+        {error && (
+          <Alert type="error" header="Query failed">
+            {error}
+          </Alert>
         )}
-      </div>
 
-      {error && <div style={{ color: '#d13212', fontSize: '0.88em', marginBottom: '1rem' }}>{error}</div>}
-
-      {result && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem' }}>
-            <span style={{ fontSize: '0.85em', color: '#5f6b7a' }}>
-              Status: <strong style={{ color: result.status === 'Complete' ? '#037f0c' : '#d13212' }}>{result.status}</strong>
-            </span>
-            <span style={{ fontSize: '0.85em', color: '#5f6b7a' }}>
-              {result.statistics.recordsScanned.toFixed(0)} records scanned, {result.statistics.recordsMatched.toFixed(0)} matched
-            </span>
-          </div>
-
-          {result.results.length === 0 ? (
-            <div style={{ color: '#5f6b7a', fontSize: '0.88em' }}>No results matched the query.</div>
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={tableStyle}>
-                <thead>
-                  <tr>
-                    {columns.map(c => <th key={c} style={thStyle}>{c}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.results.map((row, i) => (
-                    <tr key={i} style={{ borderBottom: '1px solid #2d3748' }}>
-                      {row.map((cell, j) => (
-                        <td key={j} style={{ ...tdStyle, maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {cell.value}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+        {result && (
+          <Table
+            items={rows}
+            trackBy={(row) => row.id}
+            header={
+              <Header
+                variant="h2"
+                description={
+                  <SpaceBetween direction="horizontal" size="m">
+                    <StatusIndicator type={queryStatusType(result.status)}>
+                      {result.status}
+                    </StatusIndicator>
+                    <Box color="text-body-secondary" display="inline">
+                      {result.statistics.recordsScanned.toFixed(0)} records scanned,{' '}
+                      {result.statistics.recordsMatched.toFixed(0)} matched
+                    </Box>
+                  </SpaceBetween>
+                }
+              >
+                Results
+              </Header>
+            }
+            columnDefinitions={fields.map((field, index) => ({
+              id: field,
+              header: field,
+              cell: (row: ResultRow) => row.cells[index]?.value ?? '',
+            }))}
+            empty={
+              <Box textAlign="center" color="inherit">
+                <b>No results</b>
+                <Box variant="p" color="inherit">
+                  No records matched the query.
+                </Box>
+              </Box>
+            }
+          />
+        )}
+      </SpaceBetween>
+    </ContentLayout>
   )
 }
-
-const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '0.75rem', color: '#c9cdd4', fontSize: '0.85em' }
-const inputStyle: React.CSSProperties = { background: '#0d1a26', border: '1px solid #2d3748', borderRadius: 4, color: '#e2e8f0', padding: '0.4rem 0.75rem', fontSize: '0.9em' }
-const primaryBtnStyle: React.CSSProperties = { background: '#0972d3', border: '1px solid #0972d3', borderRadius: 4, color: '#fff', cursor: 'pointer', padding: '0.4rem 1rem', fontSize: '0.85em', fontWeight: 500 }
-const cancelBtnStyle: React.CSSProperties = { background: 'none', border: '1px solid #2d3748', borderRadius: 4, color: '#c9cdd4', cursor: 'pointer', padding: '0.4rem 1rem', fontSize: '0.85em' }
-const tableStyle: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: '0.85em' }
-const thStyle: React.CSSProperties = { textAlign: 'left', padding: '0.5rem 0.75rem', color: '#8892a4', fontWeight: 500, borderBottom: '1px solid #2d3748', fontSize: '0.8em', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }
-const tdStyle: React.CSSProperties = { padding: '0.6rem 0.75rem', color: '#c9cdd4', verticalAlign: 'top', fontFamily: 'monospace' }
