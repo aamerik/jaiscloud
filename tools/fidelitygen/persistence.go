@@ -74,6 +74,7 @@ var persistentBackends = map[string]bool{
 	"workflowexecutions": true,
 	"dataproc":           true,
 	"container":          true,
+	"run":                true,
 	"managedkafka":       true,
 	"metastore":          true,
 	"iceberg":            true,

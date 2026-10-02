@@ -19,6 +19,7 @@ import (
 	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/gcp/throttle"
 	restfunctions "jaiscloud/internal/gcp/transport/rest/functions"
+	restrun "jaiscloud/internal/gcp/transport/rest/run"
 	"jaiscloud/internal/model"
 )
 
@@ -30,6 +31,9 @@ type GCPAdapter struct {
 	// functionTrigger is the codec for a deployed function's HTTPS-trigger URL.
 	// It is selected by request host (SourceHost), not by the service map.
 	functionTrigger adapter.Codec
+	// runInvocation is the codec for a deployed Cloud Run service's synthesized
+	// host (*.run.app); also selected by request host (SourceHost).
+	runInvocation adapter.Codec
 	// throttle is the optional opt-in throttle/quota injector. The adapter
 	// always implements gateway.RequestFilter, but FilterRequest returns nil
 	// while this is nil, so the default run is unaffected.
@@ -55,6 +59,7 @@ func NewAdapter(serviceAccount string) *GCPAdapter {
 		codecs:          codecs,
 		serviceAccount:  serviceAccount,
 		functionTrigger: restfunctions.NewTriggerCodec(),
+		runInvocation:   restrun.NewInvocationCodec(),
 	}
 }
 
@@ -102,6 +107,8 @@ func (a *GCPAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 	var codec adapter.Codec
 	if service == "functions" && source == SourceHost {
 		codec = a.functionTrigger
+	} else if service == "run" && source == SourceHost {
+		codec = a.runInvocation
 	} else {
 		c, err := a.CodecFor(service)
 		if err != nil {

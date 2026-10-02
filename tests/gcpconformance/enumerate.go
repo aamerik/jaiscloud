@@ -35,6 +35,7 @@ import (
 	restmetastore "jaiscloud/internal/gcp/transport/rest/metastore"
 	restmonitoring "jaiscloud/internal/gcp/transport/rest/monitoring"
 	restresourcemanager "jaiscloud/internal/gcp/transport/rest/resourcemanager"
+	restrun "jaiscloud/internal/gcp/transport/rest/run"
 	restscheduler "jaiscloud/internal/gcp/transport/rest/scheduler"
 	restserviceusage "jaiscloud/internal/gcp/transport/rest/serviceusage"
 	resttasks "jaiscloud/internal/gcp/transport/rest/tasks"
@@ -80,6 +81,7 @@ var providerPrefixes = map[string]string{
 	"ServiceUsage":      "serviceusage",
 	"Scheduler":         "scheduler",
 	"Tasks":             "tasks",
+	"Run":               "run",
 	"ResourceManager":   "resourcemanager",
 	"Datastore":         "datastore",
 	"Logging":           "logging",
@@ -114,6 +116,7 @@ func providers() []provider.Provider {
 		&restserviceusage.Provider{},
 		&restscheduler.Provider{},
 		&resttasks.Provider{},
+		&restrun.Provider{},
 		&restresourcemanager.Provider{},
 		&restdatastore.Provider{},
 		&restlogging.Provider{},

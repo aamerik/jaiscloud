@@ -6,6 +6,7 @@ import (
 
 	functionscore "jaiscloud/internal/gcp/service/functions"
 	servicelogging "jaiscloud/internal/gcp/service/logging"
+	runcore "jaiscloud/internal/gcp/service/run"
 )
 
 // DetectionSource indicates how the service was identified.
@@ -27,6 +28,13 @@ func DetectService(r *http.Request) (service string, source DetectionSource) {
 	// path and would be mis-served.
 	if functionscore.IsTriggerHost(r.Host) {
 		return "functions", SourceHost
+	}
+	// A request addressed to a deployed Cloud Run service's synthesized host
+	// ({id}-{token}.{location}.run.app) is a data-plane invocation, not a
+	// control-plane API call: its path is arbitrary and would otherwise be
+	// mis-served as a GCS raw-media object.
+	if runcore.IsInvocationHost(r.Host) {
+		return "run", SourceHost
 	}
 	// GKE (container.googleapis.com) SDK clients address the canonical
 	// /v1/projects/{project}/locations/{location}/clusters path, which collides
@@ -366,6 +374,19 @@ func detectV2Service(path string) string {
 	// otherwise unmatched).
 	if len(rest) >= 3 && rest[2] == "queues" {
 		return "tasks"
+	}
+	// Cloud Run v2 shares the /v2/projects/{p}/locations/{l} namespace. It owns
+	// the services resource family (covers services/{svc}/revisions and the
+	// service IAM custom methods) and the run-prefixed operation ids
+	// ("operation-run-<uuid>"). The bare locations/{l}/operations[/{id}] family
+	// is path-ambiguous with Cloud Functions on one origin and stays with
+	// functions by design (documented limitation; run operations are returned
+	// inline and reachable directly by their prefixed id).
+	if len(rest) >= 3 && rest[2] == "services" {
+		return "run"
+	}
+	if len(rest) >= 4 && rest[2] == "operations" && strings.HasPrefix(rest[3], "operation-run-") {
+		return "run"
 	}
 	// locations and locations/{location} are the shared google.cloud.location
 	// discovery paths; no other emulated service claims the /v2 namespace.

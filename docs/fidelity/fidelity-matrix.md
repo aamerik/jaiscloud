@@ -6,14 +6,14 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **884**
+Cells: **900**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 657 |
-| limited | 109 |
+| ga | 671 |
+| limited | 111 |
 | preview | 14 |
 | unsupported | 104 |
 
@@ -21,7 +21,7 @@ Cells: **884**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 346 | 102 | 14 | 12 |
+| rest | 360 | 104 | 14 | 12 |
 | grpc | 311 | 7 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -900,6 +900,29 @@ _15 cell(s): ga=8 limited=0 preview=0 unsupported=7_
 | TestIamPermissions | grpc | ga | — |
 | UndeleteProject | grpc | unsupported | projects are synthesized, never deleted; explicit Unimplemented stub |
 | UpdateProject | grpc | unsupported | project metadata is not modelled; explicit Unimplemented stub |
+
+## run
+
+_16 cell(s): ga=14 limited=2 preview=0 unsupported=0_
+
+| operation | transport | state | reason |
+| --- | --- | --- | --- |
+| Run.CancelOperation | rest | limited | no matching Discovery method (unverified against the official schema) |
+| Run.CreateService | rest | ga | — |
+| Run.DeleteOperation | rest | ga | — |
+| Run.DeleteService | rest | ga | — |
+| Run.GetIamPolicy | rest | ga | — |
+| Run.GetOperation | rest | ga | — |
+| Run.GetRevision | rest | ga | — |
+| Run.GetService | rest | ga | — |
+| Run.Invoke | rest | limited | no matching Discovery method (unverified against the official schema) |
+| Run.ListOperations | rest | ga | — |
+| Run.ListRevisions | rest | ga | — |
+| Run.ListServices | rest | ga | — |
+| Run.SetIamPolicy | rest | ga | — |
+| Run.TestIamPermissions | rest | ga | — |
+| Run.UpdateService | rest | ga | — |
+| Run.WaitOperation | rest | ga | — |
 
 ## scheduler
 

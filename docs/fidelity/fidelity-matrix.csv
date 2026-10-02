@@ -713,6 +713,22 @@ resourcemanager,SetIamPolicy,grpc,ga,
 resourcemanager,TestIamPermissions,grpc,ga,
 resourcemanager,UndeleteProject,grpc,unsupported,"projects are synthesized, never deleted; explicit Unimplemented stub"
 resourcemanager,UpdateProject,grpc,unsupported,project metadata is not modelled; explicit Unimplemented stub
+run,Run.CancelOperation,rest,limited,no matching Discovery method (unverified against the official schema)
+run,Run.CreateService,rest,ga,
+run,Run.DeleteOperation,rest,ga,
+run,Run.DeleteService,rest,ga,
+run,Run.GetIamPolicy,rest,ga,
+run,Run.GetOperation,rest,ga,
+run,Run.GetRevision,rest,ga,
+run,Run.GetService,rest,ga,
+run,Run.Invoke,rest,limited,no matching Discovery method (unverified against the official schema)
+run,Run.ListOperations,rest,ga,
+run,Run.ListRevisions,rest,ga,
+run,Run.ListServices,rest,ga,
+run,Run.SetIamPolicy,rest,ga,
+run,Run.TestIamPermissions,rest,ga,
+run,Run.UpdateService,rest,ga,
+run,Run.WaitOperation,rest,ga,
 scheduler,CreateJob,grpc,ga,
 scheduler,DeleteJob,grpc,ga,
 scheduler,GetJob,grpc,ga,

@@ -446,6 +446,41 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "container", Method: "GET", Path: gkeClusterName},
 	)
 
+	// ─── Cloud Run Admin v2 (run.googleapis.com) ──────────────────────────────
+	// Cloud Run shares the /v2/projects/{p}/locations/{l} namespace with Cloud
+	// Functions/Tasks, so the recorder uses canonical paths that detect as run:
+	// the services/revisions family and the run-prefixed operation id. A service
+	// is created (returns a done google.longrunning.Operation whose response is
+	// the Service), read, listed, its revision listed/fetched, its IAM policy
+	// set/read/tested, a description-only PATCH applied, its operation fetched,
+	// then it is deleted and a post-delete read proves the NotFound envelope.
+	// The bare .../operations list is intentionally NOT recorded: that path is
+	// path-ambiguous with Cloud Functions on one origin and stays with functions
+	// by design (documented limitation; run operations are reachable by their
+	// prefixed id).
+	runSvc := "conf-run-" + suffix
+	runBase := "/v2/projects/" + p + "/locations/us-central1"
+	sc = append(sc,
+		Scenario{Service: "run", Method: "POST", Path: runBase + "/services?serviceId=" + runSvc,
+			Body: `{"template":{"containers":[{"image":"nginx:latest","ports":[{"containerPort":80}]}]}}`,
+			Save: map[string]string{"runOp": "name", "runRev": "response.latestReadyRevision"}},
+		Scenario{Service: "run", Method: "GET", Path: runBase + "/services/" + runSvc},
+		Scenario{Service: "run", Method: "GET", Path: runBase + "/services"},
+		Scenario{Service: "run", Method: "GET", Path: runBase + "/services/" + runSvc + "/revisions"},
+		Scenario{Service: "run", Method: "GET", Path: "/v2/${runRev}"},
+		Scenario{Service: "run", Method: "GET", Path: runBase + "/services/" + runSvc + ":getIamPolicy"},
+		Scenario{Service: "run", Method: "POST", Path: runBase + "/services/" + runSvc + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/run.invoker","members":["allUsers"]}]}}`},
+		Scenario{Service: "run", Method: "GET", Path: runBase + "/services/" + runSvc + ":getIamPolicy"},
+		Scenario{Service: "run", Method: "POST", Path: runBase + "/services/" + runSvc + ":testIamPermissions",
+			Body: `{"permissions":["run.services.get","run.services.delete"]}`},
+		Scenario{Service: "run", Method: "PATCH", Path: runBase + "/services/" + runSvc + "?updateMask=description",
+			Body: `{"description":"updated"}`},
+		Scenario{Service: "run", Method: "GET", Path: "/v2/${runOp}"},
+		Scenario{Service: "run", Method: "DELETE", Path: runBase + "/services/" + runSvc},
+		Scenario{Service: "run", Method: "GET", Path: runBase + "/services/" + runSvc},
+	)
+
 	return sc
 }
 
