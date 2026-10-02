@@ -169,7 +169,7 @@ function Shell({ children }: Props) {
       items.push({ type: 'button', text: version, disableUtilityCollapse: true })
     }
     return items
-  }, [meta, accountId, accounts, connected, refetchAccounts, setAccountId])
+  }, [meta, accountId, accounts, connected, refetchAccounts, setAccountId, mode])
 
   return (
     <>
