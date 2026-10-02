@@ -148,9 +148,10 @@ function Shell({ children }: Props) {
       },
       {
         type: 'menu-dropdown',
+        text: mode === Mode.Dark ? 'Dark' : 'Light',
         iconName: 'settings',
         ariaLabel: 'Appearance',
-        title: 'Appearance',
+        disableUtilityCollapse: true,
         items: [
           { id: 'light', text: 'Light' },
           { id: 'dark', text: 'Dark' },

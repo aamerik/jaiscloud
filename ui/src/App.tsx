@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useMeta } from './hooks/useMeta'
 import { Layout } from './components/Layout'
+import { ConsoleHome } from './components/ConsoleHome'
 import { AzureRoutes } from './services/azure'
 import { GCPRoutes } from './services/gcp'
 import { SQSRoutes } from './services/aws/sqs'
@@ -81,7 +82,7 @@ export default function App() {
   return (
     <Layout>
       <Routes>
-        <Route path="/" element={<Navigate to="/aws/sqs" replace />} />
+        <Route path="/" element={<ConsoleHome />} />
         <Route path="/aws/sqs/*" element={<SQSRoutes />} />
         <Route path="/aws/lambda/*" element={<LambdaRoutes />} />
         <Route path="/aws/logs/*" element={<LogsRoutes />} />
