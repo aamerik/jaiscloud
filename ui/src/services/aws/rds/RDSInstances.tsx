@@ -26,13 +26,13 @@ import {
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
 import { useNotifications } from '../../../components/notifications'
-import { useSplitPanel } from '../../../components/splitPanel'
 
 export function RDSInstances() {
   const qc = useQueryClient()
   const [selected, setSelected] = useState<DBInstance[]>([])
   const [createOpen, setCreateOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [details, setDetails] = useState<DBInstance | null>(null)
   const [form, setForm] = useState({
     id: '',
     engine: 'mysql',
@@ -41,35 +41,6 @@ export function RDSInstances() {
     password: '',
   })
   const { notify } = useNotifications()
-  const splitPanel = useSplitPanel()
-
-  const showDetails = (instance: DBInstance) => {
-    splitPanel.show({
-      header: instance.id,
-      content: (
-        <KeyValuePairs
-          columns={1}
-          items={[
-            { label: 'Identifier', value: instance.id },
-            {
-              label: 'Status',
-              value: (
-                <StatusIndicator type={resourceStatus(instance.status)}>
-                  {instance.status}
-                </StatusIndicator>
-              ),
-            },
-            { label: 'Engine', value: instance.engine },
-            { label: 'Class', value: instance.class },
-            {
-              label: 'Endpoint',
-              value: <Box variant="code">{instance.endpoint ? `${instance.endpoint}:${instance.port}` : '—'}</Box>,
-            },
-          ]}
-        />
-      ),
-    })
-  }
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['rds', 'instances'],
@@ -144,6 +115,15 @@ export function RDSInstances() {
       header: 'Endpoint',
       cell: (i) => <Box variant="code">{i.endpoint ? `${i.endpoint}:${i.port}` : '—'}</Box>,
     },
+    {
+      id: 'actions',
+      header: '',
+      cell: (i) => (
+        <Button variant="inline-link" onClick={() => setDetails(i)}>
+          View details
+        </Button>
+      ),
+    },
   ]
 
   const hasStopped = selected.some((i) => i.status === 'stopped')
@@ -163,13 +143,9 @@ export function RDSInstances() {
           title="Databases"
           description="metadata only"
           loading={isLoading}
-          onRowClick={showDetails}
           selectionType="multi"
           selectedItems={selected}
-          onSelectionChange={(items) => {
-            setSelected(items)
-            if (items.length === 1) showDetails(items[0]!)
-          }}
+          onSelectionChange={setSelected}
           actions={
             <SpaceBetween direction="horizontal" size="xs">
               <ButtonDropdown
@@ -196,6 +172,47 @@ export function RDSInstances() {
           emptyBody="Create an RDS instance to get started."
         />
       )}
+
+      <Modal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.id ?? 'Database'}
+        size="medium"
+        footer={
+          <Box float="right">
+            <Button variant="link" onClick={() => setDetails(null)}>
+              Close
+            </Button>
+          </Box>
+        }
+      >
+        {details && (
+          <KeyValuePairs
+            columns={1}
+            items={[
+              { label: 'Identifier', value: details.id },
+              {
+                label: 'Status',
+                value: (
+                  <StatusIndicator type={resourceStatus(details.status)}>
+                    {details.status}
+                  </StatusIndicator>
+                ),
+              },
+              { label: 'Engine', value: details.engine },
+              { label: 'Class', value: details.class },
+              {
+                label: 'Endpoint',
+                value: (
+                  <Box variant="code">
+                    {details.endpoint ? `${details.endpoint}:${details.port}` : '—'}
+                  </Box>
+                ),
+              },
+            ]}
+          />
+        )}
+      </Modal>
 
       <Modal
         visible={createOpen}

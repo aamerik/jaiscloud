@@ -23,40 +23,13 @@ import {
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
 import { useNotifications } from '../../../components/notifications'
-import { useSplitPanel } from '../../../components/splitPanel'
 
 export function EC2Instances() {
   const qc = useQueryClient()
   const [selected, setSelected] = useState<Instance[]>([])
   const [confirmTerminate, setConfirmTerminate] = useState(false)
+  const [details, setDetails] = useState<Instance | null>(null)
   const { notify } = useNotifications()
-  const splitPanel = useSplitPanel()
-
-  const showDetails = (instance: Instance) => {
-    splitPanel.show({
-      header: `Instance ${instance.id}`,
-      content: (
-        <KeyValuePairs
-          columns={1}
-          items={[
-            { label: 'Instance ID', value: <Box variant="code">{instance.id}</Box> },
-            {
-              label: 'State',
-              value: (
-                <StatusIndicator type={resourceStatus(instance.state)}>
-                  {instance.state}
-                </StatusIndicator>
-              ),
-            },
-            { label: 'Instance type', value: instance.instanceType },
-            { label: 'AMI ID', value: <Box variant="code">{instance.imageId}</Box> },
-            { label: 'Private IP', value: <Box variant="code">{instance.privateIp || '—'}</Box> },
-            { label: 'Public IP', value: <Box variant="code">{instance.publicIp || '—'}</Box> },
-          ]}
-        />
-      ),
-    })
-  }
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['ec2', 'instances'],
@@ -141,6 +114,15 @@ export function EC2Instances() {
     { id: 'image', header: 'AMI ID', cell: (i) => <Box variant="code">{i.imageId}</Box> },
     { id: 'private', header: 'Private IP', cell: (i) => <Box variant="code">{i.privateIp || '—'}</Box> },
     { id: 'public', header: 'Public IP', cell: (i) => <Box variant="code">{i.publicIp || '—'}</Box> },
+    {
+      id: 'actions',
+      header: '',
+      cell: (i) => (
+        <Button variant="inline-link" onClick={() => setDetails(i)}>
+          View details
+        </Button>
+      ),
+    },
   ]
 
   const hasStopped = selected.some((i) => i.state === 'stopped')
@@ -160,13 +142,9 @@ export function EC2Instances() {
           title="Instances"
           description="EC2 instances (metadata only)"
           loading={isLoading}
-          onRowClick={showDetails}
           selectionType="multi"
           selectedItems={selected}
-          onSelectionChange={(items) => {
-            setSelected(items)
-            if (items.length === 1) showDetails(items[0]!)
-          }}
+          onSelectionChange={setSelected}
           actions={
             <ButtonDropdown
               items={[
@@ -188,6 +166,41 @@ export function EC2Instances() {
           emptyBody="No EC2 instances found in this region."
         />
       )}
+
+      <Modal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={`Instance ${details?.id ?? ''}`}
+        size="medium"
+        footer={
+          <Box float="right">
+            <Button variant="link" onClick={() => setDetails(null)}>
+              Close
+            </Button>
+          </Box>
+        }
+      >
+        {details && (
+          <KeyValuePairs
+            columns={1}
+            items={[
+              { label: 'Instance ID', value: <Box variant="code">{details.id}</Box> },
+              {
+                label: 'State',
+                value: (
+                  <StatusIndicator type={resourceStatus(details.state)}>
+                    {details.state}
+                  </StatusIndicator>
+                ),
+              },
+              { label: 'Instance type', value: details.instanceType },
+              { label: 'AMI ID', value: <Box variant="code">{details.imageId}</Box> },
+              { label: 'Private IP', value: <Box variant="code">{details.privateIp || '—'}</Box> },
+              { label: 'Public IP', value: <Box variant="code">{details.publicIp || '—'}</Box> },
+            ]}
+          />
+        )}
+      </Modal>
 
       <Modal
         visible={confirmTerminate}

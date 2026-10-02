@@ -19,7 +19,6 @@ import { formatDate } from '../../../lib/date'
 import { resourceStatus } from '../../../lib/status'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
 import { useNotifications } from '../../../components/notifications'
-import { useSplitPanel } from '../../../components/splitPanel'
 
 export function EKSClusters() {
   const qc = useQueryClient()
@@ -27,33 +26,8 @@ export function EKSClusters() {
   const [createOpen, setCreateOpen] = useState(false)
   const [selected, setSelected] = useState<EKSCluster[]>([])
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [details, setDetails] = useState<EKSCluster | null>(null)
   const { notify } = useNotifications()
-  const splitPanel = useSplitPanel()
-
-  const showDetails = (cluster: EKSCluster) => {
-    splitPanel.show({
-      header: cluster.name,
-      content: (
-        <KeyValuePairs
-          columns={1}
-          items={[
-            { label: 'Name', value: cluster.name },
-            {
-              label: 'Status',
-              value: (
-                <StatusIndicator type={resourceStatus(cluster.status)}>
-                  {cluster.status || '—'}
-                </StatusIndicator>
-              ),
-            },
-            { label: 'Version', value: cluster.version || '—' },
-            { label: 'ARN', value: <Box variant="code">{cluster.arn}</Box> },
-            { label: 'Created', value: formatDate(cluster.createdAt) },
-          ]}
-        />
-      ),
-    })
-  }
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['eks', 'clusters'],
@@ -100,6 +74,15 @@ export function EKSClusters() {
     },
     { id: 'version', header: 'Version', cell: (c) => c.version || '—' },
     { id: 'created', header: 'Created', cell: (c) => formatDate(c.createdAt) },
+    {
+      id: 'actions',
+      header: '',
+      cell: (c) => (
+        <Button variant="inline-link" onClick={() => setDetails(c)}>
+          View details
+        </Button>
+      ),
+    },
   ]
 
   return (
@@ -116,13 +99,9 @@ export function EKSClusters() {
           title="Clusters"
           description="metadata only"
           loading={isLoading}
-          onRowClick={showDetails}
           selectionType="multi"
           selectedItems={selected}
-          onSelectionChange={(items) => {
-            setSelected(items)
-            if (items.length === 1) showDetails(items[0]!)
-          }}
+          onSelectionChange={setSelected}
           actions={
             <SpaceBetween direction="horizontal" size="xs">
               <Button
@@ -140,6 +119,40 @@ export function EKSClusters() {
           emptyBody="Create an EKS cluster to get started."
         />
       )}
+
+      <Modal
+        visible={details != null}
+        onDismiss={() => setDetails(null)}
+        header={details?.name ?? 'Cluster'}
+        size="medium"
+        footer={
+          <Box float="right">
+            <Button variant="link" onClick={() => setDetails(null)}>
+              Close
+            </Button>
+          </Box>
+        }
+      >
+        {details && (
+          <KeyValuePairs
+            columns={1}
+            items={[
+              { label: 'Name', value: details.name },
+              {
+                label: 'Status',
+                value: (
+                  <StatusIndicator type={resourceStatus(details.status)}>
+                    {details.status || '—'}
+                  </StatusIndicator>
+                ),
+              },
+              { label: 'Version', value: details.version || '—' },
+              { label: 'ARN', value: <Box variant="code">{details.arn}</Box> },
+              { label: 'Created', value: formatDate(details.createdAt) },
+            ]}
+          />
+        )}
+      </Modal>
 
       <Modal
         visible={createOpen}
