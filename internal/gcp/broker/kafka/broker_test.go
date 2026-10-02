@@ -1,15 +1,23 @@
 package kafka
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"jaiscloud/internal/clock"
 
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -364,4 +372,265 @@ func hasArg(pod *corev1.Pod, name, value string) bool {
 		}
 	}
 	return false
+}
+
+// --- native broker reaping (MK10) ---
+
+// requireLinux skips tests that depend on Linux /proc start-time fingerprints
+// and Pdeathsig, both of which are Linux-only.
+func requireLinux(t *testing.T) {
+	t.Helper()
+	if goruntime.GOOS != "linux" {
+		t.Skip("native broker reaping uses Linux /proc and Pdeathsig")
+	}
+}
+
+// fakeRedpandaBinary writes a stand-in broker that stays alive until killed.
+func fakeRedpandaBinary(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "fake-redpanda")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+	return bin
+}
+
+// processRunning reports whether pid exists and is not a zombie. A killed but
+// unreaped child is still visible in /proc but is effectively dead.
+func processRunning(pid int) bool {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	end := bytes.LastIndexByte(data, ')')
+	if end < 0 || end+2 >= len(data) {
+		return false
+	}
+	return data[end+2] != 'Z'
+}
+
+func waitProcessGone(t *testing.T, pid int) {
+	t.Helper()
+	deadline := clock.RealNow().Add(5 * time.Second)
+	for clock.RealNow().Before(deadline) {
+		if !processRunning(pid) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("process %d still running", pid)
+}
+
+// TestNativeBrokerPidfileLifecycle proves the pidfile is written on start and
+// removed on a graceful stop, so a reaped broker can never be killed again.
+func TestNativeBrokerPidfileLifecycle(t *testing.T) {
+	requireLinux(t)
+	dir := t.TempDir()
+	key := ClusterKey{Project: "p", Location: "l", Cluster: "c1"}
+	clusterDir := filepath.Join(dir, "managedkafka", brokerResourceName(key))
+	pidPath := filepath.Join(clusterDir, nativePidFile)
+
+	b := newNativeBroker(fakeRedpandaBinary(t), dir, discardLogger())
+	b.probe = func(string) bool { return true }
+
+	if _, err := b.EnsureCluster(context.Background(), "p", "l", "c1"); err != nil {
+		t.Fatalf("EnsureCluster: %v", err)
+	}
+	rec, ok := readPidRecord(clusterDir)
+	if !ok {
+		t.Fatalf("pidfile not written at %s", pidPath)
+	}
+	if rec.PID <= 0 || rec.StartTime == "" {
+		t.Fatalf("pid record = %+v, want a pid and start-time", rec)
+	}
+	if _, ok := procStartTime(rec.PID); !ok {
+		t.Fatalf("recorded pid %d is not live", rec.PID)
+	}
+
+	if err := b.StopCluster(context.Background(), "p", "l", "c1"); err != nil {
+		t.Fatalf("StopCluster: %v", err)
+	}
+	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
+		t.Errorf("pidfile survived StopCluster: %v", err)
+	}
+}
+
+// TestNativeBrokerSweepReapsMatchingPID proves the startup sweep kills the
+// recorded orphan when its start-time fingerprint still matches, then removes
+// the data root.
+func TestNativeBrokerSweepReapsMatchingPID(t *testing.T) {
+	requireLinux(t)
+	root := t.TempDir()
+	key := ClusterKey{Project: "p", Location: "l", Cluster: "c1"}
+	clusterDir := filepath.Join(root, "managedkafka", brokerResourceName(key))
+	if err := os.MkdirAll(clusterDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	orphan := exec.Command("sleep", "60")
+	if err := orphan.Start(); err != nil {
+		t.Fatalf("start orphan: %v", err)
+	}
+	t.Cleanup(func() { _ = orphan.Process.Kill(); _, _ = orphan.Process.Wait() })
+	if err := writePidRecord(clusterDir, orphan.Process.Pid); err != nil {
+		t.Fatalf("write pid record: %v", err)
+	}
+
+	newNativeBroker("/nonexistent", root, discardLogger()).sweepOrphans()
+
+	waitProcessGone(t, orphan.Process.Pid)
+	if _, err := os.Stat(filepath.Join(root, "managedkafka")); !os.IsNotExist(err) {
+		t.Errorf("data root not removed after sweep: %v", err)
+	}
+}
+
+// TestNativeBrokerFailedStartRemovesPidfile proves the failed-readiness reap
+// does not leave a pidfile behind that a later sweep might rerun.
+func TestNativeBrokerFailedStartRemovesPidfile(t *testing.T) {
+	requireLinux(t)
+	dir := t.TempDir()
+	key := ClusterKey{Project: "p", Location: "l", Cluster: "c1"}
+	clusterDir := filepath.Join(dir, "managedkafka", brokerResourceName(key))
+
+	b := newNativeBroker(fakeRedpandaBinary(t), dir, discardLogger())
+	b.probe = func(string) bool { return false } // never ready
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := b.EnsureCluster(ctx, key.Project, key.Location, key.Cluster); err == nil {
+		t.Fatal("EnsureCluster succeeded with a never-ready broker; want error")
+	}
+	if _, ok := readPidRecord(clusterDir); ok {
+		t.Error("pidfile leaked after a failed broker start")
+	}
+}
+
+// TestNativeBrokerSweepLeavesMismatchedPID proves a recycled/mismatched PID is
+// never killed: the recorded start-time does not match the live process.
+func TestNativeBrokerSweepLeavesMismatchedPID(t *testing.T) {
+	requireLinux(t)
+	root := t.TempDir()
+	key := ClusterKey{Project: "p", Location: "l", Cluster: "c1"}
+	clusterDir := filepath.Join(root, "managedkafka", brokerResourceName(key))
+	if err := os.MkdirAll(clusterDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	orphan := exec.Command("sleep", "60")
+	if err := orphan.Start(); err != nil {
+		t.Fatalf("start orphan: %v", err)
+	}
+	t.Cleanup(func() { _ = orphan.Process.Kill(); _, _ = orphan.Process.Wait() })
+
+	// Correct PID, wrong fingerprint: a reused PID would look like this.
+	rec := fmt.Sprintf("%d 0\n", orphan.Process.Pid)
+	if err := os.WriteFile(filepath.Join(clusterDir, nativePidFile), []byte(rec), 0o644); err != nil {
+		t.Fatalf("write pid record: %v", err)
+	}
+
+	newNativeBroker("/nonexistent", root, discardLogger()).sweepOrphans()
+
+	if !processRunning(orphan.Process.Pid) {
+		t.Fatal("sweep killed a process whose fingerprint did not match")
+	}
+}
+
+// TestNativeBrokerSweepIgnoresMalformedPidfile proves a corrupt pidfile cannot
+// cause a kill, and the stale dir is still cleared.
+func TestNativeBrokerSweepIgnoresMalformedPidfile(t *testing.T) {
+	root := t.TempDir()
+	clusterDir := filepath.Join(root, "managedkafka", "mkbroker-stale")
+	if err := os.MkdirAll(clusterDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(clusterDir, nativePidFile), []byte("not a pid\n"), 0o644); err != nil {
+		t.Fatalf("write pidfile: %v", err)
+	}
+
+	newNativeBroker("/nonexistent", root, discardLogger()).sweepOrphans()
+
+	if _, err := os.Stat(clusterDir); !os.IsNotExist(err) {
+		t.Errorf("stale dir survived sweep: %v", err)
+	}
+}
+
+// TestNativeBrokerPdeathsigReapsChild proves a SIGKILLed emulator leaves no
+// broker child behind. The test re-execs itself as a helper that starts a
+// native broker, reports the child PID, then blocks; the parent SIGKILLs the
+// helper (no Go cleanup runs) and asserts the broker is gone via Pdeathsig.
+func TestNativeBrokerPdeathsigReapsChild(t *testing.T) {
+	requireLinux(t)
+
+	if os.Getenv("KAFKA_PDEATHSIG_HELPER") == "1" {
+		runPdeathsigHelper()
+		return
+	}
+
+	helper := exec.Command(os.Args[0], "-test.run=TestNativeBrokerPdeathsigReapsChild", "-test.v")
+	helper.Env = append(os.Environ(),
+		"KAFKA_PDEATHSIG_HELPER=1",
+		"KAFKA_PDEATHSIG_DIR="+t.TempDir(),
+		"KAFKA_PDEATHSIG_BIN="+fakeRedpandaBinary(t),
+	)
+	stdout, err := helper.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	helper.Stderr = os.Stderr
+	if err := helper.Start(); err != nil {
+		t.Fatalf("start helper: %v", err)
+	}
+
+	pid := readBrokerPID(t, stdout)
+	if err := helper.Process.Kill(); err != nil {
+		t.Fatalf("kill helper: %v", err)
+	}
+	_, _ = helper.Process.Wait()
+
+	waitProcessGone(t, pid)
+}
+
+// runPdeathsigHelper runs inside the re-exec'd test binary: it starts a broker
+// and blocks forever (the parent SIGKILLs it). LockOSThread keeps the spawning
+// OS thread alive so Pdeathsig's thread-death semantics match process death.
+func runPdeathsigHelper() {
+	goruntime.LockOSThread()
+	defer goruntime.UnlockOSThread()
+
+	dir := os.Getenv("KAFKA_PDEATHSIG_DIR")
+	b := newNativeBroker(os.Getenv("KAFKA_PDEATHSIG_BIN"), dir, discardLogger())
+	b.probe = func(string) bool { return true }
+	if _, err := b.EnsureCluster(context.Background(), "p", "l", "c1"); err != nil {
+		fmt.Fprintf(os.Stdout, "HELPER_ERROR=%v\n", err)
+		os.Exit(1)
+	}
+	key := ClusterKey{Project: "p", Location: "l", Cluster: "c1"}
+	rec, ok := readPidRecord(filepath.Join(dir, "managedkafka", brokerResourceName(key)))
+	if !ok {
+		fmt.Fprintln(os.Stdout, "HELPER_ERROR=no pidfile written")
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stdout, "BROKER_PID=%d\n", rec.PID)
+	_ = os.Stdout.Sync()
+	select {}
+}
+
+func readBrokerPID(t *testing.T, stdout io.Reader) int {
+	t.Helper()
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if v, ok := strings.CutPrefix(line, "BROKER_PID="); ok {
+			pid, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil {
+				t.Fatalf("bad broker pid in %q: %v", line, err)
+			}
+			return pid
+		}
+		if strings.HasPrefix(line, "HELPER_ERROR=") {
+			t.Fatalf("helper failed: %s", line)
+		}
+	}
+	t.Fatalf("helper exited without reporting a broker pid: %v", scanner.Err())
+	return 0
 }
