@@ -98,6 +98,10 @@ type Broker interface {
 	// CommitConsumerGroupOffsets sets the group's committed offsets. With no
 	// live broker it is a no-op.
 	CommitConsumerGroupOffsets(ctx context.Context, project, location, cluster, group string, offsets []core.ConsumerGroupOffset) error
+	// ReplaceAcl mirrors an ACL's entry set onto the cluster's live broker,
+	// replacing every binding for the ACL's resource pattern; an empty entry
+	// set removes them. With no live broker it is a no-op.
+	ReplaceAcl(ctx context.Context, project, location, cluster, resourceType, resourceName, patternType string, entries []core.AclBinding) error
 	// Shutdown stops every broker this manager owns (called on emulator
 	// shutdown).
 	Shutdown(ctx context.Context) error
@@ -209,6 +213,9 @@ func (mockBroker) DeleteConsumerGroup(context.Context, string, string, string, s
 	return false, nil
 }
 func (mockBroker) CommitConsumerGroupOffsets(context.Context, string, string, string, string, []core.ConsumerGroupOffset) error {
+	return nil
+}
+func (mockBroker) ReplaceAcl(context.Context, string, string, string, string, string, string, []core.AclBinding) error {
 	return nil
 }
 func (mockBroker) Shutdown(context.Context) error { return nil }
