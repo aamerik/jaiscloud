@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { listStacks, createStack, deleteStack } from '../../../api/cfn'
+import { formatDate } from '../../../lib/date'
 
 function statusColor(status: string): string {
   if (status.includes('COMPLETE') && !status.includes('ROLLBACK')) return 'bg-green-100 text-green-700'
@@ -67,7 +68,7 @@ export function CFNStacks() {
                     <span className={`text-xs px-2 py-0.5 rounded ${statusColor(s.status)}`}>{s.status}</span>
                   </td>
                   <td className="px-4 py-2 text-gray-500 truncate max-w-xs">{s.description || '—'}</td>
-                  <td className="px-4 py-2 text-gray-500">{s.createdAt ? new Date(s.createdAt).toLocaleString() : '—'}</td>
+                  <td className="px-4 py-2 text-gray-500">{formatDate(s.createdAt)}</td>
                   <td className="px-4 py-2">
                     <button onClick={() => del.mutate(s.name)} className="text-xs px-2 py-0.5 rounded bg-red-100 text-red-700 hover:bg-red-200">Delete</button>
                   </td>

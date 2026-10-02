@@ -3,17 +3,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { listFunctions, deleteFunction, type LambdaFunction } from '../../../api/lambda'
 import { EmptyState } from '../../../components/EmptyState'
+import { formatDate } from '../../../lib/date'
 
 function stateColor(state: string): string {
   if (state === 'Active') return '#1d8102'
   if (state === 'Pending') return '#e77600'
   if (state === 'Inactive' || state === 'Failed') return '#d13212'
   return '#5f6b7a'
-}
-
-function fmtDate(s: string): string {
-  if (!s) return '—'
-  try { return new Date(s).toLocaleString() } catch { return s }
 }
 
 export function LambdaList() {
@@ -75,7 +71,7 @@ export function LambdaList() {
                   <td style={td}><span style={{ color: '#0972d3', fontWeight: 500 }}>{fn.name}</span></td>
                   <td style={td}><code style={{ fontSize: '0.85em', background: '#f4f5f7', padding: '0.15em 0.4em', borderRadius: 3 }}>{fn.runtime}</code></td>
                   <td style={{ ...td, color: '#5f6b7a', fontFamily: 'monospace', fontSize: '0.85em' }}>{fn.handler}</td>
-                  <td style={{ ...td, color: '#5f6b7a' }}>{fmtDate(fn.lastModified)}</td>
+                  <td style={{ ...td, color: '#5f6b7a' }}>{formatDate(fn.lastModified)}</td>
                   <td style={td}>
                     <span style={{ color: stateColor(fn.state), fontWeight: 500, fontSize: '0.85em' }}>
                       {fn.state || '—'}

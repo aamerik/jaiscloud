@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { getFunction } from '../../../api/lambda'
 import { listLogStreams, getLogEvents } from '../../../api/logs'
+import { formatDate } from '../../../lib/date'
 import { LambdaTest } from './LambdaTest'
 
 type Tab = 'configuration' | 'test' | 'logs'
@@ -38,7 +39,7 @@ export function LambdaDetail() {
     ['Memory', `${fn.memorySize} MB`],
     ['State', fn.state],
     ['Description', fn.description || '—'],
-    ['Last modified', fn.lastModified ? new Date(fn.lastModified).toLocaleString() : '—'],
+    ['Last modified', formatDate(fn.lastModified)],
   ]
 
   return (

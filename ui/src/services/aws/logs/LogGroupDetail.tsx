@@ -1,11 +1,7 @@
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { listLogStreams, type LogStream } from '../../../api/logs'
-
-function fmtTs(ms?: number): string {
-  if (!ms) return '—'
-  return new Date(ms).toLocaleString()
-}
+import { formatDate } from '../../../lib/date'
 
 export function LogGroupDetail() {
   const { name: encodedName } = useParams<{ name: string }>()
@@ -60,8 +56,8 @@ export function LogGroupDetail() {
                   <td style={td}>
                     <span style={{ color: '#0972d3', fontFamily: 'monospace', fontSize: '0.88em' }}>{s.name}</span>
                   </td>
-                  <td style={{ ...td, color: '#5f6b7a' }}>{fmtTs(s.firstEventAt)}</td>
-                  <td style={{ ...td, color: '#5f6b7a' }}>{fmtTs(s.lastEventAt)}</td>
+                  <td style={{ ...td, color: '#5f6b7a' }}>{formatDate(s.firstEventAt)}</td>
+                  <td style={{ ...td, color: '#5f6b7a' }}>{formatDate(s.lastEventAt)}</td>
                 </tr>
               ))}
             </tbody>

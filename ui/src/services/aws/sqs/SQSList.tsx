@@ -3,12 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { listQueues, deleteQueue, type Queue } from '../../../api/sqs'
 import { EmptyState } from '../../../components/EmptyState'
+import { formatDate } from '../../../lib/date'
 import { SQSCreate } from './SQSCreate'
-
-function fmtDate(iso: string): string {
-  if (!iso) return '—'
-  try { return new Date(iso).toLocaleString() } catch { return iso }
-}
 
 export function SQSList() {
   const [createOpen, setCreateOpen] = useState(false)
@@ -103,7 +99,7 @@ export function SQSList() {
                   <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                     {q.messagesInFlight.toLocaleString()}
                   </td>
-                  <td style={{ ...td, color: '#5f6b7a' }}>{fmtDate(q.createdAt)}</td>
+                  <td style={{ ...td, color: '#5f6b7a' }}>{formatDate(q.createdAt)}</td>
                   <td style={td} onClick={(e) => e.stopPropagation()}>
                     <button
                       onClick={() => setConfirmDelete(q)}
