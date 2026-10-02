@@ -163,7 +163,10 @@ export function EC2Instances() {
           onRowClick={showDetails}
           selectionType="multi"
           selectedItems={selected}
-          onSelectionChange={setSelected}
+          onSelectionChange={(items) => {
+            setSelected(items)
+            if (items.length === 1) showDetails(items[0]!)
+          }}
           actions={
             <ButtonDropdown
               items={[

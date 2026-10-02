@@ -166,7 +166,10 @@ export function RDSInstances() {
           onRowClick={showDetails}
           selectionType="multi"
           selectedItems={selected}
-          onSelectionChange={setSelected}
+          onSelectionChange={(items) => {
+            setSelected(items)
+            if (items.length === 1) showDetails(items[0]!)
+          }}
           actions={
             <SpaceBetween direction="horizontal" size="xs">
               <ButtonDropdown

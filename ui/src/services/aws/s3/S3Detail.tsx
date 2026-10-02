@@ -272,9 +272,10 @@ export function S3Detail() {
             onRowClick={({ detail }) => showObjectDetails(detail.item)}
             selectionType="multi"
             selectedItems={selectedItems}
-            onSelectionChange={({ detail }) =>
+            onSelectionChange={({ detail }) => {
               setSelected(new Set(detail.selectedItems.map((object) => object.key)))
-            }
+              if (detail.selectedItems.length === 1) showObjectDetails(detail.selectedItems[0]!)
+            }}
             header={
               <Header
                 variant="h2"
