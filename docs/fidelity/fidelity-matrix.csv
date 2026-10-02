@@ -95,6 +95,12 @@ compute,Compute.SubnetworksList,rest,limited,metadata-only over ResourceStore (n
 compute,Compute.Unimplemented,rest,unsupported,explicit Unimplemented stub
 compute,Compute.ZonesGet,rest,limited,metadata-only over ResourceStore (no control plane)
 compute,Compute.ZonesList,rest,limited,metadata-only over ResourceStore (no control plane)
+container,Container.CreateCluster,rest,ga,
+container,Container.DeleteCluster,rest,ga,
+container,Container.GetCluster,rest,ga,
+container,Container.GetOperation,rest,ga,
+container,Container.ListClusters,rest,ga,
+container,Container.ListOperations,rest,ga,
 dataproc,CancelJob,grpc,ga,
 dataproc,CreateCluster,grpc,ga,
 dataproc,CreateWorkflowTemplate,grpc,ga,

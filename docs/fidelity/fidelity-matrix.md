@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **878**
+Cells: **884**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 651 |
+| ga | 657 |
 | limited | 109 |
 | preview | 14 |
 | unsupported | 104 |
@@ -21,7 +21,7 @@ Cells: **878**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 340 | 102 | 14 | 12 |
+| rest | 346 | 102 | 14 | 12 |
 | grpc | 311 | 7 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -149,6 +149,19 @@ _33 cell(s): ga=0 limited=32 preview=0 unsupported=1_
 | Compute.Unimplemented | rest | unsupported | explicit Unimplemented stub |
 | Compute.ZonesGet | rest | limited | metadata-only over ResourceStore (no control plane) |
 | Compute.ZonesList | rest | limited | metadata-only over ResourceStore (no control plane) |
+
+## container
+
+_6 cell(s): ga=6 limited=0 preview=0 unsupported=0_
+
+| operation | transport | state | reason |
+| --- | --- | --- | --- |
+| Container.CreateCluster | rest | ga | — |
+| Container.DeleteCluster | rest | ga | — |
+| Container.GetCluster | rest | ga | — |
+| Container.GetOperation | rest | ga | — |
+| Container.ListClusters | rest | ga | — |
+| Container.ListOperations | rest | ga | — |
 
 ## dataproc
 

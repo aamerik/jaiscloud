@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"jaiscloud/internal/adapter"
+	restcontainer "jaiscloud/internal/gcp/transport/rest/container"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
@@ -110,6 +111,21 @@ var gcpServices = []ServiceDescriptor{
 		ServiceName:    "managedkafka",
 		ProviderPrefix: "ManagedKafka",
 		Codec:          func() adapter.Codec { return restmanagedkafka.NewCodec() },
+	},
+	{
+		// Google Kubernetes Engine (GKE) v1 shares the /v1/ prefix and the
+		// canonical /v1/projects/{project}/locations/{location}/clusters path
+		// with Managed Kafka on the single emulator origin, so it is
+		// disambiguated by host (the first DNS label is "container", matching
+		// container.googleapis.com) or by the "/container/" path prefix
+		// Terraform/gcloud use. The codec lives with the REST transport package
+		// that adapts it to the shared core. REST only — GKE's native transport
+		// is gRPC, but the emulator deliberately exposes the REST metadata
+		// surface (see docs/GA.md §7).
+		ServiceName:    "container",
+		PathPrefixes:   []string{"/container/"},
+		ProviderPrefix: "Container",
+		Codec:          func() adapter.Codec { return restcontainer.NewCodec() },
 	},
 	{
 		ServiceName:    "bigquery",

@@ -28,6 +28,17 @@ func DetectService(r *http.Request) (service string, source DetectionSource) {
 	if functionscore.IsTriggerHost(r.Host) {
 		return "functions", SourceHost
 	}
+	// GKE (container.googleapis.com) SDK clients address the canonical
+	// /v1/projects/{project}/locations/{location}/clusters path, which collides
+	// with Managed Kafka on the single emulator origin. The Host's first DNS
+	// label is the discriminator: container.localhost / container.googleapis.com
+	// → GKE. The path is left unchanged (the container codec accepts the
+	// canonical form); Terraform/gcloud use the /container/ path prefix, claimed
+	// by the descriptor's PathPrefixes below. Only /v1/ paths are matched, so
+	// GCS XML/object, /storage, /v2 and health endpoints are never affected.
+	if strings.HasPrefix(r.URL.Path, "/v1/") && firstHostLabel(r.Host) == "container" {
+		return "container", SourceHost
+	}
 	p := r.URL.Path
 	// SDK test clients concatenate an endpoint that may already end in "/" with
 	// "/v1/..." paths, yielding a leading "//". Collapse redundant leading
@@ -475,4 +486,17 @@ func detectMetastoreResourceType(seg []string) string {
 		return "services"
 	}
 	return ""
+}
+
+// firstHostLabel returns the first DNS label of an HTTP Host header, stripping
+// any port. It is the emulator's host-token discriminator for services that
+// share a canonical path on one origin (currently GKE's "container").
+func firstHostLabel(host string) string {
+	if i := strings.IndexByte(host, ':'); i >= 0 {
+		host = host[:i]
+	}
+	if i := strings.IndexByte(host, '.'); i >= 0 {
+		return host[:i]
+	}
+	return host
 }
