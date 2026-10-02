@@ -1,4 +1,6 @@
 import {
+  Box,
+  Cards,
   Container,
   ContentLayout,
   Header,
@@ -6,15 +8,26 @@ import {
   SpaceBetween,
 } from '@cloudscape-design/components'
 import { useNavigate } from 'react-router-dom'
-import { categoryOrder, navTree, serviceCategory } from './nav'
+import { categoryOrder, navTree, serviceCategory, type NavSection } from './nav'
+
+function toSection(id: string): NavSection | undefined {
+  return navTree.find((section) => section.id === id)
+}
 
 /**
- * Console Home landing page: services grouped by AWS category, mirroring the
- * AWS Console home. Reached at the app root instead of dropping straight into
- * an arbitrary service.
+ * Console Home landing page: recently visited services plus all services
+ * grouped by AWS category, mirroring the AWS Console home.
  */
 export function ConsoleHome() {
   const navigate = useNavigate()
+
+  let recent: NavSection[] = []
+  try {
+    const ids: string[] = JSON.parse(localStorage.getItem('jaiscloud-recent') ?? '[]')
+    recent = ids.map(toSection).filter((section): section is NavSection => section != null)
+  } catch {
+    recent = []
+  }
 
   return (
     <ContentLayout
@@ -25,6 +38,40 @@ export function ConsoleHome() {
       }
     >
       <SpaceBetween size="l">
+        {recent.length > 0 && (
+          <Cards
+            items={recent}
+            cardDefinition={{
+              header: (item) => (
+                <Link
+                  href={`/ui${item.rootPath}`}
+                  onFollow={(event) => {
+                    event.preventDefault()
+                    navigate(item.rootPath)
+                  }}
+                >
+                  {item.label}
+                </Link>
+              ),
+              sections: [
+                {
+                  id: 'category',
+                  header: 'Category',
+                  content: (item) => serviceCategory[item.id] ?? '—',
+                },
+              ],
+            }}
+            cardsPerRow={[
+              { cards: 1 },
+              { minWidth: 300, cards: 2 },
+              { minWidth: 600, cards: 3 },
+              { minWidth: 900, cards: 4 },
+            ]}
+            header={<Header variant="h2">Recently visited</Header>}
+            empty={<Box color="inherit">Services you open appear here.</Box>}
+          />
+        )}
+
         {categoryOrder.map((title) => {
           const services = navTree.filter((section) => serviceCategory[section.id] === title)
           if (services.length === 0) return null

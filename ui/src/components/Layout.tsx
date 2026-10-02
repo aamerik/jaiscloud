@@ -5,8 +5,11 @@ import {
   AppLayout,
   BreadcrumbGroup,
   Flashbar,
+  HelpPanel,
   Input,
+  Link,
   SideNavigation,
+  SpaceBetween,
   TopNavigation,
 } from '@cloudscape-design/components'
 import type {
@@ -77,6 +80,7 @@ function useConsoleNav() {
 function Shell({ children }: Props) {
   const [navOpen, setNavOpen] = useState(true)
   const [search, setSearch] = useState('')
+  const [toolsOpen, setToolsOpen] = useState(false)
   const [mode, setMode] = useState<Mode>(() =>
     localStorage.getItem('jaiscloud-mode') === 'dark' ? Mode.Dark : Mode.Light,
   )
@@ -88,11 +92,24 @@ function Shell({ children }: Props) {
   const { connected } = useEventStream()
   const { breadcrumbItems, onFollow } = useConsoleNav()
   const { items: notifications } = useNotifications()
+  const currentSection = navTree.find((section) => pathname.startsWith(section.basePath))
 
   useEffect(() => {
     applyMode(mode)
     localStorage.setItem('jaiscloud-mode', mode)
   }, [mode])
+
+  useEffect(() => {
+    const section = navTree.find((s) => pathname.startsWith(s.basePath))
+    if (!section) return
+    try {
+      const ids: string[] = JSON.parse(localStorage.getItem('jaiscloud-recent') ?? '[]')
+      const next = [section.id, ...ids.filter((id) => id !== section.id)].slice(0, 6)
+      localStorage.setItem('jaiscloud-recent', JSON.stringify(next))
+    } catch {
+      /* ignore malformed storage */
+    }
+  }, [pathname])
 
   const accounts = useMemo(
     () => accountsData?.accounts ?? (accountId ? [accountId] : []),
@@ -218,7 +235,24 @@ function Shell({ children }: Props) {
         content={children}
         notifications={<Flashbar items={notifications} />}
         stickyNotifications
-        toolsHide
+        tools={
+          currentSection ? (
+            <HelpPanel header={<h2>{currentSection.label}</h2>}>
+              <SpaceBetween size="m">
+                <p>
+                  JaisCloud emulates {currentSection.label}. Manage its resources in account{' '}
+                  {accountId || '—'} ({meta?.region ?? '—'}).
+                </p>
+                <Link external href="https://docs.aws.amazon.com/">
+                  AWS documentation
+                </Link>
+              </SpaceBetween>
+            </HelpPanel>
+          ) : undefined
+        }
+        toolsOpen={toolsOpen}
+        onToolsChange={({ detail }) => setToolsOpen(detail.open)}
+        toolsHide={!currentSection}
         contentType="default"
       />
     </>

@@ -2,6 +2,7 @@ import { Fragment, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getQueue, purgeQueue, listDLQSources, getTags, peekMessages, type PeekedMessage } from '../../../api/sqs'
+import { TokenGroup } from '@cloudscape-design/components'
 import { formatDate } from '../../../lib/date'
 import { SQSMessageSend } from './SQSMessageSend'
 
@@ -333,24 +334,9 @@ export function SQSDetail() {
           {!tags || Object.keys(tags).length === 0 ? (
             <p style={{ color: '#5f6b7a', fontSize: '0.9em', fontStyle: 'italic' }}>No tags on this queue.</p>
           ) : (
-            <div style={{ border: '1px solid #e7e9ec', borderRadius: 6, overflow: 'hidden' }}>
-              <table style={{ borderCollapse: 'collapse', fontSize: '0.9em', width: '100%' }}>
-                <thead>
-                  <tr style={{ background: '#f4f5f7', borderBottom: '2px solid #e7e9ec' }}>
-                    <th style={th}>Key</th>
-                    <th style={th}>Value</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(tags).map(([k, v]) => (
-                    <tr key={k} style={{ borderBottom: '1px solid #e7e9ec' }}>
-                      <td style={td}><code style={{ background: '#f4f5f7', padding: '0.2em 0.5em', borderRadius: 3 }}>{k}</code></td>
-                      <td style={td}>{v}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <TokenGroup
+              items={Object.entries(tags).map(([key, value]) => ({ label: `${key}: ${value}` }))}
+            />
           )}
         </div>
       )}
