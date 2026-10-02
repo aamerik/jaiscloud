@@ -16,6 +16,8 @@ import {
   Tabs,
   Textarea,
 } from '@cloudscape-design/components'
+import { CopyText } from '../../../components/CopyText'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listRoles,
   createRole,
@@ -120,7 +122,7 @@ function RolesTab() {
     {
       id: 'arn',
       header: 'ARN',
-      cell: (r) => <Box variant="code">{r.arn}</Box>,
+      cell: (r) => <CopyText value={r.arn} label="role ARN" />,
     },
     {
       id: 'created',
@@ -141,9 +143,7 @@ function RolesTab() {
   return (
     <SpaceBetween size="m">
       {error ? (
-        <Alert type="error" header="Failed to load roles">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load roles" message={(error as Error).message} />
       ) : (
         <ResourceTable
           items={roles}
@@ -320,7 +320,7 @@ function UsersTab() {
     {
       id: 'arn',
       header: 'ARN',
-      cell: (u) => <Box variant="code">{u.arn}</Box>,
+      cell: (u) => <CopyText value={u.arn} label="user ARN" />,
     },
     {
       id: 'created',
@@ -348,9 +348,7 @@ function UsersTab() {
   return (
     <SpaceBetween size="m">
       {error ? (
-        <Alert type="error" header="Failed to load users">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load users" message={(error as Error).message} />
       ) : (
         <ResourceTable
           items={users}
@@ -588,7 +586,7 @@ function PoliciesTab() {
     {
       id: 'arn',
       header: 'ARN',
-      cell: (p) => <Box variant="code">{p.arn}</Box>,
+      cell: (p) => <CopyText value={p.arn} label="policy ARN" />,
     },
     {
       id: 'attachmentCount',
@@ -614,9 +612,7 @@ function PoliciesTab() {
   return (
     <SpaceBetween size="m">
       {error ? (
-        <Alert type="error" header="Failed to load policies">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load policies" message={(error as Error).message} />
       ) : (
         <ResourceTable
           items={policies}

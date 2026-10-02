@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Badge,
   Box,
   Button,
@@ -21,6 +20,7 @@ import {
   Table,
   Tabs,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import type { TableProps } from '@cloudscape-design/components'
 import { describeCluster, listSteps, addSteps, cancelStep, type Step } from '../../../api/emr'
 import { resourceStatus } from '../../../lib/status'
@@ -91,9 +91,7 @@ export function EMRDetail() {
   if (error || !cluster) {
     return (
       <ContentLayout header={<Header variant="h1">Cluster</Header>}>
-        <Alert type="error" header="Failed to load cluster">
-          {error ? (error as Error).message : 'Cluster not found.'}
-        </Alert>
+        <ErrorState header="Failed to load cluster" message={error ? (error as Error).message : 'Cluster not found.'} />
       </ContentLayout>
     )
   }

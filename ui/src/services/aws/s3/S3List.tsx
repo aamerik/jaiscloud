@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert,
   Badge,
   Box,
   Button,
@@ -16,6 +15,7 @@ import {
   Modal,
   SpaceBetween,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import { listBuckets, createBucket, deleteBucket, type Bucket } from '../../../api/s3'
 import { ResourceTable, type ResourceColumn } from '../../../components/ResourceTable'
 import { useNotifications } from '../../../components/notifications'
@@ -29,7 +29,7 @@ export function S3List() {
   const navigate = useNavigate()
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['s3', 'buckets'],
     queryFn: () => listBuckets(),
   })
@@ -96,9 +96,7 @@ export function S3List() {
   return (
     <ContentLayout header={<Header variant="h1">S3 buckets</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load buckets">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load buckets" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
           items={buckets}

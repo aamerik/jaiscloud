@@ -18,6 +18,7 @@ import {
   Table,
   Textarea,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import type { TableProps } from '@cloudscape-design/components'
 import {
   listExecutions,
@@ -50,7 +51,7 @@ export function SFNExecutions() {
   const [form, setForm] = useState({ name: '', input: '{}' })
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['sfn', 'executions', smArn],
     queryFn: () => listExecutions(smArn),
     enabled: !!smArn,
@@ -140,9 +141,7 @@ export function SFNExecutions() {
       }
     >
       {error ? (
-        <Alert type="error" header="Failed to load executions">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load executions" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <SpaceBetween size="l">
           <ResourceTable

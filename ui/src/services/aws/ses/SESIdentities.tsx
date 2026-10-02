@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Badge,
   Box,
   Button,
@@ -14,6 +13,7 @@ import {
   Modal,
   SpaceBetween,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listIdentities,
   verifyEmailIdentity,
@@ -33,7 +33,7 @@ export function SESIdentities() {
   const [identityInput, setIdentityInput] = useState('')
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['ses', 'identities'],
     queryFn: listIdentities,
   })
@@ -95,9 +95,7 @@ export function SESIdentities() {
   return (
     <ContentLayout header={<Header variant="h1">SES identities</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load identities">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load identities" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
           items={items}

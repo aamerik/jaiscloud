@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   ButtonDropdown,
@@ -15,6 +14,7 @@ import {
   SpaceBetween,
   StatusIndicator,
 } from '@cloudscape-design/components'
+import { ErrorState } from '../../../components/ErrorState'
 import {
   listLoadBalancers,
   createLoadBalancer,
@@ -46,7 +46,7 @@ export function ELBv2LoadBalancers() {
   const [form, setForm] = useState({ name: '', type: 'application', scheme: 'internet-facing' })
   const { notify } = useNotifications()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['elbv2', 'load-balancers'],
     queryFn: listLoadBalancers,
   })
@@ -112,9 +112,7 @@ export function ELBv2LoadBalancers() {
   return (
     <ContentLayout header={<Header variant="h1">Load balancers</Header>}>
       {error ? (
-        <Alert type="error" header="Failed to load load balancers">
-          {(error as Error).message}
-        </Alert>
+        <ErrorState header="Failed to load load balancers" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
           items={items}
