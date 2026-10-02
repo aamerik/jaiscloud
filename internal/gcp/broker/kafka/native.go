@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	core "jaiscloud/internal/gcp/service/managedkafka"
 )
 
 // nativeBroker runs a Redpanda subprocess per Managed Kafka cluster, bound to
@@ -74,6 +75,32 @@ func (b *nativeBroker) AddTopicPartitions(ctx context.Context, project, location
 // DeleteBrokerTopic removes the topic from the live broker.
 func (b *nativeBroker) DeleteBrokerTopic(ctx context.Context, project, location, cluster, topic string) error {
 	return deleteBrokerTopic(ctx, b.admins, b.Endpoint(project, location, cluster), topic)
+}
+
+// ListConsumerGroups returns the live broker's consumer groups, or an empty set
+// when no broker is running.
+func (b *nativeBroker) ListConsumerGroups(ctx context.Context, project, location, cluster string) ([]string, error) {
+	return listGroups(ctx, b.admins, b.Endpoint(project, location, cluster))
+}
+
+// ConsumerGroupOffsets returns the group's committed offsets on the live broker.
+func (b *nativeBroker) ConsumerGroupOffsets(ctx context.Context, project, location, cluster, group string) ([]core.ConsumerGroupOffset, bool, error) {
+	return groupOffsets(ctx, b.admins, b.Endpoint(project, location, cluster), group)
+}
+
+// ConsumerGroupMembers returns the group's active member count on the live broker.
+func (b *nativeBroker) ConsumerGroupMembers(ctx context.Context, project, location, cluster, group string) (int, bool, error) {
+	return groupMembers(ctx, b.admins, b.Endpoint(project, location, cluster), group)
+}
+
+// DeleteConsumerGroup removes the group from the live broker.
+func (b *nativeBroker) DeleteConsumerGroup(ctx context.Context, project, location, cluster, group string) (bool, error) {
+	return deleteGroup(ctx, b.admins, b.Endpoint(project, location, cluster), group)
+}
+
+// CommitConsumerGroupOffsets sets the group's committed offsets on the live broker.
+func (b *nativeBroker) CommitConsumerGroupOffsets(ctx context.Context, project, location, cluster, group string, offsets []core.ConsumerGroupOffset) error {
+	return commitGroupOffsets(ctx, b.admins, b.Endpoint(project, location, cluster), group, offsets)
 }
 
 func (b *nativeBroker) EnsureCluster(ctx context.Context, project, location, cluster string) (string, error) {

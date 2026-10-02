@@ -2,7 +2,10 @@ package managedkafka
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 
 	core "jaiscloud/internal/gcp/service/managedkafka"
@@ -195,4 +198,141 @@ func TestProviderAclFlow(t *testing.T) {
 	if delResp.Data["aclDeleted"] != true {
 		t.Errorf("expected aclDeleted, got %v", delResp.Data)
 	}
+}
+
+// stubBroker embeds core.Broker so only the methods exercised here need
+// implementing; the remaining (unused) methods are never called.
+type stubBroker struct {
+	core.Broker
+	groups    []string
+	offsets   map[string][]core.ConsumerGroupOffset
+	members   map[string]int
+	committed map[string][]core.ConsumerGroupOffset
+}
+
+func (b *stubBroker) EnsureCluster(context.Context, string, string, string) (string, error) {
+	return "broker:9092", nil
+}
+func (b *stubBroker) Endpoint(string, string, string) string { return "broker:9092" }
+func (b *stubBroker) ListConsumerGroups(context.Context, string, string, string) ([]string, error) {
+	return b.groups, nil
+}
+func (b *stubBroker) ConsumerGroupOffsets(_ context.Context, _, _, _, g string) ([]core.ConsumerGroupOffset, bool, error) {
+	o, ok := b.offsets[g]
+	return o, ok, nil
+}
+func (b *stubBroker) ConsumerGroupMembers(_ context.Context, _, _, _, g string) (int, bool, error) {
+	_, ok := b.offsets[g]
+	return b.members[g], ok, nil
+}
+func (b *stubBroker) CommitConsumerGroupOffsets(_ context.Context, _, _, _, g string, offs []core.ConsumerGroupOffset) error {
+	if b.committed == nil {
+		b.committed = map[string][]core.ConsumerGroupOffset{}
+	}
+	b.committed[g] = offs
+	return nil
+}
+func (b *stubBroker) DeleteConsumerGroup(_ context.Context, _, _, _, g string) (bool, error) {
+	_, ok := b.offsets[g]
+	delete(b.offsets, g)
+	return ok, nil
+}
+
+func TestProviderConsumerGroupFlow(t *testing.T) {
+	ctx := context.Background()
+	t1 := core.TopicName("proj", "us-central1", "c1", "t1")
+	fb := &stubBroker{
+		groups:  []string{"g1"},
+		offsets: map[string][]core.ConsumerGroupOffset{"g1": {{Topic: "t1", Partition: 0, Offset: 5, Metadata: "m"}}},
+		members: map[string]int{"g1": 0},
+	}
+	svc := core.NewService(mkstore.NewMemoryStore(), core.WithBroker(fb))
+	p := NewProvider(svc, "proj")
+	if _, err := p.CreateCluster(ctx, nr(map[string]any{"location": "us-central1", "clusterId": "c1"})); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+
+	// List (default FULL) expands offsets to resource names.
+	listResp, err := p.ListConsumerGroups(ctx, nr(map[string]any{"location": "us-central1", "clusterId": "c1"}))
+	if err != nil {
+		t.Fatalf("ListConsumerGroups: %v", err)
+	}
+	items, _ := listResp.Data["consumerGroups"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("consumerGroups = %v", items)
+	}
+	g0, _ := items[0].(map[string]any)
+	topics, _ := g0["topics"].(map[string]any)
+	topic, _ := topics[t1].(map[string]any)
+	partitions, _ := topic["partitions"].(map[string]any)
+	if !hasOffset(partitions, "0", 5) {
+		t.Errorf("list topics = %#v", topics)
+	}
+
+	// BASIC hides offsets.
+	basic, err := p.ListConsumerGroups(ctx, nr(map[string]any{"location": "us-central1", "clusterId": "c1", "view": "CONSUMER_GROUP_VIEW_BASIC"}))
+	if err != nil {
+		t.Fatalf("ListConsumerGroups BASIC: %v", err)
+	}
+	bg, _ := basic.Data["consumerGroups"].([]any)[0].(map[string]any)
+	if _, ok := bg["topics"]; ok {
+		t.Errorf("BASIC group carried topics: %#v", bg)
+	}
+
+	// Get round-trips.
+	getResp, err := p.GetConsumerGroup(ctx, nr(map[string]any{"location": "us-central1", "clusterId": "c1", "consumerGroupId": "g1"}))
+	if err != nil {
+		t.Fatalf("GetConsumerGroup: %v", err)
+	}
+	if getResp.Data["name"] != core.ConsumerGroupName("proj", "us-central1", "c1", "g1") {
+		t.Errorf("name = %v", getResp.Data["name"])
+	}
+	// The offset is an int64-as-string on the wire; the official REST client
+	// decodes it with the ,string struct tag.
+	encoded, _ := json.Marshal(getResp.Data)
+	if !strings.Contains(string(encoded), `"offset":"5"`) {
+		t.Errorf("encoded group missing string offset: %s", encoded)
+	}
+
+	// Update commits offsets, normalizing the resource-name key to the bare id.
+	// The offset arrives as a JSON string (as the official client sends it).
+	updResp, err := p.UpdateConsumerGroup(ctx, nr(map[string]any{
+		"location": "us-central1", "clusterId": "c1", "consumerGroupId": "g1",
+		"updateMask": "topics",
+		"body": map[string]any{"topics": map[string]any{
+			t1: map[string]any{"partitions": map[string]any{"0": map[string]any{"offset": "9", "metadata": "reset"}}},
+		}},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateConsumerGroup: %v", err)
+	}
+	if fb.committed["g1"][0].Topic != "t1" || fb.committed["g1"][0].Offset != 9 {
+		t.Errorf("committed = %+v", fb.committed["g1"])
+	}
+	updTopics, _ := updResp.Data["topics"].(map[string]any)
+	updTopic, _ := updTopics[t1].(map[string]any)
+	if !hasOffset(updTopic["partitions"].(map[string]any), "0", 9) {
+		t.Errorf("update topics = %#v", updResp.Data["topics"])
+	}
+
+	// Delete removes the group, then reports NotFound.
+	if _, err := p.DeleteConsumerGroup(ctx, nr(map[string]any{"location": "us-central1", "clusterId": "c1", "consumerGroupId": "g1"})); err != nil {
+		t.Fatalf("DeleteConsumerGroup: %v", err)
+	}
+	if _, err := p.GetConsumerGroup(ctx, nr(map[string]any{"location": "us-central1", "clusterId": "c1", "consumerGroupId": "g1"})); err == nil {
+		t.Error("expected NotFound after delete")
+	}
+}
+
+func hasOffset(partitions map[string]any, key string, want int64) bool {
+	p, ok := partitions[key].(map[string]any)
+	if !ok {
+		return false
+	}
+	got, ok := p["offset"].(string)
+	if !ok {
+		return false
+	}
+	n, err := strconv.ParseInt(got, 10, 64)
+	return err == nil && n == want
 }

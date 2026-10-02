@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 334,
-  "passed": 334,
+  "total": 337,
+  "passed": 337,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 23,
-    "checks": 334,
-    "passed": 334,
+    "checks": 337,
+    "passed": 337,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -86,8 +86,8 @@
     },
     {
       "service": "managedkafka",
-      "total": 18,
-      "passed": 18,
+      "total": 21,
+      "passed": 21,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1947,6 +1947,27 @@
       "method": "ListConsumerGroups",
       "status": "pass",
       "key_field": "empty set (no broker)"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "GetConsumerGroup",
+      "method": "GetConsumerGroup",
+      "status": "pass",
+      "key_field": "NotFound for an absent group"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "UpdateConsumerGroup",
+      "method": "UpdateConsumerGroup",
+      "status": "pass",
+      "key_field": "NotFound for an absent group"
+    },
+    {
+      "service": "managedkafka",
+      "rpc": "DeleteConsumerGroup",
+      "method": "DeleteConsumerGroup",
+      "status": "pass",
+      "key_field": "NotFound for an absent group"
     },
     {
       "service": "metastore",

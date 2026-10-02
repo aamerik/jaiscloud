@@ -4,19 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
+
+	core "jaiscloud/internal/gcp/service/managedkafka"
 )
 
-// topicAdmin is the subset of Kafka-wire admin operations the broker performs
+// kafkaAdmin is the subset of Kafka-wire admin operations the broker performs
 // on behalf of the Managed Kafka control plane. Isolating it behind an
 // interface keeps the (large) Kafka client dependency contained and lets tests
 // assert provisioning without a running broker. A future swap of franz-go for
 // another client is a change here, not in the core.
-type topicAdmin interface {
+type kafkaAdmin interface {
 	// EnsureTopic creates the topic if absent. It is idempotent: an existing
 	// topic with the same name is not an error.
 	EnsureTopic(ctx context.Context, topic string, partitions int32, replicationFactor int16) error
@@ -25,43 +28,61 @@ type topicAdmin interface {
 	// DeleteTopic removes the topic. It is idempotent: an absent topic is not
 	// an error.
 	DeleteTopic(ctx context.Context, topic string) error
+	// ListGroups returns the cluster's consumer-group ids, sorted.
+	ListGroups(ctx context.Context) ([]string, error)
+	// GroupOffsets returns the group's committed offsets. found is false when
+	// the coordinator does not know the group.
+	GroupOffsets(ctx context.Context, group string) ([]core.ConsumerGroupOffset, bool, error)
+	// GroupMembers returns the number of active members and whether the group
+	// exists.
+	GroupMembers(ctx context.Context, group string) (int, bool, error)
+	// DeleteGroup removes the group and its offsets. existed is false when the
+	// group was already absent.
+	DeleteGroup(ctx context.Context, group string) (bool, error)
+	// CommitGroupOffsets sets the group's committed offsets.
+	CommitGroupOffsets(ctx context.Context, group string, offsets []core.ConsumerGroupOffset) error
 	// Close releases the underlying client.
 	Close() error
 }
 
-// topicAdminFactory builds a topicAdmin for one broker endpoint.
-type topicAdminFactory func(endpoint string) (topicAdmin, error)
+// kafkaAdminFactory builds a kafkaAdmin for one broker endpoint.
+type kafkaAdminFactory func(endpoint string) (kafkaAdmin, error)
 
 // adminAPI is the slice of *kadm.Client the franzAdmin uses. It is an interface
-// so unit tests can exercise the per-topic response-error mapping (which the
-// top-level error hides) without a running broker.
+// so unit tests can exercise the per-topic/per-group response-error mapping
+// (which the top-level error hides) without a running broker.
 type adminAPI interface {
 	CreateTopic(ctx context.Context, partitions int32, replicationFactor int16, configs map[string]*string, topic string) (kadm.CreateTopicResponse, error)
 	UpdatePartitions(ctx context.Context, set int, topics ...string) (kadm.CreatePartitionsResponses, error)
 	DeleteTopic(ctx context.Context, topic string) (kadm.DeleteTopicResponse, error)
+	ListGroups(ctx context.Context, filterStates ...string) (kadm.ListedGroups, error)
+	DescribeGroups(ctx context.Context, groups ...string) (kadm.DescribedGroups, error)
+	FetchOffsets(ctx context.Context, group string) (kadm.OffsetResponses, error)
+	DeleteGroups(ctx context.Context, groups ...string) (kadm.DeleteGroupResponses, error)
+	CommitOffsets(ctx context.Context, group string, os kadm.Offsets) (kadm.OffsetResponses, error)
 	Close()
 }
 
-// adminPool caches one admin client per broker endpoint so repeated topic
-// mutations reuse a single Kafka connection instead of dialing per call. It is
-// safe for concurrent use.
+// adminPool caches one admin client per broker endpoint so repeated mutations
+// reuse a single Kafka connection instead of dialing per call. It is safe for
+// concurrent use.
 type adminPool struct {
-	newAdmin topicAdminFactory
+	newAdmin kafkaAdminFactory
 	mu       sync.Mutex
-	admins   map[string]topicAdmin
+	admins   map[string]kafkaAdmin
 }
 
 // newAdminPool returns a pool. A nil factory selects the franz-go client (tests
 // inject a fake).
-func newAdminPool(factory topicAdminFactory) *adminPool {
+func newAdminPool(factory kafkaAdminFactory) *adminPool {
 	if factory == nil {
 		factory = newFranzAdmin
 	}
-	return &adminPool{newAdmin: factory, admins: make(map[string]topicAdmin)}
+	return &adminPool{newAdmin: factory, admins: make(map[string]kafkaAdmin)}
 }
 
 // get returns the cached admin for endpoint, creating one on first use.
-func (p *adminPool) get(endpoint string) (topicAdmin, error) {
+func (p *adminPool) get(endpoint string) (kafkaAdmin, error) {
 	p.mu.Lock()
 	if a, ok := p.admins[endpoint]; ok {
 		p.mu.Unlock()
@@ -100,7 +121,7 @@ func (p *adminPool) close(endpoint string) {
 func (p *adminPool) closeAll() {
 	p.mu.Lock()
 	admins := p.admins
-	p.admins = make(map[string]topicAdmin)
+	p.admins = make(map[string]kafkaAdmin)
 	p.mu.Unlock()
 	for _, a := range admins {
 		_ = a.Close()
@@ -149,13 +170,77 @@ func deleteBrokerTopic(ctx context.Context, pool *adminPool, endpoint, topic str
 	return a.DeleteTopic(ctx, topic)
 }
 
-// franzAdmin is the franz-go/kadm-backed topicAdmin.
+// listGroups returns endpoint's consumer groups. An empty endpoint (no live
+// broker) yields an empty set.
+func listGroups(ctx context.Context, pool *adminPool, endpoint string) ([]string, error) {
+	if endpoint == "" {
+		return nil, nil
+	}
+	a, err := pool.get(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	return a.ListGroups(ctx)
+}
+
+// groupOffsets returns endpoint's committed offsets for group. An empty endpoint
+// (no live broker) reports the group absent.
+func groupOffsets(ctx context.Context, pool *adminPool, endpoint, group string) ([]core.ConsumerGroupOffset, bool, error) {
+	if endpoint == "" {
+		return nil, false, nil
+	}
+	a, err := pool.get(endpoint)
+	if err != nil {
+		return nil, false, err
+	}
+	return a.GroupOffsets(ctx, group)
+}
+
+// groupMembers returns endpoint's active member count for group. An empty
+// endpoint (no live broker) reports the group absent.
+func groupMembers(ctx context.Context, pool *adminPool, endpoint, group string) (int, bool, error) {
+	if endpoint == "" {
+		return 0, false, nil
+	}
+	a, err := pool.get(endpoint)
+	if err != nil {
+		return 0, false, err
+	}
+	return a.GroupMembers(ctx, group)
+}
+
+// deleteGroup removes endpoint's group. An empty endpoint (no live broker)
+// reports the group absent.
+func deleteGroup(ctx context.Context, pool *adminPool, endpoint, group string) (bool, error) {
+	if endpoint == "" {
+		return false, nil
+	}
+	a, err := pool.get(endpoint)
+	if err != nil {
+		return false, err
+	}
+	return a.DeleteGroup(ctx, group)
+}
+
+// commitGroupOffsets sets endpoint's committed offsets for group.
+func commitGroupOffsets(ctx context.Context, pool *adminPool, endpoint, group string, offsets []core.ConsumerGroupOffset) error {
+	if endpoint == "" {
+		return nil
+	}
+	a, err := pool.get(endpoint)
+	if err != nil {
+		return err
+	}
+	return a.CommitGroupOffsets(ctx, group, offsets)
+}
+
+// franzAdmin is the franz-go/kadm-backed kafkaAdmin.
 type franzAdmin struct {
 	client adminAPI
 }
 
 // newFranzAdmin dials endpoint's Kafka listener and returns an admin client.
-func newFranzAdmin(endpoint string) (topicAdmin, error) {
+func newFranzAdmin(endpoint string) (kafkaAdmin, error) {
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(endpoint),
 		kgo.ClientID("jaiscloud-managedkafka"),
@@ -201,6 +286,128 @@ func (a *franzAdmin) DeleteTopic(ctx context.Context, topic string) error {
 		return nil
 	}
 	return err
+}
+
+func (a *franzAdmin) ListGroups(ctx context.Context) ([]string, error) {
+	listed, err := a.client.ListGroups(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return listed.Groups(), nil
+}
+
+func (a *franzAdmin) GroupOffsets(ctx context.Context, group string) ([]core.ConsumerGroupOffset, bool, error) {
+	described, err := a.client.DescribeGroups(ctx, group)
+	if err != nil {
+		return nil, false, err
+	}
+	d, ok := described[group]
+	if !ok {
+		return nil, false, nil
+	}
+	if d.Err != nil {
+		if errors.Is(d.Err, kerr.GroupIDNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, d.Err
+	}
+	resps, err := a.client.FetchOffsets(ctx, group)
+	if err != nil {
+		return nil, false, err
+	}
+	out := make([]core.ConsumerGroupOffset, 0)
+	for topic, parts := range resps {
+		for partition, r := range parts {
+			if r.Err != nil {
+				// A committed offset for a topic that no longer exists is not
+				// fatal; skip it rather than failing the whole read.
+				if errors.Is(r.Err, kerr.UnknownTopicOrPartition) {
+					continue
+				}
+				return nil, false, r.Err
+			}
+			out = append(out, core.ConsumerGroupOffset{
+				Topic:     topic,
+				Partition: partition,
+				Offset:    r.At,
+				Metadata:  r.Metadata,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Topic != out[j].Topic {
+			return out[i].Topic < out[j].Topic
+		}
+		return out[i].Partition < out[j].Partition
+	})
+	return out, true, nil
+}
+
+func (a *franzAdmin) GroupMembers(ctx context.Context, group string) (int, bool, error) {
+	described, err := a.client.DescribeGroups(ctx, group)
+	if err != nil {
+		return 0, false, err
+	}
+	d, ok := described[group]
+	if !ok {
+		return 0, false, nil
+	}
+	if d.Err != nil {
+		if errors.Is(d.Err, kerr.GroupIDNotFound) {
+			return 0, false, nil
+		}
+		return 0, false, d.Err
+	}
+	return len(d.Members), true, nil
+}
+
+func (a *franzAdmin) DeleteGroup(ctx context.Context, group string) (bool, error) {
+	resps, err := a.client.DeleteGroups(ctx, group)
+	if err != nil {
+		return false, err
+	}
+	r, ok := resps[group]
+	if !ok {
+		return false, nil
+	}
+	if r.Err != nil {
+		if errors.Is(r.Err, kerr.GroupIDNotFound) {
+			return false, nil
+		}
+		// A group with active members cannot be deleted; surface it as a
+		// precondition rather than a raw Kafka error.
+		if errors.Is(r.Err, kerr.NonEmptyGroup) {
+			return false, core.ErrConsumerGroupNotEmpty
+		}
+		return false, r.Err
+	}
+	return true, nil
+}
+
+func (a *franzAdmin) CommitGroupOffsets(ctx context.Context, group string, offsets []core.ConsumerGroupOffset) error {
+	os := make(kadm.Offsets, len(offsets))
+	for _, o := range offsets {
+		if os[o.Topic] == nil {
+			os[o.Topic] = make(map[int32]kadm.Offset)
+		}
+		os[o.Topic][o.Partition] = kadm.Offset{
+			Topic:     o.Topic,
+			Partition: o.Partition,
+			At:        o.Offset,
+			Metadata:  o.Metadata,
+		}
+	}
+	resps, err := a.client.CommitOffsets(ctx, group, os)
+	if err != nil {
+		return err
+	}
+	if err := resps.Error(); err != nil {
+		if errors.Is(err, kerr.UnknownTopicOrPartition) {
+			return core.ErrConsumerGroupTopicNotFound
+		}
+		return err
+	}
+	return nil
 }
 
 func (a *franzAdmin) Close() error {

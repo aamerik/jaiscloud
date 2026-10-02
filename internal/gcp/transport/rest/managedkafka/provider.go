@@ -3,6 +3,8 @@ package managedkafka
 import (
 	"context"
 	"encoding/json"
+	"strconv"
+	"strings"
 
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -228,15 +230,14 @@ func (p *Provider) DeleteTopic(ctx context.Context, nr *model.NormalizedRequest)
 
 func (p *Provider) ListConsumerGroups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListConsumerGroups(ctx, project, strParam(nr, "location"), strParam(nr, "clusterId"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	page, next, err := p.core.ListConsumerGroups(ctx, project, strParam(nr, "location"), strParam(nr, "clusterId"),
+		strParam(nr, "view"), strParam(nr, "filter"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
 	items := make([]any, 0, len(page))
 	for _, g := range page {
-		items = append(items, map[string]any{
-			"name": core.ConsumerGroupName(project, strParam(nr, "location"), strParam(nr, "clusterId"), g),
-		})
+		items = append(items, core.ConsumerGroupJSON(g, project))
 	}
 	out := map[string]any{"consumerGroups": items}
 	if next != "" {
@@ -246,15 +247,29 @@ func (p *Provider) ListConsumerGroups(ctx context.Context, nr *model.NormalizedR
 }
 
 func (p *Provider) GetConsumerGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return nil, p.core.GetConsumerGroup(ctx, p.project(nr), strParam(nr, "location"), strParam(nr, "clusterId"), strParam(nr, "consumerGroupId"))
+	project := p.project(nr)
+	g, err := p.core.GetConsumerGroup(ctx, project, strParam(nr, "location"), strParam(nr, "clusterId"), strParam(nr, "consumerGroupId"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.ConsumerGroupJSON(g, project)), nil
 }
 
 func (p *Provider) UpdateConsumerGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return nil, p.core.UpdateConsumerGroup(ctx, p.project(nr), strParam(nr, "location"), strParam(nr, "clusterId"), strParam(nr, "consumerGroupId"))
+	project := p.project(nr)
+	g, err := p.core.UpdateConsumerGroup(ctx, project, strParam(nr, "location"), strParam(nr, "clusterId"),
+		strParam(nr, "consumerGroupId"), consumerGroupInputFrom(bodyOf(nr)), fieldMaskPaths(strParam(nr, "updateMask")))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.ConsumerGroupJSON(g, project)), nil
 }
 
 func (p *Provider) DeleteConsumerGroup(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return nil, p.core.DeleteConsumerGroup(ctx, p.project(nr), strParam(nr, "location"), strParam(nr, "clusterId"), strParam(nr, "consumerGroupId"))
+	if err := p.core.DeleteConsumerGroup(ctx, p.project(nr), strParam(nr, "location"), strParam(nr, "clusterId"), strParam(nr, "consumerGroupId")); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
 }
 
 // --- ACLs ---
@@ -334,6 +349,22 @@ func (p *Provider) RemoveAclEntry(ctx context.Context, nr *model.NormalizedReque
 
 // --- body → core input ---
 
+// fieldMaskPaths splits a google-fieldmask value (a comma-separated path list)
+// into its paths.
+func fieldMaskPaths(mask string) []string {
+	if mask == "" {
+		return nil
+	}
+	parts := strings.Split(mask, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func clusterInputFrom(body map[string]any) core.ClusterInput {
 	in := core.ClusterInput{Labels: bodyStringMap(body, "labels")}
 	if len(body) > 0 {
@@ -364,6 +395,43 @@ func aclInputFrom(body map[string]any) core.AclInput {
 			if m, ok := item.(map[string]any); ok {
 				in.AclEntries = append(in.AclEntries, aclEntryFrom(m))
 			}
+		}
+	}
+	return in
+}
+
+// consumerGroupInputFrom reads the committed offsets from a consumerGroup PATCH
+// body: topics.<topicResourceName>.partitions.<index>.{offset,metadata}.
+func consumerGroupInputFrom(body map[string]any) core.ConsumerGroupInput {
+	var in core.ConsumerGroupInput
+	topics, ok := body["topics"].(map[string]any)
+	if !ok {
+		return in
+	}
+	for topic, rawTopic := range topics {
+		tm, ok := rawTopic.(map[string]any)
+		if !ok {
+			continue
+		}
+		partitions, ok := tm["partitions"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for idx, rawPartition := range partitions {
+			partition, err := strconv.Atoi(idx)
+			if err != nil {
+				continue
+			}
+			pm, ok := rawPartition.(map[string]any)
+			if !ok {
+				continue
+			}
+			in.Offsets = append(in.Offsets, core.ConsumerGroupOffset{
+				Topic:     topic,
+				Partition: int32(partition),
+				Offset:    int64(bodyInt(pm, "offset")),
+				Metadata:  strFrom(pm["metadata"]),
+			})
 		}
 	}
 	return in

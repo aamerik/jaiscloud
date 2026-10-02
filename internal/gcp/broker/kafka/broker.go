@@ -26,6 +26,8 @@ import (
 	"os/exec"
 
 	"k8s.io/client-go/kubernetes"
+
+	core "jaiscloud/internal/gcp/service/managedkafka"
 )
 
 // Mode selects the broker backend.
@@ -81,6 +83,21 @@ type Broker interface {
 	// DeleteBrokerTopic removes the topic from the broker. It is idempotent and
 	// a no-op when no broker is running.
 	DeleteBrokerTopic(ctx context.Context, project, location, cluster, topic string) error
+	// ListConsumerGroups returns the group ids known to the cluster's group
+	// coordinator. No live broker yields an empty set.
+	ListConsumerGroups(ctx context.Context, project, location, cluster string) ([]string, error)
+	// ConsumerGroupOffsets returns the group's committed offsets (bare topic
+	// ids). found is false when no broker is running or the group is unknown.
+	ConsumerGroupOffsets(ctx context.Context, project, location, cluster, group string) ([]core.ConsumerGroupOffset, bool, error)
+	// ConsumerGroupMembers returns the number of active members in the group.
+	// found is false when no broker is running or the group is unknown.
+	ConsumerGroupMembers(ctx context.Context, project, location, cluster, group string) (int, bool, error)
+	// DeleteConsumerGroup removes the group and its offsets. existed is false
+	// when no broker is running or the group was already absent.
+	DeleteConsumerGroup(ctx context.Context, project, location, cluster, group string) (bool, error)
+	// CommitConsumerGroupOffsets sets the group's committed offsets. With no
+	// live broker it is a no-op.
+	CommitConsumerGroupOffsets(ctx context.Context, project, location, cluster, group string, offsets []core.ConsumerGroupOffset) error
 	// Shutdown stops every broker this manager owns (called on emulator
 	// shutdown).
 	Shutdown(ctx context.Context) error
@@ -177,6 +194,21 @@ func (mockBroker) AddTopicPartitions(context.Context, string, string, string, st
 	return nil
 }
 func (mockBroker) DeleteBrokerTopic(context.Context, string, string, string, string) error {
+	return nil
+}
+func (mockBroker) ListConsumerGroups(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+func (mockBroker) ConsumerGroupOffsets(context.Context, string, string, string, string) ([]core.ConsumerGroupOffset, bool, error) {
+	return nil, false, nil
+}
+func (mockBroker) ConsumerGroupMembers(context.Context, string, string, string, string) (int, bool, error) {
+	return 0, false, nil
+}
+func (mockBroker) DeleteConsumerGroup(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+func (mockBroker) CommitConsumerGroupOffsets(context.Context, string, string, string, string, []core.ConsumerGroupOffset) error {
 	return nil
 }
 func (mockBroker) Shutdown(context.Context) error { return nil }

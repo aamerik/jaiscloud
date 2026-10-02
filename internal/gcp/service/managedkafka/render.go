@@ -3,6 +3,7 @@ package managedkafka
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"jaiscloud/internal/clock"
@@ -95,6 +96,34 @@ func AclJSON(a mkstore.Acl, project string) map[string]any {
 		"resourceName": a.ResourceName,
 		"patternType":  a.PatternType,
 	}
+}
+
+// ConsumerGroupJSON renders a consumer group as the Discovery consumerGroup
+// shape: the resource name plus a topics map keyed by the full topic resource
+// name, each holding a partitions map keyed by partition index. A group with no
+// committed offsets omits the topics field.
+func ConsumerGroupJSON(g ConsumerGroup, project string) map[string]any {
+	out := map[string]any{"name": ConsumerGroupName(project, g.Location, g.Cluster, g.Name)}
+	if len(g.Topics) == 0 {
+		return out
+	}
+	topics := make(map[string]any, len(g.Topics))
+	for topic, t := range g.Topics {
+		partitions := make(map[string]any, len(t.Partitions))
+		for p, meta := range t.Partitions {
+			// ConsumerPartitionMetadata.offset is an int64 rendered as a JSON
+			// string (Discovery: type string, format int64), and the official
+			// REST client decodes it with the ,string struct tag.
+			entry := map[string]any{"offset": strconv.FormatInt(meta.Offset, 10)}
+			if meta.Metadata != "" {
+				entry["metadata"] = meta.Metadata
+			}
+			partitions[strconv.Itoa(int(p))] = entry
+		}
+		topics[topic] = map[string]any{"partitions": partitions}
+	}
+	out["topics"] = topics
+	return out
 }
 
 // OperationMetadataJSON renders the managedkafka.v1.OperationMetadata for an

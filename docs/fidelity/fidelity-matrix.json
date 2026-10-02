@@ -3,20 +3,20 @@
   "summary": {
     "total": 878,
     "by_state": {
-      "ga": 643,
-      "limited": 117,
+      "ga": 651,
+      "limited": 109,
       "preview": 14,
       "unsupported": 104
     },
     "by_transport": {
       "grpc": {
-        "ga": 307,
-        "limited": 11,
+        "ga": 311,
+        "limited": 7,
         "unsupported": 92
       },
       "rest": {
-        "ga": 336,
-        "limited": 106,
+        "ga": 340,
+        "limited": 102,
         "preview": 14,
         "unsupported": 12
       }
@@ -78,8 +78,8 @@
         "unsupported": 22
       },
       "managedkafka": {
-        "ga": 34,
-        "limited": 10
+        "ga": 42,
+        "limited": 2
       },
       "memorystore": {
         "limited": 8
@@ -5443,12 +5443,11 @@
       "service": "managedkafka",
       "operation": "DeleteConsumerGroup",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "no broker data plane; consumer groups are never present, so delete returns NOT_FOUND",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -5486,11 +5485,10 @@
       "service": "managedkafka",
       "operation": "GetConsumerGroup",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "no broker data plane; consumer groups are never present, so get returns NOT_FOUND",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -5527,8 +5525,7 @@
       "service": "managedkafka",
       "operation": "ListConsumerGroups",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "no broker data plane; consumer-group listing returns an empty set",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
         "transport=grpc (conformance=1/1 pass)"
@@ -5614,8 +5611,7 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.DeleteConsumerGroup",
       "transport": "rest",
-      "state": "limited",
-      "reason": "no broker data plane; consumer groups are never present, so delete returns NOT_FOUND",
+      "state": "ga",
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.consumerGroups.delete",
         "mutating",
@@ -5657,8 +5653,7 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.GetConsumerGroup",
       "transport": "rest",
-      "state": "limited",
-      "reason": "no broker data plane; consumer groups are never present, so get returns NOT_FOUND",
+      "state": "ga",
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.consumerGroups.get",
         "postgres=yes"
@@ -5709,8 +5704,7 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.ListConsumerGroups",
       "transport": "rest",
-      "state": "limited",
-      "reason": "no broker data plane; consumer-group listing returns an empty set",
+      "state": "ga",
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.consumerGroups.list",
         "postgres=yes"
@@ -5774,8 +5768,7 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.UpdateConsumerGroup",
       "transport": "rest",
-      "state": "limited",
-      "reason": "no broker data plane; consumer groups are never present, so update returns NOT_FOUND",
+      "state": "ga",
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.consumerGroups.patch",
         "mutating",
@@ -5830,12 +5823,11 @@
       "service": "managedkafka",
       "operation": "UpdateConsumerGroup",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "no broker data plane; consumer groups are never present, so update returns NOT_FOUND",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

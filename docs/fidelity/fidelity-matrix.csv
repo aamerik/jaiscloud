@@ -490,15 +490,15 @@ managedkafka,CreateCluster,grpc,ga,
 managedkafka,CreateTopic,grpc,ga,
 managedkafka,DeleteAcl,grpc,ga,
 managedkafka,DeleteCluster,grpc,ga,
-managedkafka,DeleteConsumerGroup,grpc,limited,"no broker data plane; consumer groups are never present, so delete returns NOT_FOUND"
+managedkafka,DeleteConsumerGroup,grpc,ga,
 managedkafka,DeleteTopic,grpc,ga,
 managedkafka,GetAcl,grpc,ga,
 managedkafka,GetCluster,grpc,ga,
-managedkafka,GetConsumerGroup,grpc,limited,"no broker data plane; consumer groups are never present, so get returns NOT_FOUND"
+managedkafka,GetConsumerGroup,grpc,ga,
 managedkafka,GetTopic,grpc,ga,
 managedkafka,ListAcls,grpc,ga,
 managedkafka,ListClusters,grpc,ga,
-managedkafka,ListConsumerGroups,grpc,limited,no broker data plane; consumer-group listing returns an empty set
+managedkafka,ListConsumerGroups,grpc,ga,
 managedkafka,ListTopics,grpc,ga,
 managedkafka,ManagedKafka.AddAclEntry,rest,ga,
 managedkafka,ManagedKafka.CreateAcl,rest,ga,
@@ -506,27 +506,27 @@ managedkafka,ManagedKafka.CreateCluster,rest,ga,
 managedkafka,ManagedKafka.CreateTopic,rest,ga,
 managedkafka,ManagedKafka.DeleteAcl,rest,ga,
 managedkafka,ManagedKafka.DeleteCluster,rest,ga,
-managedkafka,ManagedKafka.DeleteConsumerGroup,rest,limited,"no broker data plane; consumer groups are never present, so delete returns NOT_FOUND"
+managedkafka,ManagedKafka.DeleteConsumerGroup,rest,ga,
 managedkafka,ManagedKafka.DeleteTopic,rest,ga,
 managedkafka,ManagedKafka.GetAcl,rest,ga,
 managedkafka,ManagedKafka.GetCluster,rest,ga,
-managedkafka,ManagedKafka.GetConsumerGroup,rest,limited,"no broker data plane; consumer groups are never present, so get returns NOT_FOUND"
+managedkafka,ManagedKafka.GetConsumerGroup,rest,ga,
 managedkafka,ManagedKafka.GetOperation,rest,limited,the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)
 managedkafka,ManagedKafka.GetTopic,rest,ga,
 managedkafka,ManagedKafka.ListAcls,rest,ga,
 managedkafka,ManagedKafka.ListClusters,rest,ga,
-managedkafka,ManagedKafka.ListConsumerGroups,rest,limited,no broker data plane; consumer-group listing returns an empty set
+managedkafka,ManagedKafka.ListConsumerGroups,rest,ga,
 managedkafka,ManagedKafka.ListOperations,rest,limited,the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)
 managedkafka,ManagedKafka.ListTopics,rest,ga,
 managedkafka,ManagedKafka.RemoveAclEntry,rest,ga,
 managedkafka,ManagedKafka.UpdateAcl,rest,ga,
 managedkafka,ManagedKafka.UpdateCluster,rest,ga,
-managedkafka,ManagedKafka.UpdateConsumerGroup,rest,limited,"no broker data plane; consumer groups are never present, so update returns NOT_FOUND"
+managedkafka,ManagedKafka.UpdateConsumerGroup,rest,ga,
 managedkafka,ManagedKafka.UpdateTopic,rest,ga,
 managedkafka,RemoveAclEntry,grpc,ga,
 managedkafka,UpdateAcl,grpc,ga,
 managedkafka,UpdateCluster,grpc,ga,
-managedkafka,UpdateConsumerGroup,grpc,limited,"no broker data plane; consumer groups are never present, so update returns NOT_FOUND"
+managedkafka,UpdateConsumerGroup,grpc,ga,
 managedkafka,UpdateTopic,grpc,ga,
 memorystore,Memorystore.CreateInstance,rest,limited,metadata-only over ResourceStore (no data plane)
 memorystore,Memorystore.DeleteInstance,rest,limited,metadata-only over ResourceStore (no data plane)

@@ -12,8 +12,8 @@ Cells: **878**
 
 | state | count |
 | --- | --- |
-| ga | 643 |
-| limited | 117 |
+| ga | 651 |
+| limited | 109 |
 | preview | 14 |
 | unsupported | 104 |
 
@@ -21,8 +21,8 @@ Cells: **878**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 336 | 106 | 14 | 12 |
-| grpc | 307 | 11 | 0 | 92 |
+| rest | 340 | 102 | 14 | 12 |
+| grpc | 311 | 7 | 0 | 92 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -618,7 +618,7 @@ _64 cell(s): ga=41 limited=1 preview=0 unsupported=22_
 
 ## managedkafka
 
-_44 cell(s): ga=34 limited=10 preview=0 unsupported=0_
+_44 cell(s): ga=42 limited=2 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -628,15 +628,15 @@ _44 cell(s): ga=34 limited=10 preview=0 unsupported=0_
 | CreateTopic | grpc | ga | — |
 | DeleteAcl | grpc | ga | — |
 | DeleteCluster | grpc | ga | — |
-| DeleteConsumerGroup | grpc | limited | no broker data plane; consumer groups are never present, so delete returns NOT_FOUND |
+| DeleteConsumerGroup | grpc | ga | — |
 | DeleteTopic | grpc | ga | — |
 | GetAcl | grpc | ga | — |
 | GetCluster | grpc | ga | — |
-| GetConsumerGroup | grpc | limited | no broker data plane; consumer groups are never present, so get returns NOT_FOUND |
+| GetConsumerGroup | grpc | ga | — |
 | GetTopic | grpc | ga | — |
 | ListAcls | grpc | ga | — |
 | ListClusters | grpc | ga | — |
-| ListConsumerGroups | grpc | limited | no broker data plane; consumer-group listing returns an empty set |
+| ListConsumerGroups | grpc | ga | — |
 | ListTopics | grpc | ga | — |
 | ManagedKafka.AddAclEntry | rest | ga | — |
 | ManagedKafka.CreateAcl | rest | ga | — |
@@ -644,27 +644,27 @@ _44 cell(s): ga=34 limited=10 preview=0 unsupported=0_
 | ManagedKafka.CreateTopic | rest | ga | — |
 | ManagedKafka.DeleteAcl | rest | ga | — |
 | ManagedKafka.DeleteCluster | rest | ga | — |
-| ManagedKafka.DeleteConsumerGroup | rest | limited | no broker data plane; consumer groups are never present, so delete returns NOT_FOUND |
+| ManagedKafka.DeleteConsumerGroup | rest | ga | — |
 | ManagedKafka.DeleteTopic | rest | ga | — |
 | ManagedKafka.GetAcl | rest | ga | — |
 | ManagedKafka.GetCluster | rest | ga | — |
-| ManagedKafka.GetConsumerGroup | rest | limited | no broker data plane; consumer groups are never present, so get returns NOT_FOUND |
+| ManagedKafka.GetConsumerGroup | rest | ga | — |
 | ManagedKafka.GetOperation | rest | limited | the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true) |
 | ManagedKafka.GetTopic | rest | ga | — |
 | ManagedKafka.ListAcls | rest | ga | — |
 | ManagedKafka.ListClusters | rest | ga | — |
-| ManagedKafka.ListConsumerGroups | rest | limited | no broker data plane; consumer-group listing returns an empty set |
+| ManagedKafka.ListConsumerGroups | rest | ga | — |
 | ManagedKafka.ListOperations | rest | limited | the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true) |
 | ManagedKafka.ListTopics | rest | ga | — |
 | ManagedKafka.RemoveAclEntry | rest | ga | — |
 | ManagedKafka.UpdateAcl | rest | ga | — |
 | ManagedKafka.UpdateCluster | rest | ga | — |
-| ManagedKafka.UpdateConsumerGroup | rest | limited | no broker data plane; consumer groups are never present, so update returns NOT_FOUND |
+| ManagedKafka.UpdateConsumerGroup | rest | ga | — |
 | ManagedKafka.UpdateTopic | rest | ga | — |
 | RemoveAclEntry | grpc | ga | — |
 | UpdateAcl | grpc | ga | — |
 | UpdateCluster | grpc | ga | — |
-| UpdateConsumerGroup | grpc | limited | no broker data plane; consumer groups are never present, so update returns NOT_FOUND |
+| UpdateConsumerGroup | grpc | ga | — |
 | UpdateTopic | grpc | ga | — |
 
 ## memorystore

@@ -23,9 +23,13 @@
 // projects/{project}/locations/{location}/operations/{id}. The LRO timing is
 // opt-in via WithLROMode: when enabled, operations are stored done=false and
 // settle lazily on read (see settle); the default remains synchronous. Topic and
-// ACL CRUD are fully synchronous. Consumer groups are not tracked: there is no
-// create RPC and no broker, so a list is always the empty set and
-// get/update/delete report NOT_FOUND, matching real GCP for an absent group.
+// ACL CRUD are fully synchronous. Consumer groups are read from the Kafka
+// broker's group coordinator: there is no create RPC, so a group exists only
+// once a client commits offsets to the cluster and the broker is the source of
+// truth. With a live broker the core lists groups, reads committed offsets, and
+// resets/removes them through the injected Broker; with no broker (the mock
+// topology) the list is empty and get/update/delete report NOT_FOUND, matching
+// real GCP for an absent group.
 package managedkafka
 
 import (
@@ -67,6 +71,22 @@ type Broker interface {
 	// DeleteBrokerTopic removes the topic from the broker. It is idempotent and
 	// a no-op when no broker is running.
 	DeleteBrokerTopic(ctx context.Context, project, location, cluster, topic string) error
+	// ListConsumerGroups returns the consumer-group ids known to the cluster's
+	// group coordinator. With no running broker it returns an empty set.
+	ListConsumerGroups(ctx context.Context, project, location, cluster string) ([]string, error)
+	// ConsumerGroupOffsets returns the committed offsets for the group. found
+	// is false when no broker is running or the coordinator does not know the
+	// group; the topic is the bare Kafka topic id (no resource path).
+	ConsumerGroupOffsets(ctx context.Context, project, location, cluster, group string) ([]ConsumerGroupOffset, bool, error)
+	// ConsumerGroupMembers returns the number of active members in the group.
+	// found is false when no broker is running or the group does not exist.
+	ConsumerGroupMembers(ctx context.Context, project, location, cluster, group string) (int, bool, error)
+	// DeleteConsumerGroup removes the group and its committed offsets. existed
+	// is false when no broker is running or the group was already absent.
+	DeleteConsumerGroup(ctx context.Context, project, location, cluster, group string) (bool, error)
+	// CommitConsumerGroupOffsets sets the group's committed offsets. The caller
+	// checks existence first; a no-broker topology never reaches here.
+	CommitConsumerGroupOffsets(ctx context.Context, project, location, cluster, group string, offsets []ConsumerGroupOffset) error
 }
 
 // Service is the transport-neutral Managed Kafka v1 service.
@@ -550,41 +570,10 @@ func (s *Service) DeleteTopic(ctx context.Context, project, location, clusterID,
 }
 
 // --- Consumer groups ---
-
-// ListConsumerGroups returns an empty page — the emulator tracks no broker
-// consumer-group state. The empty set still passes through paging.Page so the
-// wire shape matches the real paginated API.
-func (s *Service) ListConsumerGroups(ctx context.Context, project, location, clusterID string, pageSize int, pageToken string) ([]string, string, error) {
-	if location == "" || clusterID == "" {
-		return nil, "", invalidArgument("missing location or clusterId")
-	}
-	if _, err := s.store.GetCluster(ctx, project, location, clusterID); err != nil {
-		return nil, "", mapStoreError(err)
-	}
-	groups := []string{}
-	page, next := paging.Page(groups, func(g string) string { return g }, pageParams(pageSize, pageToken))
-	return page, next, nil
-}
-
-// GetConsumerGroup reports NOT_FOUND: there is no broker, so no consumer group
-// exists. Real GCP returns NOT_FOUND for an absent group.
-func (s *Service) GetConsumerGroup(_ context.Context, _, _, _, _ string) error {
-	return consumerGroupNotFound()
-}
-
-// UpdateConsumerGroup reports NOT_FOUND for the same reason as GetConsumerGroup.
-func (s *Service) UpdateConsumerGroup(_ context.Context, _, _, _, _ string) error {
-	return consumerGroupNotFound()
-}
-
-// DeleteConsumerGroup reports NOT_FOUND for the same reason as GetConsumerGroup.
-func (s *Service) DeleteConsumerGroup(_ context.Context, _, _, _, _ string) error {
-	return consumerGroupNotFound()
-}
-
-func consumerGroupNotFound() error {
-	return model.NewProviderError("NotFound", "consumer group not found", 404)
-}
+//
+// Consumer-group business logic lives in consumer_group.go: unlike topics, a
+// group has no API-side create, so it is read from (and reset on) the cluster's
+// live broker rather than from the metadata store.
 
 // IsNotFound reports whether err is the canonical NotFound provider error (as
 // returned by GetOperation for an absent operation), so a transport's

@@ -26,10 +26,26 @@ type fakeBroker struct {
 	addedPartitions  []string // "project/location/cluster/topic:total"
 	deletedTopics    []string // "project/location/cluster/topic"
 
+	// Consumer-group data-plane behaviour + call recording.
+	listGroups       []string
+	groupState       map[string]fakeGroup
+	listGroupsErr    error
+	groupOffsetsErr  error
+	groupMembersErr  error
+	deleteGroupErr   error
+	commitOffsetsErr error
+	committed        map[string][]ConsumerGroupOffset // group → offsets passed to commit
+
 	// Optional hooks fire while the broker call is "in flight", so tests can
 	// simulate a concurrent mutation landing before the call fails.
 	beforeEnsureTopic   func()
 	beforeAddPartitions func()
+}
+
+// fakeGroup is the broker-side state of one consumer group.
+type fakeGroup struct {
+	offsets []ConsumerGroupOffset
+	members int
 }
 
 func (f *fakeBroker) key(project, location, cluster string) string {
@@ -72,6 +88,58 @@ func (f *fakeBroker) AddTopicPartitions(_ context.Context, project, location, cl
 func (f *fakeBroker) DeleteBrokerTopic(_ context.Context, project, location, cluster, topic string) error {
 	f.deletedTopics = append(f.deletedTopics, f.key(project, location, cluster)+"/"+topic)
 	return f.deleteTopicErr
+}
+
+func (f *fakeBroker) ListConsumerGroups(context.Context, string, string, string) ([]string, error) {
+	return f.listGroups, f.listGroupsErr
+}
+
+func (f *fakeBroker) ConsumerGroupOffsets(_ context.Context, _, _, _, group string) ([]ConsumerGroupOffset, bool, error) {
+	if f.groupOffsetsErr != nil {
+		return nil, false, f.groupOffsetsErr
+	}
+	st, ok := f.groupState[group]
+	if !ok {
+		return nil, false, nil
+	}
+	return st.offsets, true, nil
+}
+
+func (f *fakeBroker) ConsumerGroupMembers(_ context.Context, _, _, _, group string) (int, bool, error) {
+	if f.groupMembersErr != nil {
+		return 0, false, f.groupMembersErr
+	}
+	st, ok := f.groupState[group]
+	if !ok {
+		return 0, false, nil
+	}
+	return st.members, true, nil
+}
+
+func (f *fakeBroker) DeleteConsumerGroup(_ context.Context, _, _, _, group string) (bool, error) {
+	if f.deleteGroupErr != nil {
+		return false, f.deleteGroupErr
+	}
+	_, ok := f.groupState[group]
+	delete(f.groupState, group)
+	return ok, nil
+}
+
+func (f *fakeBroker) CommitConsumerGroupOffsets(_ context.Context, _, _, _, group string, offsets []ConsumerGroupOffset) error {
+	if f.commitOffsetsErr != nil {
+		return f.commitOffsetsErr
+	}
+	if f.committed == nil {
+		f.committed = make(map[string][]ConsumerGroupOffset)
+	}
+	f.committed[group] = offsets
+	if f.groupState == nil {
+		f.groupState = make(map[string]fakeGroup)
+	}
+	st := f.groupState[group]
+	st.offsets = offsets
+	f.groupState[group] = st
+	return nil
 }
 
 func TestClusterRendersLiveBrokerEndpoint(t *testing.T) {
