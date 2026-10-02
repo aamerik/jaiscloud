@@ -1,28 +1,180 @@
-import { useState } from 'react'
-import { TopBar } from './TopBar'
-import { Sidebar } from './Sidebar'
-import { AccountProvider } from '../context/AccountContext'
+import { useMemo, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import {
+  AppLayout,
+  BreadcrumbGroup,
+  SideNavigation,
+  TopNavigation,
+} from '@cloudscape-design/components'
+import type {
+  BreadcrumbGroupProps,
+  SideNavigationProps,
+  TopNavigationProps,
+} from '@cloudscape-design/components'
+import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
+import { useMeta } from '../hooks/useMeta'
+import { useEventStream } from '../hooks/useEventStream'
+import { navTree } from './nav'
+
+/** Router basename; links must include it so they also work without JS. */
+const BASE = '/ui'
+
+const href = (path: string) => `${BASE}${path}`
 
 interface Props {
   children: React.ReactNode
 }
 
+function useConsoleNav() {
+  const { pathname } = useLocation()
+  const navigate = useNavigate()
+
+  const onFollow = (event: { preventDefault: () => void; detail: { href: string } }) => {
+    event.preventDefault()
+    navigate(event.detail.href.replace(BASE, '') || '/')
+  }
+
+  const sideItems = useMemo<SideNavigationProps.Item[]>(() => {
+    const services: SideNavigationProps.Item[] = navTree.map((section) => {
+      if (section.children.length > 1) {
+        return {
+          type: 'expandable-link-group',
+          text: section.label,
+          href: href(section.rootPath),
+          defaultExpanded: pathname.startsWith(section.basePath),
+          items: section.children.map((child) => ({
+            type: 'link',
+            text: child.label,
+            href: href(child.path),
+          })),
+        }
+      }
+      return { type: 'link', text: section.label, href: href(section.rootPath) }
+    })
+
+    return [
+      { type: 'link', text: 'Console home', href: href('/') },
+      { type: 'divider' },
+      ...services,
+      { type: 'divider' },
+      { type: 'link', text: 'Admin', href: href('/admin') },
+    ]
+  }, [pathname])
+
+  const breadcrumbItems = useMemo<BreadcrumbGroupProps.Item[]>(() => {
+    const items: BreadcrumbGroupProps.Item[] = [
+      { text: 'JaisCloud', href: href('/') },
+    ]
+    const parts = pathname.split('/').filter(Boolean)
+    if (parts[0] === 'aws' && parts[1]) {
+      const section = navTree.find((s) => s.basePath === `/aws/${parts[1]}`)
+      if (section) items.push({ text: section.label, href: href(section.rootPath) })
+    } else if (parts[0] === 'admin') {
+      items.push({ text: 'Admin', href: href('/admin') })
+    }
+    return items
+  }, [pathname])
+
+  return { sideItems, breadcrumbItems, onFollow }
+}
+
 function Shell({ children }: Props) {
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [navOpen, setNavOpen] = useState(true)
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const { data: meta } = useMeta()
+  const { accountId, setAccountId } = useAccount()
+  const {
+    data: accountsData,
+    refetch: refetchAccounts,
+  } = useAccounts()
+  const { connected } = useEventStream()
+  const { sideItems, breadcrumbItems, onFollow } = useConsoleNav()
+
+  const accounts = useMemo(
+    () => accountsData?.accounts ?? (accountId ? [accountId] : []),
+    [accountsData, accountId],
+  )
+
+  const utilities = useMemo<TopNavigationProps.Utility[]>(() => {
+    const items: TopNavigationProps.Utility[] = [
+      {
+        type: 'button',
+        text: meta?.region ?? '—',
+        iconName: 'globe',
+        disableUtilityCollapse: true,
+      },
+      {
+        type: 'menu-dropdown',
+        text: accountId || 'Account',
+        iconName: 'user-profile',
+        items: accounts.map((account) => ({ id: account, text: account })),
+        onItemClick: (event) => {
+          if (event.detail.id) setAccountId(event.detail.id)
+        },
+      },
+      {
+        type: 'button',
+        iconName: 'refresh',
+        ariaLabel: 'Refresh account list',
+        onClick: () => void refetchAccounts(),
+      },
+      {
+        type: 'button',
+        text: connected ? 'Live' : 'Polling',
+        iconName: connected ? 'status-positive' : 'status-pending',
+        disableUtilityCollapse: true,
+      },
+    ]
+
+    const version = [
+      meta?.version ? `v${meta.version}` : '',
+      meta?.mode ?? '',
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    if (version) {
+      items.push({ type: 'button', text: version, disableUtilityCollapse: true })
+    }
+    return items
+  }, [meta, accountId, accounts, connected, refetchAccounts, setAccountId])
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
-      <TopBar
-        sidebarOpen={sidebarOpen}
-        onToggleSidebar={() => setSidebarOpen((o) => !o)}
+    <>
+      <TopNavigation
+        identity={{
+          href: href('/'),
+          title: 'JaisCloud',
+          onFollow: (event) => {
+            event.preventDefault()
+            navigate('/')
+          },
+        }}
+        utilities={utilities}
       />
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        <Sidebar open={sidebarOpen} />
-        <main style={mainStyle}>
-          {children}
-        </main>
-      </div>
-    </div>
+      <AppLayout
+        navigation={
+          <SideNavigation
+            header={{ href: href('/'), text: 'AWS services' }}
+            items={sideItems}
+            onFollow={onFollow}
+            activeHref={href(pathname)}
+          />
+        }
+        navigationOpen={navOpen}
+        onNavigationChange={({ detail }) => setNavOpen(detail.open)}
+        breadcrumbs={
+          <BreadcrumbGroup
+            items={breadcrumbItems}
+            onFollow={onFollow}
+            ariaLabel="Breadcrumbs"
+          />
+        }
+        content={children}
+        toolsHide
+        contentType="default"
+      />
+    </>
   )
 }
 
@@ -32,12 +184,4 @@ export function Layout({ children }: Props) {
       <Shell>{children}</Shell>
     </AccountProvider>
   )
-}
-
-const mainStyle: React.CSSProperties = {
-  flex: 1,
-  overflowY: 'auto',
-  padding: '1.5rem 2rem',
-  background: '#f8f9fa',
-  boxSizing: 'border-box',
 }

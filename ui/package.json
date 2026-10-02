@@ -11,6 +11,8 @@
     "lint": "eslint src"
   },
   "dependencies": {
+    "@cloudscape-design/components": "^3.0.1391",
+    "@cloudscape-design/global-styles": "^1.0.71",
     "@tanstack/react-query": "^5.69.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
