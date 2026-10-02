@@ -20,6 +20,9 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.69.0
         version: 5.100.14(react@19.2.6)
+      ace-builds:
+        specifier: ^1.44.0
+        version: 1.44.0
       react:
         specifier: ^19.0.0
         version: 19.2.6

@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { JsonEditor } from '../../../components/JsonEditor'
 import { scanTable, deleteItem, putItem, type ScanResponse } from '../../../api/dynamodb'
-
 function renderValue(v: unknown): string {
   if (v === null || v === undefined) return '—'
   if (typeof v === 'object') return JSON.stringify(v)
@@ -176,10 +176,11 @@ export function DynamoDBDetail() {
           <div style={{ ...dialogStyle, minWidth: 480 }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ margin: '0 0 1rem' }}>{Object.keys(editItem).length === 0 ? 'Put Item' : 'Edit Item'}</h3>
             <p style={{ margin: '0 0 0.5rem', fontSize: '0.8em', color: '#5f6b7a' }}>Edit as DynamoDB JSON (&#123;"pk": &#123;"S": "value"&#125;, ...&#125;)</p>
-            <textarea
+            <JsonEditor
               value={editJson}
-              onChange={(e) => setEditJson(e.target.value)}
-              style={{ width: '100%', boxSizing: 'border-box', height: 240, fontFamily: 'monospace', fontSize: '0.85em', padding: '0.5rem', border: '1px solid #c9cdd4', borderRadius: 4, resize: 'vertical' }}
+              onChange={setEditJson}
+              height={240}
+              ariaLabel="Item JSON"
             />
             {editErr && <p style={{ color: '#d13212', margin: '0.25rem 0 0', fontSize: '0.85em' }}>{editErr}</p>}
             {putMut.error && <p style={{ color: '#d13212', margin: '0.25rem 0 0', fontSize: '0.85em' }}>{(putMut.error as Error).message}</p>}
