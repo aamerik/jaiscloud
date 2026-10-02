@@ -1,0 +1,10 @@
+/*
+ * AWS Console chrome overrides on top of Cloudscape.
+ *
+ * The top navigation background is not exposed as a design token, so set the
+ * AWS "squid ink" header colour (#232f3e) directly. Scoped to the console
+ * wrapper so it cannot leak into other <header> elements.
+ */
+.console-topnav header {
+  background-color: #232f3e;
+}

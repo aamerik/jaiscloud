@@ -141,17 +141,19 @@ function Shell({ children }: Props) {
 
   return (
     <>
-      <TopNavigation
-        identity={{
-          href: href('/'),
-          title: 'JaisCloud',
-          onFollow: (event) => {
-            event.preventDefault()
-            navigate('/')
-          },
-        }}
-        utilities={utilities}
-      />
+      <div className="console-topnav">
+        <TopNavigation
+          identity={{
+            href: href('/'),
+            title: 'JaisCloud',
+            onFollow: (event) => {
+              event.preventDefault()
+              navigate('/')
+            },
+          }}
+          utilities={utilities}
+        />
+      </div>
       <AppLayout
         navigation={
           <SideNavigation
