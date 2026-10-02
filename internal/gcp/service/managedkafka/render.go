@@ -20,12 +20,19 @@ func formatTimestamp(t time.Time) string {
 
 // ClusterJSON renders a stored Cluster as the Discovery cluster shape.
 // capacityConfig, gcpConfig, rebalanceConfig, and tlsConfig are echoed from the
-// stored config verbatim; the remaining fields are derived.
+// stored config verbatim; the remaining fields are derived. bootstrapAddress is
+// the live broker endpoint when one is running (c.BootstrapAddress, set by the
+// core from the broker manager), otherwise the synthesized cloud.goog name of
+// the mock topology.
 func ClusterJSON(c mkstore.Cluster, project string) map[string]any {
+	addr := c.BootstrapAddress
+	if addr == "" {
+		addr = BootstrapAddress(project, c.Location, c.Name)
+	}
 	out := map[string]any{
 		"name":             ClusterName(project, c.Location, c.Name),
 		"state":            "ACTIVE",
-		"bootstrapAddress": BootstrapAddress(project, c.Location, c.Name),
+		"bootstrapAddress": addr,
 		"createTime":       formatTimestamp(c.CreateTime),
 		"updateTime":       formatTimestamp(c.UpdateTime),
 	}

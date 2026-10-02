@@ -114,11 +114,12 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-e2e-lakehouse-k3d \
         test-e2e-gcp-samples-k3d \
         test-dataproc-streaming-k8s \
+        test-managedkafka-broker-k8s \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all test-all-gcp \
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
         _start-k8s _stop-k8s \
         _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq \
-        _check-lakehouse-k3d-prereq _check-gcp-samples-prereq _check-dataproc-streaming-k8s-prereq _refresh-gcp-image \
+        _check-lakehouse-k3d-prereq _check-gcp-samples-prereq _check-dataproc-streaming-k8s-prereq _check-managedkafka-broker-k8s-prereq _refresh-gcp-image \
         test-gcp-wire-conformance record-gcp-wire-conformance test-gcp-grpc-conformance \
         test-gcp-gcloud-conformance test-gcp-python-conformance \
         test-gcp-differential record-gcp-differential \
@@ -885,6 +886,11 @@ test-dataproc-streaming-k8s: _check-dataproc-streaming-k8s-prereq _refresh-gcp-i
 	K8S_NAMESPACE=$(K8S_NAMESPACE) \
 	  go test -v -tags dataproc_streaming_e2e -timeout 20m ./tests/persistent_mode/gcp/dataproc-streaming/
 
+test-managedkafka-broker-k8s: _check-managedkafka-broker-k8s-prereq _refresh-gcp-image ## Real-K8s Managed Kafka broker lifecycle smoke on k3d (tag: managedkafka_broker_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
+	go clean -testcache
+	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	  go test -v -tags managedkafka_broker_e2e -timeout 20m ./tests/persistent_mode/gcp/managedkafka-broker/
+
 # Rebuild the emulator image from the working tree and roll the deployment so the
 # pipeline always runs against the code under test, not whatever happens to be in
 # the cluster. A stale image silently broke this suite once already.
@@ -993,6 +999,13 @@ _check-gcp-samples-prereq:
 	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)
 
 _check-dataproc-streaming-k8s-prereq:
+	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
+	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
+	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
+	@kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1 || \
+	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)
+
+_check-managedkafka-broker-k8s-prereq:
 	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
 	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
 	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)

@@ -276,7 +276,9 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   execute lazily on read (a due key rotates on its next `GetCryptoKey`/`ListCryptoKeys`/`Encrypt`,
   creating a new primary and advancing the schedule — there is no background scheduler); Logging
   `TailLogEntries` is a bounded, at-most-once poll;
-  Eventarc and Managed Kafka are metadata-only (no event-delivery engine, no real broker);
+  Eventarc is metadata-only (no event-delivery engine); Managed Kafka is metadata-only by default
+  (an opt-in k8s/native broker mode stands up a real Redpanda endpoint behind `bootstrapAddress`,
+  but topics/consumer groups are not yet provisioned over it);
   Cloud Resource Manager serves the legacy v1 REST and v3 gRPC project surfaces over one core
   (projects are synthesized and immutable, project IAM is metadata, and bindings are not enforced);
   Dataproc `Reset` does not drain in-flight Spark job goroutines, and a Dataproc gRPC

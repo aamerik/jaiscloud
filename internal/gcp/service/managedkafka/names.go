@@ -37,14 +37,16 @@ func OperationName(project, location, id string) string {
 	return resource.ResourceID(project)("managedkafka-operation", location+"/"+id)
 }
 
-// BootstrapAddress is the output-only address clients dial to reach a cluster's
-// Kafka brokers. The emulator stands up no broker, so the returned name matches
-// the documented legacy GCP format but is not dialable:
+// BootstrapAddress is the synthesized bootstrap address of the mock topology:
+// when no real broker is running (the default), the emulator returns the
+// documented legacy GCP format but nothing listens at it:
 //
 //	bootstrap.{cluster}.{location}.managedkafka.{project}.cloud.goog
 //
-// Real GCP omits the port so a client selects its own listener (:9092 TLS,
-// :9094 mTLS); the address is present while the cluster is ACTIVE.
+// With a real broker (broker modes k8s/native) a cluster renders the broker's
+// live endpoint instead; see ClusterJSON. Real GCP omits the port so a client
+// selects its own listener (:9092 TLS, :9094 mTLS); the address is present while
+// the cluster is ACTIVE.
 func BootstrapAddress(project, location, cluster string) string {
 	return "bootstrap." + cluster + "." + location + ".managedkafka." + project + ".cloud.goog"
 }
