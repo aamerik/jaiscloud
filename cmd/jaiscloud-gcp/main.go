@@ -849,7 +849,10 @@ func startCmd() *cobra.Command {
 			}
 			adminHandler.RegisterResetter(stores.workflows)
 			adminHandler.RegisterResetter(stores.dataproc)
-			adminHandler.RegisterResetter(stores.managedkafka)
+			// The managedkafka core owns the optional real broker; register it
+			// (rather than the bare store) so /_jaiscloud/reset reaps broker
+			// Pods/Services/subprocesses in addition to wiping the store.
+			adminHandler.RegisterResetter(managedKafkaCore)
 			adminHandler.RegisterResetter(stores.metastore)
 			adminHandler.RegisterResetter(stores.iceberg)
 			adminHandler.RegisterResetter(stores.hms)

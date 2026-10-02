@@ -20,7 +20,8 @@
 // JAISCLOUD_KAFKA_BROKER_MODE=k8s (deploy/k8s/jaiscloud-gcp.yaml).
 //
 // The full produce/consume + consumer-group gate against a real Kafka client is
-// the planned MK6 session; this smoke stops at reachability.
+// the planned MK6 session; this smoke stops at reachability. MK5 adds a reset +
+// orphan-sweep case below (TestManagedKafkaBrokerResetAndSweepK3d).
 package managedkafkabroker_test
 
 import (
@@ -263,6 +264,92 @@ func TestManagedKafkaBrokerK3d(t *testing.T) {
 	deleteCluster(t, base, cluster)
 	waitForResourceGone(t, "svc", svcName, 60*time.Second)
 	waitForResourceGone(t, "pod", svcName, 90*time.Second)
+}
+
+// TestManagedKafkaBrokerResetAndSweepK3d proves the MK5 lifecycle hardening
+// against a live deployment:
+//
+//   - /_jaiscloud/reset reaps the running broker's Pod and Service and wipes
+//     the cluster from the store;
+//   - a broker-labeled Pod/Service the emulator never tracked is swept too;
+//   - the same cluster id is reusable after reset and gets a fresh broker.
+//
+// The reuse caveat mirrors AWS EMR/Dataproc reset: reset does not drain
+// in-flight producer/consumer work, and broker bytes are ephemeral — a reused
+// id starts from a clean broker.
+func TestManagedKafkaBrokerResetAndSweepK3d(t *testing.T) {
+	requireK3d(t)
+
+	base, _, stop := startPortForward(t, "jaiscloud-gcp", 8080)
+	t.Cleanup(stop)
+
+	run := fmt.Sprintf("%d", time.Now().Unix())
+	cluster := "mk-reset-" + run
+	deleteCluster(t, base, cluster)
+
+	code, body := api(t, clusterCreateClient, http.MethodPost,
+		base+fmt.Sprintf("/v1/projects/%s/locations/%s/clusters?clusterId=%s", testProject, testRegion, cluster),
+		map[string]any{})
+	if code < 200 || code >= 300 {
+		t.Fatalf("create cluster: HTTP %d: %v", code, body)
+	}
+	code, cl := api(t, httpClient, http.MethodGet, base+clusterPath(cluster), nil)
+	if code < 200 || code >= 300 {
+		t.Fatalf("get cluster: HTTP %d: %v", code, cl)
+	}
+	svcName := strings.SplitN(strField(cl, "bootstrapAddress"), ".", 2)[0]
+	if !strings.HasPrefix(svcName, "mkbroker-") {
+		t.Fatalf("unexpected broker service %q", svcName)
+	}
+
+	// Seed an orphan broker-labeled Pod/Service the emulator never tracked; the
+	// reset sweep must reap it (the once-per-process startup sweep is covered by
+	// the package unit tests).
+	orphan := "mkbroker-orphan-" + run
+	if _, err := kubectl("-n", namespace(), "run", orphan, "--image=busybox:1.36", "--restart=Never",
+		"--labels", "jaiscloud.io/broker=managedkafka", "--", "sleep", "3600"); err != nil {
+		t.Fatalf("seed orphan pod: %v", err)
+	}
+	if _, err := kubectl("-n", namespace(), "create", "service", "clusterip", orphan, "--tcp=9092:9092"); err != nil {
+		t.Fatalf("seed orphan service: %v", err)
+	}
+	if _, err := kubectl("-n", namespace(), "label", "svc", orphan, "jaiscloud.io/broker=managedkafka"); err != nil {
+		t.Fatalf("label orphan service: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = kubectl("-n", namespace(), "delete", "pod", orphan, "--ignore-not-found")
+		_, _ = kubectl("-n", namespace(), "delete", "svc", orphan, "--ignore-not-found")
+	})
+
+	code, resetBody := api(t, httpClient, http.MethodPost, base+"/_jaiscloud/reset", nil)
+	if code < 200 || code >= 300 {
+		t.Fatalf("reset: HTTP %d: %v", code, resetBody)
+	}
+
+	// Reset reaps the tracked broker and the untracked orphan, and wipes state.
+	waitForResourceGone(t, "svc", svcName, 60*time.Second)
+	waitForResourceGone(t, "pod", svcName, 90*time.Second)
+	waitForResourceGone(t, "svc", orphan, 60*time.Second)
+	waitForResourceGone(t, "pod", orphan, 90*time.Second)
+	if code, _ := api(t, httpClient, http.MethodGet, base+clusterPath(cluster), nil); code != http.StatusNotFound {
+		t.Fatalf("cluster still present after reset: HTTP %d", code)
+	}
+
+	// The same cluster id is reusable after reset and gets a fresh broker.
+	code, body = api(t, clusterCreateClient, http.MethodPost,
+		base+fmt.Sprintf("/v1/projects/%s/locations/%s/clusters?clusterId=%s", testProject, testRegion, cluster),
+		map[string]any{})
+	if code < 200 || code >= 300 {
+		t.Fatalf("recreate cluster after reset: HTTP %d: %v", code, body)
+	}
+	code, cl = api(t, httpClient, http.MethodGet, base+clusterPath(cluster), nil)
+	if code < 200 || code >= 300 {
+		t.Fatalf("get recreated cluster: HTTP %d: %v", code, cl)
+	}
+	if addr := strField(cl, "bootstrapAddress"); !strings.HasPrefix(addr, "mkbroker-") {
+		t.Fatalf("recreated cluster bootstrapAddress = %q, want a live broker", addr)
+	}
+	deleteCluster(t, base, cluster)
 }
 
 // assertBrokerAcl reads the broker's Kafka ACL table from inside the broker Pod

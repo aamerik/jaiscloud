@@ -27,6 +27,9 @@ type nativeBroker struct {
 	mu        sync.Mutex
 	instances map[ClusterKey]*nativeInstance
 	admins    *adminPool
+	// sweepOnce removes stale data dirs from a previous instance exactly once,
+	// before the first broker starts.
+	sweepOnce sync.Once
 
 	// probe reports whether addr is accepting TCP connections. Overridable in
 	// tests; defaults to a one-second TCP dial.
@@ -116,6 +119,9 @@ func (b *nativeBroker) ReplaceAcl(ctx context.Context, project, location, cluste
 func (b *nativeBroker) EnsureCluster(ctx context.Context, project, location, cluster string) (string, error) {
 	key := ClusterKey{Project: project, Location: location, Cluster: cluster}
 
+	// Remove stale data dirs from a previous instance before creating one.
+	b.sweepOnce.Do(b.sweepOrphans)
+
 	b.mu.Lock()
 	if inst, ok := b.instances[key]; ok {
 		b.mu.Unlock()
@@ -199,10 +205,22 @@ func (b *nativeBroker) StopCluster(_ context.Context, project, location, cluster
 	}
 	// Drop the pooled admin client before the process goes away.
 	b.admins.close(inst.addr)
-	return stopProcess(inst.cmd)
+	err := stopProcess(inst.cmd)
+	// Broker data is ephemeral and non-portable (MK5): remove the per-cluster
+	// scratch dir so a reused cluster id starts clean.
+	if inst.dir != "" {
+		if rmErr := os.RemoveAll(inst.dir); rmErr != nil {
+			b.logger.Warn("managedkafka broker: data dir cleanup failed", "dir", inst.dir, "err", rmErr)
+		}
+	}
+	return err
 }
 
-func (b *nativeBroker) Shutdown(ctx context.Context) error {
+// Reset stops and reaps every broker, clears its in-memory bookkeeping, and
+// removes the broker data root so a reset leaves no subprocess bookkeeping or
+// on-disk state behind. The manager stays usable: a later EnsureCluster starts
+// a fresh broker.
+func (b *nativeBroker) Reset(ctx context.Context) error {
 	b.mu.Lock()
 	keys := make([]ClusterKey, 0, len(b.instances))
 	for k := range b.instances {
@@ -217,7 +235,29 @@ func (b *nativeBroker) Shutdown(ctx context.Context) error {
 		}
 	}
 	b.admins.closeAll()
+	b.removeDataRoot()
 	return firstErr
+}
+
+// Shutdown reaps every broker on emulator shutdown.
+func (b *nativeBroker) Shutdown(ctx context.Context) error { return b.Reset(ctx) }
+
+// sweepOrphans removes data directories left by a previous emulator instance.
+// It does not attempt to kill orphaned processes: a subprocess is reaped on a
+// graceful StopCluster/Shutdown, and killing arbitrary processes by name would
+// be unsafe.
+func (b *nativeBroker) sweepOrphans() { b.removeDataRoot() }
+
+// removeDataRoot deletes the broker data root under the configured data dir.
+// Broker data is ephemeral and non-portable, so nothing here is restored.
+func (b *nativeBroker) removeDataRoot() {
+	if b.dataDir == "" {
+		return
+	}
+	root := filepath.Join(b.dataDir, "managedkafka")
+	if err := os.RemoveAll(root); err != nil {
+		b.logger.Warn("managedkafka broker: data root cleanup failed", "dir", root, "err", err)
+	}
 }
 
 func (b *nativeBroker) waitReady(ctx context.Context, addr string) error {

@@ -93,6 +93,9 @@ type Broker interface {
 	// metadata-only no-op. A broker failure is returned so the caller can roll
 	// the metadata write back.
 	ReplaceAcl(ctx context.Context, project, location, cluster, resourceType, resourceName, patternType string, entries []AclBinding) error
+	// Reset stops and reaps every broker the manager owns so a
+	// /_jaiscloud/reset leaves no broker Pod, Service, or subprocess behind.
+	Reset(ctx context.Context) error
 }
 
 // Service is the transport-neutral Managed Kafka v1 service.
@@ -135,10 +138,18 @@ func NewService(s mkstore.Store, opts ...Option) *Service {
 	return svc
 }
 
-// Reset wipes the store. Broker teardown on reset is deliberately out of scope
-// here: a running broker is runtime state, and reaping it (plus the orphan
-// sweep for a restarted emulator) is the planned MK5 session.
-func (s *Service) Reset(ctx context.Context) { s.store.Reset(ctx) }
+// Reset wipes the store and reaps every broker the injected manager owns, so
+// /_jaiscloud/reset leaves no broker Pod, Service, or subprocess behind. Broker
+// teardown failures are logged, not surfaced: the metadata wipe has already
+// happened and the next cluster create starts a fresh broker.
+func (s *Service) Reset(ctx context.Context) {
+	if s.broker != nil {
+		if err := s.broker.Reset(ctx); err != nil {
+			slog.Warn("managedkafka: broker reset failed", "err", err)
+		}
+	}
+	s.store.Reset(ctx)
+}
 
 // ensureBroker starts the real broker for a newly created cluster and returns
 // its endpoint. A broker failure degrades to the mock topology: the cluster
@@ -161,6 +172,18 @@ func (s *Service) brokerEndpoint(project, location, cluster string) string {
 		return ""
 	}
 	return s.broker.Endpoint(project, location, cluster)
+}
+
+// brokerReady rehydrates the cluster's broker before a data-plane call. A
+// cluster persisted under --dsn (or restored from an import) has no live broker
+// until the first call, so this starts one lazily. It is a no-op with no broker
+// manager or when a broker is already running; a start failure degrades to the
+// metadata-only topology (logged by ensureBroker).
+func (s *Service) brokerReady(ctx context.Context, project, location, cluster string) {
+	if s.broker == nil || s.broker.Endpoint(project, location, cluster) != "" {
+		return
+	}
+	s.ensureBroker(ctx, project, location, cluster)
 }
 
 // stopBroker reaps the broker for a deleted cluster. Failures are logged, not
@@ -188,6 +211,7 @@ func (s *Service) ensureBrokerTopic(ctx context.Context, project, location, clus
 	if s.broker == nil {
 		return nil
 	}
+	s.brokerReady(ctx, project, location, cluster)
 	if err := s.broker.EnsureTopic(ctx, project, location, cluster, topic, partitions); err != nil {
 		return brokerInternalError("ensure topic", err)
 	}
@@ -200,6 +224,7 @@ func (s *Service) addBrokerPartitions(ctx context.Context, project, location, cl
 	if s.broker == nil {
 		return nil
 	}
+	s.brokerReady(ctx, project, location, cluster)
 	if err := s.broker.AddTopicPartitions(ctx, project, location, cluster, topic, totalPartitions); err != nil {
 		return brokerInternalError("add topic partitions", err)
 	}
@@ -212,6 +237,7 @@ func (s *Service) deleteBrokerTopic(ctx context.Context, project, location, clus
 	if s.broker == nil {
 		return nil
 	}
+	s.brokerReady(ctx, project, location, cluster)
 	if err := s.broker.DeleteBrokerTopic(ctx, project, location, cluster, topic); err != nil {
 		return brokerInternalError("delete topic", err)
 	}
@@ -227,6 +253,7 @@ func (s *Service) replaceBrokerAcl(ctx context.Context, project, location, clust
 	if s.broker == nil {
 		return nil
 	}
+	s.brokerReady(ctx, project, location, cluster)
 	if err := s.broker.ReplaceAcl(ctx, project, location, cluster, resourceType, resourceName, patternType, entries); err != nil {
 		return brokerInternalError("replace acl", err)
 	}
@@ -295,7 +322,10 @@ func (s *Service) CreateCluster(ctx context.Context, project, location, clusterI
 	return c, op, nil
 }
 
-// GetCluster returns one cluster.
+// GetCluster returns one cluster. The live broker endpoint is resolved with
+// EnsureCluster so a cluster persisted under --dsn (or restored from an import)
+// rehydrates its broker on first read; the synthesized fallback is rendered
+// when no broker manager is configured or the broker cannot start.
 func (s *Service) GetCluster(ctx context.Context, project, location, clusterID string) (mkstore.Cluster, error) {
 	if location == "" || clusterID == "" {
 		return mkstore.Cluster{}, invalidArgument("missing location or clusterId")
@@ -304,7 +334,7 @@ func (s *Service) GetCluster(ctx context.Context, project, location, clusterID s
 	if err != nil {
 		return mkstore.Cluster{}, mapStoreError(err)
 	}
-	c.BootstrapAddress = s.brokerEndpoint(project, c.Location, c.Name)
+	c.BootstrapAddress = s.ensureBroker(ctx, project, c.Location, c.Name)
 	return c, nil
 }
 
