@@ -143,6 +143,8 @@ func (s *Server) buildRouter() {
 		r.Post("/cw-evaluate", s.adminHandler.CWEvaluateHandler)
 		r.Post("/clock", s.adminHandler.SetClock)
 		r.Get("/clock", s.adminHandler.GetClock)
+		r.Post("/throttle", s.adminHandler.SetThrottle)
+		r.Get("/throttle", s.adminHandler.GetThrottle)
 		r.Post("/ttl-sweep", s.adminHandler.TTLSweepHandler)
 		r.Post("/eb-tick", s.adminHandler.EBTickHandler)
 		r.Post("/scheduler-tick", s.adminHandler.SchedulerTickHandler)

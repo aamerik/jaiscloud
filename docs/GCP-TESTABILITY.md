@@ -224,7 +224,9 @@ evidence for any of them.
       **opt-in** injector (`JAISCLOUD_GCP_THROTTLE`, default `off`) refuses matching REST + gRPC
       requests before dispatch with a retryable `429 RESOURCE_EXHAUSTED`/`503 UNAVAILABLE`, a
       `Retry-After` header and a `google.rpc.RetryInfo` detail (`make test-throttle-gcp` exercises
-      it end-to-end); it injects **synthetic** failures, not real quota values. Cloud
+      it end-to-end); it injects **synthetic** failures, not real quota values. The policy can be
+      changed **mid-run** without a restart via `POST /_jaiscloud/throttle` (`GET` reports the
+      current state); an unarmed injector is a no-op. Cloud
       Functions instance/concurrency configuration (`minInstanceCount`/`maxInstanceCount`/
       `maxInstanceRequestConcurrency`/`availableCpu`) is stored, range-validated, and surfaced,
       and a configured `maxInstanceCount` (× `maxInstanceRequestConcurrency`) plus a
@@ -257,8 +259,8 @@ Production code paths must never rely on affordances that exist only in the emul
 These are fixed by policy, not by the fidelity matrix:
 
 - **`/_jaiscloud/*` admin endpoints** — `health`, `doctor`, `reset`, `export`, `import`,
-  `snapshot*`, `clock`, `ttl-sweep`, `eb-tick`, `scheduler-tick`, `tasks-tick`, and `/metrics`
-  are local control surfaces, not GCP APIs. Never call them from application code.
+  `snapshot*`, `clock`, `throttle`, `ttl-sweep`, `eb-tick`, `scheduler-tick`, `tasks-tick`, and
+  `/metrics` are local control surfaces, not GCP APIs. Never call them from application code.
 - **Reset / state wipe** — `POST /_jaiscloud/reset` and the `reset` CLI command exist for
   test isolation only; production code must not assume resettable state.
 - **Lenient validation** — the emulator accepts and ignores more than real GCP (shallow
@@ -269,8 +271,9 @@ These are fixed by policy, not by the fidelity matrix:
 - **Frozen clock** — deterministic-time mode is a test affordance. Business logic must not
   depend on a frozen/offset clock.
 - **Throttle/quota injection** — `JAISCLOUD_GCP_THROTTLE` is an emulator-only failure injector
-  (default `off`) that injects synthetic retryable failures, never real quota values. Production
-  code must not depend on its presence or its limits; quota behaviour must be verified on real GCP.
+  (default `off`) that injects synthetic retryable failures, never real quota values; the
+  `POST /_jaiscloud/throttle` runtime control is equally emulator-only. Production code must not
+  depend on its presence or its limits; quota behaviour must be verified on real GCP.
 
 A useful guard is a lint/test that rejects references to `/_jaiscloud/` and clock control
 in production packages.

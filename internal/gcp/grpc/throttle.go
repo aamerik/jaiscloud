@@ -15,10 +15,12 @@ import (
 )
 
 // ThrottleServerOptions returns the gRPC interceptors that apply the opt-in
-// throttle/quota injector to every registered service. It returns nil when the
-// injector is disabled, so the default server has no extra interceptors at all.
+// throttle/quota injector to every registered service. The interceptors are
+// installed whenever an injector is present — even one that starts disabled —
+// so POST /_jaiscloud/throttle can arm it at runtime without a restart; a
+// disabled injector makes each interceptor a single cheap no-op call.
 func ThrottleServerOptions(inj *throttle.Injector) []grpc.ServerOption {
-	if !inj.Enabled() {
+	if inj == nil {
 		return nil
 	}
 	return []grpc.ServerOption{

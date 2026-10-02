@@ -90,18 +90,32 @@ func TestThrottleStreamInterceptorInjects(t *testing.T) {
 }
 
 func TestThrottleServerOptions(t *testing.T) {
-	if opts := ThrottleServerOptions(throttle.New(throttle.Config{})); opts != nil {
-		t.Fatalf("disabled injector must install no interceptors, got %d options", len(opts))
+	// The interceptors are installed even for a disabled injector so a runtime
+	// arm (POST /_jaiscloud/throttle) takes effect without a restart.
+	if opts := ThrottleServerOptions(throttle.New(throttle.Config{})); len(opts) != 2 {
+		t.Fatalf("a present injector must install unary+stream options, got %d", len(opts))
 	}
-	opts := ThrottleServerOptions(throttle.New(throttle.Config{Fault: true, FailCount: 1}))
-	if len(opts) != 2 {
-		t.Fatalf("enabled injector needs unary+stream options, got %d", len(opts))
+	if opts := ThrottleServerOptions(nil); opts != nil {
+		t.Fatalf("a nil injector must install no interceptors, got %d options", len(opts))
 	}
-	// A disabled injector must still let a matching method through if the
-	// interceptor is invoked directly.
-	interceptor := throttleUnaryInterceptor(throttle.New(throttle.Config{}))
+}
+
+// TestThrottleRuntimeArm proves the installed interceptor honours an injector
+// armed after startup: it allows while disabled, then injects once armed.
+func TestThrottleRuntimeArm(t *testing.T) {
+	inj := throttle.New(throttle.Config{})
+	interceptor := throttleUnaryInterceptor(inj)
 	info := &grpc.UnaryServerInfo{FullMethod: "/google.storage.v2.Storage/GetObject"}
-	if _, err := interceptor(context.Background(), nil, info, func(context.Context, any) (any, error) { return "ok", nil }); err != nil {
+	handler := func(context.Context, any) (any, error) { return "ok", nil }
+
+	if _, err := interceptor(context.Background(), nil, info, handler); err != nil {
 		t.Fatalf("disabled injector must allow: %v", err)
+	}
+
+	if _, err := inj.SetThrottleConfig([]byte(`{"mode":"fault","failFirst":1,"status":429}`)); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+	if _, err := interceptor(context.Background(), nil, info, handler); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("armed injector must inject: %v", err)
 	}
 }
