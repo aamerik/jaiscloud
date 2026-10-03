@@ -114,6 +114,16 @@ func (s *Service) ListQueues(ctx context.Context, project, location, filter stri
 	return out, nil
 }
 
+// ListQueuesByProject lists every queue in a project across all locations,
+// sorted by location then id. It backs the location-optional console list.
+func (s *Service) ListQueuesByProject(ctx context.Context, project string) ([]tasksstore.Queue, error) {
+	queues, err := s.store.ListQueuesByProject(ctx, project)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	return queues, nil
+}
+
 // UpdateQueue applies a partial update. An empty mask replaces every mutable
 // field from upd; otherwise only the named fields are copied. A queue that does
 // not yet exist is created, matching Cloud Tasks' UpsertQueue semantics.
