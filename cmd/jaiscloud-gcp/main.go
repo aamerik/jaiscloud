@@ -235,6 +235,11 @@ func startCmd() *cobra.Command {
 			lroMode := lro.FromEnv()
 			slog.Info("gcp lro mode", "async", lroMode.Async(), "delay", lroMode.Delay)
 
+			// Shared in-process event bus for the console's live status stream:
+			// GCP cores publish cloud-neutral status events (EventStatus) and
+			// the UI SSE broker forwards them to connected browser clients.
+			eventBus := events.NewEventBus()
+
 			// Throttle/quota fault injection is an opt-in, cross-service,
 			// emulator-only testing affordance (default OFF). The same injector
 			// backs both the REST gateway RequestFilter and the gRPC
@@ -422,6 +427,9 @@ func startCmd() *cobra.Command {
 					// jaiscloud-events-topic label.
 					dataproccore.WithEventPublisher(pubsubP),
 					dataproccore.WithEventsTopic(os.Getenv("JAISCLOUD_DATAPROC_EVENTS_TOPIC")),
+					// Surface job/cluster transitions in the console's live
+					// status stream (shared event bus).
+					dataproccore.WithEventBus(eventBus),
 					// Stage each job's driver output/control files into the
 					// emulated GCS. The core only sees the BlobSink interface,
 					// so it never imports provider/storage.
@@ -582,7 +590,8 @@ func startCmd() *cobra.Command {
 			}
 			runCore := runcore.NewService(stores.run, stores.resources,
 				runcore.WithLROMode(lroMode),
-				runcore.WithURLSuffix(os.Getenv("JAISCLOUD_CLOUDRUN_URL_SUFFIX")))
+				runcore.WithURLSuffix(os.Getenv("JAISCLOUD_CLOUDRUN_URL_SUFFIX")),
+				runcore.WithEventBus(eventBus))
 			runP := restrun.NewProvider(runCore)
 
 			// Service Usage v1's transport-neutral core is shared by the REST
@@ -1189,7 +1198,7 @@ func startCmd() *cobra.Command {
 			var uiServer *coreui.UIServer
 			if cfg.UIEnabled {
 				var uiErr error
-				uiServer, uiErr = coreui.New(gcpui.NewRegistrar(storageP, pubsubP, firestoreP, computeP, bigqueryP, runCore, iamP, kmsP, secretP, cfg), adminHandler, cfg, events.NewEventBus(), version)
+				uiServer, uiErr = coreui.New(gcpui.NewRegistrar(storageP, pubsubP, firestoreP, computeP, bigqueryP, runCore, iamP, kmsP, secretP, cfg), adminHandler, cfg, eventBus, version)
 				if uiErr != nil {
 					slog.Warn("ui server init failed", "err", uiErr)
 				} else if uiServer != nil {

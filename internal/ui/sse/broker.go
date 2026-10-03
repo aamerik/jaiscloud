@@ -11,11 +11,12 @@ import (
 
 // Event is a typed SSE message published to browser clients.
 type Event struct {
-	Type     string `json:"type"`               // "status" | "reset" | "close"
-	Resource string `json:"resource,omitempty"` // "emr-cluster" | "dynamodb-table" | ...
-	ID       string `json:"id,omitempty"`
-	State    string `json:"state,omitempty"`
-	Detail   string `json:"detail,omitempty"`
+	Type     string   `json:"type"`               // "status" | "reset" | "close"
+	Resource string   `json:"resource,omitempty"` // "emr-cluster" | "gcp-run-service" | ...
+	Keys     []string `json:"keys,omitempty"`     // React Query key prefix to invalidate
+	ID       string   `json:"id,omitempty"`
+	State    string   `json:"state,omitempty"`
+	Detail   string   `json:"detail,omitempty"`
 }
 
 // Broker manages SSE subscriptions and publishes events to browser clients.
@@ -36,11 +37,13 @@ func New(bus *events.EventBus) *Broker {
 
 	// Subscribe to EMR events — these are the current EventTypes in the EventBus.
 	// Phase 1b adds new EventTypes (queue/table/function state) to events package.
+	// EventStatus is the cloud-neutral status channel GCP cores publish on.
 	for _, et := range []events.EventType{
 		events.EventEMRStepState,
 		events.EventEMRJobRunState,
 		events.EventEMRClusterState,
 		events.EventMessageDLQ,
+		events.EventStatus,
 	} {
 		eventType := et // capture loop variable
 		bus.Subscribe(eventType, func(e events.Event) {
@@ -67,6 +70,8 @@ func mapEvent(e events.Event) Event {
 		return Event{Type: "status", Resource: "emr-jobrun", ID: p.JobRunID, State: p.State}
 	case events.DLQEvent:
 		return Event{Type: "status", Resource: "sqs-dlq", ID: p.MessageID, Detail: p.DLQQueueURL}
+	case events.StatusEvent:
+		return Event{Type: "status", Resource: p.Resource, Keys: p.Keys, ID: p.ID, State: p.State, Detail: p.Detail}
 	default:
 		return Event{Type: "status"}
 	}

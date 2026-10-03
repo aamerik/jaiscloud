@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"jaiscloud/internal/events"
 	runstore "jaiscloud/internal/gcp/store/run"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -13,6 +14,45 @@ import (
 
 func newTestService() *Service {
 	return NewService(runstore.NewMemoryStore(), store.NewMemoryResourceStore())
+}
+
+// A wired event bus receives one cloud-neutral status event per service
+// mutation so the console's live stream can invalidate the GCP/run query tree.
+func TestMutationsPublishStatusEvents(t *testing.T) {
+	ctx := context.Background()
+	bus := events.NewEventBus()
+	s := NewService(runstore.NewMemoryStore(), store.NewMemoryResourceStore(), WithEventBus(bus))
+
+	var got []events.StatusEvent
+	bus.Subscribe(events.EventStatus, func(e events.Event) {
+		if se, ok := e.Payload.(events.StatusEvent); ok {
+			got = append(got, se)
+		}
+	})
+
+	if _, err := s.CreateService(ctx, "proj", "us-central1", "svc", createRequest()); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	if _, err := s.UpdateService(ctx, "proj", "us-central1", "svc", createRequest(), "template"); err != nil {
+		t.Fatalf("UpdateService: %v", err)
+	}
+	if _, err := s.DeleteService(ctx, "proj", "us-central1", "svc"); err != nil {
+		t.Fatalf("DeleteService: %v", err)
+	}
+
+	if len(got) != 3 {
+		t.Fatalf("status events = %d, want 3: %+v", len(got), got)
+	}
+	if got[0].State != "READY" || got[1].State != "READY" || got[2].State != "DELETED" {
+		t.Fatalf("states = %q,%q,%q", got[0].State, got[1].State, got[2].State)
+	}
+	first := got[0]
+	if first.Cloud != model.CloudGCP || first.ID != "svc" || first.Resource != "gcp-run-service" {
+		t.Fatalf("first event = %+v", first)
+	}
+	if len(first.Keys) != 2 || first.Keys[0] != "gcp" || first.Keys[1] != "run" {
+		t.Fatalf("first keys = %v", first.Keys)
+	}
 }
 
 func createRequest() map[string]any {
