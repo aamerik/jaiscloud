@@ -38,6 +38,8 @@ import { SubscriptionDetailPage } from './pubsub/SubscriptionDetailPage'
 import { CollectionsPage } from './firestore/CollectionsPage'
 import { DocumentsPage } from './firestore/DocumentsPage'
 import { DocumentDetailPage } from './firestore/DocumentDetailPage'
+import { InstancesPage } from './compute/InstancesPage'
+import { InstanceDetailPage } from './compute/InstanceDetailPage'
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
@@ -245,6 +247,8 @@ function GcpShell() {
             path="/gcp/firestore/collections/:collection/documents/:document"
             element={<DocumentDetailPage />}
           />
+          <Route path="/gcp/compute/instances" element={<InstancesPage />} />
+          <Route path="/gcp/compute/instances/:zone/:instance" element={<InstanceDetailPage />} />
           <Route path="/gcp/admin" element={<GcpAdminPage />} />
           <Route path="*" element={<Navigate to="/gcp" replace />} />
         </Routes>

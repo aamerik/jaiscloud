@@ -2,6 +2,7 @@ import { Alert, Box, Card, CardActionArea, CardContent, Chip, Typography } from 
 import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined'
 import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined'
 import CampaignOutlinedIcon from '@mui/icons-material/CampaignOutlined'
+import ComputerOutlinedIcon from '@mui/icons-material/ComputerOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { useAccount } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
@@ -11,6 +12,7 @@ import type { ServiceDescriptor } from '../api/services'
 function ServiceIcon({ service }: { service: ServiceDescriptor }) {
   if (service.id === 'storage') return <StorageOutlinedIcon />
   if (service.id === 'pubsub') return <CampaignOutlinedIcon />
+  if (service.id === 'compute') return <ComputerOutlinedIcon />
   return <CloudOutlinedIcon />
 }
 
