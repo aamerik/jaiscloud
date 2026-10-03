@@ -93,6 +93,16 @@ func (s *Service) ListJobs(ctx context.Context, project, location string) ([]sch
 	return jobs, nil
 }
 
+// ListJobsByProject lists every job in a project across all locations, sorted
+// by location then id. It backs the location-optional console list.
+func (s *Service) ListJobsByProject(ctx context.Context, project string) ([]schedstore.Job, error) {
+	jobs, err := s.store.ListJobsByProject(ctx, project)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	return jobs, nil
+}
+
 // UpdateJob applies a partial update. An empty mask replaces every mutable
 // field from upd; otherwise only the named (camelCase Discovery or snake_case
 // proto) fields are copied. Nested target fields are replaced as a whole.
