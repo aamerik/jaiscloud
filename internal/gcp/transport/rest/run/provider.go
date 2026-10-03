@@ -203,14 +203,28 @@ func (p *Provider) Invoke(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if r == nil {
 		return nil, model.NewProviderError("InvalidRequest", "missing raw request", 400)
 	}
-	inv, err := p.core.Invoke(ctx, core.InvocationRequest{
+	invReq := core.InvocationRequest{
 		Host:    r.Host,
 		Method:  r.Method,
 		Path:    r.URL.Path,
 		Query:   r.URL.RawQuery,
 		Headers: forwardHeaders(r),
 		Body:    bodyBytes(nr),
-	})
+	}
+	// Legacy path-form invocation (/run/v2/.../services/{svc}/<subpath>) carries
+	// the target service explicitly; the runtime resolves it by service rather
+	// than by Host. Host-routed invocation leaves Service unset.
+	if svcID := strParam(nr, "service"); svcID != "" {
+		svc, err := p.core.GetService(ctx, strParam(nr, "project"), strParam(nr, "location"), svcID)
+		if err != nil {
+			return nil, err
+		}
+		invReq.Service = svc
+		if pth := strParam(nr, "invokePath"); pth != "" {
+			invReq.Path = pth
+		}
+	}
+	inv, err := p.core.Invoke(ctx, invReq)
 	if err != nil {
 		if errors.Is(err, core.ErrNoReadyRuntime) {
 			return nil, model.NewProviderError("Unavailable", err.Error(), 503)

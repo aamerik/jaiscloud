@@ -349,9 +349,17 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   (`response`/`metadata` typed `Any`s carrying the `Service`); the opt-in `JAISCLOUD_LRO_MODE=async`
   mode makes them in-flight and settles them lazily on read. The synthesized `uri` is
   `https://{service}-{token}.{location}.run.app` (override the suffix with
-  `JAISCLOUD_CLOUDRUN_URL_SUFFIX`). **No container runs**: the runtime seam's only implementation is
-  a mock, so a request to a generated `*.run.app` host resolves `503` (no ready runtime), and a
-  service is a stored metadata record. Cloud Run shares the `/v2/projects/{p}/locations/{l}`
+  `JAISCLOUD_CLOUDRUN_URL_SUFFIX`, and the authority port with `JAISCLOUD_CLOUDRUN_URL_PORT`).
+  The runtime is behind a `RuntimeManager` seam with two implementations: the default **mock**
+  (a service is a stored metadata record; a request to a generated host resolves `503`) and, when
+  `JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=k8s` (or `JAISCLOUD_EXECUTOR_MODE=k8s`), a **k8s executor** that
+  launches the template image as a Pod + ClusterIP Service per revision, injects
+  `PORT`/`K_SERVICE`/`K_REVISION`/`K_CONFIGURATION`, waits for the port, and reverse-proxies
+  data-plane requests to it (`uri` becomes `http://{service}-{token}.{location}.{suffix}[:port]`).
+  Revisions are always-on — there is no idle reaper; a runtime is torn down on service delete, a
+  template-changing update, `/_jaiscloud/reset`, or the startup orphan sweep. The proxy maps a
+  missing service to `404`, no ready runtime to `503`, a dial failure to `502`, and a timeout to
+  `504`. Cloud Run shares the `/v2/projects/{p}/locations/{l}`
   namespace with Cloud Functions and Cloud Tasks on the single emulator origin, so it is claimed by
   resource segment (`services`/`revisions`) and by run-prefixed operation ids
   (`operation-run-<uuid>`); the bare `.../operations` list path is path-ambiguous and stays with
@@ -359,7 +367,8 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   reach the same surface under a `/run` path prefix. The native gRPC
   `google.cloud.run.v2.Services`/`Revisions` transport is not served, and Jobs, WorkerPools, traffic
   splitting, autoscaling/scale-to-zero, sidecars, volumes, custom domains, probes and IAM invocation
-  enforcement are not modelled. A real k8s executor is a follow-up session (CR2/CR3).
+  enforcement are not modelled. The k8s executor shares the Pod/ClusterIP-Service lifecycle helper
+  in `internal/k8shelpers` with Managed Kafka; Docker execution mode is not scheduled.
 - **Not implemented at all (out of scope for v1.x)** — Artifact Registry, Cloud
   Endpoints, Deployment Manager, and Firebase Auth (Identity Toolkit): no emulator surface
   (requests are unhandled). Artifact Registry is engine-bearing (registry proxy) and is deliberately
