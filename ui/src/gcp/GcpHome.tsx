@@ -7,6 +7,7 @@ import { Link as RouterLink } from 'react-router-dom'
 import { useAccount } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
+import { tierLabel } from '../lib/tier'
 import type { ServiceDescriptor } from '../api/services'
 
 function ServiceIcon({ service }: { service: ServiceDescriptor }) {
@@ -50,41 +51,44 @@ export function GcpHome() {
             gap: 2,
           }}
         >
-          {services.map((service) => (
-            <Card key={service.id} variant="outlined">
-              <CardActionArea
-                component={RouterLink}
-                to={service.rootPath}
-                sx={{ height: '100%' }}
-              >
-                <CardContent>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
-                    <Box
-                      sx={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: '50%',
-                        bgcolor: 'primary.main',
-                        color: '#fff',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <ServiceIcon service={service} />
+          {services.map((service) => {
+            const tier = tierLabel(service)
+            return (
+              <Card key={service.id} variant="outlined">
+                <CardActionArea
+                  component={RouterLink}
+                  to={service.rootPath}
+                  sx={{ height: '100%' }}
+                >
+                  <CardContent>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
+                      <Box
+                        sx={{
+                          width: 40,
+                          height: 40,
+                          borderRadius: '50%',
+                          bgcolor: 'primary.main',
+                          color: '#fff',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <ServiceIcon service={service} />
+                      </Box>
+                      <Box>
+                        <Typography variant="subtitle1">{service.label}</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {service.category}
+                        </Typography>
+                      </Box>
                     </Box>
-                    <Box>
-                      <Typography variant="subtitle1">{service.label}</Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        {service.category}
-                      </Typography>
-                    </Box>
-                  </Box>
-                  <Chip size="small" label={service.tier} variant="outlined" />
-                </CardContent>
-              </CardActionArea>
-            </Card>
-          ))}
+                    {tier && <Chip size="small" label={tier} variant="outlined" />}
+                  </CardContent>
+                </CardActionArea>
+              </Card>
+            )
+          })}
         </Box>
       )}
     </Box>
