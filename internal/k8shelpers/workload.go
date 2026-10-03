@@ -2,6 +2,7 @@ package k8shelpers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -107,21 +108,13 @@ func WorkloadEndpoint(name, namespace string, port int32) string {
 // namespaced RBAC ServiceAccount cannot Get cluster-scoped namespaces; the
 // namespace is managed externally in every deployment). A genuinely missing
 // namespace surfaces on the subsequent Pod/Service create.
+//
+// It is the legacy single-namespace helper retained for EnsureWorkload and
+// engines that have not migrated to per-resource namespaces; it delegates to
+// the shared create primitive. New code should use EnsureManagedNamespace.
 func EnsureNamespace(ctx context.Context, client kubernetes.Interface, namespace string, labels map[string]string) error {
-	_, err := client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
-	if err == nil || k8serrors.IsForbidden(err) {
-		return nil
-	}
-	if !k8serrors.IsNotFound(err) {
-		return err
-	}
-	if labels == nil {
-		labels = map[string]string{"managed-by": "jaiscloud"}
-	}
-	_, err = client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: namespace, Labels: labels},
-	}, metav1.CreateOptions{})
-	if k8serrors.IsAlreadyExists(err) || k8serrors.IsForbidden(err) {
+	_, err := ensureNamespaceRaw(ctx, client, namespace, labels)
+	if errors.Is(err, ErrNamespaceForbidden) {
 		return nil
 	}
 	return err

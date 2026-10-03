@@ -51,12 +51,14 @@ type SubmitJobRequest struct {
 type PatcherConfig struct {
     LabelSelector string                              // e.g. "spark-role in (driver,executor)"
     ResolveOwner  func(*corev1.Pod) (*OwnerRefHint, error)
-    Namespace     string
+    Namespace     string   // primary namespace
+    Namespaces    []string // additional per-resource namespaces (see ListManagedNamespaces)
 }
 
 // CleanupConfig controls the startup orphan sweep.
 type CleanupConfig struct {
     Namespace, InstanceID string
+    Namespaces            []string // additional per-resource namespaces
     OrphanSelectors       []string
     OnTerminalJob         func(jobName, state, reason string)
     OnUnownedPod          func(pod *corev1.Pod) (delete bool)
@@ -106,11 +108,32 @@ Runs a reconcile sweep on startup to catch pods created during a crash. Returns 
 function; also stops when the parent context is cancelled.
 
 ### CleanupOrphans
-Startup sweep over:
+Startup sweep over every configured namespace (`Namespace` plus `Namespaces`):
 1. `batch/v1 Jobs` labelled `app.kubernetes.io/managed-by=jaiscloud` (optionally filtered
    by `jaiscloud.io/instance-id`): terminal Jobs invoke `OnTerminalJob` and are deleted;
    suspended Jobs are unsuspended (re-adopted).
 2. Each `OrphanSelectors` entry: pods with no `OwnerReferences` invoke `OnUnownedPod`.
+
+### Namespace lifecycle (per-resource isolation)
+Engine-bearing, cluster-shaped resources can own one namespace each instead of sharing the
+process-wide one. The seam lives in `namespace.go`:
+
+- `NamespaceName(service, project, id)` — deterministic, RFC-1123, <=63:
+  `gcp-<service>-<project>-<sanitized-id>-<hash8>` (hash over the raw inputs, so sanitize
+  collisions stay distinct; restart-safe).
+- `EnsureManagedNamespace(ctx, client, ns, service) (created, err)` — create-if-missing.
+  `created == true` marks an emulator-owned namespace; a pre-existing namespace is adopted
+  (`created == false`) and never deleted. A Forbidden Get/Create returns
+  `ErrNamespaceForbidden` so the caller can fall back to `JAISCLOUD_K8S_NAMESPACE`.
+- `DeleteManagedNamespace` / `SweepManagedNamespaces` / `ListManagedNamespaces` — delete and
+  enumerate only namespaces carrying `jaiscloud.io/managed-by=jaiscloud` (and
+  `jaiscloud.io/service=<service>`), so an adopted or foreign namespace is untouched.
+- `EnsureNamespaceRBAC(ctx, client, ns, sa, saNamespace)` — creates the executor RoleBinding
+  in a new namespace, referencing the `jaiscloud-executor` ClusterRole
+  (`deploy/k8s/rbac.yaml`), so the executor ServiceAccount can run there.
+
+`JAISCLOUD_K8S_NAMESPACE` remains the default for engines that have not migrated, and the
+fallback when the ServiceAccount cannot manage cluster-scoped namespaces.
 
 ### PersistTerminalSnapshot / LoadTerminalSnapshot
 First-write-wins terminal state persistence keyed by `prefix/jobID` under resource type
