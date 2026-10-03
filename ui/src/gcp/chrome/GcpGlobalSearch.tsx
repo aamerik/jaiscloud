@@ -1,0 +1,124 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Autocomplete, Box, InputAdornment, TextField, Typography } from '@mui/material'
+import SearchIcon from '@mui/icons-material/Search'
+import { useFavorites } from '../../hooks/useFavorites'
+import { useServices } from '../../hooks/useServices'
+import {
+  buildSearchGroups,
+  pushRecent,
+  readRecent,
+  RECENT_SERVICES_KEY,
+  type SearchOption,
+} from './navModel'
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  const tag = target.tagName.toLowerCase()
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable
+}
+
+/**
+ * GCP console global search over the service catalog. Favorites and recents
+ * lead, then every service grouped by category. `/` (or Cmd/Ctrl+K) focuses it.
+ */
+export function GcpGlobalSearch() {
+  const navigate = useNavigate()
+  const inputRef = useRef<HTMLInputElement>(null)
+  const { data } = useServices()
+  const { favorites } = useFavorites()
+  const [query, setQuery] = useState('')
+  const [recent] = useState<string[]>(() => readRecent(RECENT_SERVICES_KEY))
+
+  const services = useMemo(() => data?.services ?? [], [data])
+  const groups = useMemo(
+    () => buildSearchGroups(services, favorites, recent, query),
+    [services, favorites, recent, query],
+  )
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || isTypingTarget(event.target)) return
+      const slash = event.key === '/' && !event.metaKey && !event.ctrlKey && !event.altKey
+      const chord = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k'
+      if (slash || chord) {
+        event.preventDefault()
+        inputRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  return (
+    <Autocomplete<SearchOption, false, false, false>
+      options={groups.flatMap((group) => group.options)}
+      groupBy={(option) => {
+        const group = groups.find((candidate) => candidate.options.includes(option))
+        return group?.label ?? ''
+      }}
+      filterOptions={(options) => options}
+      getOptionLabel={(option) => option.label}
+      inputValue={query}
+      onInputChange={(_, value, reason) => {
+        if (reason !== 'reset') setQuery(value)
+      }}
+      onChange={(_, option) => {
+        if (!option) return
+        pushRecent(RECENT_SERVICES_KEY, option.id)
+        setQuery('')
+        navigate(option.path)
+      }}
+      size="small"
+      sx={{ width: '100%', maxWidth: 720 }}
+      renderGroup={(params) => (
+        <li key={params.key}>
+          <Typography
+            variant="overline"
+            sx={{ display: 'block', px: 2, pt: 1, color: 'text.secondary' }}
+          >
+            {params.group}
+          </Typography>
+          <ul style={{ padding: 0 }}>{params.children}</ul>
+        </li>
+      )}
+      renderOption={(props, option) => (
+        <Box component="li" {...props}>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="body2" noWrap>
+              {option.label}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" noWrap>
+              {option.description}
+            </Typography>
+          </Box>
+        </Box>
+      )}
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          inputRef={inputRef}
+          placeholder="Search JaisCloud"
+          slotProps={{
+            ...params.slotProps,
+            input: {
+              ...params.slotProps.input,
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+                </InputAdornment>
+              ),
+              sx: {
+                backgroundColor: '#f1f3f4',
+                borderRadius: 1,
+                '& fieldset': { border: 'none' },
+                '&:hover': { backgroundColor: '#e8eaed' },
+              },
+            },
+            htmlInput: { ...params.slotProps.htmlInput, 'aria-label': 'Search services' },
+          }}
+        />
+      )}
+    />
+  )
+}

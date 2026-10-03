@@ -1,9 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AppBar,
   Box,
   Button,
-  Chip,
   CssBaseline,
   Divider,
   Drawer,
@@ -12,15 +11,13 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
-  Menu,
-  MenuItem,
   ThemeProvider,
   Toolbar,
-  Tooltip,
   Typography,
 } from '@mui/material'
 import MenuIcon from '@mui/icons-material/Menu'
-import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined'
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
+import CloudQueueIcon from '@mui/icons-material/CloudQueue'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import { Link as RouterLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import '@fontsource/roboto/400.css'
@@ -29,6 +26,12 @@ import '@fontsource/roboto/700.css'
 import { gcpTheme } from './theme'
 import { GcpHome } from './GcpHome'
 import { GcpAdminPage } from './admin/GcpAdminPage'
+import { GcpGlobalSearch } from './chrome/GcpGlobalSearch'
+import { ProjectPickerDialog } from './chrome/ProjectPicker'
+import { AccountMenu } from './chrome/AccountMenu'
+import { ChromeActions } from './chrome/ChromeActions'
+import { GcpBreadcrumbs } from './chrome/GcpBreadcrumbs'
+import { pageTitleFor } from './chrome/navModel'
 import { BucketsPage } from './storage/BucketsPage'
 import { ObjectsPage } from './storage/ObjectsPage'
 import { BucketSettingsPage } from './storage/BucketSettingsPage'
@@ -76,11 +79,10 @@ import { ExclusionsPage } from './logging/ExclusionsPage'
 import { MetricsExplorer } from './monitoring/MetricsExplorer'
 import { AlertingPage } from './monitoring/AlertingPage'
 import { ChannelsPage } from './monitoring/ChannelsPage'
-import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
+import { AccountProvider, useAccount } from '../context/AccountContext'
 import { useEventStream } from '../hooks/useEventStream'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
-import { docsLink } from '../lib/cloudLinks'
 
 const DRAWER_WIDTH = 256
 
@@ -88,16 +90,17 @@ const DRAWER_WIDTH = 256
 function GcpShell() {
   const location = useLocation()
   const { data: meta } = useMeta()
-  const { accountId, setAccountId } = useAccount()
-  const { data: accountsData } = useAccounts()
+  const { accountId } = useAccount()
   const { data: servicesData } = useServices()
-  const services = servicesData?.services ?? []
-  const accounts = accountsData?.accounts ?? (accountId ? [accountId] : [])
-  const docs = docsLink('gcp')
+  const services = useMemo(() => servicesData?.services ?? [], [servicesData])
   const { connected } = useEventStream()
 
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [projectAnchor, setProjectAnchor] = useState<HTMLElement | null>(null)
+  const [projectOpen, setProjectOpen] = useState(false)
+
+  useEffect(() => {
+    document.title = pageTitleFor(services, location.pathname)
+  }, [services, location.pathname])
 
   const isSelected = (path: string) =>
     location.pathname === path || location.pathname.startsWith(`${path}/`)
@@ -153,98 +156,60 @@ function GcpShell() {
   return (
     <Box sx={{ display: 'flex' }}>
       <AppBar position="fixed" sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}>
-        <Toolbar>
+        <Toolbar sx={{ gap: 1 }}>
           <IconButton
             edge="start"
             color="inherit"
             aria-label="Toggle navigation"
             onClick={() => setMobileOpen((open) => !open)}
-            sx={{ mr: 1, display: { md: 'none' }, color: 'text.primary' }}
+            sx={{ display: { md: 'none' }, color: 'text.primary' }}
           >
             <MenuIcon />
           </IconButton>
-          <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0, mr: 2 }}>
-            <Typography
-              component={RouterLink}
-              to="/gcp"
-              variant="h6"
-              noWrap
-              sx={{
-                color: 'text.primary',
-                textDecoration: 'none',
-                fontWeight: 500,
-                minWidth: 0,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              JaisCloud
-            </Typography>
+          <Box
+            component={RouterLink}
+            to="/gcp"
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              mr: 1,
+              minWidth: 0,
+              textDecoration: 'none',
+              color: 'text.primary',
+            }}
+          >
+            <CloudQueueIcon sx={{ color: 'primary.main' }} />
+            <Box sx={{ minWidth: 0, display: { xs: 'none', sm: 'block' } }}>
+              <Typography variant="subtitle1" noWrap sx={{ fontWeight: 500, lineHeight: 1.1 }}>
+                JaisCloud
+              </Typography>
+              <Typography variant="caption" color="text.secondary" noWrap>
+                Cloud console
+              </Typography>
+            </Box>
+          </Box>
+          <Box sx={{ flexGrow: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
+            <GcpGlobalSearch />
           </Box>
           <Button
-            color="inherit"
-            sx={{ color: 'text.primary', minWidth: 0, flexShrink: 1 }}
-            onClick={(event) => setProjectAnchor(event.currentTarget)}
+            onClick={() => setProjectOpen(true)}
+            endIcon={<KeyboardArrowDownIcon />}
+            sx={{
+              color: 'text.primary',
+              textTransform: 'none',
+              minWidth: 0,
+              maxWidth: { xs: 140, sm: 260 },
+              flexShrink: 1,
+              display: { xs: 'none', sm: 'inline-flex' },
+            }}
           >
-            <Box
-              component="span"
-              sx={{
-                display: 'block',
-                maxWidth: { xs: 120, sm: 280 },
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {accountId || meta?.accountId || 'Project'}
-            </Box>
+            <Typography variant="body2" noWrap component="span">
+              {accountId || meta?.accountId || 'Select a project'}
+            </Typography>
           </Button>
-          <Menu
-            anchorEl={projectAnchor}
-            open={Boolean(projectAnchor)}
-            onClose={() => setProjectAnchor(null)}
-          >
-            {accounts.length === 0 && <MenuItem disabled>(no projects)</MenuItem>}
-            {accounts.map((account) => (
-              <MenuItem
-                key={account}
-                selected={account === accountId}
-                onClick={() => {
-                  setAccountId(account)
-                  setProjectAnchor(null)
-                }}
-              >
-                {account}
-              </MenuItem>
-            ))}
-          </Menu>
-          <Tooltip
-            title={
-              connected
-                ? 'Live updates active'
-                : 'Stream disconnected — falling back to polling'
-            }
-          >
-            <Chip
-              size="small"
-              label={connected ? 'Live' : 'Polling'}
-              color={connected ? 'success' : 'default'}
-              variant="outlined"
-              sx={{ mr: 1 }}
-            />
-          </Tooltip>
-          <Tooltip title={docs.label}>
-            <IconButton
-              color="inherit"
-              component="a"
-              href={docs.href}
-              target="_blank"
-              rel="noreferrer"
-              sx={{ color: 'text.secondary' }}
-            >
-              <HelpOutlineIcon />
-            </IconButton>
-          </Tooltip>
+          <ChromeActions connected={connected} />
+          <AccountMenu onSelectProject={() => setProjectOpen(true)} />
         </Toolbar>
       </AppBar>
 
@@ -285,6 +250,7 @@ function GcpShell() {
         }}
       >
         <Toolbar />
+        <GcpBreadcrumbs services={services} />
         <Routes>
           <Route path="/gcp" element={<GcpHome />} />
           <Route path="/gcp/storage/buckets" element={<BucketsPage />} />
@@ -365,6 +331,8 @@ function GcpShell() {
           <Route path="*" element={<Navigate to="/gcp" replace />} />
         </Routes>
       </Box>
+
+      <ProjectPickerDialog open={projectOpen} onClose={() => setProjectOpen(false)} />
     </Box>
   )
 }
