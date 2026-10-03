@@ -128,6 +128,7 @@ import (
 	dataprocui "jaiscloud/internal/gcp/ui/dataproc"
 	eventarcui "jaiscloud/internal/gcp/ui/eventarc"
 	functionsui "jaiscloud/internal/gcp/ui/functions"
+	managedkafkaui "jaiscloud/internal/gcp/ui/managedkafka"
 	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/model"
@@ -1267,7 +1268,11 @@ func startCmd() *cobra.Command {
 				if dataprocCore != nil {
 					dataprocUI = dataprocui.NewProvider(dataprocCore)
 				}
-				uiServer, uiErr = coreui.New(gcpui.NewRegistrar(storageP, pubsubP, firestoreP, computeP, dataprocUI, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, cfg), adminHandler, cfg, eventBus, version)
+				// Managed Kafka is advertised whenever the core is wired; the
+				// core is always constructed (its default mock topology starts
+				// no broker), so the console page is present in every mode.
+				managedkafkaUI := managedkafkaui.NewProvider(managedKafkaCore)
+				uiServer, uiErr = coreui.New(gcpui.NewRegistrar(storageP, pubsubP, firestoreP, computeP, dataprocUI, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, managedkafkaUI, cfg), adminHandler, cfg, eventBus, version)
 				if uiErr != nil {
 					slog.Warn("ui server init failed", "err", uiErr)
 				} else if uiServer != nil {

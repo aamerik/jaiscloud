@@ -1,9 +1,9 @@
 // Package ui contributes the GCP service catalog and API routes to the shared
 // UI core. It exposes the GCP cloud identity and mounts per-service UI APIs
 // (Cloud Storage, Pub/Sub, Firestore, Compute, Cloud Run, Cloud Functions, Cloud
-// Scheduler, Cloud Tasks, Workflows, Eventarc, BigQuery, Dataproc, IAM, Cloud
-// KMS, Secret Manager, Logging, Monitoring; the rest follow) over the providers wired in
-// cmd/jaiscloud-gcp.
+// Scheduler, Cloud Tasks, Workflows, Eventarc, BigQuery, Dataproc, Managed Kafka,
+// IAM, Cloud KMS, Secret Manager, Logging, Monitoring; the rest follow) over the
+// providers wired in cmd/jaiscloud-gcp.
 package ui
 
 import (
@@ -19,6 +19,7 @@ import (
 	iamui "jaiscloud/internal/gcp/ui/iam"
 	kmsui "jaiscloud/internal/gcp/ui/kms"
 	loggingui "jaiscloud/internal/gcp/ui/logging"
+	managedkafkaui "jaiscloud/internal/gcp/ui/managedkafka"
 	monitoringui "jaiscloud/internal/gcp/ui/monitoring"
 	pubsubui "jaiscloud/internal/gcp/ui/pubsub"
 	runui "jaiscloud/internal/gcp/ui/run"
@@ -50,12 +51,13 @@ type Registrar struct {
 	workflows     workflowsui.ProviderInterface
 	eventarc      eventarcui.ProviderInterface
 	functions     functionsui.ProviderInterface
+	managedkafka  managedkafkaui.ProviderInterface
 	cfg           *config.Config
 }
 
 // NewRegistrar returns the GCP UI registrar. A nil provider leaves that
 // service's pages out of the catalog.
-func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, dataprocProvider dataprocui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, schedulerProvider schedulerui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, tasksProvider tasksui.ProviderInterface, workflowsProvider workflowsui.ProviderInterface, eventarcProvider eventarcui.ProviderInterface, functionsProvider functionsui.ProviderInterface, cfg *config.Config) *Registrar {
+func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, dataprocProvider dataprocui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, schedulerProvider schedulerui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, tasksProvider tasksui.ProviderInterface, workflowsProvider workflowsui.ProviderInterface, eventarcProvider eventarcui.ProviderInterface, functionsProvider functionsui.ProviderInterface, managedkafkaProvider managedkafkaui.ProviderInterface, cfg *config.Config) *Registrar {
 	return &Registrar{
 		storage:       storageProvider,
 		pubsub:        pubsubProvider,
@@ -74,6 +76,7 @@ func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pu
 		workflows:     workflowsProvider,
 		eventarc:      eventarcProvider,
 		functions:     functionsProvider,
+		managedkafka:  managedkafkaProvider,
 		cfg:           cfg,
 	}
 }
@@ -188,6 +191,19 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Children: []coreui.ServiceChild{
 				{Label: "Triggers", Path: "/gcp/eventarc/triggers"},
 				{Label: "Channels", Path: "/gcp/eventarc/channels"},
+			},
+		})
+	}
+	if r.managedkafka != nil {
+		services = append(services, coreui.ServiceDescriptor{
+			ID:       "managedkafka",
+			Label:    "Managed Kafka",
+			Category: "Integration",
+			RootPath: "/gcp/managedkafka/clusters",
+			Tier:     coreui.TierFull,
+			Children: []coreui.ServiceChild{
+				{Label: "Clusters", Path: "/gcp/managedkafka/clusters"},
+				{Label: "Topics", Path: "/gcp/managedkafka/topics"},
 			},
 		})
 	}
@@ -312,6 +328,9 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 	}
 	if r.functions != nil {
 		router.Mount("/api/ui/v1/gcp/functions", functionsui.BuildRouter(r.functions, r.cfg))
+	}
+	if r.managedkafka != nil {
+		router.Mount("/api/ui/v1/gcp/managedkafka", managedkafkaui.BuildRouter(r.managedkafka, r.cfg))
 	}
 	if r.bigquery != nil {
 		router.Mount("/api/ui/v1/gcp/bigquery", bigqueryui.BuildRouter(r.bigquery, r.cfg))

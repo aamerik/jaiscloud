@@ -11,6 +11,7 @@ import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined'
 import DeviceHubOutlinedIcon from '@mui/icons-material/DeviceHubOutlined'
 import AnalyticsOutlinedIcon from '@mui/icons-material/AnalyticsOutlined'
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined'
+import StreamOutlinedIcon from '@mui/icons-material/StreamOutlined'
 import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettingsOutlined'
 import VpnKeyOutlinedIcon from '@mui/icons-material/VpnKeyOutlined'
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
@@ -41,6 +42,7 @@ export const SERVICE_ICONS: Record<string, GcpIconComponent> = {
   eventarc: DeviceHubOutlinedIcon,
   bigquery: AnalyticsOutlinedIcon,
   dataproc: HubOutlinedIcon,
+  managedkafka: StreamOutlinedIcon,
   iam: AdminPanelSettingsOutlinedIcon,
   kms: VpnKeyOutlinedIcon,
   secretmanager: LockOutlinedIcon,
@@ -63,6 +65,7 @@ export const SERVICE_ACCENTS: Record<string, string> = {
   eventarc: '#ea4335',
   bigquery: '#4285f4',
   dataproc: '#4285f4',
+  managedkafka: '#4285f4',
   iam: '#ea4335',
   kms: '#34a853',
   secretmanager: '#ea4335',

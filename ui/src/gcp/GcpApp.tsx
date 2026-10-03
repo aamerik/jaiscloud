@@ -75,6 +75,10 @@ import { JobsPage as DataprocJobsPage } from './dataproc/JobsPage'
 import { JobDetailPage as DataprocJobDetailPage } from './dataproc/JobDetailPage'
 import { WorkflowTemplatesPage as DataprocWorkflowTemplatesPage } from './dataproc/WorkflowTemplatesPage'
 import { WorkflowTemplateDetailPage as DataprocWorkflowTemplateDetailPage } from './dataproc/WorkflowTemplateDetailPage'
+import { ClustersPage as ManagedKafkaClustersPage } from './managedkafka/ClustersPage'
+import { ClusterDetailPage as ManagedKafkaClusterDetailPage } from './managedkafka/ClusterDetailPage'
+import { TopicsPage as ManagedKafkaTopicsPage } from './managedkafka/TopicsPage'
+import { TopicDetailPage as ManagedKafkaTopicDetailPage } from './managedkafka/TopicDetailPage'
 import { ServiceAccountsPage } from './iam/ServiceAccountsPage'
 import { ServiceAccountDetailPage } from './iam/ServiceAccountDetailPage'
 import { KeyRingsPage } from './kms/KeyRingsPage'
@@ -321,6 +325,16 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
           <Route
             path="/gcp/dataproc/workflow-templates/:region/:template"
             element={<DataprocWorkflowTemplateDetailPage />}
+          />
+          <Route path="/gcp/managedkafka/clusters" element={<ManagedKafkaClustersPage />} />
+          <Route
+            path="/gcp/managedkafka/clusters/:location/:cluster"
+            element={<ManagedKafkaClusterDetailPage />}
+          />
+          <Route path="/gcp/managedkafka/topics" element={<ManagedKafkaTopicsPage />} />
+          <Route
+            path="/gcp/managedkafka/clusters/:location/:cluster/topics/:topic"
+            element={<ManagedKafkaTopicDetailPage />}
           />
           <Route path="/gcp/iam/service-accounts" element={<ServiceAccountsPage />} />
           <Route path="/gcp/iam/service-accounts/:email" element={<ServiceAccountDetailPage />} />

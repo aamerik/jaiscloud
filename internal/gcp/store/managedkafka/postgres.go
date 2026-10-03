@@ -176,6 +176,28 @@ func (s *PostgresStore) ListClusters(ctx context.Context, projectID, location st
 	return result, rows.Err()
 }
 
+// ListClustersByProject returns every cluster in a project across all
+// locations, ordered by location then name.
+func (s *PostgresStore) ListClustersByProject(ctx context.Context, projectID string) ([]Cluster, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, location, cluster_name, config, labels, create_time, update_time
+		FROM jc_mk_clusters WHERE project_id=$1 ORDER BY location, cluster_name
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Cluster
+	for rows.Next() {
+		c, err := scanCluster(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, c)
+	}
+	return result, rows.Err()
+}
+
 // --- Topics ---
 
 func (s *PostgresStore) CreateTopic(ctx context.Context, projectID, location, clusterName string, t Topic) error {
@@ -313,6 +335,28 @@ func (s *PostgresStore) ListTopics(ctx context.Context, projectID, location, clu
 		result = append(result, t)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, rows.Err()
+}
+
+// ListTopicsByProject returns every topic in a project across all locations
+// and clusters, ordered by location, cluster, then name.
+func (s *PostgresStore) ListTopicsByProject(ctx context.Context, projectID string) ([]Topic, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, location, cluster_name, topic_name, partition_count, replication_factor, config, create_time, update_time
+		FROM jc_mk_topics WHERE project_id=$1 ORDER BY location, cluster_name, topic_name
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Topic
+	for rows.Next() {
+		t, err := scanTopic(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, t)
+	}
 	return result, rows.Err()
 }
 
