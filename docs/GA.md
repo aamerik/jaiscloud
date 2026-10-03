@@ -393,8 +393,13 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 - **Approximated, not modelled** — Cloud Workflows executes synchronously, ignores
   `filter`/`orderBy`, fails loud on a `switch` with no matching condition and on `retry.predicate`,
   and has no subworkflows/`listRevisions`/IAM/CMEK; Dataproc Serverless (Batch) is not implemented;
-  a GKE-backed cluster's `virtualClusterConfig` is metadata only (no GKE control plane or
-  node-pool CRUD), Dataproc cluster/job mutations return pollable long-running operations
+  a GKE-backed cluster's `virtualClusterConfig` is still a metadata-only GKE control plane (no GKE
+  API or node-pool CRUD), but in K8s executor mode each Dataproc cluster runs in its own Kubernetes
+  workload namespace — the caller's `kubernetesClusterConfig.kubernetesNamespace` when supplied,
+  else a deterministic derived name — provisioned on cluster create and removed on cluster
+  delete/reset only when the emulator created it (a pre-existing namespace is adopted and left);
+  with no provisionable namespace the process-wide `JAISCLOUD_K8S_NAMESPACE` is used;
+  Dataproc cluster/job mutations return pollable long-running operations
   (`operations.get` walks CREATING/DELETING/… to terminal via a lazy, clock-driven state machine);
   Dataproc runs the Spark family (`sparkJob`/`pysparkJob`/`sparkSqlJob`/`sparkRJob`; `sparkSqlJob` executes
   the real Spark SQL CLI, with `queryFileUri`/`queryList.queries`/`jarFileUris`/`properties`/`scriptVariables`

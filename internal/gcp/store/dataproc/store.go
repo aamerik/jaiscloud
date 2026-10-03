@@ -50,8 +50,16 @@ type Cluster struct {
 	Status               ClusterStatus     `json:"status"`
 	StatusHistory        []ClusterStatus   `json:"statusHistory,omitempty"`
 	ClusterUUID          string            `json:"clusterUuid,omitempty"`
-	CreateTime           time.Time         `json:"createTime"`
-	UpdateTime           time.Time         `json:"updateTime"`
+	// Namespace is the effective Kubernetes namespace the cluster's jobs run in
+	// (the caller's virtualClusterConfig kubernetesNamespace when supplied, else
+	// a derived per-cluster name). Empty in mock execution mode (no executor) or
+	// when no namespace could be provisioned. NamespaceOwned is true when the
+	// emulator created the namespace and may therefore delete it on cluster
+	// delete/reset; a pre-existing adopted namespace is left untouched.
+	Namespace      string    `json:"namespace,omitempty"`
+	NamespaceOwned bool      `json:"namespaceOwned,omitempty"`
+	CreateTime     time.Time `json:"createTime"`
+	UpdateTime     time.Time `json:"updateTime"`
 }
 
 // IsGKEBacked reports whether the cluster was created with a

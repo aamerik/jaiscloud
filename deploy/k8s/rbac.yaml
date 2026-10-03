@@ -22,6 +22,9 @@ rules:
     resources: ["configmaps", "services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "delete"]
 ---
@@ -58,6 +61,9 @@ rules:
     resources: ["configmaps", "services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "delete"]
 ---
@@ -76,6 +82,12 @@ rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
     verbs: ["get", "list", "create", "update", "delete"]
+  # Needed to create a RoleBinding that references the executor ClusterRole
+  # (RBAC escalation prevention otherwise rejects the per-namespace RoleBinding).
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    verbs: ["bind"]
+    resourceNames: ["jaiscloud-executor"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

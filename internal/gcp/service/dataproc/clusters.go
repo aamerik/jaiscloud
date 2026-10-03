@@ -101,6 +101,11 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
 	now := clock.Now().UTC()
+	// Provision the cluster's workload namespace before persisting the record, so
+	// a job submitted immediately after create has a placement. Mock execution
+	// yields ("", false); an RBAC/tech failure falls back to the process-wide
+	// namespace (see resolveClusterNamespace).
+	ns, nsOwned := s.resolveClusterNamespace(ctx, project, region, name, in)
 	c := dpstore.Cluster{
 		ProjectID:            project,
 		Region:               region,
@@ -112,11 +117,15 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 		Labels:               in.Labels,
 		Config:               in.Config,
 		VirtualClusterConfig: in.VirtualClusterConfig,
+		Namespace:            ns,
+		NamespaceOwned:       nsOwned,
 	}
 	if err := s.store.CreateCluster(ctx, project, region, c); err != nil {
+		s.rollbackNamespace(ctx, ns, nsOwned)
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
 	}
-	slog.Info("dataproc: cluster creating", "project", project, "region", region, "cluster", name, "placement", clusterPlacement(c))
+	slog.Info("dataproc: cluster creating", "project", project, "region", region, "cluster", name,
+		"placement", clusterPlacement(c), "namespace", ns, "namespaceOwned", nsOwned)
 	s.emitClusterStateChange(ctx, project, region, c, dpstore.ClusterStatus{})
 	op, err := s.createClusterOperation(ctx, project, region, "create", ClusterName(project, region, name),
 		clusterOperationMetadata(name, c.ClusterUUID, "CREATE", "RUNNING"))
@@ -440,6 +449,10 @@ func (s *Service) advanceCluster(ctx context.Context, project, region, name stri
 			gone := deleted
 			gone.Status = dpstore.ClusterStatus{State: clusterDeletedState, StateStartTime: clock.Now().UTC()}
 			s.emitClusterStateChange(ctx, project, region, gone, deleted.Status)
+			// The record is gone; reap the cluster's workloads and, when the
+			// emulator owns it, its namespace. Dispatched in the background so a
+			// read never blocks on namespace deletion.
+			s.dispatchClusterTeardown(deleted)
 		}
 		return dpstore.Cluster{}, dpstore.ErrNoSuchCluster
 	}

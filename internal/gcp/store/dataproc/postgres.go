@@ -46,10 +46,10 @@ func (s *PostgresStore) CreateCluster(ctx context.Context, projectID, region str
 	history, _ := json.Marshal(c.StatusHistory)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_dataproc_clusters
-			(project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, create_time, update_time)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			(project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, namespace, namespace_owned, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 	`, projectID, region, c.Name, nullableJSONRaw(c.Config, "{}"), nullableJSONRaw(c.VirtualClusterConfig, "{}"), nullableJSONRaw(labels, "{}"),
-		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), c.ClusterUUID, c.CreateTime, c.UpdateTime)
+		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), c.ClusterUUID, c.Namespace, c.NamespaceOwned, c.CreateTime, c.UpdateTime)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -63,7 +63,7 @@ func (s *PostgresStore) CreateCluster(ctx context.Context, projectID, region str
 func scanCluster(row pgx.Row) (Cluster, error) {
 	var c Cluster
 	var config, vcc, labels, status, history []byte
-	err := row.Scan(&c.ProjectID, &c.Region, &c.Name, &config, &vcc, &labels, &status, &history, &c.ClusterUUID, &c.CreateTime, &c.UpdateTime)
+	err := row.Scan(&c.ProjectID, &c.Region, &c.Name, &config, &vcc, &labels, &status, &history, &c.ClusterUUID, &c.Namespace, &c.NamespaceOwned, &c.CreateTime, &c.UpdateTime)
 	if err != nil {
 		return Cluster{}, err
 	}
@@ -87,7 +87,7 @@ func normalizeOptionalJSON(b []byte) json.RawMessage {
 
 func (s *PostgresStore) GetCluster(ctx context.Context, projectID, region, name string) (Cluster, error) {
 	c, err := scanCluster(s.pool.QueryRow(ctx, `
-		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, create_time, update_time
+		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, namespace, namespace_owned, create_time, update_time
 		FROM jc_dataproc_clusters WHERE project_id=$1 AND region=$2 AND cluster_name=$3
 	`, projectID, region, name))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -101,10 +101,10 @@ func (s *PostgresStore) UpdateCluster(ctx context.Context, projectID, region str
 	status, _ := json.Marshal(c.Status)
 	history, _ := json.Marshal(c.StatusHistory)
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE jc_dataproc_clusters SET config=$4, virtual_cluster_config=$5, labels=$6, status=$7, status_history=$8, cluster_uuid=$9, update_time=$10
+		UPDATE jc_dataproc_clusters SET config=$4, virtual_cluster_config=$5, labels=$6, status=$7, status_history=$8, cluster_uuid=$9, namespace=$11, namespace_owned=$12, update_time=$10
 		WHERE project_id=$1 AND region=$2 AND cluster_name=$3
 	`, projectID, region, c.Name, nullableJSONRaw(c.Config, "{}"), nullableJSONRaw(c.VirtualClusterConfig, "{}"), nullableJSONRaw(labels, "{}"),
-		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), c.ClusterUUID, c.UpdateTime)
+		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), c.ClusterUUID, c.UpdateTime, c.Namespace, c.NamespaceOwned)
 	if err != nil {
 		return err
 	}
@@ -129,7 +129,7 @@ func (s *PostgresStore) UpdateClusterAtomic(ctx context.Context, projectID, regi
 	defer tx.Rollback(ctx)
 
 	current, err := scanCluster(tx.QueryRow(ctx, `
-		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, create_time, update_time
+		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, namespace, namespace_owned, create_time, update_time
 		FROM jc_dataproc_clusters WHERE project_id=$1 AND region=$2 AND cluster_name=$3 FOR UPDATE
 	`, projectID, region, name))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -148,10 +148,10 @@ func (s *PostgresStore) UpdateClusterAtomic(ctx context.Context, projectID, regi
 	status, _ := json.Marshal(next.Status)
 	history, _ := json.Marshal(next.StatusHistory)
 	tag, err := tx.Exec(ctx, `
-		UPDATE jc_dataproc_clusters SET config=$4, virtual_cluster_config=$5, labels=$6, status=$7, status_history=$8, cluster_uuid=$9, update_time=$10
+		UPDATE jc_dataproc_clusters SET config=$4, virtual_cluster_config=$5, labels=$6, status=$7, status_history=$8, cluster_uuid=$9, namespace=$11, namespace_owned=$12, update_time=$10
 		WHERE project_id=$1 AND region=$2 AND cluster_name=$3
 	`, projectID, region, name, nullableJSONRaw(next.Config, "{}"), nullableJSONRaw(next.VirtualClusterConfig, "{}"), nullableJSONRaw(labels, "{}"),
-		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), next.ClusterUUID, next.UpdateTime)
+		nullableJSONRaw(status, "{}"), nullableJSONRaw(history, "[]"), next.ClusterUUID, next.UpdateTime, next.Namespace, next.NamespaceOwned)
 	if err != nil {
 		return Cluster{}, err
 	}
@@ -179,7 +179,7 @@ func (s *PostgresStore) DeleteCluster(ctx context.Context, projectID, region, na
 
 func (s *PostgresStore) ListClusters(ctx context.Context, projectID, region string) ([]Cluster, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, create_time, update_time
+		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, namespace, namespace_owned, create_time, update_time
 		FROM jc_dataproc_clusters WHERE project_id=$1 AND region=$2 ORDER BY cluster_name
 	`, projectID, region)
 	if err != nil {
@@ -202,7 +202,7 @@ func (s *PostgresStore) ListClusters(ctx context.Context, projectID, region stri
 // ordered by region then name.
 func (s *PostgresStore) ListClustersByProject(ctx context.Context, projectID string) ([]Cluster, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, create_time, update_time
+		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, namespace, namespace_owned, create_time, update_time
 		FROM jc_dataproc_clusters WHERE project_id=$1 ORDER BY region, cluster_name
 	`, projectID)
 	if err != nil {
