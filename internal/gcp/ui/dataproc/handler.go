@@ -65,8 +65,9 @@ func jobHistory(h []dpstore.JobStatus) []StatusEvent {
 }
 
 // renderCluster flattens a stored cluster into the console row. The full
-// config (Config/VirtualClusterConfig) is included only on the detail read to
-// keep the list payload small.
+// config (Config/VirtualClusterConfig) and the Kubernetes namespace placement
+// (effective + requested) are included only on the detail read to keep the list
+// payload small.
 func renderCluster(project string, c dpstore.Cluster, full bool) Cluster {
 	out := Cluster{
 		ID:            c.Name,
@@ -84,6 +85,9 @@ func renderCluster(project string, c dpstore.Cluster, full bool) Cluster {
 	if full {
 		out.Config = c.Config
 		out.VirtualClusterConfig = c.VirtualClusterConfig
+		out.Namespace = c.Namespace
+		out.NamespaceOwned = c.NamespaceOwned
+		out.KubernetesNamespace = dataproccore.KubernetesNamespaceFromVirtualClusterConfig(c.VirtualClusterConfig)
 	}
 	return out
 }

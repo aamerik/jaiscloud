@@ -20,6 +20,12 @@ export interface DataprocCluster {
   clusterUuid?: string
   labels?: Record<string, string>
   gkeBacked?: boolean
+  /** Effective k8s namespace the cluster's jobs run in; detail only. */
+  namespace?: string
+  /** Whether the emulator created the effective namespace; detail only. */
+  namespaceOwned?: boolean
+  /** Caller-requested kubernetesNamespace (GKE virtual clusters); detail only. */
+  kubernetesNamespace?: string
   /** Full ClusterConfig wire object; detail only. */
   config?: unknown
   /** Full VirtualClusterConfig wire object; detail only. */

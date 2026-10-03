@@ -122,6 +122,17 @@ export function ClusterDetailPage() {
             }}
           >
             <Detail label="Region">{cluster.region}</Detail>
+            {cluster.namespace && (
+              <Detail label="Kubernetes namespace">
+                {cluster.namespace}
+                {cluster.namespaceOwned ? ' · created by emulator' : ''}
+              </Detail>
+            )}
+            {cluster.gkeBacked &&
+              cluster.kubernetesNamespace &&
+              cluster.kubernetesNamespace !== cluster.namespace && (
+                <Detail label="Requested namespace">{cluster.kubernetesNamespace}</Detail>
+              )}
             <Detail label="Cluster UUID">{cluster.clusterUuid}</Detail>
             <Detail label="Created">{shortDate(cluster.createTime)}</Detail>
             <Detail label="Updated">{shortDate(cluster.updateTime)}</Detail>
