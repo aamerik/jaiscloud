@@ -40,6 +40,9 @@ import { DocumentsPage } from './firestore/DocumentsPage'
 import { DocumentDetailPage } from './firestore/DocumentDetailPage'
 import { InstancesPage } from './compute/InstancesPage'
 import { InstanceDetailPage } from './compute/InstanceDetailPage'
+import { ServicesPage as RunServicesPage } from './run/ServicesPage'
+import { ServiceDetailPage as RunServiceDetailPage } from './run/ServiceDetailPage'
+import { RevisionDetailPage as RunRevisionDetailPage } from './run/RevisionDetailPage'
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
@@ -249,6 +252,12 @@ function GcpShell() {
           />
           <Route path="/gcp/compute/instances" element={<InstancesPage />} />
           <Route path="/gcp/compute/instances/:zone/:instance" element={<InstanceDetailPage />} />
+          <Route path="/gcp/run/services" element={<RunServicesPage />} />
+          <Route path="/gcp/run/services/:region/:service" element={<RunServiceDetailPage />} />
+          <Route
+            path="/gcp/run/services/:region/:service/revisions/:revision"
+            element={<RunRevisionDetailPage />}
+          />
           <Route path="/gcp/admin" element={<GcpAdminPage />} />
           <Route path="*" element={<Navigate to="/gcp" replace />} />
         </Routes>

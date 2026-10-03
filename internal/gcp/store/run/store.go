@@ -103,6 +103,10 @@ type Store interface {
 	UpdateService(ctx context.Context, project, location string, s Service) error
 	DeleteService(ctx context.Context, project, location, id string) error
 	ListServices(ctx context.Context, project, location string) ([]Service, error)
+	// ListServicesByProject lists every service in a project across all
+	// locations, sorted by location then id. It backs the region-optional
+	// console list, which shows every service without a location picker.
+	ListServicesByProject(ctx context.Context, project string) ([]Service, error)
 
 	CreateRevision(ctx context.Context, project, location, service string, r Revision) error
 	GetRevision(ctx context.Context, project, location, service, id string) (Revision, error)

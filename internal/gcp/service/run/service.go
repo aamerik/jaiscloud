@@ -175,6 +175,16 @@ func (s *Service) ListServices(ctx context.Context, project, location string) ([
 	return svcs, nil
 }
 
+// ListAllServices lists every service in a project across all locations,
+// sorted by location then id. It backs the region-optional console list.
+func (s *Service) ListAllServices(ctx context.Context, project string) ([]runstore.Service, error) {
+	svcs, err := s.store.ListServicesByProject(ctx, project)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	return svcs, nil
+}
+
 // UpdateService applies an update mask and returns the update operation. A
 // template change mints the next revision.
 func (s *Service) UpdateService(ctx context.Context, project, location, id string, body map[string]any, updateMask string) (runstore.Operation, error) {

@@ -59,6 +59,25 @@ func TestMemoryStoreSnapshotRestore(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreListServicesByProject(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	_ = s.CreateService(ctx, "p", "us-central1", Service{ID: "b"})
+	_ = s.CreateService(ctx, "p", "europe-west1", Service{ID: "a"})
+	_ = s.CreateService(ctx, "other", "us-central1", Service{ID: "c"})
+
+	got, err := s.ListServicesByProject(ctx, "p")
+	if err != nil {
+		t.Fatalf("ListServicesByProject: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d services, want 2", len(got))
+	}
+	if got[0].ID != "a" || got[0].Location != "europe-west1" || got[1].ID != "b" || got[1].Location != "us-central1" {
+		t.Fatalf("unexpected order/scope: %+v", got)
+	}
+}
+
 func TestMemoryStoreUpdateDelete(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()

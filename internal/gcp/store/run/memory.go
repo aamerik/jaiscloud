@@ -92,6 +92,28 @@ func (s *MemoryStore) ListServices(_ context.Context, project, location string) 
 	return result, nil
 }
 
+// ListServicesByProject returns every service in a project across all
+// locations, sorted by location then id.
+func (s *MemoryStore) ListServicesByProject(_ context.Context, project string) ([]Service, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var result []Service
+	for _, byID := range s.services {
+		for _, svc := range byID {
+			if svc.ProjectID == project {
+				result = append(result, svc)
+			}
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].ID < result[j].ID
+	})
+	return result, nil
+}
+
 func (s *MemoryStore) CreateRevision(_ context.Context, project, location, service string, r Revision) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
