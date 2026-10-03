@@ -112,7 +112,7 @@ func (s *Service) submitJob(ctx context.Context, project, region string, in JobI
 		defer s.wg.Done()
 		defer runCancel()
 		defer s.unregisterCancel(key)
-		s.runJobWithCtx(runCtx, project, region, j, metastoreEndpoint)
+		s.runJobWithCtx(runCtx, project, region, j, metastoreEndpoint, cluster.Namespace)
 	}()
 	return j, nil
 }

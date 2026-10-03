@@ -64,13 +64,13 @@ var waitTerminalFn = sparkhelpers.WaitTerminalWith
 // synchronously before runJobWithCtx blocks (or, when called from submitJob,
 // before the executor goroutine is launched), so a CancelJob racing job
 // submission always finds the cancel func.
-func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint string) {
+func (s *Service) runJob(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint, namespace string) {
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 	key := cancelKey(project, region, j.JobID)
 	s.registerCancel(key, runCancel)
 	defer s.unregisterCancel(key)
-	s.runJobWithCtx(runCtx, project, region, j, metastoreEndpoint)
+	s.runJobWithCtx(runCtx, project, region, j, metastoreEndpoint, namespace)
 }
 
 // registerCancel records a running job's cancel func so a racing CancelJob
@@ -93,7 +93,8 @@ func (s *Service) unregisterCancel(key string) {
 // persisted for post-GC rehydration parity. metastoreEndpoint is the cluster's
 // Hive Metastore thrift endpoint ("" when the cluster has no attachment); it is
 // injected as a spark-submit conf so driver and executor pods share the
-// attachment.
+// attachment. namespace is the cluster's effective workload namespace ("" falls
+// back to the process-wide one).
 //
 // The caller owns ctx's cancel func and its registration in s.cancels. submitJob
 // registers before launching the goroutine so a CancelJob landing in the
@@ -103,7 +104,7 @@ func (s *Service) unregisterCancel(key string) {
 // restarts the driver within maxFailuresPerHour/maxFailuresTotal and the
 // documented thrash rule (>4 non-zero exits in a 10-minute window). Success is
 // strictly driver exit 0. Only k8s mode runs here; mock mode has no executor.
-func (s *Service) runJobWithCtx(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint string) {
+func (s *Service) runJobWithCtx(ctx context.Context, project, region string, j dpstore.Job, metastoreEndpoint, namespace string) {
 	jobID := j.JobID
 	runCtx := ctx
 
@@ -131,9 +132,9 @@ func (s *Service) runJobWithCtx(ctx context.Context, project, region string, j d
 	// exits, so success is only exit 0.
 	_, isSQLJob := ep.(sparkhelpers.SqlEntryPoint)
 
-	ns := s.namespace
+	ns := namespace
 	if ns == "" {
-		ns = "jaiscloud"
+		ns = s.defaultNamespace()
 	}
 
 	var identityMutator k8shelpers.IdentityMutator

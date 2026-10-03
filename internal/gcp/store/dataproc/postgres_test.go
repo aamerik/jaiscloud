@@ -51,7 +51,7 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 
 	const config = `{"gceClusterConfig":{"zoneUri":"z"},"softwareConfig":{"imageVersion":"2.2"},"initializationActions":[{"executableFile":"gs://b/init.sh"}]}`
 	const vcc = `{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/p/locations/us-central1/clusters/gke"}},"auxiliaryServicesConfig":{"metastoreConfig":{"dataprocMetastoreService":"projects/p/locations/us-central1/services/hms"}}}`
-	c := Cluster{Name: "c1", Config: []byte(config), VirtualClusterConfig: []byte(vcc), Labels: map[string]string{"k": "v"}, Status: ClusterStatus{State: "RUNNING"}}
+	c := Cluster{Name: "c1", Config: []byte(config), VirtualClusterConfig: []byte(vcc), Labels: map[string]string{"k": "v"}, Status: ClusterStatus{State: "RUNNING"}, Namespace: "gcp-dataproc-proj-c1-deadbeef", NamespaceOwned: true}
 	if err := s.CreateCluster(ctx, "proj", "us-central1", c); err != nil {
 		t.Fatalf("create cluster: %v", err)
 	}
@@ -82,6 +82,10 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 	}
 	if got.Labels["k"] != "v" || got.Status.State != "RUNNING" {
 		t.Fatalf("cluster fields lost: %+v", got)
+	}
+	if got.Namespace != c.Namespace || got.NamespaceOwned != c.NamespaceOwned {
+		t.Fatalf("namespace not preserved: got (%q, %v) want (%q, %v)",
+			got.Namespace, got.NamespaceOwned, c.Namespace, c.NamespaceOwned)
 	}
 
 	gotJob, err := s.GetJob(ctx, "proj", "us-central1", "j1")

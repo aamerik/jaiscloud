@@ -45,6 +45,11 @@ const (
 	ExecutorClusterRoleName = "jaiscloud-executor"
 	// ExecutorRoleBindingName is the RoleBinding created in each new namespace.
 	ExecutorRoleBindingName = "jaiscloud-executor"
+	// DefaultExecutorServiceAccount / ...Namespace identify the ServiceAccount
+	// the emulator itself runs as (deploy/k8s/rbac.yaml). A per-namespace
+	// RoleBinding must bind this identity, not a Spark pod's service account.
+	DefaultExecutorServiceAccount          = "jaiscloud"
+	DefaultExecutorServiceAccountNamespace = "jaiscloud"
 
 	// maxNamespaceLength is the DNS-1123 label limit for a namespace name.
 	maxNamespaceLength = 63
@@ -257,15 +262,20 @@ func SweepManagedNamespaces(ctx context.Context, client kubernetes.Interface, se
 }
 
 // EnsureNamespaceRBAC creates the executor RoleBinding in namespace so the
-// executor ServiceAccount can run jobs/pods/services/configmaps there. It is
+// emulator's ServiceAccount can run jobs/pods/services/configmaps there. The
+// bound identity is the emulator's own ServiceAccount (deploy/k8s/rbac.yaml);
+// pass empty serviceAccount/serviceAccountNamespace to use the defaults. It is
 // idempotent and best-effort against AlreadyExists; a Forbidden create returns
 // ErrNamespaceForbidden so the caller can fall back.
 func EnsureNamespaceRBAC(ctx context.Context, client kubernetes.Interface, namespace, serviceAccount, serviceAccountNamespace string) error {
-	if namespace == "" || serviceAccount == "" {
+	if namespace == "" {
 		return nil
 	}
+	if serviceAccount == "" {
+		serviceAccount = DefaultExecutorServiceAccount
+	}
 	if serviceAccountNamespace == "" {
-		serviceAccountNamespace = namespace
+		serviceAccountNamespace = DefaultExecutorServiceAccountNamespace
 	}
 	_, err := client.RbacV1().RoleBindings(namespace).Create(ctx, &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: ExecutorRoleBindingName, Namespace: namespace},

@@ -242,10 +242,17 @@ func NewService(s dpstore.Store, resources store.ResourceStore, opts ...Option) 
 		if ns == "" {
 			ns = "jaiscloud"
 		}
+		// Sweep/watch every namespace the emulator owns for Dataproc (persisted
+		// across a --dsn restart) in addition to the process-wide default.
+		owned, listErr := k8shelpers.ListManagedNamespaces(svc.ctx, svc.k8sClient, dataprocService)
+		if listErr != nil {
+			slog.Warn("dataproc: failed to list owned namespaces", "err", listErr)
+		}
 		stop, err := k8shelpers.StartOwnershipPatcher(svc.ctx, svc.k8sClient, k8shelpers.PatcherConfig{
 			Namespace:     ns,
+			Namespaces:    owned,
 			LabelSelector: "spark-role=executor",
-			ResolveOwner:  sparkhelpers.MakeExecutorOwnerResolver(svc.k8sClient, ns),
+			ResolveOwner:  sparkhelpers.MakeExecutorOwnerResolverPerPod(svc.k8sClient),
 		})
 		if err != nil {
 			slog.Warn("dataproc: failed to start ownership patcher", "err", err)
@@ -254,6 +261,7 @@ func NewService(s dpstore.Store, resources store.ResourceStore, opts ...Option) 
 		}
 		if err := k8shelpers.CleanupOrphans(svc.ctx, svc.k8sClient, k8shelpers.CleanupConfig{
 			Namespace:       ns,
+			Namespaces:      owned,
 			InstanceID:      svc.instanceID,
 			OrphanSelectors: []string{"spark-role in (driver,executor)"},
 		}); err != nil {
@@ -272,9 +280,14 @@ func (s *Service) Shutdown(_ context.Context) {
 	s.wg.Wait()
 }
 
-// Reset wipes the store. The core's own in-flight goroutines are drained by
-// Shutdown; /_jaiscloud/reset does not drain them (documented limitation).
-func (s *Service) Reset(ctx context.Context) { s.store.Reset(ctx) }
+// Reset wipes the store and reaps every namespace the emulator owns for
+// Dataproc (deleting a namespace cascades its workloads). The core's own
+// in-flight goroutines are drained by Shutdown; /_jaiscloud/reset does not
+// drain them (documented limitation).
+func (s *Service) Reset(ctx context.Context) {
+	s.store.Reset(ctx)
+	s.sweepOwnedNamespaces(ctx)
+}
 
 // randomHex returns n random hexadecimal characters.
 func randomHex(n int) string {
