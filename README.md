@@ -483,15 +483,14 @@ All endpoints are available at the emulator's base URL (default `http://localhos
 
 > **Coming Soon** — Under active development; shipping in an upcoming release. **Free and open-source.**
 
-The JaisCloud UI Console is a browser-based interface that mirrors each emulated cloud's native console — without the bill. It ships as part of the single binary: no separate server, no external service, no subscription.
+The JaisCloud UI Console is a browser-based interface that mirrors the AWS Management Console experience — without the AWS bill. It ships as part of the single binary: no separate server, no external service, no subscription.
 
-- **AWS / Azure** use the Cloudscape Design System, matching the AWS Management Console look and feel.
-- **Google Cloud** uses Material Design (MUI), matching the Google Cloud Console (Google Blue, Roboto, dense layout).
+> The GCP binary has its own **Material Design** console, matching the Google Cloud Console — see the [GCP guide](README-GCP.md#ui-console).
 
 **Planned capabilities:**
 
-- **Resource browser** — list, inspect, create, update, and delete any emulated resource (queues, tables, buckets, Lambda functions, secrets, parameters, Cloud Storage buckets, and more) across all accounts and regions from a single view
-- **Account / project switcher** — toggle between emulated AWS accounts and GCP projects and see per-account scopes, exactly as you would in the native consoles
+- **Resource browser** — list, inspect, create, update, and delete any emulated resource (queues, tables, buckets, Lambda functions, secrets, parameters, and more) across all accounts and regions from a single view
+- **Multi-account switcher** — toggle between emulated AWS accounts and see per-account ARN scopes, exactly as you would in the AWS Console
 - **State management** — trigger reset, export, import, and named snapshot operations from the UI instead of the CLI; share snapshots directly from the browser
 - **CloudWatch dashboard** — visualise metric data, alarm states, and log groups without configuring a separate Prometheus or Grafana instance
 
