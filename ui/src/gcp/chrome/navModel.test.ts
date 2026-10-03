@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ServiceDescriptor } from '../../api/services'
 import {
   breadcrumbsFor,
+  buildNavGroups,
   buildSearchGroups,
   pageTitleFor,
   pushRecent,
@@ -86,6 +87,41 @@ describe('buildSearchGroups', () => {
   it('drops favorites that do not match the query', () => {
     const groups = buildSearchGroups(services, ['iam'], [], 'storage')
     expect(groups.map((g) => g.label)).not.toContain('Favorites')
+  })
+})
+
+describe('buildNavGroups', () => {
+  it('leads with pinned favorites and recents, then category groups', () => {
+    const groups = buildNavGroups(services, ['iam'], ['pubsub'], '')
+    expect(groups.map((g) => [g.kind, g.label])).toEqual([
+      ['pinned', 'Favorites'],
+      ['recent', 'Recent'],
+      ['category', 'Storage'],
+      ['category', 'Integration'],
+      ['category', 'Security'],
+    ])
+    expect(groups[0]?.entries[0]?.id).toBe('iam')
+    expect(groups[1]?.entries[0]?.id).toBe('pubsub')
+  })
+
+  it('carries children and the pinned flag onto entries', () => {
+    const groups = buildNavGroups(services, ['storage'], [], '')
+    const storage = groups
+      .flatMap((group) => group.entries)
+      .find((entry) => entry.id === 'storage')
+    expect(storage?.children).toEqual([{ label: 'Buckets', path: '/gcp/storage/buckets' }])
+    expect(storage?.pinned).toBe(true)
+    const pubsub = groups
+      .flatMap((group) => group.entries)
+      .find((entry) => entry.id === 'pubsub')
+    expect(pubsub?.pinned).toBe(false)
+  })
+
+  it('filters by query and drops non-matching favorites', () => {
+    expect(buildNavGroups(services, [], [], 'nope')).toEqual([])
+    const groups = buildNavGroups(services, ['iam'], [], 'storage')
+    expect(groups.map((g) => g.label)).not.toContain('Favorites')
+    expect(groups.flatMap((g) => g.entries).map((e) => e.id)).toEqual(['storage'])
   })
 })
 

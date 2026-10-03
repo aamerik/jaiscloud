@@ -31,6 +31,8 @@ import { ProjectPickerDialog } from './chrome/ProjectPicker'
 import { AccountMenu } from './chrome/AccountMenu'
 import { ChromeActions } from './chrome/ChromeActions'
 import { GcpBreadcrumbs } from './chrome/GcpBreadcrumbs'
+import { NavMenu } from './chrome/NavMenu'
+import { rememberRecentService } from './chrome/recentServices'
 import { pageTitleFor } from './chrome/navModel'
 import { BucketsPage } from './storage/BucketsPage'
 import { ObjectsPage } from './storage/ObjectsPage'
@@ -101,7 +103,7 @@ function GcpShell() {
   const services = useMemo(() => servicesData?.services ?? [], [servicesData])
   const { connected } = useEventStream()
 
-  const [mobileOpen, setMobileOpen] = useState(false)
+  const [navOpen, setNavOpen] = useState(false)
   const [projectOpen, setProjectOpen] = useState(false)
 
   useEffect(() => {
@@ -126,7 +128,6 @@ function GcpShell() {
           component={RouterLink}
           to="/gcp"
           selected={location.pathname === '/gcp'}
-          onClick={() => setMobileOpen(false)}
         >
           <ListItemText primary="Console home" />
         </ListItemButton>
@@ -136,7 +137,7 @@ function GcpShell() {
             component={RouterLink}
             to={service.rootPath}
             selected={isSelected(service.rootPath)}
-            onClick={() => setMobileOpen(false)}
+            onClick={() => rememberRecentService(service.id)}
           >
             <ListItemText primary={service.label} secondary={service.category} />
           </ListItemButton>
@@ -148,7 +149,6 @@ function GcpShell() {
           component={RouterLink}
           to="/gcp/admin"
           selected={isSelected('/gcp/admin')}
-          onClick={() => setMobileOpen(false)}
         >
           <ListItemIcon>
             <SettingsOutlinedIcon fontSize="small" />
@@ -166,9 +166,9 @@ function GcpShell() {
           <IconButton
             edge="start"
             color="inherit"
-            aria-label="Toggle navigation"
-            onClick={() => setMobileOpen((open) => !open)}
-            sx={{ display: { md: 'none' }, color: 'text.primary' }}
+            aria-label="Open navigation menu"
+            onClick={() => setNavOpen(true)}
+            sx={{ color: 'text.primary' }}
           >
             <MenuIcon />
           </IconButton>
@@ -220,18 +220,6 @@ function GcpShell() {
       </AppBar>
 
       <Box component="nav" sx={{ width: { md: DRAWER_WIDTH }, flexShrink: { md: 0 } }}>
-        <Drawer
-          variant="temporary"
-          open={mobileOpen}
-          onClose={() => setMobileOpen(false)}
-          ModalProps={{ keepMounted: true }}
-          sx={{
-            display: { xs: 'block', md: 'none' },
-            '& .MuiDrawer-paper': { width: DRAWER_WIDTH, boxSizing: 'border-box' },
-          }}
-        >
-          {navigation}
-        </Drawer>
         <Drawer
           variant="permanent"
           open
@@ -350,6 +338,7 @@ function GcpShell() {
         </Routes>
       </Box>
 
+      <NavMenu open={navOpen} onClose={() => setNavOpen(false)} services={services} />
       <ProjectPickerDialog open={projectOpen} onClose={() => setProjectOpen(false)} />
     </Box>
   )
