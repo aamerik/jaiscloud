@@ -1,4 +1,4 @@
-import type { ServiceDescriptor } from '../../api/services'
+import type { ServiceChild, ServiceDescriptor } from '../../api/services'
 import { groupByCategory, serviceForPath } from '../../components/nav'
 
 /** Minimal Storage surface so the recent-list helpers are testable in Node. */
@@ -65,6 +65,24 @@ export interface SearchGroup {
   options: SearchOption[]
 }
 
+/** A service plus the presentation state the navigation menu needs. */
+export interface NavEntry {
+  id: string
+  label: string
+  category: string
+  path: string
+  children: ServiceChild[]
+  pinned: boolean
+}
+
+export interface NavGroup {
+  label: string
+  kind: 'pinned' | 'recent' | 'category'
+  entries: NavEntry[]
+}
+
+export type NavGroupKind = NavGroup['kind']
+
 function matchesQuery(service: ServiceDescriptor, query: string): boolean {
   const q = query.trim().toLowerCase()
   if (!q) return true
@@ -73,21 +91,62 @@ function matchesQuery(service: ServiceDescriptor, query: string): boolean {
   )
 }
 
-function toOption(service: ServiceDescriptor): SearchOption {
+function toEntry(service: ServiceDescriptor, favorites: Set<string>): NavEntry {
   return {
     id: service.id,
     label: service.label,
-    description: service.category,
+    category: service.category,
     path: service.rootPath,
+    children: service.children,
+    pinned: favorites.has(service.id),
   }
 }
 
-function pick(services: ServiceDescriptor[], ids: string[]): SearchOption[] {
+function pickEntries(
+  services: ServiceDescriptor[],
+  ids: string[],
+  matchingIds: Set<string>,
+  favorites: Set<string>,
+): NavEntry[] {
   const byId = new Map(services.map((service) => [service.id, service]))
   return ids
     .map((id) => byId.get(id))
     .filter((service): service is ServiceDescriptor => service != null)
-    .map(toOption)
+    .filter((service) => matchingIds.has(service.id))
+    .map((service) => toEntry(service, favorites))
+}
+
+/**
+ * Build the navigation-menu groups: pinned favorites and recents first, then
+ * every matching service grouped by category. A service's own `children` drive
+ * its collapsible sub-nav. The global-search options are derived from this so
+ * the two surfaces never diverge.
+ */
+export function buildNavGroups(
+  services: ServiceDescriptor[],
+  favorites: string[],
+  recent: string[],
+  query: string,
+): NavGroup[] {
+  const matching = services.filter((service) => matchesQuery(service, query))
+  const matchingIds = new Set(matching.map((service) => service.id))
+  const favoriteSet = new Set(favorites)
+  const groups: NavGroup[] = []
+
+  const pinned = pickEntries(services, favorites, matchingIds, favoriteSet)
+  if (pinned.length > 0) groups.push({ label: 'Favorites', kind: 'pinned', entries: pinned })
+
+  const recentEntries = pickEntries(services, recent, matchingIds, favoriteSet)
+  if (recentEntries.length > 0) groups.push({ label: 'Recent', kind: 'recent', entries: recentEntries })
+
+  for (const group of groupByCategory(matching)) {
+    groups.push({
+      label: group.category,
+      kind: 'category',
+      entries: group.services.map((service) => toEntry(service, favoriteSet)),
+    })
+  }
+  return groups
 }
 
 /**
@@ -100,23 +159,15 @@ export function buildSearchGroups(
   recent: string[],
   query: string,
 ): SearchGroup[] {
-  const matching = services.filter((service) => matchesQuery(service, query))
-  const matchingIds = new Set(matching.map((service) => service.id))
-  const groups: SearchGroup[] = []
-
-  const favoriteServices = pick(services, favorites).filter((option) => matchingIds.has(option.id))
-  if (favoriteServices.length > 0) groups.push({ label: 'Favorites', options: favoriteServices })
-
-  const recentServices = pick(services, recent).filter((option) => matchingIds.has(option.id))
-  if (recentServices.length > 0) groups.push({ label: 'Recent', options: recentServices })
-
-  for (const group of groupByCategory(matching)) {
-    groups.push({
-      label: group.category,
-      options: group.services.map(toOption),
-    })
-  }
-  return groups
+  return buildNavGroups(services, favorites, recent, query).map((group) => ({
+    label: group.label,
+    options: group.entries.map((entry) => ({
+      id: entry.id,
+      label: entry.label,
+      description: entry.category,
+      path: entry.path,
+    })),
+  }))
 }
 
 export interface Crumb {

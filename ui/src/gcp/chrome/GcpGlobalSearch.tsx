@@ -6,11 +6,9 @@ import { useFavorites } from '../../hooks/useFavorites'
 import { useServices } from '../../hooks/useServices'
 import {
   buildSearchGroups,
-  pushRecent,
-  readRecent,
-  RECENT_SERVICES_KEY,
   type SearchOption,
 } from './navModel'
+import { rememberRecentService, useRecentServices } from './recentServices'
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
@@ -28,7 +26,7 @@ export function GcpGlobalSearch() {
   const { data } = useServices()
   const { favorites } = useFavorites()
   const [query, setQuery] = useState('')
-  const [recent] = useState<string[]>(() => readRecent(RECENT_SERVICES_KEY))
+  const recent = useRecentServices()
 
   const services = useMemo(() => data?.services ?? [], [data])
   const groups = useMemo(
@@ -65,7 +63,7 @@ export function GcpGlobalSearch() {
       }}
       onChange={(_, option) => {
         if (!option) return
-        pushRecent(RECENT_SERVICES_KEY, option.id)
+        rememberRecentService(option.id)
         setQuery('')
         navigate(option.path)
       }}
