@@ -98,6 +98,10 @@ type Store interface {
 	// deleting. See DeleteTriggerAtomic.
 	DeleteChannelAtomic(ctx context.Context, projectID, location, id string, guard func(Channel) error) error
 	ListChannels(ctx context.Context, projectID, location string) ([]Channel, error)
+	// ListChannelsAllLocations returns every channel for a project across all
+	// locations, for the location-optional console list (mirrors
+	// ListTriggersAllLocations).
+	ListChannelsAllLocations(ctx context.Context, projectID string) ([]Channel, error)
 
 	Reset(ctx context.Context)
 }

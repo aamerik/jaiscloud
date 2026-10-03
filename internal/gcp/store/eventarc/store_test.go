@@ -105,6 +105,25 @@ func runStoreTests(t *testing.T, s Store) {
 	if err != nil || len(chList) != 1 {
 		t.Fatalf("list channels: %v %d", err, len(chList))
 	}
+
+	// Cross-location lists (back the location-optional console): a second
+	// channel in another location is returned, ordered by location then id.
+	if err := s.CreateChannel(ctx, "proj", "europe-west1", Channel{Name: "aaa-channel", UID: "uid-c2"}); err != nil {
+		t.Fatalf("create second channel: %v", err)
+	}
+	allCh, err := s.ListChannelsAllLocations(ctx, "proj")
+	if err != nil || len(allCh) != 2 {
+		t.Fatalf("list channels all locations: %v %d", err, len(allCh))
+	}
+	if allCh[0].Location != "europe-west1" || allCh[0].Name != "aaa-channel" || allCh[1].Location != "us-central1" {
+		t.Fatalf("cross-location channel ordering wrong: %+v", allCh)
+	}
+	if other, err := s.ListChannelsAllLocations(ctx, "other-proj"); err != nil || len(other) != 0 {
+		t.Fatalf("channels leaked across projects: %v %d", err, len(other))
+	}
+	if err := s.DeleteChannel(ctx, "proj", "europe-west1", "aaa-channel"); err != nil {
+		t.Fatalf("delete second channel: %v", err)
+	}
 	if err := s.DeleteChannelAtomic(ctx, "proj", "us-central1", "my-channel", func(Channel) error { return guardErr }); !errors.Is(err, guardErr) {
 		t.Fatalf("expected channel guard error, got %v", err)
 	}

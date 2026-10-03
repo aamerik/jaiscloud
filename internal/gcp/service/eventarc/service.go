@@ -521,6 +521,17 @@ func (s *Service) ListTriggers(ctx context.Context, project, location string, pa
 	return page, next, nil
 }
 
+// ListTriggersByProject returns every trigger in a project across all
+// locations, sorted by location then id. It backs the location-optional
+// console list (the REST/gRPC ListTriggers method is per-location).
+func (s *Service) ListTriggersByProject(ctx context.Context, project string) ([]eventarcstore.Trigger, error) {
+	triggers, err := s.store.ListTriggersAllLocations(ctx, project)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return triggers, nil
+}
+
 // UpdateTrigger merges the caller's fields into the stored trigger and returns
 // it with the done update operation. The merge honors updateMask (comma-
 // separated; empty means apply every field in the body). reqEtag is the
@@ -696,6 +707,17 @@ func (s *Service) ListChannels(ctx context.Context, project, location string, pa
 	}
 	page, next := paging.Page(channels, func(c eventarcstore.Channel) string { return c.Name }, pageParams(pageSize, pageToken))
 	return page, next, nil
+}
+
+// ListChannelsByProject returns every channel in a project across all
+// locations, sorted by location then id. It backs the location-optional
+// console list (the REST/gRPC ListChannels method is per-location).
+func (s *Service) ListChannelsByProject(ctx context.Context, project string) ([]eventarcstore.Channel, error) {
+	channels, err := s.store.ListChannelsAllLocations(ctx, project)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return channels, nil
 }
 
 // UpdateChannel merges the caller's fields into the stored channel and returns
