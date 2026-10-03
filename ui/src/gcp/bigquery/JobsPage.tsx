@@ -1,27 +1,16 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Alert,
-  Box,
-  Chip,
-  CircularProgress,
-  IconButton,
-  Link,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tooltip,
-  Typography,
-} from '@mui/material'
+import { Alert, Box, Chip, IconButton, Link, Stack, Tooltip } from '@mui/material'
 import CancelOutlinedIcon from '@mui/icons-material/CancelOutlined'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { cancelJob, deleteJob, listJobs, type BigQueryJob } from '../../api/gcp/bigquery'
 import { useAccount } from '../../context/AccountContext'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 
 function querySummary(job: BigQueryJob): string {
   const q = (job.query ?? '').replace(/\s+/g, ' ').trim()
@@ -33,6 +22,8 @@ function querySummary(job: BigQueryJob): string {
 export function JobsPage() {
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'bigquery'] })
 
   const jobs = useQuery({
@@ -43,97 +34,124 @@ export function JobsPage() {
   const cancel = useMutation({ mutationFn: (job: string) => cancelJob(job), onSuccess: invalidate })
   const remove = useMutation({ mutationFn: (job: string) => deleteJob(job), onSuccess: invalidate })
 
-  return (
-    <Box>
-      <Stack sx={{ mb: 2 }}>
-        <GcpPageTitle id="bigquery">BigQuery</GcpPageTitle>
-        <Typography variant="body2" color="text.secondary">
-          Jobs · project {accountId || '—'}
-        </Typography>
-      </Stack>
+  const rows = filterRows(jobs.data?.jobs ?? [], filter, (job) =>
+    `${job.jobId} ${job.statementType ?? ''} ${job.query ?? ''} ${job.state ?? ''}`,
+  )
 
-      {jobs.isError && <Alert severity="error">Failed to load jobs.</Alert>}
+  const columns: GcpColumn<BigQueryJob>[] = [
+    {
+      key: 'jobId',
+      header: 'Job ID',
+      sortable: true,
+      sortValue: (job) => job.jobId,
+      render: (job) => (
+        <Link component={RouterLink} to={`/gcp/bigquery/jobs/${encodeURIComponent(job.jobId)}`}>
+          {job.jobId}
+        </Link>
+      ),
+    },
+    {
+      key: 'statementType',
+      header: 'Statement',
+      sortable: true,
+      sortValue: (job) => job.statementType ?? null,
+      render: (job) => job.statementType || '—',
+    },
+    {
+      key: 'query',
+      header: 'Query',
+      sortable: true,
+      sortValue: (job) => job.query ?? null,
+      render: (job) => (
+        <Box sx={{ fontFamily: 'monospace', maxWidth: 360, overflowWrap: 'anywhere' }}>
+          {querySummary(job)}
+        </Box>
+      ),
+    },
+    {
+      key: 'state',
+      header: 'State',
+      sortable: true,
+      sortValue: (job) => job.state ?? null,
+      render: (job) => (
+        <Chip
+          size="small"
+          label={job.state || 'UNKNOWN'}
+          color={job.state === 'DONE' ? 'success' : 'warning'}
+        />
+      ),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (job) => (
+        <>
+          <Tooltip title="Cancel job">
+            <span>
+              <IconButton
+                size="small"
+                disabled={cancel.isPending}
+                onClick={() => cancel.mutate(job.jobId)}
+                aria-label={`Cancel ${job.jobId}`}
+              >
+                <CancelOutlinedIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Delete job">
+            <span>
+              <IconButton
+                size="small"
+                disabled={remove.isPending}
+                onClick={() => remove.mutate(job.jobId)}
+                aria-label={`Delete ${job.jobId}`}
+              >
+                <DeleteOutlineIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </>
+      ),
+    },
+  ]
+
+  return (
+    <Stack>
+      <GcpPageHeader
+        id="bigquery"
+        title="BigQuery"
+        subtitle={`Jobs · project ${accountId || '—'}`}
+      />
+
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter jobs"
+        onRefresh={() => void jobs.refetch()}
+        refreshing={jobs.isFetching}
+      />
+
       {(cancel.isError || remove.isError) && (
         <Alert severity="error" sx={{ mb: 2 }}>
           Job action failed.
         </Alert>
       )}
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Job ID</TableCell>
-              <TableCell>Statement</TableCell>
-              <TableCell>Query</TableCell>
-              <TableCell>State</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {jobs.isLoading && (
-              <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!jobs.isLoading && (jobs.data?.jobs.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No jobs in this project.
-                </TableCell>
-              </TableRow>
-            )}
-            {jobs.data?.jobs.map((job) => (
-              <TableRow key={job.jobId} hover>
-                <TableCell>
-                  <Link component={RouterLink} to={`/gcp/bigquery/jobs/${encodeURIComponent(job.jobId)}`}>
-                    {job.jobId}
-                  </Link>
-                </TableCell>
-                <TableCell>{job.statementType || '—'}</TableCell>
-                <TableCell sx={{ fontFamily: 'monospace', maxWidth: 360, overflowWrap: 'anywhere' }}>
-                  {querySummary(job)}
-                </TableCell>
-                <TableCell>
-                  <Chip
-                    size="small"
-                    label={job.state || 'UNKNOWN'}
-                    color={job.state === 'DONE' ? 'success' : 'warning'}
-                  />
-                </TableCell>
-                <TableCell align="right">
-                  <Tooltip title="Cancel job">
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={cancel.isPending}
-                        onClick={() => cancel.mutate(job.jobId)}
-                        aria-label={`Cancel ${job.jobId}`}
-                      >
-                        <CancelOutlinedIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                  <Tooltip title="Delete job">
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={remove.isPending}
-                        onClick={() => remove.mutate(job.jobId)}
-                        aria-label={`Delete ${job.jobId}`}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
-    </Box>
+      <GcpDataTable
+        aria-label="BigQuery jobs"
+        columns={columns}
+        rows={rows}
+        getRowKey={(job) => job.jobId}
+        loading={jobs.isLoading}
+        error={jobs.isError ? 'Failed to load jobs.' : null}
+        emptyMessage={filter ? 'No jobs match the filter.' : 'No jobs in this project.'}
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(job) => <GcpRowDetail row={job} />}
+        detailTitle={(job) => job.jobId}
+      />
+    </Stack>
   )
 }

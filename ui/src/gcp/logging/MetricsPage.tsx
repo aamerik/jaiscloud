@@ -1,29 +1,24 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Alert,
-  Box,
-  Button,
-  Chip,
-  CircularProgress,
-  IconButton,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tooltip,
-  Typography,
-} from '@mui/material'
+import { Alert, Box, Button, Chip, IconButton, Tooltip } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import { deleteMetric, listMetrics, type LogMetric } from '../../api/gcp/logging'
 import { useAccount } from '../../context/AccountContext'
 import { MetricDialog } from './MetricDialog'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
+
+const ellipsisSx = {
+  maxWidth: 360,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+} as const
 
 /** Logs-based metrics: list, create, edit and delete. */
 export function MetricsPage() {
@@ -31,6 +26,8 @@ export function MetricsPage() {
   const queryClient = useQueryClient()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<LogMetric | undefined>(undefined)
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
 
   const metrics = useQuery({
     queryKey: ['gcp', 'logging', 'metrics', accountId],
@@ -42,104 +39,127 @@ export function MetricsPage() {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'logging', 'metrics'] }),
   })
 
-  const rows = metrics.data?.metrics ?? []
+  const rows = filterRows(metrics.data?.metrics ?? [], filter, (metric) => metric.name)
+
+  const columns: GcpColumn<LogMetric>[] = [
+    {
+      key: 'name',
+      header: 'Name',
+      sortable: true,
+      sortValue: (metric) => metric.name,
+      render: (metric) => metric.name,
+    },
+    {
+      key: 'filter',
+      header: 'Filter',
+      sortable: true,
+      sortValue: (metric) => metric.filter,
+      render: (metric) => <Box sx={ellipsisSx}>{metric.filter}</Box>,
+    },
+    {
+      key: 'kind',
+      header: 'Kind',
+      sortable: true,
+      sortValue: (metric) => metric.metricDescriptor?.metricKind ?? '',
+      render: (metric) => metric.metricDescriptor?.metricKind || '—',
+    },
+    {
+      key: 'valueType',
+      header: 'Value type',
+      sortable: true,
+      sortValue: (metric) => metric.metricDescriptor?.valueType ?? '',
+      render: (metric) => metric.metricDescriptor?.valueType || '—',
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      sortable: true,
+      sortValue: (metric) => (metric.disabled ? 'DISABLED' : 'ENABLED'),
+      render: (metric) => (
+        <Chip
+          size="small"
+          label={metric.disabled ? 'DISABLED' : 'ENABLED'}
+          color={metric.disabled ? 'default' : 'success'}
+        />
+      ),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (metric) => (
+        <>
+          <Tooltip title="Edit metric">
+            <IconButton
+              size="small"
+              onClick={() => {
+                setEditing(metric)
+                setDialogOpen(true)
+              }}
+            >
+              <EditOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Delete metric">
+            <IconButton size="small" onClick={() => remove.mutate(metric.name)} disabled={remove.isPending}>
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </>
+      ),
+    },
+  ]
 
   return (
     <Box>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <Box>
-          <GcpPageTitle id="logging">Logs-based metrics</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Count log entries matching a filter · project {accountId || '—'}
-          </Typography>
-        </Box>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => {
-            setEditing(undefined)
-            setDialogOpen(true)
-          }}
-        >
-          Create metric
-        </Button>
-      </Stack>
+      <GcpPageHeader
+        id="logging"
+        title="Logs-based metrics"
+        subtitle={`Count log entries matching a filter · project ${accountId || '—'}`}
+        actions={
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => {
+              setEditing(undefined)
+              setDialogOpen(true)
+            }}
+          >
+            Create metric
+          </Button>
+        }
+      />
 
-      {metrics.isError && <Alert severity="error">Failed to load metrics.</Alert>}
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter metrics"
+        onRefresh={() => void metrics.refetch()}
+        refreshing={metrics.isFetching}
+      />
+
       {remove.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>
           Delete failed.
         </Alert>
       )}
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Filter</TableCell>
-              <TableCell>Kind</TableCell>
-              <TableCell>Value type</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {metrics.isLoading && (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!metrics.isLoading && rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No logs-based metrics in this project.
-                </TableCell>
-              </TableRow>
-            )}
-            {rows.map((metric) => (
-              <TableRow key={metric.name} hover>
-                <TableCell>{metric.name}</TableCell>
-                <TableCell sx={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {metric.filter}
-                </TableCell>
-                <TableCell>{metric.metricDescriptor?.metricKind || '—'}</TableCell>
-                <TableCell>{metric.metricDescriptor?.valueType || '—'}</TableCell>
-                <TableCell>
-                  <Chip
-                    size="small"
-                    label={metric.disabled ? 'DISABLED' : 'ENABLED'}
-                    color={metric.disabled ? 'default' : 'success'}
-                  />
-                </TableCell>
-                <TableCell align="right">
-                  <Tooltip title="Edit metric">
-                    <IconButton
-                      size="small"
-                      onClick={() => {
-                        setEditing(metric)
-                        setDialogOpen(true)
-                      }}
-                    >
-                      <EditOutlinedIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Delete metric">
-                    <IconButton size="small" onClick={() => remove.mutate(metric.name)} disabled={remove.isPending}>
-                      <DeleteOutlineIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpDataTable
+        aria-label="Logs-based metrics"
+        columns={columns}
+        rows={rows}
+        getRowKey={(metric) => metric.name}
+        loading={metrics.isLoading}
+        error={metrics.isError ? 'Failed to load metrics.' : null}
+        emptyMessage={
+          filter ? 'No logs-based metrics match the filter.' : 'No logs-based metrics in this project.'
+        }
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(metric) => <GcpRowDetail row={metric} />}
+        detailTitle={(metric) => metric.name}
+      />
 
       <MetricDialog open={dialogOpen} onClose={() => setDialogOpen(false)} initial={editing} />
     </Box>

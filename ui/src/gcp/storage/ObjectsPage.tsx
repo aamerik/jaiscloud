@@ -13,12 +13,6 @@ import {
   Link,
   Stack,
   Switch,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   Typography,
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
@@ -42,7 +36,10 @@ import {
   type GCSObject,
 } from '../../api/gcp/storage'
 import { useAccount } from '../../context/AccountContext'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 
 function formatSize(value?: string): string {
   if (!value) return '—'
@@ -55,6 +52,11 @@ function formatSize(value?: string): string {
 
 const DRAWER_WIDTH = 420
 
+/** A folder placeholder (common prefix) or a real object row. */
+type ObjectRow =
+  | { kind: 'prefix'; name: string }
+  | { kind: 'object'; object: GCSObject }
+
 /** Object browser for one Cloud Storage bucket. */
 export function ObjectsPage() {
   const { bucket = '' } = useParams()
@@ -64,7 +66,9 @@ export function ObjectsPage() {
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
   const fileInput = useRef<HTMLInputElement>(null)
-  const [selected, setSelected] = useState<{ name: string; generation?: string } | null>(null)
+  const [detail, setDetail] = useState<{ name: string; generation?: string } | null>(null)
+  const [filter, setFilter] = useState('')
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([])
 
   const objects = useQuery({
     queryKey: ['gcp', 'storage', 'objects', accountId, bucket, prefix, versions],
@@ -97,176 +101,226 @@ export function ObjectsPage() {
     void queryClient.invalidateQueries({ queryKey: ['gcp', 'storage', 'object'] })
   }
 
+  const allRows: ObjectRow[] = [
+    ...(!versions
+      ? (objects.data?.prefixes ?? []).map((name): ObjectRow => ({ kind: 'prefix', name }))
+      : []),
+    ...(objects.data?.items ?? []).map((object): ObjectRow => ({ kind: 'object', object })),
+  ]
+  const rows = filterRows(allRows, filter, (row) =>
+    row.kind === 'prefix'
+      ? row.name
+      : `${row.object.name} ${row.object.contentType ?? ''}`,
+  )
+
+  const columns: GcpColumn<ObjectRow>[] = [
+    {
+      key: 'name',
+      header: 'Name',
+      sortable: true,
+      sortValue: (row) => (row.kind === 'prefix' ? row.name : row.object.name),
+      render: (row) => {
+        if (row.kind === 'prefix') {
+          return (
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+              <FolderOutlinedIcon fontSize="small" color="action" />
+              <span>{row.name}</span>
+            </Stack>
+          )
+        }
+        const object = row.object
+        return (
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', minWidth: 0 }}>
+            <span style={{ wordBreak: 'break-all' }}>{object.name}</span>
+            {object.temporaryHold && <Chip size="small" label="temp hold" />}
+            {object.eventBasedHold && <Chip size="small" label="event hold" />}
+            {object.timeDeleted && <Chip size="small" color="default" label="noncurrent" />}
+          </Stack>
+        )
+      },
+    },
+    ...(versions
+      ? [
+          {
+            key: 'generation',
+            header: 'Generation',
+            sortable: true,
+            sortValue: (row: ObjectRow) =>
+              row.kind === 'object' ? row.object.generation ?? '' : '',
+            render: (row: ObjectRow) =>
+              row.kind === 'object' ? row.object.generation || '—' : '—',
+          } satisfies GcpColumn<ObjectRow>,
+        ]
+      : []),
+    {
+      key: 'size',
+      header: 'Size',
+      sortable: true,
+      sortValue: (row) => (row.kind === 'object' ? Number(row.object.size ?? 0) : -1),
+      render: (row) => (row.kind === 'object' ? formatSize(row.object.size) : '—'),
+    },
+    {
+      key: 'type',
+      header: 'Type',
+      sortable: true,
+      sortValue: (row) => (row.kind === 'object' ? row.object.contentType ?? '' : 'Folder'),
+      render: (row) => (row.kind === 'object' ? row.object.contentType || '—' : 'Folder'),
+    },
+    {
+      key: 'updated',
+      header: 'Updated',
+      sortable: true,
+      sortValue: (row) =>
+        row.kind === 'object' ? row.object.updated ?? row.object.timeCreated ?? '' : '',
+      render: (row) =>
+        row.kind === 'object' ? row.object.updated || row.object.timeCreated || '—' : '—',
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (row) => {
+        if (row.kind === 'prefix') return null
+        const object = row.object
+        const dead = Boolean(object.timeDeleted)
+        return (
+          <Stack direction="row" spacing={0.5} sx={{ justifyContent: 'flex-end' }}>
+            {!dead && (
+              <IconButton
+                size="small"
+                component="a"
+                href={downloadObjectUrl(bucket, object.name, object.generation)}
+                aria-label={`Download ${object.name}`}
+              >
+                <DownloadIcon fontSize="small" />
+              </IconButton>
+            )}
+            {dead && object.generation && (
+              <IconButton
+                size="small"
+                aria-label={`Restore ${object.name}`}
+                onClick={() => restore.mutate({ name: object.name, generation: object.generation! })}
+              >
+                <RestoreIcon fontSize="small" />
+              </IconButton>
+            )}
+            <IconButton
+              size="small"
+              aria-label={`Delete ${object.name}`}
+              onClick={() => remove.mutate({ name: object.name, generation: object.generation })}
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </Stack>
+        )
+      },
+    },
+  ]
+
   return (
     <Box>
-      <Stack
-        direction="row"
-        spacing={1}
-        sx={{ alignItems: 'center', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
+      <GcpPageHeader
+        id="storage"
+        title={bucket}
+        backTo="/gcp/storage/buckets"
+        backAriaLabel="Back to buckets"
+        actions={
+          <>
+            <Button
+              component={RouterLink}
+              to={`/gcp/storage/buckets/${encodeURIComponent(bucket)}/settings`}
+              startIcon={<SettingsOutlinedIcon />}
+            >
+              Settings
+            </Button>
+            <Button
+              variant="contained"
+              startIcon={<CloudUploadIcon />}
+              disabled={upload.isPending}
+              onClick={() => fileInput.current?.click()}
+            >
+              Upload
+            </Button>
+          </>
+        }
       >
-        <IconButton component={RouterLink} to="/gcp/storage/buckets" aria-label="Back to buckets">
-          <ArrowBackIcon />
-        </IconButton>
-        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <GcpPageTitle id="storage">{bucket}</GcpPageTitle>
-          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-            <Link component={RouterLink} to={`/gcp/storage/buckets/${encodeURIComponent(bucket)}`}>
-              {prefix ? 'Buckets / ' + prefix : 'Objects'}
-            </Link>
-            <Chip
-              size="small"
-              label="Versions"
-              color={versions ? 'primary' : 'default'}
-              onClick={() => {
-                const next = new URLSearchParams()
-                if (prefix) next.set('prefix', prefix)
-                if (!versions) next.set('versions', '1')
-                setParams(next)
-              }}
-            />
-          </Stack>
-        </Box>
-        <Button
-          component={RouterLink}
-          to={`/gcp/storage/buckets/${encodeURIComponent(bucket)}/settings`}
-          startIcon={<SettingsOutlinedIcon />}
-        >
-          Settings
-        </Button>
-        <Button
-          variant="contained"
-          startIcon={<CloudUploadIcon />}
-          disabled={upload.isPending}
-          onClick={() => fileInput.current?.click()}
-        >
-          Upload
-        </Button>
-        <input
-          ref={fileInput}
-          type="file"
-          hidden
-          onChange={(e) => {
-            const file = e.target.files?.[0]
-            if (file) upload.mutate(file)
-            e.target.value = ''
-          }}
-        />
-      </Stack>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 1 }}>
+          <Link component={RouterLink} to={`/gcp/storage/buckets/${encodeURIComponent(bucket)}`}>
+            {prefix ? 'Buckets / ' + prefix : 'Objects'}
+          </Link>
+          <Chip
+            size="small"
+            label="Versions"
+            color={versions ? 'primary' : 'default'}
+            onClick={() => {
+              const next = new URLSearchParams()
+              if (prefix) next.set('prefix', prefix)
+              if (!versions) next.set('versions', '1')
+              setParams(next)
+            }}
+          />
+        </Stack>
+      </GcpPageHeader>
 
-      {objects.isError && <Alert severity="error">Failed to list objects.</Alert>}
-      {upload.isError && <Alert severity="error">Upload failed.</Alert>}
+      <input
+        ref={fileInput}
+        type="file"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) upload.mutate(file)
+          e.target.value = ''
+        }}
+      />
+
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter objects"
+        onRefresh={refresh}
+        refreshing={objects.isFetching}
+      />
+
+      {upload.isError && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          Upload failed.
+        </Alert>
+      )}
       {remove.isError && (
-        <Alert severity="error">Delete failed. The object may be held or retention-protected.</Alert>
+        <Alert severity="error" sx={{ mb: 2 }}>
+          Delete failed. The object may be held or retention-protected.
+        </Alert>
       )}
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              {versions && <TableCell>Generation</TableCell>}
-              <TableCell>Size</TableCell>
-              <TableCell>Type</TableCell>
-              <TableCell>Updated</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {objects.isLoading && (
-              <TableRow>
-                <TableCell colSpan={versions ? 6 : 5} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!versions &&
-              objects.data?.prefixes?.map((folder) => (
-                <TableRow
-                  key={folder}
-                  hover
-                  sx={{ cursor: 'pointer' }}
-                  onClick={() => setParams({ prefix: folder })}
-                >
-                  <TableCell sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <FolderOutlinedIcon fontSize="small" color="action" />
-                    {folder}
-                  </TableCell>
-                  <TableCell>—</TableCell>
-                  <TableCell>Folder</TableCell>
-                  <TableCell>—</TableCell>
-                  <TableCell />
-                </TableRow>
-              ))}
-            {objects.data?.items.map((object) => {
-              const key = `${object.name}#${object.generation ?? ''}`
-              const dead = Boolean(object.timeDeleted)
-              return (
-                <TableRow
-                  key={key}
-                  hover
-                  sx={{ cursor: 'pointer' }}
-                  onClick={() => setSelected({ name: object.name, generation: object.generation })}
-                >
-                  <TableCell>
-                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center', minWidth: 0 }}>
-                      <span style={{ wordBreak: 'break-all' }}>{object.name}</span>
-                      {object.temporaryHold && <Chip size="small" label="temp hold" />}
-                      {object.eventBasedHold && <Chip size="small" label="event hold" />}
-                      {dead && <Chip size="small" color="default" label="noncurrent" />}
-                    </Stack>
-                  </TableCell>
-                  {versions && <TableCell>{object.generation || '—'}</TableCell>}
-                  <TableCell>{formatSize(object.size)}</TableCell>
-                  <TableCell>{object.contentType || '—'}</TableCell>
-                  <TableCell>{object.updated || object.timeCreated || '—'}</TableCell>
-                  <TableCell align="right" onClick={(e) => e.stopPropagation()}>
-                    {!dead && (
-                      <IconButton
-                        size="small"
-                        component="a"
-                        href={downloadObjectUrl(bucket, object.name, object.generation)}
-                        aria-label={`Download ${object.name}`}
-                      >
-                        <DownloadIcon fontSize="small" />
-                      </IconButton>
-                    )}
-                    {dead && object.generation && (
-                      <IconButton
-                        size="small"
-                        aria-label={`Restore ${object.name}`}
-                        onClick={() => restore.mutate({ name: object.name, generation: object.generation! })}
-                      >
-                        <RestoreIcon fontSize="small" />
-                      </IconButton>
-                    )}
-                    <IconButton
-                      size="small"
-                      aria-label={`Delete ${object.name}`}
-                      onClick={() => remove.mutate({ name: object.name, generation: object.generation })}
-                    >
-                      <DeleteOutlineIcon fontSize="small" />
-                    </IconButton>
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-            {!objects.isLoading &&
-              (objects.data?.items.length ?? 0) === 0 &&
-              (objects.data?.prefixes?.length ?? 0) === 0 && (
-                <TableRow>
-                  <TableCell colSpan={versions ? 6 : 5} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                    No objects{prefix ? ` under ${prefix}` : ''}.
-                  </TableCell>
-                </TableRow>
-              )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpDataTable
+        aria-label="Objects"
+        columns={columns}
+        rows={rows}
+        getRowKey={(row) =>
+          row.kind === 'prefix'
+            ? `prefix:${row.name}`
+            : `object:${row.object.name}#${row.object.generation ?? ''}`
+        }
+        loading={objects.isLoading}
+        error={objects.isError ? 'Failed to list objects.' : null}
+        emptyMessage={
+          filter
+            ? 'No objects match the filter.'
+            : `No objects${prefix ? ` under ${prefix}` : ''}.`
+        }
+        selectable
+        selectedKeys={selectedKeys}
+        onSelectionChange={setSelectedKeys}
+        onRowClick={(row) => {
+          if (row.kind === 'prefix') setParams({ prefix: row.name })
+          else setDetail({ name: row.object.name, generation: row.object.generation })
+        }}
+      />
 
       <ObjectDrawer
         bucket={bucket}
-        selection={selected}
-        onClose={() => setSelected(null)}
+        selection={detail}
+        onClose={() => setDetail(null)}
         onChanged={refresh}
       />
     </Box>

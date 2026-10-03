@@ -1,22 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Alert,
-  Box,
-  Button,
-  Chip,
-  CircularProgress,
-  IconButton,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tooltip,
-  Typography,
-} from '@mui/material'
+import { Alert, Box, Button, Chip, IconButton, Tooltip } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
@@ -29,7 +13,11 @@ import {
 import { useAccount } from '../../context/AccountContext'
 import { AlertPolicyDialog } from './AlertPolicyDialog'
 import { resourceID } from './util'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 
 function toggleBody(policy: AlertPolicy) {
   return {
@@ -49,6 +37,8 @@ export function AlertingPage() {
   const queryClient = useQueryClient()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<AlertPolicy | undefined>(undefined)
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
 
   const policies = useQuery({
     queryKey: ['gcp', 'monitoring', 'policies', accountId],
@@ -66,111 +56,138 @@ export function AlertingPage() {
     onSuccess: invalidate,
   })
 
-  const rows = policies.data?.alertPolicies ?? []
+  const rows = filterRows(
+    policies.data?.alertPolicies ?? [],
+    filter,
+    (policy) => policy.displayName || resourceID(policy.name),
+  )
+
+  const columns: GcpColumn<AlertPolicy>[] = [
+    {
+      key: 'displayName',
+      header: 'Display name',
+      sortable: true,
+      sortValue: (policy) => policy.displayName || resourceID(policy.name),
+      render: (policy) => policy.displayName || resourceID(policy.name),
+    },
+    {
+      key: 'combiner',
+      header: 'Combiner',
+      sortable: true,
+      sortValue: (policy) => policy.combiner ?? '',
+      render: (policy) => policy.combiner || '—',
+    },
+    {
+      key: 'conditions',
+      header: 'Conditions',
+      sortable: true,
+      sortValue: (policy) => policy.conditions?.length ?? 0,
+      render: (policy) => policy.conditions?.length ?? 0,
+    },
+    {
+      key: 'channels',
+      header: 'Channels',
+      sortable: true,
+      sortValue: (policy) => policy.notificationChannels?.length ?? 0,
+      render: (policy) => policy.notificationChannels?.length ?? 0,
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      sortable: true,
+      sortValue: (policy) => ((policy.enabled ?? true) ? 'ENABLED' : 'DISABLED'),
+      render: (policy) => {
+        const on = policy.enabled ?? true
+        return (
+          <Chip
+            size="small"
+            label={on ? 'ENABLED' : 'DISABLED'}
+            color={on ? 'success' : 'default'}
+            onClick={() => toggle.mutate(policy)}
+            clickable
+          />
+        )
+      },
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (policy) => (
+        <>
+          <Tooltip title="Edit policy">
+            <IconButton
+              size="small"
+              onClick={() => {
+                setEditing(policy)
+                setDialogOpen(true)
+              }}
+            >
+              <EditOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Delete policy">
+            <IconButton
+              size="small"
+              onClick={() => remove.mutate(resourceID(policy.name))}
+              disabled={remove.isPending}
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </>
+      ),
+    },
+  ]
 
   return (
     <Box>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <Box>
-          <GcpPageTitle id="monitoring">Alerting</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Alerting policies · project {accountId || '—'}
-          </Typography>
-        </Box>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => {
-            setEditing(undefined)
-            setDialogOpen(true)
-          }}
-        >
-          Create policy
-        </Button>
-      </Stack>
+      <GcpPageHeader
+        id="monitoring"
+        title="Alerting"
+        subtitle={`Alerting policies · project ${accountId || '—'}`}
+        actions={
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => {
+              setEditing(undefined)
+              setDialogOpen(true)
+            }}
+          >
+            Create policy
+          </Button>
+        }
+      />
 
-      {policies.isError && <Alert severity="error">Failed to load alert policies.</Alert>}
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter policies"
+        onRefresh={() => void policies.refetch()}
+        refreshing={policies.isFetching}
+      />
+
       {(remove.isError || toggle.isError) && (
         <Alert severity="error" sx={{ mb: 2 }}>
           The action failed.
         </Alert>
       )}
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Display name</TableCell>
-              <TableCell>Combiner</TableCell>
-              <TableCell>Conditions</TableCell>
-              <TableCell>Channels</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {policies.isLoading && (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!policies.isLoading && rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No alerting policies in this project.
-                </TableCell>
-              </TableRow>
-            )}
-            {rows.map((policy) => {
-              const on = policy.enabled ?? true
-              return (
-                <TableRow key={policy.name} hover>
-                  <TableCell>{policy.displayName || resourceID(policy.name)}</TableCell>
-                  <TableCell>{policy.combiner || '—'}</TableCell>
-                  <TableCell>{policy.conditions?.length ?? 0}</TableCell>
-                  <TableCell>{policy.notificationChannels?.length ?? 0}</TableCell>
-                  <TableCell>
-                    <Chip
-                      size="small"
-                      label={on ? 'ENABLED' : 'DISABLED'}
-                      color={on ? 'success' : 'default'}
-                      onClick={() => toggle.mutate(policy)}
-                      clickable
-                    />
-                  </TableCell>
-                  <TableCell align="right">
-                    <Tooltip title="Edit policy">
-                      <IconButton
-                        size="small"
-                        onClick={() => {
-                          setEditing(policy)
-                          setDialogOpen(true)
-                        }}
-                      >
-                        <EditOutlinedIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Delete policy">
-                      <IconButton
-                        size="small"
-                        onClick={() => remove.mutate(resourceID(policy.name))}
-                        disabled={remove.isPending}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpDataTable
+        aria-label="Alerting policies"
+        columns={columns}
+        rows={rows}
+        getRowKey={(policy) => policy.name}
+        loading={policies.isLoading}
+        error={policies.isError ? 'Failed to load alert policies.' : null}
+        emptyMessage={filter ? 'No alerting policies match the filter.' : 'No alerting policies in this project.'}
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(policy) => <GcpRowDetail row={policy} />}
+        detailTitle={(policy) => policy.displayName || resourceID(policy.name)}
+      />
 
       <AlertPolicyDialog open={dialogOpen} onClose={() => setDialogOpen(false)} initial={editing} />
     </Box>

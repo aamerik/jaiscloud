@@ -14,12 +14,6 @@ import {
   MenuItem,
   Paper,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   TextField,
   Tooltip,
   Typography,
@@ -39,7 +33,11 @@ import {
   type ClockState,
   type Snapshot,
 } from '../../api/admin'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 import { useGcpSnackbar } from '../common/SnackbarProvider'
 
 const MODE_OPTIONS: { value: ClockState['mode']; label: string }[] = [
@@ -58,10 +56,11 @@ function shortDate(value?: string): string {
 export function GcpAdminPage() {
   return (
     <Box>
-      <GcpPageTitle id="admin">Admin</GcpPageTitle>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Status, clock, state reset and named snapshots for this emulator instance.
-      </Typography>
+      <GcpPageHeader
+        id="admin"
+        title="Admin"
+        subtitle="Status, clock, state reset and named snapshots for this emulator instance."
+      />
 
       <Stack spacing={3}>
         <Box
@@ -329,6 +328,8 @@ function SnapshotsSection() {
   const [description, setDescription] = useState('')
   const [revertTarget, setRevertTarget] = useState<Snapshot | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Snapshot | null>(null)
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
 
   const create = useMutation({
     mutationFn: () => createSnapshot({ name, description }),
@@ -363,6 +364,57 @@ function SnapshotsSection() {
   })
 
   const snapshots = data?.snapshots ?? []
+  const rows = filterRows(
+    snapshots,
+    filter,
+    (snapshot) => `${snapshot.name} ${snapshot.description ?? ''}`,
+  )
+
+  const columns: GcpColumn<Snapshot>[] = [
+    {
+      key: 'name',
+      header: 'Name',
+      sortable: true,
+      sortValue: (snapshot) => snapshot.name,
+      render: (snapshot) => snapshot.name,
+    },
+    {
+      key: 'description',
+      header: 'Description',
+      sortable: true,
+      sortValue: (snapshot) => snapshot.description ?? '',
+      render: (snapshot) => snapshot.description || '—',
+    },
+    {
+      key: 'created',
+      header: 'Created',
+      sortable: true,
+      sortValue: (snapshot) => snapshot.createdAt ?? '',
+      render: (snapshot) => shortDate(snapshot.createdAt),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (snapshot) => (
+        <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end' }}>
+          <Button size="small" onClick={() => setRevertTarget(snapshot)}>
+            Revert
+          </Button>
+          <Tooltip title="Delete snapshot">
+            <IconButton
+              size="small"
+              disabled={remove.isPending}
+              onClick={() => setDeleteTarget(snapshot)}
+              aria-label={`Delete ${snapshot.name}`}
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Stack>
+      ),
+    },
+  ]
 
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
@@ -373,60 +425,30 @@ function SnapshotsSection() {
         </Button>
       </Stack>
 
-      {isError && <Alert severity="error" sx={{ mb: 2 }}>Failed to load snapshots.</Alert>}
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter snapshots"
+      />
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Description</TableCell>
-              <TableCell>Created</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {isLoading && (
-              <TableRow>
-                <TableCell colSpan={4} align="center" sx={{ py: 3 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!isLoading && snapshots.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={4} align="center" sx={{ py: 3, color: 'text.secondary' }}>
-                  No snapshots. Create one to save the current state.
-                </TableCell>
-              </TableRow>
-            )}
-            {snapshots.map((snapshot) => (
-              <TableRow key={snapshot.name} hover>
-                <TableCell>{snapshot.name}</TableCell>
-                <TableCell>{snapshot.description || '—'}</TableCell>
-                <TableCell>{shortDate(snapshot.createdAt)}</TableCell>
-                <TableCell align="right">
-                  <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end' }}>
-                    <Button size="small" onClick={() => setRevertTarget(snapshot)}>
-                      Revert
-                    </Button>
-                    <Tooltip title="Delete snapshot">
-                      <IconButton
-                        size="small"
-                        disabled={remove.isPending}
-                        onClick={() => setDeleteTarget(snapshot)}
-                        aria-label={`Delete ${snapshot.name}`}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  </Stack>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpDataTable
+        aria-label="Snapshots"
+        columns={columns}
+        rows={rows}
+        getRowKey={(snapshot) => snapshot.name}
+        loading={isLoading}
+        error={isError ? 'Failed to load snapshots.' : null}
+        emptyMessage={
+          filter
+            ? 'No snapshots match the filter.'
+            : 'No snapshots. Create one to save the current state.'
+        }
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(snapshot) => <GcpRowDetail row={snapshot} />}
+        detailTitle={(snapshot) => snapshot.name}
+      />
 
       <Dialog open={createOpen} onClose={() => setCreateOpen(false)} fullWidth maxWidth="xs">
         <DialogTitle>Create snapshot</DialogTitle>

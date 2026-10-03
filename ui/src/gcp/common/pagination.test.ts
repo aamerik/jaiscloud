@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterRows, pageCount, paginate } from './pagination'
+import { filterRows, pageCount, paginate, sortRows } from './pagination'
 
 const rows = [0, 1, 2, 3, 4, 5, 6]
 
@@ -39,5 +39,68 @@ describe('filterRows', () => {
 
   it('returns all rows for a blank query', () => {
     expect(filterRows(people, '   ', (p) => p.name)).toEqual(people)
+  })
+})
+
+describe('sortRows', () => {
+  const people = [
+    { name: 'Charlie', age: 30 },
+    { name: 'alice', age: 25 },
+    { name: 'Bob', age: 35 },
+  ]
+
+  it('sorts strings case-insensitively in both directions', () => {
+    expect(sortRows(people, (p) => p.name, 'asc').map((p) => p.name)).toEqual([
+      'alice',
+      'Bob',
+      'Charlie',
+    ])
+    expect(sortRows(people, (p) => p.name, 'desc').map((p) => p.name)).toEqual([
+      'Charlie',
+      'Bob',
+      'alice',
+    ])
+  })
+
+  it('sorts numbers numerically', () => {
+    expect(sortRows(people, (p) => p.age, 'asc').map((p) => p.age)).toEqual([25, 30, 35])
+    expect(sortRows(people, (p) => p.age, 'desc').map((p) => p.age)).toEqual([35, 30, 25])
+  })
+
+  it('sorts dates chronologically', () => {
+    const rows = [
+      { at: new Date('2020-01-03') },
+      { at: new Date('2020-01-01') },
+      { at: new Date('2020-01-02') },
+    ]
+    expect(sortRows(rows, (r) => r.at, 'asc').map((r) => r.at.getUTCDate())).toEqual([1, 2, 3])
+  })
+
+  it('keeps null/undefined last in both directions and is stable', () => {
+    const rows = [
+      { name: 'none', extra: null },
+      { name: 'two', extra: 2 },
+      { name: 'missing', extra: undefined },
+      { name: 'one', extra: 1 },
+    ]
+    expect(sortRows(rows, (r) => r.extra, 'asc').map((r) => r.name)).toEqual([
+      'one',
+      'two',
+      'none',
+      'missing',
+    ])
+    // Nullish rows stay last even descending; their relative order is preserved.
+    expect(sortRows(rows, (r) => r.extra, 'desc').map((r) => r.name)).toEqual([
+      'two',
+      'one',
+      'none',
+      'missing',
+    ])
+  })
+
+  it('does not mutate the input array', () => {
+    const input = [3, 1, 2]
+    expect(sortRows(input, (n) => n, 'asc')).toEqual([1, 2, 3])
+    expect(input).toEqual([3, 1, 2])
   })
 })

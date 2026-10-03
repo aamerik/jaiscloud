@@ -1,95 +1,89 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import {
-  Alert,
-  Box,
-  Button,
-  CircularProgress,
-  Link,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Typography,
-} from '@mui/material'
+import { Button, Link, Stack } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import { Link as RouterLink } from 'react-router-dom'
-import { listCollections } from '../../api/gcp/firestore'
+import { listCollections, type Collection } from '../../api/gcp/firestore'
 import { useAccount } from '../../context/AccountContext'
 import { CreateDocumentDialog } from './CreateDocumentDialog'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 
 /** Firestore root collections. Clicking a collection browses its documents. */
 export function CollectionsPage() {
   const { accountId } = useAccount()
   const [createOpen, setCreateOpen] = useState(false)
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
 
   const collections = useQuery({
     queryKey: ['gcp', 'firestore', 'collections', accountId],
     queryFn: listCollections,
   })
 
+  const rows = filterRows(collections.data?.collections ?? [], filter, (collection) => collection.id)
+
+  const columns: GcpColumn<Collection>[] = [
+    {
+      key: 'id',
+      header: 'Collection ID',
+      sortable: true,
+      sortValue: (collection) => collection.id,
+      render: (collection) => (
+        <Link
+          component={RouterLink}
+          to={`/gcp/firestore/collections/${encodeURIComponent(collection.id)}`}
+        >
+          {collection.id}
+        </Link>
+      ),
+    },
+  ]
+
   return (
-    <Box>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <Box>
-          <GcpPageTitle id="firestore">Firestore</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Collections · project {accountId || '—'}
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-          Create document
-        </Button>
-      </Stack>
+    <Stack>
+      <GcpPageHeader
+        id="firestore"
+        title="Firestore"
+        subtitle={`Collections · project ${accountId || '—'}`}
+        actions={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+            Create document
+          </Button>
+        }
+      />
 
-      {collections.isError && <Alert severity="error">Failed to load collections.</Alert>}
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter collections"
+        onRefresh={() => void collections.refetch()}
+        refreshing={collections.isFetching}
+      />
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Collection ID</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {collections.isLoading && (
-              <TableRow>
-                <TableCell align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!collections.isLoading && (collections.data?.collections.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No collections in this project. Create a document to add one.
-                </TableCell>
-              </TableRow>
-            )}
-            {collections.data?.collections.map((collection) => (
-              <TableRow key={collection.id} hover>
-                <TableCell>
-                  <Link
-                    component={RouterLink}
-                    to={`/gcp/firestore/collections/${encodeURIComponent(collection.id)}`}
-                  >
-                    {collection.id}
-                  </Link>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpDataTable
+        aria-label="Collections"
+        columns={columns}
+        rows={rows}
+        getRowKey={(collection) => collection.id}
+        loading={collections.isLoading}
+        error={collections.isError ? 'Failed to load collections.' : null}
+        emptyMessage={
+          filter
+            ? 'No collections match the filter.'
+            : 'No collections in this project. Create a document to add one.'
+        }
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(collection) => <GcpRowDetail row={collection} />}
+        detailTitle={(collection) => collection.id}
+      />
 
       <CreateDocumentDialog open={createOpen} onClose={() => setCreateOpen(false)} />
-    </Box>
+    </Stack>
   )
 }
