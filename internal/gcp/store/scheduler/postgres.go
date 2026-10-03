@@ -186,6 +186,35 @@ func (s *PostgresStore) ListJobs(ctx context.Context, projectID, location string
 	return result, rows.Err()
 }
 
+func (s *PostgresStore) ListJobsByProject(ctx context.Context, projectID string) ([]Job, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT job_name, location, data FROM jc_scheduler_jobs
+		WHERE project_id=$1
+		ORDER BY location, job_name
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Job
+	for rows.Next() {
+		var name, location string
+		var data []byte
+		if err := rows.Scan(&name, &location, &data); err != nil {
+			return nil, err
+		}
+		j, err := decodeJob(data)
+		if err != nil {
+			return nil, err
+		}
+		j.ProjectID = projectID
+		j.Location = location
+		j.Name = name
+		result = append(result, j)
+	}
+	return result, rows.Err()
+}
+
 func (s *PostgresStore) ListAllJobs(ctx context.Context) ([]Job, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT project_id, location, job_name, data FROM jc_scheduler_jobs
