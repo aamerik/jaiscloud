@@ -28,6 +28,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { createBucket, deleteBucket, listBuckets } from '../../api/gcp/storage'
 import { useAccount } from '../../context/AccountContext'
+import { GcpPageTitle } from '../common/PageTitle'
 
 const LOCATIONS = ['US', 'EU', 'ASIA']
 
@@ -72,7 +73,7 @@ export function BucketsPage() {
         sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
       >
         <Box>
-          <Typography variant="h5">Buckets</Typography>
+          <GcpPageTitle id="storage">Buckets</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Cloud Storage · project {accountId || '—'}
           </Typography>

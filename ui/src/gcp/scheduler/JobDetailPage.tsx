@@ -29,6 +29,7 @@ import {
 import { useAccount } from '../../context/AccountContext'
 import { JobDialog } from './JobDialog'
 import { shortDate, stateColor, targetLabel } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** A small label/value row for the job overview. */
 function Detail({ label, children }: { label: string; children: ReactNode }) {
@@ -88,9 +89,7 @@ export function JobDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {jobName}
-          </Typography>
+          <GcpPageTitle id="scheduler">{jobName}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Cloud Scheduler · {location || '—'}
           </Typography>

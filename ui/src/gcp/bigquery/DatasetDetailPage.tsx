@@ -30,6 +30,7 @@ import {
 import { useAccount } from '../../context/AccountContext'
 import { CreateTableDialog } from './CreateTableDialog'
 import { formatMillis } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 function str(detail: Record<string, unknown> | undefined, key: string): string {
   const v = detail?.[key]
@@ -71,9 +72,7 @@ export function DatasetDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {dataset}
-          </Typography>
+          <GcpPageTitle id="bigquery">{dataset}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             BigQuery dataset · project {accountId || '—'}
           </Typography>

@@ -4,6 +4,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
 import { cancelJob, deleteJob, getJob } from '../../api/gcp/bigquery'
 import { useAccount } from '../../context/AccountContext'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** One BigQuery job: the full wire object, with cancel and delete. */
 export function JobDetailPage() {
@@ -39,9 +40,7 @@ export function JobDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {job}
-          </Typography>
+          <GcpPageTitle id="bigquery">{job}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             BigQuery job · project {accountId || '—'}
           </Typography>

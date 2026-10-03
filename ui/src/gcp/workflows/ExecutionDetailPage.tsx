@@ -17,6 +17,7 @@ import { Link as RouterLink, useParams } from 'react-router-dom'
 import { cancelExecution, getExecution } from '../../api/gcp/workflows'
 import { useAccount } from '../../context/AccountContext'
 import { executionStateColor, shortDate } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** A small label/value row for the execution overview. */
 function Detail({ label, children }: { label: string; children: ReactNode }) {
@@ -81,9 +82,7 @@ export function ExecutionDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {executionID}
-          </Typography>
+          <GcpPageTitle id="workflows">{executionID}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Workflow execution · {workflowID} · {location || '—'}
           </Typography>

@@ -23,6 +23,7 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import { deleteSink, listSinks, type LogSink } from '../../api/gcp/logging'
 import { useAccount } from '../../context/AccountContext'
 import { SinkDialog } from './SinkDialog'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** Log router sinks: list, create, edit and delete. */
 export function SinksPage() {
@@ -50,7 +51,7 @@ export function SinksPage() {
         sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
       >
         <Box>
-          <Typography variant="h5">Log router</Typography>
+          <GcpPageTitle id="logging">Log router</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Sinks route log entries to a destination · project {accountId || '—'}
           </Typography>

@@ -25,6 +25,7 @@ import { getTopic, listSubscriptions } from '../../api/gcp/pubsub'
 import { useAccount } from '../../context/AccountContext'
 import { IamPanel } from './IamPanel'
 import { PublishDialog } from './PublishDialog'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** Topic detail: configuration, dependent subscriptions, IAM. */
 export function TopicDetailPage() {
@@ -49,9 +50,7 @@ export function TopicDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {topic}
-          </Typography>
+          <GcpPageTitle id="pubsub">{topic}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Pub/Sub topic · project {accountId || '—'}
           </Typography>

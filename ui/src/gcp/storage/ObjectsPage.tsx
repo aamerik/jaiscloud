@@ -42,6 +42,7 @@ import {
   type GCSObject,
 } from '../../api/gcp/storage'
 import { useAccount } from '../../context/AccountContext'
+import { GcpPageTitle } from '../common/PageTitle'
 
 function formatSize(value?: string): string {
   if (!value) return '—'
@@ -107,9 +108,7 @@ export function ObjectsPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {bucket}
-          </Typography>
+          <GcpPageTitle id="storage">{bucket}</GcpPageTitle>
           <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
             <Link component={RouterLink} to={`/gcp/storage/buckets/${encodeURIComponent(bucket)}`}>
               {prefix ? 'Buckets / ' + prefix : 'Objects'}

@@ -25,6 +25,7 @@ import { deleteFunction, listFunctions, type GcpFunction } from '../../api/gcp/f
 import { useAccount } from '../../context/AccountContext'
 import { FunctionDialog } from './FunctionDialog'
 import { functionStateColor, memoryLabel, shortDate, triggerSummary } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** Cloud Functions across every location, with create and delete. */
 export function FunctionsPage() {
@@ -51,7 +52,7 @@ export function FunctionsPage() {
         sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
       >
         <Box>
-          <Typography variant="h5">Cloud Functions</Typography>
+          <GcpPageTitle id="functions">Cloud Functions</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Functions · project {accountId || '—'}
           </Typography>

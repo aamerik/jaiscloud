@@ -1,21 +1,11 @@
 import { Alert, Box, Card, CardActionArea, CardContent, Chip, Typography } from '@mui/material'
-import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined'
-import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined'
-import CampaignOutlinedIcon from '@mui/icons-material/CampaignOutlined'
-import ComputerOutlinedIcon from '@mui/icons-material/ComputerOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { useAccount } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
 import { tierLabel } from '../lib/tier'
-import type { ServiceDescriptor } from '../api/services'
-
-function ServiceIcon({ service }: { service: ServiceDescriptor }) {
-  if (service.id === 'storage') return <StorageOutlinedIcon />
-  if (service.id === 'pubsub') return <CampaignOutlinedIcon />
-  if (service.id === 'compute') return <ComputerOutlinedIcon />
-  return <CloudOutlinedIcon />
-}
+import { GcpServiceIcon } from './icons/GcpServiceIcon'
+import { serviceAccent } from './icons/serviceIcons'
 
 /** Google Cloud console overview: emulator identity and the wired services. */
 export function GcpHome() {
@@ -67,14 +57,14 @@ export function GcpHome() {
                           width: 40,
                           height: 40,
                           borderRadius: '50%',
-                          bgcolor: 'primary.main',
-                          color: '#fff',
+                          bgcolor: `${serviceAccent(service.id)}1f`,
+                          color: serviceAccent(service.id),
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
                         }}
                       >
-                        <ServiceIcon service={service} />
+                        <GcpServiceIcon id={service.id} size={24} />
                       </Box>
                       <Box>
                         <Typography variant="subtitle1">{service.label}</Typography>

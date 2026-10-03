@@ -35,6 +35,7 @@ import {
   shortDate,
   workflowStateColor,
 } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** A small label/value row for the workflow overview. */
 function Detail({ label, children }: { label: string; children: ReactNode }) {
@@ -119,9 +120,7 @@ export function WorkflowDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {workflowID}
-          </Typography>
+          <GcpPageTitle id="workflows">{workflowID}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Workflows · {location || '—'}
           </Typography>

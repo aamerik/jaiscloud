@@ -23,6 +23,7 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import { deleteExclusion, listExclusions, type LogExclusion } from '../../api/gcp/logging'
 import { useAccount } from '../../context/AccountContext'
 import { ExclusionDialog } from './ExclusionDialog'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** Resource-level log exclusions: list, create, edit and delete. */
 export function ExclusionsPage() {
@@ -50,7 +51,7 @@ export function ExclusionsPage() {
         sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
       >
         <Box>
-          <Typography variant="h5">Exclusions</Typography>
+          <GcpPageTitle id="logging">Exclusions</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Excluded entries are not ingested · project {accountId || '—'}
           </Typography>

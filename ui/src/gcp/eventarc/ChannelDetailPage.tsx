@@ -27,6 +27,7 @@ import { useAccount } from '../../context/AccountContext'
 import { IamPolicyPanel } from '../common/IamPolicyPanel'
 import { ChannelDialog } from './ChannelDialog'
 import { channelStateColor, shortDate } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** A small label/value row for the channel overview. */
 function Detail({ label, children }: { label: string; children: ReactNode }) {
@@ -77,9 +78,7 @@ export function ChannelDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {channelName}
-          </Typography>
+          <GcpPageTitle id="eventarc">{channelName}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Eventarc channel · {location || '—'}
           </Typography>

@@ -40,6 +40,7 @@ import {
   type ClockState,
   type Snapshot,
 } from '../../api/admin'
+import { GcpPageTitle } from '../common/PageTitle'
 
 type Feedback = { severity: 'success' | 'error'; message: string }
 
@@ -61,7 +62,7 @@ export function GcpAdminPage() {
 
   return (
     <Box>
-      <Typography variant="h5">Admin</Typography>
+      <GcpPageTitle id="admin">Admin</GcpPageTitle>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         Status, clock, state reset and named snapshots for this emulator instance.
       </Typography>

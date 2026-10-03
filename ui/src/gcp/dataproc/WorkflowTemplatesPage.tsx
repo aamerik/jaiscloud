@@ -17,6 +17,7 @@ import { Link as RouterLink } from 'react-router-dom'
 import { listWorkflowTemplates } from '../../api/gcp/dataproc'
 import { useAccount } from '../../context/AccountContext'
 import { shortDate } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** Dataproc workflow templates across every region. */
 export function WorkflowTemplatesPage() {
@@ -30,7 +31,7 @@ export function WorkflowTemplatesPage() {
   return (
     <Box>
       <Stack sx={{ mb: 2 }}>
-        <Typography variant="h5">Dataproc</Typography>
+        <GcpPageTitle id="dataproc">Dataproc</GcpPageTitle>
         <Typography variant="body2" color="text.secondary">
           Workflow templates · project {accountId || '—'}
         </Typography>

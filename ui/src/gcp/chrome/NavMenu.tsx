@@ -25,6 +25,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import CloseIcon from '@mui/icons-material/Close'
 import type { ServiceDescriptor } from '../../api/services'
+import { GcpServiceIcon } from '../icons/GcpServiceIcon'
 import { useFavorites } from '../../hooks/useFavorites'
 import { buildNavGroups, type NavEntry } from './navModel'
 import { rememberRecentService, useRecentServices } from './recentServices'
@@ -200,6 +201,9 @@ export function NavMenu({ open, onClose, services }: NavMenuProps) {
                       onClick={() => select(entry.id)}
                       sx={{ pr: children.length > 0 ? 10 : 7 }}
                     >
+                      <ListItemIcon sx={{ minWidth: 36 }}>
+                        <GcpServiceIcon id={entry.id} size={20} />
+                      </ListItemIcon>
                       <ListItemText primary={entry.label} secondary={entry.category} />
                     </ListItemButton>
                   </ListItem>

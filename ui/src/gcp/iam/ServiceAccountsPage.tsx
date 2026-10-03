@@ -28,6 +28,7 @@ import {
 } from '../../api/gcp/iam'
 import { useAccount } from '../../context/AccountContext'
 import { CreateServiceAccountDialog } from './CreateServiceAccountDialog'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** IAM service accounts in the project, with create and delete. */
 export function ServiceAccountsPage() {
@@ -53,7 +54,7 @@ export function ServiceAccountsPage() {
         sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
       >
         <Box>
-          <Typography variant="h5">IAM</Typography>
+          <GcpPageTitle id="iam">IAM</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Service accounts · project {accountId || '—'}
           </Typography>

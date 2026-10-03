@@ -19,6 +19,7 @@ import { deleteDocument, getDocument, updateDocument } from '../../api/gcp/fires
 import { useAccount } from '../../context/AccountContext'
 import { JsonEditor } from './JsonEditor'
 import { parseJsonObject } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 function shortDate(value?: string): string {
   if (!value) return '—'
@@ -94,9 +95,7 @@ export function DocumentDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {documentId}
-          </Typography>
+          <GcpPageTitle id="firestore">{documentId}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             {collection} · project {accountId || '—'}
           </Typography>

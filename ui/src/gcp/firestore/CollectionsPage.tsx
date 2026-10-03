@@ -20,6 +20,7 @@ import { Link as RouterLink } from 'react-router-dom'
 import { listCollections } from '../../api/gcp/firestore'
 import { useAccount } from '../../context/AccountContext'
 import { CreateDocumentDialog } from './CreateDocumentDialog'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** Firestore root collections. Clicking a collection browses its documents. */
 export function CollectionsPage() {
@@ -38,7 +39,7 @@ export function CollectionsPage() {
         sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
       >
         <Box>
-          <Typography variant="h5">Firestore</Typography>
+          <GcpPageTitle id="firestore">Firestore</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Collections · project {accountId || '—'}
           </Typography>

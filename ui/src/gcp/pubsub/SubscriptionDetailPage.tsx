@@ -20,6 +20,7 @@ import { Link as RouterLink, useParams } from 'react-router-dom'
 import { getSubscription, updateSubscription } from '../../api/gcp/pubsub'
 import { useAccount } from '../../context/AccountContext'
 import { IamPanel } from './IamPanel'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** Subscription detail: configuration edit + IAM. */
 export function SubscriptionDetailPage() {
@@ -37,9 +38,7 @@ export function SubscriptionDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {subscription}
-          </Typography>
+          <GcpPageTitle id="pubsub">{subscription}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Pub/Sub subscription
           </Typography>

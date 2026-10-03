@@ -21,6 +21,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { cancelJob, deleteJob, listJobs, type BigQueryJob } from '../../api/gcp/bigquery'
 import { useAccount } from '../../context/AccountContext'
+import { GcpPageTitle } from '../common/PageTitle'
 
 function querySummary(job: BigQueryJob): string {
   const q = (job.query ?? '').replace(/\s+/g, ' ').trim()
@@ -45,7 +46,7 @@ export function JobsPage() {
   return (
     <Box>
       <Stack sx={{ mb: 2 }}>
-        <Typography variant="h5">BigQuery</Typography>
+        <GcpPageTitle id="bigquery">BigQuery</GcpPageTitle>
         <Typography variant="body2" color="text.secondary">
           Jobs · project {accountId || '—'}
         </Typography>

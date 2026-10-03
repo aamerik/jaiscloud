@@ -24,6 +24,7 @@ import { Link as RouterLink, useParams } from 'react-router-dom'
 import { deleteDocument, listDocuments } from '../../api/gcp/firestore'
 import { useAccount } from '../../context/AccountContext'
 import { CreateDocumentDialog } from './CreateDocumentDialog'
+import { GcpPageTitle } from '../common/PageTitle'
 
 function shortDate(value?: string): string {
   if (!value) return '—'
@@ -64,9 +65,7 @@ export function DocumentsPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {collection}
-          </Typography>
+          <GcpPageTitle id="firestore">{collection}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Firestore collection · project {accountId || '—'}
           </Typography>

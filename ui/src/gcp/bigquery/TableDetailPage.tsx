@@ -18,6 +18,7 @@ import { Link as RouterLink, useParams } from 'react-router-dom'
 import { getTable, listRows } from '../../api/gcp/bigquery'
 import { useAccount } from '../../context/AccountContext'
 import { cellValue, formatMillis, schemaFields } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 function str(detail: Record<string, unknown> | undefined, key: string): string {
   const v = detail?.[key]
@@ -69,9 +70,7 @@ export function TableDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {table}
-          </Typography>
+          <GcpPageTitle id="bigquery">{table}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Table in {dataset} · project {accountId || '—'}
           </Typography>

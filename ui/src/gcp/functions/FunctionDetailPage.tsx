@@ -34,6 +34,7 @@ import { useAccount } from '../../context/AccountContext'
 import { IamPolicyPanel } from '../common/IamPolicyPanel'
 import { FunctionTestDialog } from './FunctionTestDialog'
 import { deliveryStatusColor, functionStateColor, memoryLabel, shortDate, triggerSummary } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** A small label/value row for the function overview. */
 function Detail({ label, children }: { label: string; children: ReactNode }) {
@@ -90,9 +91,7 @@ export function FunctionDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {fnID}
-          </Typography>
+          <GcpPageTitle id="functions">{fnID}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Cloud Functions · {location || '—'}
           </Typography>

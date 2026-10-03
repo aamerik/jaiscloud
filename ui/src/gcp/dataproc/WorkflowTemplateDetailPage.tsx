@@ -14,6 +14,7 @@ import { getWorkflowTemplate } from '../../api/gcp/dataproc'
 import { useAccount } from '../../context/AccountContext'
 import { Detail, JsonBlock } from './common'
 import { shortDate } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** A single Dataproc workflow template: metadata plus the full definition. */
 export function WorkflowTemplateDetailPage() {
@@ -39,9 +40,7 @@ export function WorkflowTemplateDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {templateID}
-          </Typography>
+          <GcpPageTitle id="dataproc">{templateID}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Workflow template · {region || '—'}
           </Typography>

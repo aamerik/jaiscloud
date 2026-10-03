@@ -32,6 +32,7 @@ import { useAccount } from '../../context/AccountContext'
 import { IamPolicyPanel } from '../common/IamPolicyPanel'
 import { TriggerDialog } from './TriggerDialog'
 import { destinationLabel, shortDate } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** A small label/value row for the trigger overview. */
 function Detail({ label, children }: { label: string; children: ReactNode }) {
@@ -82,9 +83,7 @@ export function TriggerDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {triggerName}
-          </Typography>
+          <GcpPageTitle id="eventarc">{triggerName}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Eventarc trigger · {location || '—'}
           </Typography>

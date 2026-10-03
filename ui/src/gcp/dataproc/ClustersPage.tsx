@@ -29,6 +29,7 @@ import {
 } from '../../api/gcp/dataproc'
 import { useAccount } from '../../context/AccountContext'
 import { clusterStateColor, shortDate } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 function target(cluster: DataprocCluster) {
   return { region: cluster.region, cluster: cluster.id }
@@ -68,7 +69,7 @@ export function ClustersPage() {
   return (
     <Box>
       <Stack sx={{ mb: 2 }}>
-        <Typography variant="h5">Dataproc</Typography>
+        <GcpPageTitle id="dataproc">Dataproc</GcpPageTitle>
         <Typography variant="body2" color="text.secondary">
           Clusters · project {accountId || '—'}
         </Typography>
