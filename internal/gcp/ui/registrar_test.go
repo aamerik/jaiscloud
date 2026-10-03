@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"jaiscloud/internal/config"
+	firestoreui "jaiscloud/internal/gcp/ui/firestore"
 	pubsubui "jaiscloud/internal/gcp/ui/pubsub"
 	storageui "jaiscloud/internal/gcp/ui/storage"
 	"jaiscloud/internal/model"
@@ -16,22 +17,25 @@ type fakeStorage struct{ storageui.ProviderInterface }
 // fakePubSub satisfies pubsub.ProviderInterface the same way.
 type fakePubSub struct{ pubsubui.ProviderInterface }
 
+// fakeFirestore satisfies firestore.ProviderInterface the same way.
+type fakeFirestore struct{ firestoreui.ProviderInterface }
+
 func TestRegistrar_CloudIsGCP(t *testing.T) {
-	reg := NewRegistrar(nil, nil, &config.Config{})
+	reg := NewRegistrar(nil, nil, nil, &config.Config{})
 	if got := reg.Cloud(); got != model.CloudGCP {
 		t.Fatalf("Cloud() = %q, want %q", got, model.CloudGCP)
 	}
 }
 
 func TestRegistrar_NoProviders_EmptyCatalog(t *testing.T) {
-	reg := NewRegistrar(nil, nil, &config.Config{})
+	reg := NewRegistrar(nil, nil, nil, &config.Config{})
 	if services := reg.Services(); len(services) != 0 {
 		t.Fatalf("Services() = %d entries, want 0", len(services))
 	}
 }
 
 func TestRegistrar_StorageAdvertised(t *testing.T) {
-	reg := NewRegistrar(fakeStorage{}, nil, &config.Config{})
+	reg := NewRegistrar(fakeStorage{}, nil, nil, &config.Config{})
 	services := reg.Services()
 	if len(services) != 1 {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
@@ -42,7 +46,7 @@ func TestRegistrar_StorageAdvertised(t *testing.T) {
 }
 
 func TestRegistrar_PubSubAdvertised(t *testing.T) {
-	reg := NewRegistrar(nil, fakePubSub{}, &config.Config{})
+	reg := NewRegistrar(nil, fakePubSub{}, nil, &config.Config{})
 	services := reg.Services()
 	if len(services) != 1 {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
@@ -56,9 +60,24 @@ func TestRegistrar_PubSubAdvertised(t *testing.T) {
 	}
 }
 
+func TestRegistrar_FirestoreAdvertised(t *testing.T) {
+	reg := NewRegistrar(nil, nil, fakeFirestore{}, &config.Config{})
+	services := reg.Services()
+	if len(services) != 1 {
+		t.Fatalf("Services() = %d entries, want 1", len(services))
+	}
+	got := services[0]
+	if got.ID != "firestore" || got.RootPath != "/gcp/firestore/collections" || got.Tier != "full" {
+		t.Fatalf("unexpected descriptor: %+v", got)
+	}
+	if len(got.Children) != 1 || got.Children[0].Path != "/gcp/firestore/collections" {
+		t.Fatalf("children = %+v, want collections", got.Children)
+	}
+}
+
 func TestRegistrar_BothAdvertised(t *testing.T) {
-	reg := NewRegistrar(fakeStorage{}, fakePubSub{}, &config.Config{})
-	if services := reg.Services(); len(services) != 2 {
-		t.Fatalf("Services() = %d entries, want 2", len(services))
+	reg := NewRegistrar(fakeStorage{}, fakePubSub{}, fakeFirestore{}, &config.Config{})
+	if services := reg.Services(); len(services) != 3 {
+		t.Fatalf("Services() = %d entries, want 3", len(services))
 	}
 }

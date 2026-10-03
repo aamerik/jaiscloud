@@ -8,14 +8,30 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strconv"
+
+	"github.com/go-chi/chi/v5"
 
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/ui/middleware"
 )
+
+// PathParam returns a URL path parameter with percent-encoding fully decoded.
+// chi leaves the encoding in place for characters Go treats as path-safe (e.g.
+// '+', '&', ':'), so a client-encoded segment would otherwise reach handlers
+// still escaped. Document/collection ids must not contain '/'; callers that
+// build resource names from a param should reject a decoded slash.
+func PathParam(r *http.Request, key string) string {
+	v := chi.URLParam(r, key)
+	if decoded, err := url.PathUnescape(v); err == nil {
+		return decoded
+	}
+	return v
+}
 
 // AsSlice coerces a provider response value that may be a typed slice into
 // []any so handlers can range over it uniformly. Returns nil for non-slices.
@@ -76,6 +92,15 @@ func PageSizeFrom(r *http.Request, defaultSize, maxSize int) int {
 // WriteJSON encodes v as JSON with Content-Type application/json.
 func WriteJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v) //nolint:errcheck
+}
+
+// WriteJSONStatus writes v as JSON with the given HTTP status. The
+// Content-Type must be set before WriteHeader, so callers that need a non-200
+// status use this instead of WriteHeader followed by WriteJSON.
+func WriteJSONStatus(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v) //nolint:errcheck
 }
 

@@ -35,6 +35,9 @@ import { TopicsPage } from './pubsub/TopicsPage'
 import { TopicDetailPage } from './pubsub/TopicDetailPage'
 import { SubscriptionsPage } from './pubsub/SubscriptionsPage'
 import { SubscriptionDetailPage } from './pubsub/SubscriptionDetailPage'
+import { CollectionsPage } from './firestore/CollectionsPage'
+import { DocumentsPage } from './firestore/DocumentsPage'
+import { DocumentDetailPage } from './firestore/DocumentDetailPage'
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
@@ -236,6 +239,12 @@ function GcpShell() {
           <Route path="/gcp/pubsub/topics/:topic" element={<TopicDetailPage />} />
           <Route path="/gcp/pubsub/subscriptions" element={<SubscriptionsPage />} />
           <Route path="/gcp/pubsub/subscriptions/:subscription" element={<SubscriptionDetailPage />} />
+          <Route path="/gcp/firestore/collections" element={<CollectionsPage />} />
+          <Route path="/gcp/firestore/collections/:collection" element={<DocumentsPage />} />
+          <Route
+            path="/gcp/firestore/collections/:collection/documents/:document"
+            element={<DocumentDetailPage />}
+          />
           <Route path="/gcp/admin" element={<GcpAdminPage />} />
           <Route path="*" element={<Navigate to="/gcp" replace />} />
         </Routes>
