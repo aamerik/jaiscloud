@@ -35,7 +35,6 @@ import (
 	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/platform"
-	"jaiscloud/internal/sparkhelpers"
 	"jaiscloud/internal/store"
 )
 
@@ -120,12 +119,17 @@ type Service struct {
 	// JAISCLOUD_DATAPROC_HMS_ENDPOINT). See WithHMSEndpointOverride.
 	hmsEndpointOverride string
 
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	cancelsMu   sync.Mutex
-	cancels     map[string]context.CancelFunc
-	patcherStop func()
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	cancelsMu sync.Mutex
+	cancels   map[string]context.CancelFunc
+
+	// nsPatchers holds one ownership patcher per workload namespace (the default
+	// plus every per-cluster namespace), so per-cluster namespaces created after
+	// startup are watched and their executor pods get ownerReferences.
+	nsPatchersMu sync.Mutex
+	nsPatchers   map[string]func()
 }
 
 // defaultOperationTTL is how long a completed operation is retained before the
@@ -232,6 +236,7 @@ func NewService(s dpstore.Store, resources store.ResourceStore, opts ...Option) 
 		cancel:       cancel,
 		sparkImage:   "spark-dataproc:devbox",
 		cancels:      make(map[string]context.CancelFunc),
+		nsPatchers:   make(map[string]func()),
 		operationTTL: defaultOperationTTL,
 	}
 	for _, o := range opts {
@@ -242,22 +247,17 @@ func NewService(s dpstore.Store, resources store.ResourceStore, opts ...Option) 
 		if ns == "" {
 			ns = "jaiscloud"
 		}
-		// Sweep/watch every namespace the emulator owns for Dataproc (persisted
-		// across a --dsn restart) in addition to the process-wide default.
+		// Watch the process-wide namespace plus every namespace the emulator owns
+		// for Dataproc (persisted across a --dsn restart). Per-cluster namespaces
+		// created after startup are registered as they are provisioned
+		// (registerNamespacePatcher).
 		owned, listErr := k8shelpers.ListManagedNamespaces(svc.ctx, svc.k8sClient, dataprocService)
 		if listErr != nil {
 			slog.Warn("dataproc: failed to list owned namespaces", "err", listErr)
 		}
-		stop, err := k8shelpers.StartOwnershipPatcher(svc.ctx, svc.k8sClient, k8shelpers.PatcherConfig{
-			Namespace:     ns,
-			Namespaces:    owned,
-			LabelSelector: "spark-role=executor",
-			ResolveOwner:  sparkhelpers.MakeExecutorOwnerResolverPerPod(svc.k8sClient),
-		})
-		if err != nil {
-			slog.Warn("dataproc: failed to start ownership patcher", "err", err)
-		} else {
-			svc.patcherStop = stop
+		svc.registerNamespacePatcher(ns)
+		for _, ownedNS := range owned {
+			svc.registerNamespacePatcher(ownedNS)
 		}
 		if err := k8shelpers.CleanupOrphans(svc.ctx, svc.k8sClient, k8shelpers.CleanupConfig{
 			Namespace:       ns,
@@ -273,9 +273,7 @@ func NewService(s dpstore.Store, resources store.ResourceStore, opts ...Option) 
 
 // Shutdown cancels the core context and drains in-flight job goroutines.
 func (s *Service) Shutdown(_ context.Context) {
-	if s.patcherStop != nil {
-		s.patcherStop()
-	}
+	s.stopNamespacePatchers()
 	s.cancel()
 	s.wg.Wait()
 }

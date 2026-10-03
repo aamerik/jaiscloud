@@ -170,6 +170,27 @@ func TestListAndSweepManagedNamespaces(t *testing.T) {
 	}
 }
 
+func TestEnsureNamespaceRBACForSubjects(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	ctx := context.Background()
+	err := EnsureNamespaceRBACForSubjects(ctx, client, "gcp-dataproc-p-c-1",
+		RBACSubject{Name: "jaiscloud", Namespace: "jaiscloud"},
+		RBACSubject{Name: "spark-driver", Namespace: "gcp-dataproc-p-c-1"},
+		RBACSubject{Name: "jaiscloud", Namespace: "jaiscloud"}, // duplicate
+		RBACSubject{Name: ""}, // skipped
+	)
+	if err != nil {
+		t.Fatalf("EnsureNamespaceRBACForSubjects: %v", err)
+	}
+	rb, err := client.RbacV1().RoleBindings("gcp-dataproc-p-c-1").Get(ctx, ExecutorRoleBindingName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("rolebinding not created: %v", err)
+	}
+	if len(rb.Subjects) != 2 {
+		t.Fatalf("subjects = %+v; want 2 (deduped, empty skipped)", rb.Subjects)
+	}
+}
+
 func TestEnsureNamespaceRBACCreatesRoleBinding(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	ctx := context.Background()

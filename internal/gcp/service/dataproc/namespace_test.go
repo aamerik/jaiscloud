@@ -38,6 +38,17 @@ func TestCreateClusterProvisionsPerClusterNamespace(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "dataproc", ns.Labels["jaiscloud.io/service"])
 
+	// The per-namespace RoleBinding binds both the emulator SA and the Spark
+	// driver SA (default when unset).
+	rb, err := client.RbacV1().RoleBindings(c1.Namespace).Get(ctx, k8shelpers.ExecutorRoleBindingName, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Len(t, rb.Subjects, 2)
+	// The new namespace is watched for executor-pod ownership.
+	p.nsPatchersMu.Lock()
+	_, watched := p.nsPatchers[c1.Namespace]
+	p.nsPatchersMu.Unlock()
+	require.True(t, watched, "per-cluster namespace must be watched by an ownership patcher")
+
 	c2, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c2", gceClusterInput())
 	require.NoError(t, err)
 	require.NotEqual(t, c1.Namespace, c2.Namespace, "distinct clusters must get distinct namespaces")
@@ -86,16 +97,19 @@ func TestDeleteClusterRemovesOwnedNamespaceAndWorkloads(t *testing.T) {
 
 	_, err = p.DeleteCluster(ctx, "proj", "us-central1", "c1")
 	require.NoError(t, err)
-	// The next read settles DELETING -> record removed + namespace teardown.
+	// The next read settles DELETING -> record removed; teardown runs in the
+	// background.
 	_, err = p.GetCluster(ctx, "proj", "us-central1", "c1")
 	require.Error(t, err)
 
-	if _, err := client.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{}); !k8serrors.IsNotFound(err) {
-		t.Fatalf("owned namespace survived cluster delete: %v", err)
-	}
-	if _, err := client.BatchV1().Jobs(ns).Get(ctx, "jc-spark-c1", metav1.GetOptions{}); !k8serrors.IsNotFound(err) {
-		t.Fatalf("cluster job survived cluster delete: %v", err)
-	}
+	require.Eventually(t, func() bool {
+		_, err := client.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
+		return k8serrors.IsNotFound(err)
+	}, 5*time.Second, 20*time.Millisecond, "owned namespace survived cluster delete")
+	require.Eventually(t, func() bool {
+		_, err := client.BatchV1().Jobs(ns).Get(ctx, "jc-spark-c1", metav1.GetOptions{})
+		return k8serrors.IsNotFound(err)
+	}, 5*time.Second, 20*time.Millisecond, "cluster job survived cluster delete")
 }
 
 func TestDeleteClusterLeavesAdoptedNamespace(t *testing.T) {

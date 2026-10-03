@@ -11,6 +11,7 @@ import (
 
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/k8shelpers"
+	"jaiscloud/internal/sparkhelpers"
 )
 
 // dataprocService is the ownership label value for Dataproc's per-cluster
@@ -72,7 +73,18 @@ func (s *Service) resolveClusterNamespace(ctx context.Context, project, region, 
 			"cluster", name, "namespace", candidate, "fallback", s.defaultNamespace(), "err", err)
 		return s.defaultNamespace(), false
 	}
-	if rbacErr := k8shelpers.EnsureNamespaceRBAC(ctx, s.k8sClient, candidate, "", ""); rbacErr != nil {
+	// Bind the identities that must act in the new namespace: the emulator's own
+	// ServiceAccount (creates the driver Job/pod) and the Spark driver's
+	// ServiceAccount (creates executor pods; "default" when unset).
+	driverSA := s.serviceAccountName
+	if driverSA == "" {
+		driverSA = "default"
+	}
+	subjects := []k8shelpers.RBACSubject{
+		{Name: k8shelpers.DefaultExecutorServiceAccount, Namespace: k8shelpers.DefaultExecutorServiceAccountNamespace},
+		{Name: driverSA, Namespace: candidate},
+	}
+	if rbacErr := k8shelpers.EnsureNamespaceRBACForSubjects(ctx, s.k8sClient, candidate, subjects...); rbacErr != nil {
 		slog.Warn("dataproc: cannot bootstrap executor RBAC in per-cluster namespace; falling back",
 			"cluster", name, "namespace", candidate, "fallback", s.defaultNamespace(), "err", rbacErr)
 		if created {
@@ -82,7 +94,93 @@ func (s *Service) resolveClusterNamespace(ctx context.Context, project, region, 
 		}
 		return s.defaultNamespace(), false
 	}
+	s.registerNamespacePatcher(candidate)
 	return candidate, created
+}
+
+// rollbackNamespace deletes a namespace the emulator just created when the
+// cluster record could not be persisted, so a failed create does not leak it.
+func (s *Service) rollbackNamespace(ctx context.Context, namespace string, created bool) {
+	if s.k8sClient == nil || !created || namespace == "" {
+		return
+	}
+	if _, err := k8shelpers.DeleteManagedNamespace(ctx, s.k8sClient, namespace, dataprocService); err != nil {
+		slog.Warn("dataproc: failed to roll back namespace after create failure", "namespace", namespace, "err", err)
+	}
+}
+
+// registerNamespacePatcher starts an ownership patcher for one workload
+// namespace so executor pods created there are adopted into the driver Job's
+// owner references. It is idempotent; a failure is logged and retried for the
+// next cluster in that namespace.
+func (s *Service) registerNamespacePatcher(namespace string) {
+	if s.k8sClient == nil || namespace == "" {
+		return
+	}
+	s.nsPatchersMu.Lock()
+	_, exists := s.nsPatchers[namespace]
+	s.nsPatchersMu.Unlock()
+	if exists {
+		return
+	}
+	stop, err := k8shelpers.StartOwnershipPatcher(s.ctx, s.k8sClient, k8shelpers.PatcherConfig{
+		Namespace:     namespace,
+		LabelSelector: "spark-role=executor",
+		ResolveOwner:  sparkhelpers.MakeExecutorOwnerResolverPerPod(s.k8sClient),
+	})
+	if err != nil {
+		slog.Warn("dataproc: failed to start ownership patcher", "namespace", namespace, "err", err)
+		return
+	}
+	s.nsPatchersMu.Lock()
+	if _, raced := s.nsPatchers[namespace]; raced {
+		s.nsPatchersMu.Unlock()
+		stop()
+		return
+	}
+	s.nsPatchers[namespace] = stop
+	s.nsPatchersMu.Unlock()
+}
+
+// unregisterNamespacePatcher stops and forgets a namespace's ownership patcher.
+func (s *Service) unregisterNamespacePatcher(namespace string) {
+	s.nsPatchersMu.Lock()
+	stop, ok := s.nsPatchers[namespace]
+	if ok {
+		delete(s.nsPatchers, namespace)
+	}
+	s.nsPatchersMu.Unlock()
+	if ok {
+		stop()
+	}
+}
+
+// stopNamespacePatchers stops every namespace ownership patcher.
+func (s *Service) stopNamespacePatchers() {
+	s.nsPatchersMu.Lock()
+	stops := make([]func(), 0, len(s.nsPatchers))
+	for ns, stop := range s.nsPatchers {
+		stops = append(stops, stop)
+		delete(s.nsPatchers, ns)
+	}
+	s.nsPatchersMu.Unlock()
+	for _, stop := range stops {
+		stop()
+	}
+}
+
+// dispatchClusterTeardown runs teardownClusterNamespace in the background so a
+// cluster read (GetCluster/ListClusters) never blocks on namespace deletion. The
+// goroutine is tracked by s.wg so Shutdown waits for in-flight teardowns.
+func (s *Service) dispatchClusterTeardown(c dpstore.Cluster) {
+	if s.k8sClient == nil || c.Namespace == "" {
+		return
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.teardownClusterNamespace(context.Background(), c)
+	}()
 }
 
 // teardownClusterNamespace removes a deleted cluster's workloads and, when the
@@ -96,6 +194,7 @@ func (s *Service) teardownClusterNamespace(ctx context.Context, c dpstore.Cluste
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceTeardownTimeout)
 	defer cancel()
 
+	s.unregisterNamespacePatcher(c.Namespace)
 	s.deleteClusterJobs(ctx, c)
 	if !c.NamespaceOwned {
 		slog.Info("dataproc: cluster namespace is not emulator-owned; workloads reaped, namespace left",

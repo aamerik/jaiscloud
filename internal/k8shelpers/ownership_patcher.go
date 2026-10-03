@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -61,11 +60,8 @@ func StartOwnershipPatcher(ctx context.Context, k8s kubernetes.Interface, cfg Pa
 
 	patchCtx, patchCancel := context.WithCancel(ctx)
 
-	var wg sync.WaitGroup
 	for _, ns := range namespaces {
-		wg.Add(1)
 		go func(namespace string) {
-			defer wg.Done()
 			runPatchLoop(patchCtx, k8s, cfg, namespace)
 		}(ns)
 	}

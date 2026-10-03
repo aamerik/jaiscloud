@@ -121,6 +121,7 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 		NamespaceOwned:       nsOwned,
 	}
 	if err := s.store.CreateCluster(ctx, project, region, c); err != nil {
+		s.rollbackNamespace(ctx, ns, nsOwned)
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
 	}
 	slog.Info("dataproc: cluster creating", "project", project, "region", region, "cluster", name,
@@ -449,8 +450,9 @@ func (s *Service) advanceCluster(ctx context.Context, project, region, name stri
 			gone.Status = dpstore.ClusterStatus{State: clusterDeletedState, StateStartTime: clock.Now().UTC()}
 			s.emitClusterStateChange(ctx, project, region, gone, deleted.Status)
 			// The record is gone; reap the cluster's workloads and, when the
-			// emulator owns it, its namespace.
-			s.teardownClusterNamespace(ctx, deleted)
+			// emulator owns it, its namespace. Dispatched in the background so a
+			// read never blocks on namespace deletion.
+			s.dispatchClusterTeardown(deleted)
 		}
 		return dpstore.Cluster{}, dpstore.ErrNoSuchCluster
 	}

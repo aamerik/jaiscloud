@@ -261,21 +261,59 @@ func SweepManagedNamespaces(ctx context.Context, client kubernetes.Interface, se
 	return deleted, firstErr
 }
 
-// EnsureNamespaceRBAC creates the executor RoleBinding in namespace so the
-// emulator's ServiceAccount can run jobs/pods/services/configmaps there. The
-// bound identity is the emulator's own ServiceAccount (deploy/k8s/rbac.yaml);
-// pass empty serviceAccount/serviceAccountNamespace to use the defaults. It is
-// idempotent and best-effort against AlreadyExists; a Forbidden create returns
+// RBACSubject is a ServiceAccount granted the executor ClusterRole in a managed
+// namespace. The emulator's own ServiceAccount needs to create the driver
+// Job/pod, and the Spark driver ServiceAccount needs to create executor pods.
+type RBACSubject struct {
+	Name      string
+	Namespace string
+}
+
+// EnsureNamespaceRBAC creates the executor RoleBinding in namespace for the
+// emulator's own ServiceAccount (deploy/k8s/rbac.yaml); pass empty
+// serviceAccount/serviceAccountNamespace to use the defaults. It is idempotent
+// and best-effort against AlreadyExists; a Forbidden create returns
 // ErrNamespaceForbidden so the caller can fall back.
 func EnsureNamespaceRBAC(ctx context.Context, client kubernetes.Interface, namespace, serviceAccount, serviceAccountNamespace string) error {
-	if namespace == "" {
-		return nil
-	}
 	if serviceAccount == "" {
 		serviceAccount = DefaultExecutorServiceAccount
 	}
 	if serviceAccountNamespace == "" {
 		serviceAccountNamespace = DefaultExecutorServiceAccountNamespace
+	}
+	return EnsureNamespaceRBACForSubjects(ctx, client, namespace, RBACSubject{Name: serviceAccount, Namespace: serviceAccountNamespace})
+}
+
+// EnsureNamespaceRBACForSubjects creates one executor RoleBinding in namespace
+// binding every subject (deduplicated) to the jaiscloud-executor ClusterRole. It
+// is idempotent against AlreadyExists; a Forbidden create returns
+// ErrNamespaceForbidden so the caller can fall back to the process-wide
+// namespace.
+func EnsureNamespaceRBACForSubjects(ctx context.Context, client kubernetes.Interface, namespace string, subjects ...RBACSubject) error {
+	if namespace == "" {
+		return nil
+	}
+	seen := make(map[RBACSubject]bool, len(subjects))
+	rbacSubjects := make([]rbacv1.Subject, 0, len(subjects))
+	for _, s := range subjects {
+		if s.Name == "" {
+			continue
+		}
+		if s.Namespace == "" {
+			s.Namespace = namespace
+		}
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		rbacSubjects = append(rbacSubjects, rbacv1.Subject{
+			Kind:      "ServiceAccount",
+			Name:      s.Name,
+			Namespace: s.Namespace,
+		})
+	}
+	if len(rbacSubjects) == 0 {
+		return nil
 	}
 	_, err := client.RbacV1().RoleBindings(namespace).Create(ctx, &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: ExecutorRoleBindingName, Namespace: namespace},
@@ -284,11 +322,7 @@ func EnsureNamespaceRBAC(ctx context.Context, client kubernetes.Interface, names
 			Kind:     "ClusterRole",
 			Name:     ExecutorClusterRoleName,
 		},
-		Subjects: []rbacv1.Subject{{
-			Kind:      "ServiceAccount",
-			Name:      serviceAccount,
-			Namespace: serviceAccountNamespace,
-		}},
+		Subjects: rbacSubjects,
 	}, metav1.CreateOptions{})
 	if err == nil || k8serrors.IsAlreadyExists(err) {
 		return nil
