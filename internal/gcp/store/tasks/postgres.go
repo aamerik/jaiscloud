@@ -213,6 +213,35 @@ func (s *PostgresStore) ListQueues(ctx context.Context, projectID, location stri
 	return result, rows.Err()
 }
 
+func (s *PostgresStore) ListQueuesByProject(ctx context.Context, projectID string) ([]Queue, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT queue_name, location, data FROM jc_tasks_queues
+		WHERE project_id=$1
+		ORDER BY location, queue_name
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Queue
+	for rows.Next() {
+		var name, location string
+		var data []byte
+		if err := rows.Scan(&name, &location, &data); err != nil {
+			return nil, err
+		}
+		q, err := decodeQueue(data)
+		if err != nil {
+			return nil, err
+		}
+		q.ProjectID = projectID
+		q.Location = location
+		q.Name = name
+		result = append(result, q)
+	}
+	return result, rows.Err()
+}
+
 func (s *PostgresStore) ListAllQueues(ctx context.Context) ([]Queue, error) {
 	rows, err := s.listAllQueues(ctx)
 	if err != nil {

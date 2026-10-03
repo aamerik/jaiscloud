@@ -46,6 +46,8 @@ import { ServiceDetailPage as RunServiceDetailPage } from './run/ServiceDetailPa
 import { RevisionDetailPage as RunRevisionDetailPage } from './run/RevisionDetailPage'
 import { JobsPage as SchedulerJobsPage } from './scheduler/JobsPage'
 import { JobDetailPage as SchedulerJobDetailPage } from './scheduler/JobDetailPage'
+import { QueuesPage as TasksQueuesPage } from './tasks/QueuesPage'
+import { QueueDetailPage as TasksQueueDetailPage } from './tasks/QueueDetailPage'
 import { DatasetsPage } from './bigquery/DatasetsPage'
 import { DatasetDetailPage } from './bigquery/DatasetDetailPage'
 import { TableDetailPage } from './bigquery/TableDetailPage'
@@ -301,6 +303,11 @@ function GcpShell() {
           <Route
             path="/gcp/scheduler/jobs/:location/:job"
             element={<SchedulerJobDetailPage />}
+          />
+          <Route path="/gcp/tasks/queues" element={<TasksQueuesPage />} />
+          <Route
+            path="/gcp/tasks/queues/:location/:queue"
+            element={<TasksQueueDetailPage />}
           />
           <Route path="/gcp/bigquery/datasets" element={<DatasetsPage />} />
           <Route path="/gcp/bigquery/datasets/:dataset" element={<DatasetDetailPage />} />
