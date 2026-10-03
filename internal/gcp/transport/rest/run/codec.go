@@ -25,6 +25,7 @@ package run
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"jaiscloud/internal/gcp/gcperr"
 	"jaiscloud/internal/gcp/wire"
@@ -74,7 +75,7 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 	if len(rest) == 0 {
 		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 	}
-	action := runAction(rest, r.Method, nr.Params)
+	action := runAction(rest, r.Method, nr.Params, strings.Contains(r.URL.EscapedPath(), "/run/"))
 	if action == "" {
 		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 	}
@@ -84,18 +85,29 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 
 // runAction maps the path segments after projects/{p}/locations/{l}, the HTTP
 // method and (for item paths) the custom verb to the provider action. It also
-// fills the resource-name params.
-func runAction(rest []string, method string, params map[string]any) string {
+// fills the resource-name params. prefixed marks a "/run/..." path, where a
+// service subpath is a data-plane invocation rather than a control-plane call.
+func runAction(rest []string, method string, params map[string]any, prefixed bool) string {
 	switch rest[0] {
 	case "services":
-		return serviceAction(rest, method, params)
+		return serviceAction(rest, method, params, prefixed)
 	case "operations":
 		return operationAction(rest, method, params)
 	}
 	return ""
 }
 
-func serviceAction(rest []string, method string, params map[string]any) string {
+func serviceAction(rest []string, method string, params map[string]any, prefixed bool) string {
+	// Legacy prefixed invocation (floci's CloudRunInvocationController path):
+	// /run/v2/.../services/{svc}/<subpath> forwards to the revision runtime. The
+	// exact service path (/services/{svc}) is deliberately left to the control
+	// plane so prefix-mode service reads keep working; real invocation is
+	// Host-routed, and this path form only carries a subpath.
+	if prefixed && len(rest) >= 3 && rest[2] != "revisions" {
+		params["service"] = rest[1]
+		params["invokePath"] = "/" + strings.Join(rest[2:], "/")
+		return "Invoke"
+	}
 	switch len(rest) {
 	case 1:
 		switch method {

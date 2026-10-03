@@ -49,6 +49,7 @@ import (
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
+	"jaiscloud/internal/gcp/runexec"
 	containercore "jaiscloud/internal/gcp/service/container"
 	dataproccore "jaiscloud/internal/gcp/service/dataproc"
 	datastorecore "jaiscloud/internal/gcp/service/datastore"
@@ -584,18 +585,54 @@ func startCmd() *cobra.Command {
 			containerP := restcontainer.NewProvider(containerCore)
 
 			// Cloud Run Admin v2's behavioural control plane. REST-first (gRPC
-			// deferred, CR4): W1.1 ships a mock runtime (a service is a stored
-			// record), W1.2 adds the k8s executor that launches the template
-			// image. The seam is resolved once at startup.
+			// deferred, CR4): the default mock runtime makes a service a stored
+			// record; k8s executor mode additionally launches the template image
+			// as a Pod + ClusterIP Service and reverse-proxies to it. The seam is
+			// resolved once at startup.
 			runExecutorMode, runExecutorSource := config.ExecutorMode("cloudrun", "mock")
-			if runExecutorMode != "mock" {
-				slog.Warn("cloudrun: executor mode not supported in this build; using mock",
+			// The invocation host is process-wide: the router's host detection
+			// (DetectService -> IsInvocationHost) and the core's uri synthesis
+			// must agree, so configure it before serving. k8s mode uses http and
+			// the externally reachable emulator port so a client can send the
+			// generated authority back as a Host header.
+			runScheme := "https"
+			if runExecutorMode == "k8s" {
+				runScheme = "http"
+			}
+			runHost := runcore.HostConfig{
+				Scheme: runScheme,
+				Suffix: os.Getenv("JAISCLOUD_CLOUDRUN_URL_SUFFIX"),
+				Port:   os.Getenv("JAISCLOUD_CLOUDRUN_URL_PORT"),
+			}
+			runcore.ConfigureInvocationHost(runHost)
+
+			runOpts := []runcore.Option{
+				runcore.WithLROMode(lroMode),
+				runcore.WithInvocationHost(runHost),
+				runcore.WithEventBus(eventBus),
+			}
+			switch runExecutorMode {
+			case "k8s":
+				k8sNS := cfg.K8sNamespace
+				if k8sNS == "" {
+					k8sNS = "jaiscloud"
+				}
+				if client, err := buildK8sClient(); err != nil {
+					slog.Warn("cloudrun: failed to build k8s client; falling back to mock", "err", err)
+				} else {
+					runOpts = append(runOpts, runcore.WithRuntimeManager(runexec.New(runexec.Config{
+						Client:    client,
+						Namespace: k8sNS,
+						Logger:    slog.Default(),
+					})))
+					slog.Info("cloudrun executor", "mode", runExecutorMode, "source", runExecutorSource, "namespace", k8sNS)
+				}
+			case "mock":
+			default:
+				slog.Warn("cloudrun: unknown executor mode; using mock",
 					"mode", runExecutorMode, "source", runExecutorSource)
 			}
-			runCore := runcore.NewService(stores.run, stores.resources,
-				runcore.WithLROMode(lroMode),
-				runcore.WithURLSuffix(os.Getenv("JAISCLOUD_CLOUDRUN_URL_SUFFIX")),
-				runcore.WithEventBus(eventBus))
+			runCore := runcore.NewService(stores.run, stores.resources, runOpts...)
 			runP := restrun.NewProvider(runCore)
 
 			// Service Usage v1's transport-neutral core is shared by the REST

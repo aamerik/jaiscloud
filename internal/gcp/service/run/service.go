@@ -30,10 +30,6 @@ import (
 	"jaiscloud/internal/store"
 )
 
-// DefaultURLSuffix is the DNS suffix of a synthesized service uri when
-// JAISCLOUD_CLOUDRUN_URL_SUFFIX is unset. It matches the real *.run.app host.
-const DefaultURLSuffix = "run.app"
-
 // servicePolicy is the policy resource type for a Cloud Run service IAM policy.
 const servicePolicy = "run-service-policy"
 
@@ -46,7 +42,7 @@ type Service struct {
 	resources store.ResourceStore
 	lro       lro.Mode
 	runtime   RuntimeManager
-	urlSuffix string
+	host      HostConfig
 	// eventBus publishes cloud-neutral status events for the console's live
 	// stream. Nil disables them (unit tests that only exercise the control
 	// plane).
@@ -71,13 +67,21 @@ func WithRuntimeManager(m RuntimeManager) Option {
 	}
 }
 
-// WithURLSuffix sets the DNS suffix used to synthesize a service uri.
+// WithURLSuffix sets the DNS suffix used to synthesize a service uri, leaving
+// the scheme and port from the process-wide default.
 func WithURLSuffix(suffix string) Option {
 	return func(s *Service) {
 		if suffix != "" {
-			s.urlSuffix = strings.TrimPrefix(suffix, ".")
+			s.host.Suffix = strings.TrimPrefix(suffix, ".")
 		}
 	}
+}
+
+// WithInvocationHost overrides the full invocation host config (scheme, suffix,
+// port) for this core. It is used by k8s execution mode so the synthesized uri
+// is the http authority the client can send back as a Host header.
+func WithInvocationHost(c HostConfig) Option {
+	return func(s *Service) { s.host = normalizeHostConfig(c) }
 }
 
 // WithEventBus wires the shared event bus the console's live status stream
@@ -96,7 +100,7 @@ func NewService(s runstore.Store, resources store.ResourceStore, opts ...Option)
 		store:     s,
 		resources: resources,
 		runtime:   MockRuntime{},
-		urlSuffix: DefaultURLSuffix,
+		host:      invocationHost,
 	}
 	for _, o := range opts {
 		o(svc)
@@ -221,6 +225,11 @@ func (s *Service) UpdateService(ctx context.Context, project, location, id strin
 
 	var rev runstore.Revision
 	if templateChanged {
+		// Tear down the revision currently serving traffic before standing up
+		// its replacement. Revisions are always-on, so the old runtime is only
+		// removed here (and on service delete/reset/orphan sweep). Teardown is
+		// best-effort: a failure must not block the update.
+		s.removeServingRevision(ctx, existing)
 		revID := nextRevisionID(id, existing.LatestCreatedRevision)
 		rev = runstore.Revision{
 			ProjectID:  project,
@@ -249,6 +258,26 @@ func (s *Service) UpdateService(ctx context.Context, project, location, id strin
 		}
 	}
 	return s.recordOperation(ctx, project, location, "update", updated)
+}
+
+// removeServingRevision tears down the runtime of the revision currently
+// serving a service (best-effort). It is called when a template-changing update
+// replaces the serving revision.
+func (s *Service) removeServingRevision(ctx context.Context, svc runstore.Service) {
+	name := svc.LatestReadyRevision
+	if name == "" {
+		name = svc.LatestCreatedRevision
+	}
+	project, location, service, id, ok := ParseRevisionName(name)
+	if !ok {
+		return
+	}
+	_ = s.runtime.RemoveRevision(ctx, runstore.Revision{
+		ProjectID: project,
+		Location:  location,
+		Service:   service,
+		ID:        id,
+	})
 }
 
 // DeleteService removes a service and its revisions and returns the delete
@@ -384,12 +413,24 @@ func (s *Service) Invoke(ctx context.Context, req InvocationRequest) (Invocation
 }
 
 // URLSuffix returns the configured synthesized-uri DNS suffix.
-func (s *Service) URLSuffix() string { return s.urlSuffix }
+func (s *Service) URLSuffix() string { return s.host.Suffix }
+
+// ServiceAuthority returns the invocation authority (host[:port]) of a service
+// under this core's configuration. The runtime manager registers revisions
+// under the same authority so Invoke can resolve a request Host to a revision.
+func (s *Service) ServiceAuthority(project, location, id string) string {
+	host := id + "-" + projectToken(project) + "." + strings.ToLower(location) + "." + s.host.Suffix
+	if s.host.Port != "" {
+		host += ":" + s.host.Port
+	}
+	return host
+}
 
 // uri synthesizes the service uri. Mock mode uses the real
-// https://{id}-{token}.{location}.{suffix} form; W1.2 rewrites it for k8s mode.
+// https://{id}-{token}.{location}.{suffix} form; k8s execution mode overrides
+// the scheme/port via WithInvocationHost.
 func (s *Service) uri(project, location, id string) string {
-	return "https://" + id + "-" + projectToken(project) + "." + strings.ToLower(location) + "." + s.urlSuffix
+	return s.host.Scheme + "://" + s.ServiceAuthority(project, location, id)
 }
 
 // projectToken is the 12-hex-char SHA-256 prefix of the project, matching the

@@ -107,6 +107,27 @@ func TestProviderInvokeNoRuntime(t *testing.T) {
 	}
 }
 
+func TestProviderInvokeLegacyPathForm(t *testing.T) {
+	ctx := context.Background()
+	p := testProvider()
+	if _, err := p.CreateService(ctx, req("CreateService", map[string]any{"serviceId": "svc", "body": map[string]any{}})); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	u, _ := url.Parse("/run/v2/projects/p/locations/l/services/svc/hello")
+	nr := &model.NormalizedRequest{
+		Service: "run",
+		Action:  "Invoke",
+		Params:  map[string]any{"project": "p", "location": "l", "service": "svc", "invokePath": "/hello"},
+		Raw:     &http.Request{Host: "localhost:8080", Method: http.MethodGet, URL: u},
+	}
+	// The mock runtime runs no container, so the resolved path still reports 503.
+	_, err := p.Invoke(ctx, nr)
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.HTTPStatus != 503 {
+		t.Fatalf("Invoke err = %v, want 503 ProviderError", err)
+	}
+}
+
 func TestInvocationCodecRoundTrip(t *testing.T) {
 	u, _ := url.Parse("/hello?x=1")
 	r := &http.Request{Method: http.MethodGet, Host: "svc-abcdef012345.us-central1.run.app", URL: u}

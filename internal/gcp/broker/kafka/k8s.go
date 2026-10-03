@@ -11,13 +11,12 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 
-	"jaiscloud/internal/clock"
 	core "jaiscloud/internal/gcp/service/managedkafka"
+	"jaiscloud/internal/k8shelpers"
 )
 
 const (
@@ -25,8 +24,9 @@ const (
 	// exposes. Real GCP omits the port from bootstrapAddress; the emulator
 	// includes it so a raw client can dial the in-cluster Service directly.
 	kafkaPort = 9092
-	// brokerReadyTimeout bounds how long EnsureCluster waits for the Pod's
-	// Service to accept a TCP connection.
+	// brokerReadyTimeout bounds how long the native broker waits for its
+	// listener to accept a TCP connection. The k8s broker uses the shared
+	// k8shelpers workload readiness timeout.
 	brokerReadyTimeout = 180 * time.Second
 	// brokerLabelKey/Value tag every managedkafka broker resource so the K8s
 	// e2e smoke can find the per-cluster Service the cluster advertises.
@@ -35,11 +35,6 @@ const (
 	// brokerSelector matches every broker resource this package owns; the
 	// startup orphan sweep and Reset use it to reap leftovers.
 	brokerSelector = brokerLabelKey + "=" + brokerLabelValue
-	// brokerSweepTimeout bounds the startup orphan sweep.
-	brokerSweepTimeout = 30 * time.Second
-	// brokerSweepCap bounds a sweep so a mislabelled namespace cannot trigger
-	// unbounded deletes.
-	brokerSweepCap = 2000
 )
 
 // k8sBroker runs a single-node Redpanda Pod plus a ClusterIP Service per
@@ -156,25 +151,20 @@ func (b *k8sBroker) EnsureCluster(ctx context.Context, project, location, cluste
 	b.mu.Unlock()
 
 	name := brokerResourceName(key)
-	dns := fmt.Sprintf("%s.%s.svc.cluster.local:%d", name, b.namespace, kafkaPort)
-
-	if err := b.ensureNamespace(ctx); err != nil {
-		return "", fmt.Errorf("managedkafka broker: ensure namespace: %w", err)
-	}
-	if err := b.ensureService(ctx, name); err != nil {
-		return "", fmt.Errorf("managedkafka broker: ensure service: %w", err)
-	}
-	if err := b.ensurePod(ctx, name, dns); err != nil {
-		b.reapResources(ctx, name)
-		return "", fmt.Errorf("managedkafka broker: ensure pod: %w", err)
-	}
+	dns := k8shelpers.WorkloadEndpoint(name, b.namespace, kafkaPort)
 
 	b.logger.Info("managedkafka broker: waiting for redpanda pod", "cluster", keyStr, "address", dns)
-	if err := b.waitReady(ctx, dns); err != nil {
-		// A broker that never became ready must not leak its Pod/Service; the
-		// caller degrades to the metadata-only topology.
-		b.reapResources(ctx, name)
-		return "", err
+	// The workload helper owns the Pod + ClusterIP Service lifecycle and reaps
+	// both if the broker never becomes ready, so a failed start cannot leak.
+	if _, err := k8shelpers.EnsureWorkload(ctx, b.client, k8shelpers.WorkloadSpec{
+		Namespace:     b.namespace,
+		Pod:           *b.buildPod(name, dns),
+		ServiceLabels: map[string]string{"app": name, "managed-by": "jaiscloud", brokerLabelKey: brokerLabelValue},
+		Selector:      map[string]string{"app": name},
+		Ports:         []k8shelpers.ServicePort{{Name: "kafka", Port: kafkaPort, TargetPort: kafkaPort}},
+		Probe:         b.probe,
+	}); err != nil {
+		return "", fmt.Errorf("managedkafka broker: ensure workload: %w", err)
 	}
 
 	b.mu.Lock()
@@ -188,18 +178,7 @@ func (b *k8sBroker) StopCluster(ctx context.Context, project, location, cluster 
 	key := ClusterKey{Project: project, Location: location, Cluster: cluster}
 	name := brokerResourceName(key)
 
-	podErr := b.client.CoreV1().Pods(b.namespace).Delete(ctx, name, metav1.DeleteOptions{})
-	if podErr != nil && !k8serrors.IsNotFound(podErr) {
-		podErr = fmt.Errorf("managedkafka broker: delete pod: %w", podErr)
-	} else {
-		podErr = nil
-	}
-	svcErr := b.client.CoreV1().Services(b.namespace).Delete(ctx, name, metav1.DeleteOptions{})
-	if svcErr != nil && !k8serrors.IsNotFound(svcErr) {
-		svcErr = fmt.Errorf("managedkafka broker: delete service: %w", svcErr)
-	} else {
-		svcErr = nil
-	}
+	reapErr := k8shelpers.DeleteWorkload(ctx, b.client, b.namespace, name)
 
 	// Always drop the endpoint and its pooled admin, even if a delete failed:
 	// keeping a dead address advertised is worse than retrying a delete.
@@ -210,10 +189,10 @@ func (b *k8sBroker) StopCluster(ctx context.Context, project, location, cluster 
 	if ep != "" {
 		b.admins.close(ep)
 	}
-	if podErr != nil {
-		return podErr
+	if reapErr != nil {
+		return fmt.Errorf("managedkafka broker: %w", reapErr)
 	}
-	return svcErr
+	return nil
 }
 
 // Reset stops and reaps every tracked broker, then sweeps any broker resources
@@ -242,140 +221,22 @@ func (b *k8sBroker) Reset(ctx context.Context) error {
 // Shutdown reaps every broker on emulator shutdown.
 func (b *k8sBroker) Shutdown(ctx context.Context) error { return b.Reset(ctx) }
 
-// reapResources deletes a broker's Pod and Service, ignoring NotFound, so a
-// failed start does not leak them.
-func (b *k8sBroker) reapResources(ctx context.Context, name string) {
-	if err := b.client.CoreV1().Pods(b.namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
-		b.logger.Warn("managedkafka broker: reap pod failed", "pod", name, "err", err)
-	}
-	if err := b.client.CoreV1().Services(b.namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
-		b.logger.Warn("managedkafka broker: reap service failed", "service", name, "err", err)
-	}
-}
-
 // sweepOrphans deletes broker Pods and Services left by a previous emulator
 // instance or a failed start, matched by the broker label. Broker liveness is
 // runtime state this process cannot adopt across the deterministic resource
 // names, so every labeled resource is an orphan. Best-effort: a failure is
 // logged, never fatal to cluster creation.
 func (b *k8sBroker) sweepOrphans() {
-	ctx, cancel := context.WithTimeout(context.Background(), brokerSweepTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	b.sweepOrphanPods(ctx)
-	b.sweepOrphanServices(ctx)
-}
-
-func (b *k8sBroker) sweepOrphanPods(ctx context.Context) {
-	deleted := 0
-	var cont string
-	for {
-		list, err := b.client.CoreV1().Pods(b.namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: brokerSelector,
-			Limit:         500,
-			Continue:      cont,
-		})
-		if err != nil {
-			b.logger.Warn("managedkafka broker: orphan pod sweep failed", "err", err)
-			return
-		}
-		for i := range list.Items {
-			name := list.Items[i].Name
-			if err := b.client.CoreV1().Pods(b.namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
-				b.logger.Warn("managedkafka broker: orphan pod delete failed", "pod", name, "err", err)
-				continue
-			}
-			deleted++
-			b.logger.Info("managedkafka broker: reaped orphan pod", "pod", name)
-		}
-		cont = list.Continue
-		if cont == "" || deleted >= brokerSweepCap {
-			return
-		}
-	}
-}
-
-func (b *k8sBroker) sweepOrphanServices(ctx context.Context) {
-	deleted := 0
-	var cont string
-	for {
-		list, err := b.client.CoreV1().Services(b.namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: brokerSelector,
-			Limit:         500,
-			Continue:      cont,
-		})
-		if err != nil {
-			b.logger.Warn("managedkafka broker: orphan service sweep failed", "err", err)
-			return
-		}
-		for i := range list.Items {
-			name := list.Items[i].Name
-			if err := b.client.CoreV1().Services(b.namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
-				b.logger.Warn("managedkafka broker: orphan service delete failed", "service", name, "err", err)
-				continue
-			}
-			deleted++
-			b.logger.Info("managedkafka broker: reaped orphan service", "service", name)
-		}
-		cont = list.Continue
-		if cont == "" || deleted >= brokerSweepCap {
-			return
-		}
+	if n, err := k8shelpers.SweepWorkloads(ctx, b.client, b.namespace, brokerSelector); err != nil {
+		b.logger.Warn("managedkafka broker: orphan sweep incomplete", "deleted", n, "err", err)
+	} else if n > 0 {
+		b.logger.Info("managedkafka broker: reaped orphan workloads", "count", n)
 	}
 }
 
 // ─── K8s resource management ─────────────────────────────────────────────────
-
-// ensureNamespace is best-effort: the emulator's ServiceAccount is granted only
-// namespaced RBAC (namespaces are cluster-scoped), so a Forbidden Get is not an
-// error — it means the namespace is managed externally (it is, in every
-// deployment: the emulator runs in it). A genuinely missing namespace surfaces
-// on the subsequent Pod/Service create.
-func (b *k8sBroker) ensureNamespace(ctx context.Context) error {
-	_, err := b.client.CoreV1().Namespaces().Get(ctx, b.namespace, metav1.GetOptions{})
-	if err == nil || k8serrors.IsForbidden(err) {
-		return nil
-	}
-	if !k8serrors.IsNotFound(err) {
-		return err
-	}
-	_, err = b.client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: b.namespace, Labels: map[string]string{"managed-by": "jaiscloud"}},
-	}, metav1.CreateOptions{})
-	if k8serrors.IsAlreadyExists(err) || k8serrors.IsForbidden(err) {
-		return nil
-	}
-	return err
-}
-
-func (b *k8sBroker) ensureService(ctx context.Context, name string) error {
-	_, err := b.client.CoreV1().Services(b.namespace).Get(ctx, name, metav1.GetOptions{})
-	if err == nil {
-		return nil // already provisioned
-	}
-	if !k8serrors.IsNotFound(err) {
-		return err
-	}
-	_, err = b.client.CoreV1().Services(b.namespace).Create(ctx, b.buildService(name), metav1.CreateOptions{})
-	if k8serrors.IsAlreadyExists(err) {
-		return nil
-	}
-	return err
-}
-
-func (b *k8sBroker) ensurePod(ctx context.Context, name, dns string) error {
-	_, err := b.client.CoreV1().Pods(b.namespace).Get(ctx, name, metav1.GetOptions{})
-	if err == nil {
-		return nil // already provisioned
-	}
-	if !k8serrors.IsNotFound(err) {
-		return err
-	}
-	_, err = b.client.CoreV1().Pods(b.namespace).Create(ctx, b.buildPod(name, dns), metav1.CreateOptions{})
-	if k8serrors.IsAlreadyExists(err) {
-		return nil
-	}
-	return err
-}
 
 func (b *k8sBroker) buildPod(name, dns string) *corev1.Pod {
 	labels := map[string]string{"app": name, "managed-by": "jaiscloud", brokerLabelKey: brokerLabelValue}
@@ -425,37 +286,6 @@ func (b *k8sBroker) buildPod(name, dns string) *corev1.Pod {
 			}},
 		},
 	}
-}
-
-func (b *k8sBroker) buildService(name string) *corev1.Service {
-	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: b.namespace, Labels: map[string]string{"app": name, "managed-by": "jaiscloud", brokerLabelKey: brokerLabelValue}},
-		Spec: corev1.ServiceSpec{
-			Type:     corev1.ServiceTypeClusterIP,
-			Selector: map[string]string{"app": name},
-			Ports: []corev1.ServicePort{{
-				Name:       "kafka",
-				Port:       kafkaPort,
-				TargetPort: intstr.FromInt(kafkaPort),
-			}},
-		},
-	}
-}
-
-func (b *k8sBroker) waitReady(ctx context.Context, addr string) error {
-	// Broker startup is real elapsed time, not the simulated clock.
-	deadline := clock.RealNow().Add(brokerReadyTimeout)
-	for clock.RealNow().Before(deadline) {
-		if b.probe(addr) {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
-	return fmt.Errorf("managedkafka broker: %s not ready within %s", addr, brokerReadyTimeout)
 }
 
 // brokerResourceName returns a DNS-safe, per-cluster resource name derived from

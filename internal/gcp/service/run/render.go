@@ -146,7 +146,7 @@ func serviceAny(s runstore.Service) map[string]any {
 // (*.run.app), which addresses the data plane rather than the control plane.
 func IsInvocationHost(host string) bool {
 	h := strings.ToLower(stripHostPort(host))
-	suffix := "." + DefaultURLSuffix
+	suffix := "." + invocationHost.Suffix
 	return strings.HasSuffix(h, suffix) && len(h) > len(suffix)
 }
 
