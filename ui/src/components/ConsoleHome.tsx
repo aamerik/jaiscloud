@@ -12,14 +12,9 @@ import { useNavigate } from 'react-router-dom'
 import { useFavorites } from '../hooks/useFavorites'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
+import { cloudName } from '../lib/cloudNames'
 import { groupByCategory, type NavSection } from './nav'
 import { ServiceTierBadge } from './ServiceTierBadge'
-
-const CLOUD_NAMES: Record<string, string> = {
-  aws: 'AWS',
-  gcp: 'Google Cloud',
-  azure: 'Azure',
-}
 
 function recentIds(): string[] {
   try {
@@ -41,7 +36,7 @@ export function ConsoleHome() {
   const { data: meta } = useMeta()
   const services = data?.services ?? []
   const { isFavorite, toggle } = useFavorites()
-  const cloud = CLOUD_NAMES[meta?.cloud ?? ''] ?? CLOUD_NAMES.aws
+  const cloud = cloudName(meta?.cloud)
 
   const recent = recentIds()
     .map((id) => services.find((service) => service.id === id))
