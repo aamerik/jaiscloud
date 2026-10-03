@@ -9,6 +9,7 @@ import {
   IconButton,
   List,
   ListItemButton,
+  ListItemIcon,
   ListItemText,
   Menu,
   MenuItem,
@@ -19,12 +20,14 @@ import {
 } from '@mui/material'
 import MenuIcon from '@mui/icons-material/Menu'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined'
+import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import { Link as RouterLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import '@fontsource/roboto/400.css'
 import '@fontsource/roboto/500.css'
 import '@fontsource/roboto/700.css'
 import { gcpTheme } from './theme'
 import { GcpHome } from './GcpHome'
+import { GcpAdminPage } from './admin/GcpAdminPage'
 import { BucketsPage } from './storage/BucketsPage'
 import { ObjectsPage } from './storage/ObjectsPage'
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
@@ -81,6 +84,20 @@ function GcpShell() {
             <ListItemText primary={service.label} secondary={service.category} />
           </ListItemButton>
         ))}
+      </List>
+      <Divider />
+      <List sx={{ py: 1 }}>
+        <ListItemButton
+          component={RouterLink}
+          to="/gcp/admin"
+          selected={isSelected('/gcp/admin')}
+          onClick={() => setMobileOpen(false)}
+        >
+          <ListItemIcon>
+            <SettingsOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Admin" />
+        </ListItemButton>
       </List>
     </Box>
   )
@@ -188,6 +205,7 @@ function GcpShell() {
           <Route path="/gcp" element={<GcpHome />} />
           <Route path="/gcp/storage/buckets" element={<BucketsPage />} />
           <Route path="/gcp/storage/buckets/:bucket" element={<ObjectsPage />} />
+          <Route path="/gcp/admin" element={<GcpAdminPage />} />
           <Route path="*" element={<Navigate to="/gcp" replace />} />
         </Routes>
       </Box>

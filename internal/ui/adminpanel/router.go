@@ -4,12 +4,11 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"jaiscloud/internal/admin"
-	"jaiscloud/internal/config"
 )
 
-// BuildRouter returns the chi router for the Admin Panel UI API.
-func BuildRouter(a *admin.Handler, cfg *config.Config) chi.Router {
-	h := NewHandler(a, cfg)
+// BuildRouter returns the chi router for the cloud-neutral Admin Panel UI API.
+func BuildRouter(a *admin.Handler) chi.Router {
+	h := NewHandler(a)
 	r := chi.NewRouter()
 
 	r.Get("/status", h.Status)

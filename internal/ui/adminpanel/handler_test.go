@@ -6,23 +6,10 @@ import (
 	"testing"
 
 	"jaiscloud/internal/admin"
-	"jaiscloud/internal/clock"
-	"jaiscloud/internal/config"
 )
 
-func testCfg() *config.Config {
-	return &config.Config{
-		Port:      4566,
-		UIPort:    4567,
-		Region:    "us-east-1",
-		AccountID: "000000000000",
-		Clock:     clock.RealClock{},
-	}
-}
-
 func testHandler() *Handler {
-	a := admin.NewHandler()
-	return NewHandler(a, testCfg())
+	return NewHandler(admin.NewHandler())
 }
 
 func TestAdminStatus_Returns200(t *testing.T) {
