@@ -31,6 +31,10 @@ import { GcpAdminPage } from './admin/GcpAdminPage'
 import { BucketsPage } from './storage/BucketsPage'
 import { ObjectsPage } from './storage/ObjectsPage'
 import { BucketSettingsPage } from './storage/BucketSettingsPage'
+import { TopicsPage } from './pubsub/TopicsPage'
+import { TopicDetailPage } from './pubsub/TopicDetailPage'
+import { SubscriptionsPage } from './pubsub/SubscriptionsPage'
+import { SubscriptionDetailPage } from './pubsub/SubscriptionDetailPage'
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
@@ -207,6 +211,10 @@ function GcpShell() {
           <Route path="/gcp/storage/buckets" element={<BucketsPage />} />
           <Route path="/gcp/storage/buckets/:bucket" element={<ObjectsPage />} />
           <Route path="/gcp/storage/buckets/:bucket/settings" element={<BucketSettingsPage />} />
+          <Route path="/gcp/pubsub/topics" element={<TopicsPage />} />
+          <Route path="/gcp/pubsub/topics/:topic" element={<TopicDetailPage />} />
+          <Route path="/gcp/pubsub/subscriptions" element={<SubscriptionsPage />} />
+          <Route path="/gcp/pubsub/subscriptions/:subscription" element={<SubscriptionDetailPage />} />
           <Route path="/gcp/admin" element={<GcpAdminPage />} />
           <Route path="*" element={<Navigate to="/gcp" replace />} />
         </Routes>
