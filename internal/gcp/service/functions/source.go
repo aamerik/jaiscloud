@@ -165,6 +165,11 @@ func (s *Service) StoreSource(ctx context.Context, project, location, id string,
 // configured and the input carries a resolvable GCS reference. It is a no-op
 // otherwise, so metadata-only creates keep working without GCS.
 func (s *Service) resolveSource(ctx context.Context, project, location, id string, in FunctionInput) (sha256hex string, size int64, blobKey string, err error) {
+	// A console inline archive is persisted directly; it bypasses the GCS
+	// reference/fetcher path (which the wire transports use).
+	if len(in.SourceArchive) > 0 {
+		return s.StoreSource(ctx, project, location, id, in.SourceArchive)
+	}
 	bucket, object := sourceRef(in)
 	if s.sourceFetcher == nil || bucket == "" || object == "" {
 		return "", 0, "", nil

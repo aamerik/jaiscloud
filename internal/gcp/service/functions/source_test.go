@@ -103,6 +103,36 @@ func TestCreateFunctionPersistsSourceAndInvokesWithCode(t *testing.T) {
 	}
 }
 
+func TestCreateFunctionInlineArchivePersistsSource(t *testing.T) {
+	ctx := context.Background()
+	blobs := blobfs.NewMemoryBlobStore()
+	zip := []byte("PK\x03\x04 inline console archive")
+	// The fetcher is wired AND a resolvable gs:// reference is present, so this
+	// proves the inline archive takes precedence over the GCS fetch path.
+	fetched := []byte("PK\x03\x04 fetched archive")
+	fetcher := &fakeFetcher{objects: map[string][]byte{"b/o.zip": fetched}}
+	s := newSourceTestService(t, blobs, fetcher, nil)
+
+	f, _, err := s.CreateFunction(ctx, "proj", "us-central1", "inline",
+		FunctionInput{
+			Runtime:       "nodejs20",
+			EntryPoint:    "handler",
+			SourceArchive: zip,
+			SourceBucket:  "b",
+			SourceObject:  "o.zip",
+		}, V2)
+	if err != nil {
+		t.Fatalf("CreateFunction: %v", err)
+	}
+	wantSHA := sha256hex(zip)
+	if f.SourceSHA256 != wantSHA || f.SourceSize != int64(len(zip)) || f.SourceBlobKey == "" {
+		t.Fatalf("source metadata = sha=%q size=%d key=%q", f.SourceSHA256, f.SourceSize, f.SourceBlobKey)
+	}
+	if got, err := blobs.Get(ctx, functionsSourceBucket, f.SourceBlobKey); err != nil || string(got) != string(zip) {
+		t.Fatalf("stored source = %q, err=%v; want the inline archive, not the fetched one", got, err)
+	}
+}
+
 func TestCreateFunctionMissingSourceIsNotFound(t *testing.T) {
 	ctx := context.Background()
 	s := newSourceTestService(t, blobfs.NewMemoryBlobStore(), &fakeFetcher{objects: map[string][]byte{}}, nil)
