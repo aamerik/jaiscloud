@@ -138,8 +138,11 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Verify UI-enabled server builds
-        run: go build -tags ui -o /tmp/jaiscloud-ui ./cmd/jaiscloud-aws/
+      - name: Verify UI-enabled AWS server builds
+        run: go build -tags ui -o /tmp/jaiscloud-ui-aws ./cmd/jaiscloud-aws/
+
+      - name: Verify UI-enabled GCP server builds
+        run: go build -tags ui -o /tmp/jaiscloud-ui-gcp ./cmd/jaiscloud-gcp/
 
   # ─── GCP unit + integration + persistence tests ────────────────────────────
 
