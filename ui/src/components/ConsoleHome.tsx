@@ -10,9 +10,16 @@ import {
 } from '@cloudscape-design/components'
 import { useNavigate } from 'react-router-dom'
 import { useFavorites } from '../hooks/useFavorites'
+import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
 import { groupByCategory, type NavSection } from './nav'
 import { ServiceTierBadge } from './ServiceTierBadge'
+
+const CLOUD_NAMES: Record<string, string> = {
+  aws: 'AWS',
+  gcp: 'Google Cloud',
+  azure: 'Azure',
+}
 
 function recentIds(): string[] {
   try {
@@ -24,14 +31,17 @@ function recentIds(): string[] {
 
 /**
  * Console Home landing page: favourites and recently visited services plus all
- * supported services grouped by AWS category. The service list is provided by
- * the backend, so only services this build supports are shown.
+ * supported services grouped by category. The service list is provided by the
+ * backend, so only services this build supports are shown; the copy adapts to
+ * the active cloud (AWS, GCP, Azure).
  */
 export function ConsoleHome() {
   const navigate = useNavigate()
   const { data } = useServices()
+  const { data: meta } = useMeta()
   const services = data?.services ?? []
   const { isFavorite, toggle } = useFavorites()
+  const cloud = CLOUD_NAMES[meta?.cloud ?? ''] ?? CLOUD_NAMES.aws
 
   const recent = recentIds()
     .map((id) => services.find((service) => service.id === id))
@@ -78,7 +88,7 @@ export function ConsoleHome() {
   return (
     <ContentLayout
       header={
-        <Header variant="h1" description="JaisCloud local AWS emulator">
+        <Header variant="h1" description={`JaisCloud local ${cloud} emulator`}>
           Console Home
         </Header>
       }

@@ -27,7 +27,7 @@ branch = one PR. The ledger parses it automatically; a plan without those
 headers is invisible to `gcp-status-next` / `gcp-status-audit` / `gcp-status-coverage`.
 Plans are independent *families* (default: the filename) and order via
 `SERIES` (e.g. `make gcp-status-next SERIES="java-compat,bigquery-ga"`); the
-Makefile default keeps `java-compat` first. Scaffold a new plan with
+Makefile default keeps `console-ui` first. Scaffold a new plan with
 `make gcp-plan-new SERVICE=<svc>` (pre-fills that service's non-`ga` fidelity
 cells), and `make gcp-status-lint-plans` fails any plan-shaped doc that lacks a
 parseable index/detail.

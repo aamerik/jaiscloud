@@ -184,6 +184,9 @@ The most common flags — all have an equivalent `JAISCLOUD_*` env var.
 | — | `JAISCLOUD_GCP_THROTTLE_STATUS` | `429` | Injected HTTP status: `429` (`RESOURCE_EXHAUSTED`) or `503` (`UNAVAILABLE`) |
 | — | `JAISCLOUD_GCP_THROTTLE_RETRY_DELAY` | `1s` | Advertised retry delay (Go duration), surfaced as `Retry-After` + `RetryInfo` |
 | `--metrics` | — | `false` | Expose Prometheus metrics at `/metrics` |
+| `--ui` | — | `false` | Serve the Material Design console on `--ui-port` (requires a `-tags ui` build) |
+| `--ui-port` | — | `4567` | UI listen port; the console is served under `/ui/` |
+| `--ui-open` | — | `false` | Open a browser to the console on startup (no-op when not a TTY) |
 
 **Throttle runtime control.** The injector policy can be changed mid-test without a restart via the admin plane: `POST /_jaiscloud/throttle` with a JSON body (`mode`, `rps`, `burst`, `services`, `failFirst`, `failEvery`, `failCount`, `status`, `retryDelay`) fully replaces the running configuration and clears accumulated counters; `GET /_jaiscloud/throttle` returns the current state. It is wired even when `JAISCLOUD_GCP_THROTTLE` is unset, so a test can arm a failure on demand; an unarmed injector is a no-op (local testing only — see [Known Limitations](#known-limitations)).
 
@@ -230,6 +233,26 @@ Identical shared endpoints to the AWS binary (see the [main README](README.md#ad
 ```bash
 curl -X POST http://localhost:8080/_jaiscloud/reset
 ```
+
+---
+
+## UI Console
+
+The GCP binary ships a **Material Design** console that mirrors the Google Cloud Console — Google Blue (`#1a73e8`), Roboto, and a dense layout — driving the same in-process providers as the wire API.
+
+```bash
+go build -tags ui -o jaiscloud-gcp ./cmd/jaiscloud-gcp/   # or: make build-ui-gcp
+./jaiscloud-gcp start --ui                                # UI on http://localhost:4567/ui/
+./jaiscloud-gcp start --ui --ui-open                      # also open a browser
+```
+
+The console is a single React app embedded in the binary (no separate server or external service). When `meta.cloud` is `gcp` it renders the Material console (`ui/src/gcp/**`); the AWS/Azure binaries keep the Cloudscape console that matches the AWS Management Console. It is under active development alongside the wire services.
+
+**Current GCP surface:**
+
+- **Cloud Storage** — list, create and delete buckets; browse objects and folders within a bucket. Backed by `GET/POST/DELETE /api/ui/v1/gcp/storage/buckets` and `GET /api/ui/v1/gcp/storage/buckets/{bucket}/objects`.
+
+Further service pages (Pub/Sub, Firestore, Compute, Cloud Run, BigQuery, IAM/KMS/Secret Manager, Logging/Monitoring, ...) ship separately.
 
 ---
 

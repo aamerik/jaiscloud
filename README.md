@@ -485,6 +485,8 @@ All endpoints are available at the emulator's base URL (default `http://localhos
 
 The JaisCloud UI Console is a browser-based interface that mirrors the AWS Management Console experience — without the AWS bill. It ships as part of the single binary: no separate server, no external service, no subscription.
 
+> The GCP binary has its own **Material Design** console, matching the Google Cloud Console — see the [GCP guide](README-GCP.md#ui-console).
+
 **Planned capabilities:**
 
 - **Resource browser** — list, inspect, create, update, and delete any emulated resource (queues, tables, buckets, Lambda functions, secrets, parameters, and more) across all accounts and regions from a single view

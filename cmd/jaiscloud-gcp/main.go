@@ -1189,7 +1189,7 @@ func startCmd() *cobra.Command {
 			var uiServer *coreui.UIServer
 			if cfg.UIEnabled {
 				var uiErr error
-				uiServer, uiErr = coreui.New(gcpui.NewRegistrar(), adminHandler, cfg, events.NewEventBus(), version)
+				uiServer, uiErr = coreui.New(gcpui.NewRegistrar(storageP, cfg), adminHandler, cfg, events.NewEventBus(), version)
 				if uiErr != nil {
 					slog.Warn("ui server init failed", "err", uiErr)
 				} else if uiServer != nil {
