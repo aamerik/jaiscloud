@@ -27,6 +27,7 @@ import { gcpTheme } from './theme'
 import { GcpHome } from './GcpHome'
 import { BucketsPage } from './storage/BucketsPage'
 import { ObjectsPage } from './storage/ObjectsPage'
+import { BucketSettingsPage } from './storage/BucketSettingsPage'
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
@@ -188,6 +189,7 @@ function GcpShell() {
           <Route path="/gcp" element={<GcpHome />} />
           <Route path="/gcp/storage/buckets" element={<BucketsPage />} />
           <Route path="/gcp/storage/buckets/:bucket" element={<ObjectsPage />} />
+          <Route path="/gcp/storage/buckets/:bucket/settings" element={<BucketSettingsPage />} />
           <Route path="*" element={<Navigate to="/gcp" replace />} />
         </Routes>
       </Box>

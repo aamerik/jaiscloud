@@ -1,28 +1,16 @@
 package ui
 
 import (
-	"context"
 	"testing"
 
 	"jaiscloud/internal/config"
+	storageui "jaiscloud/internal/gcp/ui/storage"
 	"jaiscloud/internal/model"
 )
 
-// fakeStorage satisfies storage.ProviderInterface without a real provider.
-type fakeStorage struct{}
-
-func (fakeStorage) BucketsList(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
-}
-func (fakeStorage) BucketsInsert(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
-}
-func (fakeStorage) BucketsDelete(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return &model.ProviderResponse{HTTPStatus: 204, Data: map[string]any{}}, nil
-}
-func (fakeStorage) ObjectsList(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
-}
+// fakeStorage satisfies storage.ProviderInterface via an embedded (nil)
+// interface; the registrar tests only exercise the catalog, never the handlers.
+type fakeStorage struct{ storageui.ProviderInterface }
 
 func TestRegistrar_CloudIsGCP(t *testing.T) {
 	reg := NewRegistrar(nil, &config.Config{})
