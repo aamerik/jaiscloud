@@ -165,6 +165,10 @@ type Store interface {
 	UpdateClusterAtomic(ctx context.Context, projectID, region, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error)
 	DeleteCluster(ctx context.Context, projectID, region, name string) error
 	ListClusters(ctx context.Context, projectID, region string) ([]Cluster, error)
+	// ListClustersByProject returns every cluster in a project across all
+	// regions, ordered by region then name. It backs the region-optional
+	// console list.
+	ListClustersByProject(ctx context.Context, projectID string) ([]Cluster, error)
 
 	CreateJob(ctx context.Context, projectID, region string, j Job) error
 	GetJob(ctx context.Context, projectID, region, jobID string) (Job, error)
@@ -178,6 +182,9 @@ type Store interface {
 	UpdateJobAtomic(ctx context.Context, projectID, region, jobID string, mutate func(Job) (Job, error)) (Job, error)
 	DeleteJob(ctx context.Context, projectID, region, jobID string) error
 	ListJobs(ctx context.Context, projectID, region string) ([]Job, error)
+	// ListJobsByProject returns every job in a project across all regions,
+	// ordered by region then job id. It backs the region-optional console list.
+	ListJobsByProject(ctx context.Context, projectID string) ([]Job, error)
 
 	CreateOperation(ctx context.Context, projectID, region string, op Operation) error
 	GetOperation(ctx context.Context, projectID, region, id string) (Operation, error)
@@ -205,6 +212,10 @@ type Store interface {
 	UpdateWorkflowTemplateAtomic(ctx context.Context, projectID, region, templateID string, mutate func(WorkflowTemplate) (WorkflowTemplate, error)) (WorkflowTemplate, error)
 	DeleteWorkflowTemplate(ctx context.Context, projectID, region, templateID string) error
 	ListWorkflowTemplates(ctx context.Context, projectID, region string) ([]WorkflowTemplate, error)
+	// ListWorkflowTemplatesByProject returns every workflow template in a
+	// project across all regions, ordered by region then template id. It backs
+	// the region-optional console list.
+	ListWorkflowTemplatesByProject(ctx context.Context, projectID string) ([]WorkflowTemplate, error)
 
 	Reset(ctx context.Context)
 }

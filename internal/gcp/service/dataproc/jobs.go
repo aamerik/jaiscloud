@@ -228,6 +228,28 @@ func (s *Service) ListJobs(ctx context.Context, project, region, clusterName, fi
 	return page, next, nil
 }
 
+// ListAllJobs lists every job in a project across all regions, sorted by region
+// then job id, settling each transitional job first. It backs the
+// region-optional console list.
+func (s *Service) ListAllJobs(ctx context.Context, project string) ([]dpstore.Job, error) {
+	jobs, err := s.store.ListJobsByProject(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	settled := make([]dpstore.Job, 0, len(jobs))
+	for _, j := range jobs {
+		advanced, advErr := s.advanceJob(ctx, j.ProjectID, j.Region, j.JobID)
+		if errors.Is(advErr, dpstore.ErrNoSuchJob) {
+			continue
+		}
+		if advErr != nil {
+			return nil, mapErr(advErr)
+		}
+		settled = append(settled, advanced)
+	}
+	return settled, nil
+}
+
 // UpdateJob applies the masked fields of a job update. Dataproc jobs are
 // immutable except for labels.
 func (s *Service) UpdateJob(ctx context.Context, project, region, jobID string, in JobInput, mask []string) (dpstore.Job, error) {

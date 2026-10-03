@@ -1,8 +1,8 @@
 // Package ui contributes the GCP service catalog and API routes to the shared
 // UI core. It exposes the GCP cloud identity and mounts per-service UI APIs
 // (Cloud Storage, Pub/Sub, Firestore, Compute, Cloud Run, Cloud Functions, Cloud
-// Scheduler, Cloud Tasks, Workflows, Eventarc, BigQuery, IAM, Cloud KMS, Secret
-// Manager, Logging, Monitoring; the rest follow) over the providers wired in
+// Scheduler, Cloud Tasks, Workflows, Eventarc, BigQuery, Dataproc, IAM, Cloud
+// KMS, Secret Manager, Logging, Monitoring; the rest follow) over the providers wired in
 // cmd/jaiscloud-gcp.
 package ui
 
@@ -12,6 +12,7 @@ import (
 	"jaiscloud/internal/config"
 	bigqueryui "jaiscloud/internal/gcp/ui/bigquery"
 	computeui "jaiscloud/internal/gcp/ui/compute"
+	dataprocui "jaiscloud/internal/gcp/ui/dataproc"
 	eventarcui "jaiscloud/internal/gcp/ui/eventarc"
 	firestoreui "jaiscloud/internal/gcp/ui/firestore"
 	functionsui "jaiscloud/internal/gcp/ui/functions"
@@ -36,6 +37,7 @@ type Registrar struct {
 	pubsub        pubsubui.ProviderInterface
 	firestore     firestoreui.ProviderInterface
 	compute       computeui.ProviderInterface
+	dataproc      dataprocui.ProviderInterface
 	bigquery      bigqueryui.ProviderInterface
 	run           runui.ProviderInterface
 	scheduler     schedulerui.ProviderInterface
@@ -53,12 +55,13 @@ type Registrar struct {
 
 // NewRegistrar returns the GCP UI registrar. A nil provider leaves that
 // service's pages out of the catalog.
-func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, schedulerProvider schedulerui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, tasksProvider tasksui.ProviderInterface, workflowsProvider workflowsui.ProviderInterface, eventarcProvider eventarcui.ProviderInterface, functionsProvider functionsui.ProviderInterface, cfg *config.Config) *Registrar {
+func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, dataprocProvider dataprocui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, schedulerProvider schedulerui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, tasksProvider tasksui.ProviderInterface, workflowsProvider workflowsui.ProviderInterface, eventarcProvider eventarcui.ProviderInterface, functionsProvider functionsui.ProviderInterface, cfg *config.Config) *Registrar {
 	return &Registrar{
 		storage:       storageProvider,
 		pubsub:        pubsubProvider,
 		firestore:     firestoreProvider,
 		compute:       computeProvider,
+		dataproc:      dataprocProvider,
 		bigquery:      bigqueryProvider,
 		run:           runProvider,
 		scheduler:     schedulerProvider,
@@ -201,6 +204,20 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			},
 		})
 	}
+	if r.dataproc != nil {
+		services = append(services, coreui.ServiceDescriptor{
+			ID:       "dataproc",
+			Label:    "Dataproc",
+			Category: "Analytics",
+			RootPath: "/gcp/dataproc/clusters",
+			Tier:     coreui.TierFull,
+			Children: []coreui.ServiceChild{
+				{Label: "Clusters", Path: "/gcp/dataproc/clusters"},
+				{Label: "Jobs", Path: "/gcp/dataproc/jobs"},
+				{Label: "Workflow templates", Path: "/gcp/dataproc/workflow-templates"},
+			},
+		})
+	}
 	if r.iam != nil {
 		services = append(services, coreui.ServiceDescriptor{
 			ID:       "iam",
@@ -298,6 +315,9 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 	}
 	if r.bigquery != nil {
 		router.Mount("/api/ui/v1/gcp/bigquery", bigqueryui.BuildRouter(r.bigquery, r.cfg))
+	}
+	if r.dataproc != nil {
+		router.Mount("/api/ui/v1/gcp/dataproc", dataprocui.BuildRouter(r.dataproc, r.cfg))
 	}
 	if r.iam != nil {
 		router.Mount("/api/ui/v1/gcp/iam", iamui.BuildRouter(r.iam, r.cfg))

@@ -164,6 +164,29 @@ func (s *Service) ListClusters(ctx context.Context, project, region string, page
 	return page, next, nil
 }
 
+// ListAllClusters lists every cluster in a project across all regions, sorted
+// by region then name, settling each transitional cluster first (and dropping
+// any whose delayed delete completed). It backs the region-optional console
+// list.
+func (s *Service) ListAllClusters(ctx context.Context, project string) ([]dpstore.Cluster, error) {
+	clusters, err := s.store.ListClustersByProject(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	settled := make([]dpstore.Cluster, 0, len(clusters))
+	for _, c := range clusters {
+		advanced, err := s.advanceCluster(ctx, c.ProjectID, c.Region, c.Name)
+		if errors.Is(err, dpstore.ErrNoSuchCluster) {
+			continue // a delayed delete completed during this read
+		}
+		if err != nil {
+			return nil, mapErr(err)
+		}
+		settled = append(settled, advanced)
+	}
+	return settled, nil
+}
+
 // UpdateCluster merges the caller's config/labels into the stored cluster and
 // returns its (not yet done) update operation. The mask selects which top-level
 // fields apply; an empty mask applies everything supplied. Field changes are

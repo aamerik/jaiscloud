@@ -198,6 +198,28 @@ func (s *PostgresStore) ListClusters(ctx context.Context, projectID, region stri
 	return result, rows.Err()
 }
 
+// ListClustersByProject returns every cluster in a project across all regions,
+// ordered by region then name.
+func (s *PostgresStore) ListClustersByProject(ctx context.Context, projectID string) ([]Cluster, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, region, cluster_name, config, virtual_cluster_config, labels, status, status_history, cluster_uuid, create_time, update_time
+		FROM jc_dataproc_clusters WHERE project_id=$1 ORDER BY region, cluster_name
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Cluster
+	for rows.Next() {
+		c, err := scanCluster(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, c)
+	}
+	return result, rows.Err()
+}
+
 // --- Jobs ---
 
 func (s *PostgresStore) CreateJob(ctx context.Context, projectID, region string, j Job) error {
@@ -386,6 +408,30 @@ func (s *PostgresStore) ListJobs(ctx context.Context, projectID, region string) 
 	return result, rows.Err()
 }
 
+// ListJobsByProject returns every job in a project across all regions, ordered
+// by region then job id.
+func (s *PostgresStore) ListJobsByProject(ctx context.Context, projectID string) ([]Job, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, region, job_id, placement_cluster_name, job_type, type_job, labels, status, status_history,
+		       driver_output_resource_uri, driver_control_files_uri, job_uuid, create_time, placement_cluster_uuid,
+		       scheduling, long_running
+		FROM jc_dataproc_jobs WHERE project_id=$1 ORDER BY region, job_id
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Job
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, j)
+	}
+	return result, rows.Err()
+}
+
 // --- Workflow templates ---
 
 func (s *PostgresStore) CreateWorkflowTemplate(ctx context.Context, projectID, region string, t WorkflowTemplate) error {
@@ -510,6 +556,28 @@ func (s *PostgresStore) ListWorkflowTemplates(ctx context.Context, projectID, re
 		result = append(result, t)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].TemplateID < result[j].TemplateID })
+	return result, rows.Err()
+}
+
+// ListWorkflowTemplatesByProject returns every workflow template in a project
+// across all regions, ordered by region then template id.
+func (s *PostgresStore) ListWorkflowTemplatesByProject(ctx context.Context, projectID string) ([]WorkflowTemplate, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, region, template_id, version, definition, create_time, update_time
+		FROM jc_dataproc_workflow_templates WHERE project_id=$1 ORDER BY region, template_id
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []WorkflowTemplate
+	for rows.Next() {
+		t, err := scanWorkflowTemplate(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, t)
+	}
 	return result, rows.Err()
 }
 
