@@ -43,6 +43,11 @@ import { InstanceDetailPage } from './compute/InstanceDetailPage'
 import { ServicesPage as RunServicesPage } from './run/ServicesPage'
 import { ServiceDetailPage as RunServiceDetailPage } from './run/ServiceDetailPage'
 import { RevisionDetailPage as RunRevisionDetailPage } from './run/RevisionDetailPage'
+import { DatasetsPage } from './bigquery/DatasetsPage'
+import { DatasetDetailPage } from './bigquery/DatasetDetailPage'
+import { TableDetailPage } from './bigquery/TableDetailPage'
+import { JobsPage } from './bigquery/JobsPage'
+import { JobDetailPage } from './bigquery/JobDetailPage'
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
@@ -258,6 +263,14 @@ function GcpShell() {
             path="/gcp/run/services/:region/:service/revisions/:revision"
             element={<RunRevisionDetailPage />}
           />
+          <Route path="/gcp/bigquery/datasets" element={<DatasetsPage />} />
+          <Route path="/gcp/bigquery/datasets/:dataset" element={<DatasetDetailPage />} />
+          <Route
+            path="/gcp/bigquery/datasets/:dataset/tables/:table"
+            element={<TableDetailPage />}
+          />
+          <Route path="/gcp/bigquery/jobs" element={<JobsPage />} />
+          <Route path="/gcp/bigquery/jobs/:job" element={<JobDetailPage />} />
           <Route path="/gcp/admin" element={<GcpAdminPage />} />
           <Route path="*" element={<Navigate to="/gcp" replace />} />
         </Routes>

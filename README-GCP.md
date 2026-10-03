@@ -251,9 +251,14 @@ The console is a single React app embedded in the binary (no separate server or 
 **Current GCP surface:**
 
 - **Cloud Storage** — full bucket and object management over `/api/ui/v1/gcp/storage`: list/create/delete buckets; browse objects and folders; upload, download, inspect, update (holds/metadata) and delete objects; list and restore noncurrent versions; and configure bucket versioning, lifecycle, retention (including locking), default event-based holds, IAM policies and ACLs.
+- **Pub/Sub** — topics and subscriptions over `/api/ui/v1/gcp/pubsub`: list/create/delete, topic/subscription detail, publish, subscription updates, and topic/subscription IAM.
+- **Firestore** — collections and documents over `/api/ui/v1/gcp/firestore`: browse root collections and documents, and create/update/delete documents with the typed field encoding.
+- **Compute Engine** — instances over `/api/ui/v1/gcp/compute`: an aggregated list across zones with detail, start, stop and delete.
+- **Cloud Run** — services and revisions over `/api/ui/v1/gcp/run`: services aggregated across regions, service/revision detail, and delete.
+- **BigQuery** — datasets, tables and jobs over `/api/ui/v1/gcp/bigquery`: list/create/delete datasets and tables, view a table's schema and a read-only row preview, and list/inspect/cancel/delete jobs.
 - **Admin** — emulator status, clock control (real/fixed/offset), state reset, export, and named snapshots (create/revert/delete). Backed by the cloud-neutral `/api/ui/v1/admin` plane, which the shared UI core mounts for every cloud.
 
-Further service pages (Pub/Sub, Firestore, Compute, Cloud Run, BigQuery, IAM/KMS/Secret Manager, Logging/Monitoring, ...) ship separately.
+Further service pages (IAM/KMS/Secret Manager, Logging/Monitoring, Dataproc/Workflows/Scheduler/Tasks/Eventarc/Functions, ...) ship separately.
 
 ---
 
