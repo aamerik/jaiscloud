@@ -23,22 +23,36 @@ type StatusEvent struct {
 }
 
 // Cluster is the console rendering of a Dataproc cluster, flattened across
-// regions for the list page. Config/VirtualClusterConfig carry the full wire
-// config and are only populated on the detail read, not the list.
+// regions for the list page. Config/VirtualClusterConfig and the Kubernetes
+// namespace placement (Namespace/NamespaceOwned/KubernetesNamespace) are only
+// populated on the detail read, not the list.
 type Cluster struct {
-	ID                   string            `json:"id"`
-	Name                 string            `json:"name"`
-	Region               string            `json:"region"`
-	Status               string            `json:"status"`
-	StatusDetail         string            `json:"statusDetail,omitempty"`
-	StatusHistory        []StatusEvent     `json:"statusHistory,omitempty"`
-	ClusterUUID          string            `json:"clusterUuid,omitempty"`
-	Labels               map[string]string `json:"labels,omitempty"`
-	GKEBacked            bool              `json:"gkeBacked,omitempty"`
-	Config               json.RawMessage   `json:"config,omitempty"`
-	VirtualClusterConfig json.RawMessage   `json:"virtualClusterConfig,omitempty"`
-	CreateTime           string            `json:"createTime,omitempty"`
-	UpdateTime           string            `json:"updateTime,omitempty"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Region        string            `json:"region"`
+	Status        string            `json:"status"`
+	StatusDetail  string            `json:"statusDetail,omitempty"`
+	StatusHistory []StatusEvent     `json:"statusHistory,omitempty"`
+	ClusterUUID   string            `json:"clusterUuid,omitempty"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	GKEBacked     bool              `json:"gkeBacked,omitempty"`
+	// Namespace is the effective Kubernetes namespace the cluster's jobs run in
+	// (the requested kubernetesNamespace when supplied, else a derived
+	// per-cluster name). Empty only in mock execution mode (no k8s client);
+	// when provisioning fails it falls back to the process-wide namespace.
+	// Populated on the detail read only.
+	Namespace string `json:"namespace,omitempty"`
+	// NamespaceOwned is true when the emulator created the namespace and may
+	// delete it on cluster delete; a pre-existing adopted namespace is false.
+	NamespaceOwned bool `json:"namespaceOwned,omitempty"`
+	// KubernetesNamespace is the caller-requested namespace from a GKE
+	// VirtualClusterConfig ("" for a GCE-backed cluster); populated on the
+	// detail read only.
+	KubernetesNamespace  string          `json:"kubernetesNamespace,omitempty"`
+	Config               json.RawMessage `json:"config,omitempty"`
+	VirtualClusterConfig json.RawMessage `json:"virtualClusterConfig,omitempty"`
+	CreateTime           string          `json:"createTime,omitempty"`
+	UpdateTime           string          `json:"updateTime,omitempty"`
 }
 
 // ListClustersResponse is the response for GET /clusters.

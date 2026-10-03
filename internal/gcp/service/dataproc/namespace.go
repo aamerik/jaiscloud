@@ -31,10 +31,12 @@ func (s *Service) defaultNamespace() string {
 	return "jaiscloud"
 }
 
-// kubernetesNamespaceFromVirtualClusterConfig extracts the caller-supplied
+// KubernetesNamespaceFromVirtualClusterConfig extracts the caller-supplied
 // kubernetesClusterConfig.kubernetesNamespace from a Dataproc-on-GKE
-// VirtualClusterConfig ("" for a GCE-shaped or malformed config).
-func kubernetesNamespaceFromVirtualClusterConfig(raw json.RawMessage) string {
+// VirtualClusterConfig ("" for a GCE-shaped or malformed config). It is
+// exported so the console UI can render the requested namespace alongside the
+// cluster's effective namespace without duplicating the parse.
+func KubernetesNamespaceFromVirtualClusterConfig(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
@@ -63,7 +65,7 @@ func (s *Service) resolveClusterNamespace(ctx context.Context, project, region, 
 	if s.k8sClient == nil {
 		return "", false
 	}
-	candidate := kubernetesNamespaceFromVirtualClusterConfig(in.VirtualClusterConfig)
+	candidate := KubernetesNamespaceFromVirtualClusterConfig(in.VirtualClusterConfig)
 	if candidate == "" {
 		candidate = k8shelpers.NamespaceName(dataprocService, project, name)
 	}

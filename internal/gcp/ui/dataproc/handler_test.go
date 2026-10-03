@@ -202,6 +202,108 @@ func TestGetCluster_IncludesConfig(t *testing.T) {
 	}
 }
 
+func TestGetCluster_IncludesNamespace(t *testing.T) {
+	c := cluster("gke-1", "us-central1")
+	c.Config = nil // a GKE virtual cluster carries no GCE ClusterConfig
+	c.VirtualClusterConfig = json.RawMessage(`{"kubernetesClusterConfig":{"kubernetesNamespace":"team-a"}}`)
+	c.Namespace = "team-a"
+	c.NamespaceOwned = true
+	mock := &mockProvider{cluster: c}
+
+	w := do(t, mock, http.MethodGet, "/clusters/us-central1/gke-1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var body Cluster
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body.GKEBacked {
+		t.Fatalf("cluster should be GKE-backed: %+v", body)
+	}
+	if body.Namespace != "team-a" {
+		t.Fatalf("namespace = %q, want team-a", body.Namespace)
+	}
+	if !body.NamespaceOwned {
+		t.Fatalf("namespaceOwned = false, want true")
+	}
+	if body.KubernetesNamespace != "team-a" {
+		t.Fatalf("requested kubernetesNamespace = %q, want team-a", body.KubernetesNamespace)
+	}
+}
+
+func TestGetCluster_GCEHasNoRequestedNamespace(t *testing.T) {
+	c := cluster("gce-1", "us-central1") // GCE config; no virtualClusterConfig
+	c.Namespace = "derived-gce-1"
+	c.NamespaceOwned = true
+	mock := &mockProvider{cluster: c}
+
+	w := do(t, mock, http.MethodGet, "/clusters/us-central1/gce-1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var body Cluster
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.GKEBacked {
+		t.Fatalf("GCE cluster must not be GKE-backed: %+v", body)
+	}
+	if body.Namespace != "derived-gce-1" {
+		t.Fatalf("namespace = %q, want derived-gce-1", body.Namespace)
+	}
+	if body.KubernetesNamespace != "" {
+		t.Fatalf("GCE cluster must have no requested namespace, got %q", body.KubernetesNamespace)
+	}
+}
+
+func TestGetCluster_RequestedNamespaceWithoutEffective(t *testing.T) {
+	c := cluster("gke-1", "us-central1")
+	c.Config = nil
+	c.VirtualClusterConfig = json.RawMessage(`{"kubernetesClusterConfig":{"kubernetesNamespace":"team-a"}}`)
+	// Mock execution / failed provisioning: no effective namespace recorded, so
+	// the effective field is omitted (omitempty) while the requested one shows.
+	mock := &mockProvider{cluster: c}
+
+	w := do(t, mock, http.MethodGet, "/clusters/us-central1/gke-1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var body Cluster
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Namespace != "" || body.NamespaceOwned {
+		t.Fatalf("no effective namespace expected: %+v", body)
+	}
+	if body.KubernetesNamespace != "team-a" {
+		t.Fatalf("requested kubernetesNamespace = %q, want team-a", body.KubernetesNamespace)
+	}
+}
+
+func TestListClusters_OmitsNamespace(t *testing.T) {
+	c := cluster("gke-1", "us-central1")
+	c.VirtualClusterConfig = json.RawMessage(`{"kubernetesClusterConfig":{"kubernetesNamespace":"team-a"}}`)
+	c.Namespace = "team-a"
+	c.NamespaceOwned = true
+	mock := &mockProvider{clusters: []dpstore.Cluster{c}}
+
+	w := do(t, mock, http.MethodGet, "/clusters")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp ListClustersResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Clusters) != 1 {
+		t.Fatalf("got %d clusters, want 1", len(resp.Clusters))
+	}
+	if got := resp.Clusters[0]; got.Namespace != "" || got.NamespaceOwned || got.KubernetesNamespace != "" {
+		t.Fatalf("list row must omit namespace placement: %+v", got)
+	}
+}
+
 func TestClusterActions_Dispatch(t *testing.T) {
 	for _, action := range []string{"start", "stop"} {
 		mock := &mockProvider{cluster: cluster("alpha", "us-central1")}
