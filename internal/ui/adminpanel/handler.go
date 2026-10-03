@@ -1,5 +1,6 @@
-// Package adminpanel provides the UI API backend for the Admin Panel.
-// It delegates to the existing admin.Handler rather than re-implementing logic.
+// Package adminpanel provides the cloud-neutral UI API backend for the Admin
+// Panel. It delegates to the shared admin.Handler rather than re-implementing
+// logic, so every cloud binary (AWS, GCP, Azure) gets the same admin surface.
 package adminpanel
 
 import (
@@ -13,19 +14,16 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"jaiscloud/internal/admin"
-	"jaiscloud/internal/aws/ui/uihelper"
-	"jaiscloud/internal/config"
 )
 
 // Handler wraps the existing admin.Handler for UI-friendly responses.
 type Handler struct {
 	admin *admin.Handler
-	cfg   *config.Config
 }
 
 // NewHandler creates a Handler.
-func NewHandler(a *admin.Handler, cfg *config.Config) *Handler {
-	return &Handler{admin: a, cfg: cfg}
+func NewHandler(a *admin.Handler) *Handler {
+	return &Handler{admin: a}
 }
 
 // GET /admin/status  — returns doctor info + snapshotter names
@@ -47,7 +45,7 @@ func (h *Handler) Status(w http.ResponseWriter, r *http.Request) {
 	}
 	doctorResp["snapshotters"] = snapshotters
 
-	uihelper.WriteJSON(w, doctorResp)
+	writeJSON(w, doctorResp)
 }
 
 // POST /admin/reset
@@ -58,7 +56,7 @@ func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
 
 // GET /admin/export  — triggers export and returns tarball or JSON URL for download
 func (h *Handler) ExportInfo(w http.ResponseWriter, r *http.Request) {
-	uihelper.WriteJSON(w, map[string]string{
+	writeJSON(w, map[string]string{
 		"downloadUrl": fmt.Sprintf("/_jaiscloud/export"),
 		"info":        "Use the download URL to export state as a gzip tarball",
 	})
@@ -74,7 +72,7 @@ func (h *Handler) GetClock(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) SetClock(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		uihelper.UIError(w, "BadRequest", "failed to read body", http.StatusBadRequest)
+		writeError(w, "BadRequest", "failed to read body", http.StatusBadRequest)
 		return
 	}
 	req, _ := http.NewRequestWithContext(r.Context(), "POST", "/_jaiscloud/clock", bytes.NewReader(body))
@@ -92,7 +90,7 @@ func (h *Handler) ListSnapshots(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateSnapshot(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		uihelper.UIError(w, "BadRequest", "failed to read body", http.StatusBadRequest)
+		writeError(w, "BadRequest", "failed to read body", http.StatusBadRequest)
 		return
 	}
 	req, _ := http.NewRequestWithContext(r.Context(), "POST", "/_jaiscloud/snapshot", bytes.NewReader(body))
@@ -104,7 +102,7 @@ func (h *Handler) CreateSnapshot(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) RevertSnapshot(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	if name == "" {
-		uihelper.UIError(w, "BadRequest", "name is required", http.StatusBadRequest)
+		writeError(w, "BadRequest", "name is required", http.StatusBadRequest)
 		return
 	}
 	target := fmt.Sprintf("/_jaiscloud/snapshot/%s/revert?reset_first=true", url.PathEscape(name))
@@ -116,12 +114,25 @@ func (h *Handler) RevertSnapshot(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DeleteSnapshot(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	if name == "" {
-		uihelper.UIError(w, "BadRequest", "name is required", http.StatusBadRequest)
+		writeError(w, "BadRequest", "name is required", http.StatusBadRequest)
 		return
 	}
 	target := fmt.Sprintf("/_jaiscloud/snapshot/%s?yes=true", url.PathEscape(name))
 	req, _ := http.NewRequestWithContext(r.Context(), "DELETE", target, nil)
 	h.admin.SnapshotDelete(w, req)
+}
+
+// writeJSON encodes v as JSON with Content-Type application/json.
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v) //nolint:errcheck
+}
+
+// writeError writes a UI error response: { "code": "...", "message": "..." }.
+func writeError(w http.ResponseWriter, code, message string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"code": code, "message": message}) //nolint:errcheck
 }
 
 // responseRecorder captures response body without writing to the wire.

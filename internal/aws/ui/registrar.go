@@ -3,8 +3,6 @@ package ui
 import (
 	"github.com/go-chi/chi/v5"
 
-	"jaiscloud/internal/admin"
-	adminpanelui "jaiscloud/internal/aws/ui/adminpanel"
 	apigwui "jaiscloud/internal/aws/ui/apigw"
 	cfnui "jaiscloud/internal/aws/ui/cfn"
 	cloudwatchui "jaiscloud/internal/aws/ui/cloudwatch"
@@ -42,13 +40,12 @@ import (
 // UI core. It is the AWS implementation of coreui.Registrar.
 type Registrar struct {
 	providers *AWSProviders
-	admin     *admin.Handler
 	cfg       *config.Config
 }
 
 // NewRegistrar returns a registrar for the supplied AWS providers.
-func NewRegistrar(providers *AWSProviders, adminHandler *admin.Handler, cfg *config.Config) *Registrar {
-	return &Registrar{providers: providers, admin: adminHandler, cfg: cfg}
+func NewRegistrar(providers *AWSProviders, cfg *config.Config) *Registrar {
+	return &Registrar{providers: providers, cfg: cfg}
 }
 
 // Cloud implements coreui.Registrar.
@@ -65,7 +62,8 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 	providers := r.providers
 	cfg := r.cfg
 
-	router.Mount("/api/ui/v1/admin", adminpanelui.BuildRouter(r.admin, cfg))
+	// The cloud-neutral admin panel (/api/ui/v1/admin) is mounted by the shared
+	// UI core, not here — every cloud exposes the same admin surface.
 
 	// Phase 0 service routes
 	if providers.Queue != nil {
