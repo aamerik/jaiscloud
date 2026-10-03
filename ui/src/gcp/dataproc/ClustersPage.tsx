@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Chip, IconButton, Link, Stack, Tooltip } from '@mui/material'
+import { Alert, Button, Chip, IconButton, Link, Stack, Tooltip } from '@mui/material'
+import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import StopIcon from '@mui/icons-material/Stop'
@@ -13,6 +14,7 @@ import {
   type DataprocCluster,
 } from '../../api/gcp/dataproc'
 import { useAccount } from '../../context/AccountContext'
+import { ClusterDialog } from './ClusterDialog'
 import { clusterStateColor, shortDate } from './util'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
@@ -28,6 +30,7 @@ function target(cluster: DataprocCluster) {
 export function ClustersPage() {
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
+  const [createOpen, setCreateOpen] = useState(false)
   const [filter, setFilter] = useState('')
   const [selected, setSelected] = useState<string[]>([])
 
@@ -162,6 +165,11 @@ export function ClustersPage() {
         id="dataproc"
         title="Dataproc"
         subtitle={`Clusters · project ${accountId || '—'}`}
+        actions={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+            Create cluster
+          </Button>
+        }
       />
 
       {actionError && (
@@ -194,6 +202,8 @@ export function ClustersPage() {
         renderDetail={(cluster) => <GcpRowDetail row={cluster} />}
         detailTitle={(cluster) => cluster.id}
       />
+
+      <ClusterDialog open={createOpen} onClose={() => setCreateOpen(false)} />
     </Stack>
   )
 }

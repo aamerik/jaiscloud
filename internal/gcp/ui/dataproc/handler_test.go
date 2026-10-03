@@ -11,6 +11,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
+	dataproccore "jaiscloud/internal/gcp/service/dataproc"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/model"
 )
@@ -28,7 +29,9 @@ type mockProvider struct {
 
 	gotRegion string
 	gotID     string
+	gotInput  dataproccore.ClusterInput
 	deleted   bool
+	created   bool
 	action    string
 }
 
@@ -57,6 +60,11 @@ func (m *mockProvider) mutateCluster(action, region, name string) (dpstore.Clust
 func (m *mockProvider) DeleteCluster(_ context.Context, _, region, name string) error {
 	m.gotRegion, m.gotID, m.deleted = region, name, true
 	return m.err
+}
+
+func (m *mockProvider) CreateCluster(_ context.Context, _, region, name string, in dataproccore.ClusterInput) (dpstore.Cluster, error) {
+	m.gotRegion, m.gotID, m.gotInput, m.created = region, name, in, true
+	return m.cluster, m.err
 }
 
 func (m *mockProvider) ListAllJobs(_ context.Context, _ string) ([]dpstore.Job, error) {
@@ -97,6 +105,15 @@ func do(t *testing.T, mock *mockProvider, method, path string) *httptest.Respons
 	t.Helper()
 	router := BuildRouter(mock, testCfg())
 	req := httptest.NewRequest(method, path, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+func doBody(t *testing.T, mock *mockProvider, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	router := BuildRouter(mock, testCfg())
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	return w
@@ -206,6 +223,72 @@ func TestDeleteCluster_NoContent(t *testing.T) {
 	}
 	if !mock.deleted || mock.gotRegion != "us-central1" || mock.gotID != "alpha" {
 		t.Fatalf("delete not dispatched: %+v", mock)
+	}
+}
+
+func TestCreateCluster_GCEConfig(t *testing.T) {
+	mock := &mockProvider{cluster: cluster("alpha", "us-central1")}
+	body := `{"region":"us-central1","name":"alpha","config":{"gceClusterConfig":{"zoneUri":"z"}}}`
+	w := doBody(t, mock, http.MethodPost, "/clusters", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	if !mock.created || mock.gotRegion != "us-central1" || mock.gotID != "alpha" {
+		t.Fatalf("create not dispatched: %+v", mock)
+	}
+	if len(mock.gotInput.Config) == 0 || mock.gotInput.VirtualClusterConfig != nil {
+		t.Fatalf("config not passed through: %+v", mock.gotInput)
+	}
+	var got Cluster
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Config == nil || !strings.Contains(string(got.Config), "gceClusterConfig") {
+		t.Fatalf("config not rendered: %s", got.Config)
+	}
+}
+
+func TestCreateCluster_VirtualClusterConfig(t *testing.T) {
+	mock := &mockProvider{cluster: cluster("gke-1", "us-central1")}
+	body := `{"region":"us-central1","name":"gke-1","virtualClusterConfig":{` +
+		`"kubernetesClusterConfig":{"kubernetesNamespace":"dataproc","gkeClusterConfig":` +
+		`{"gkeClusterTarget":"projects/p/locations/us-central1/clusters/gke-1"}}}}`
+	w := doBody(t, mock, http.MethodPost, "/clusters", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	if len(mock.gotInput.VirtualClusterConfig) == 0 || mock.gotInput.Config != nil {
+		t.Fatalf("virtualClusterConfig not passed through: %+v", mock.gotInput)
+	}
+	if !strings.Contains(string(mock.gotInput.VirtualClusterConfig), "dataproc") {
+		t.Fatalf("kubernetesNamespace lost: %s", mock.gotInput.VirtualClusterConfig)
+	}
+}
+
+func TestCreateCluster_RequiresRegionAndName(t *testing.T) {
+	for _, body := range []string{`{}`, `{"region":"us-central1"}`, `{"name":"alpha"}`} {
+		w := doBody(t, &mockProvider{}, http.MethodPost, "/clusters", body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want 400", body, w.Code)
+		}
+	}
+}
+
+func TestCreateCluster_InvalidJSON(t *testing.T) {
+	w := doBody(t, &mockProvider{}, http.MethodPost, "/clusters", `{`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCreateCluster_ProviderErrorMapped(t *testing.T) {
+	mock := &mockProvider{err: model.NewProviderError("AlreadyExists", "cluster exists", http.StatusConflict)}
+	w := doBody(t, mock, http.MethodPost, "/clusters", `{"region":"us-central1","name":"alpha"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "cluster exists") {
+		t.Fatalf("body = %s", w.Body.String())
 	}
 }
 

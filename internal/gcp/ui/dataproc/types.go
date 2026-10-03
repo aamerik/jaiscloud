@@ -8,9 +8,9 @@
 // a resource id never has to be disambiguated by hand.
 //
 // This surface is read + lifecycle only: clusters list/detail with
-// start/stop/delete, jobs list/detail with cancel, and workflow templates
-// list/detail. Cluster create, job submit and workflow-template CRUD are
-// deferred (see the console-UI plan's deferral rows).
+// start/stop/create/delete, jobs list/detail with cancel, and workflow
+// templates list/detail. Job submit and workflow-template CRUD are deferred
+// (see the console-UI plan's deferral rows).
 package dataprocui
 
 import "encoding/json"
@@ -45,6 +45,18 @@ type Cluster struct {
 type ListClustersResponse struct {
 	Clusters []Cluster `json:"clusters"`
 	Total    int       `json:"total"`
+}
+
+// CreateClusterRequest is the console create-cluster body (POST /clusters).
+// Exactly one of Config (a GCE ClusterConfig) or VirtualClusterConfig (a
+// Dataproc-on-GKE VirtualClusterConfig carrying kubernetesNamespace) is sent;
+// the core stores it verbatim and enforces mutual exclusivity.
+type CreateClusterRequest struct {
+	Region               string            `json:"region"`
+	Name                 string            `json:"name"`
+	Labels               map[string]string `json:"labels,omitempty"`
+	Config               json.RawMessage   `json:"config,omitempty"`
+	VirtualClusterConfig json.RawMessage   `json:"virtualClusterConfig,omitempty"`
 }
 
 // Job is the console rendering of a Dataproc job, flattened across regions for

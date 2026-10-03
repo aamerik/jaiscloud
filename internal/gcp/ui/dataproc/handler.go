@@ -2,6 +2,7 @@ package dataprocui
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -144,6 +145,30 @@ func (h *Handler) ListClusters(w http.ResponseWriter, r *http.Request) {
 		out = append(out, renderCluster(project, c, false))
 	}
 	uihelper.WriteJSON(w, ListClustersResponse{Clusters: out, Total: len(out)})
+}
+
+// POST /clusters
+func (h *Handler) CreateCluster(w http.ResponseWriter, r *http.Request) {
+	var in CreateClusterRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		uihelper.UIError(w, "InvalidArgument", "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if in.Region == "" || in.Name == "" {
+		uihelper.UIError(w, "InvalidArgument", "region and name are required", http.StatusBadRequest)
+		return
+	}
+	project := h.account(r)
+	c, err := h.provider.CreateCluster(r.Context(), project, in.Region, in.Name, dataproccore.ClusterInput{
+		Labels:               in.Labels,
+		Config:               in.Config,
+		VirtualClusterConfig: in.VirtualClusterConfig,
+	})
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSONStatus(w, http.StatusCreated, renderCluster(project, c, true))
 }
 
 // GET /clusters/{region}/{cluster}

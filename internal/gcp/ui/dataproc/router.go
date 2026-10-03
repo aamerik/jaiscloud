@@ -12,6 +12,7 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r := chi.NewRouter()
 
 	r.Get("/clusters", h.ListClusters)
+	r.Post("/clusters", h.CreateCluster)
 	r.Get("/clusters/{region}/{cluster}", h.GetCluster)
 	r.Post("/clusters/{region}/{cluster}/start", h.StartCluster)
 	r.Post("/clusters/{region}/{cluster}/stop", h.StopCluster)

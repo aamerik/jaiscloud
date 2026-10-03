@@ -33,6 +33,19 @@ export interface ListClustersResponse {
   total: number
 }
 
+/**
+ * Create-cluster body (POST /clusters). Exactly one of `config` (a GCE
+ * ClusterConfig) or `virtualClusterConfig` (a Dataproc-on-GKE
+ * VirtualClusterConfig carrying `kubernetesNamespace`) is sent.
+ */
+export interface DataprocClusterInput {
+  region: string
+  name: string
+  labels?: Record<string, string>
+  config?: unknown
+  virtualClusterConfig?: unknown
+}
+
 /** A Dataproc job, flattened across regions for the list. */
 export interface DataprocJob {
   id: string
@@ -86,6 +99,9 @@ const templatePath = (region: string, template: string) =>
   `${BASE}/workflow-templates/${encodeURIComponent(region)}/${encodeURIComponent(template)}`
 
 export const listClusters = () => api.get<ListClustersResponse>(`${BASE}/clusters`)
+
+export const createCluster = (input: DataprocClusterInput) =>
+  api.post<DataprocCluster>(`${BASE}/clusters`, input)
 
 export const getCluster = (region: string, cluster: string) =>
   api.get<DataprocCluster>(clusterPath(region, cluster))
