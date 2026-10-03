@@ -506,3 +506,133 @@ operations:
     operation: BigQuery.RowAccessPolicies
     state: unsupported
     reason: "row access policies are not modelled; explicit Unimplemented (501) stub"
+
+  # GKE ClusterManager gRPC is metadata cluster CRUD only: cluster
+  # create/get/list/delete and operation get/list are served (and verified by
+  # the official container client), while every node-pool, update, setter,
+  # rotation and upgrade RPC is an explicit Unimplemented stub. The emulator has
+  # no real control plane (docs/GA.md §7).
+  - service: container
+    operation: CancelOperation
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: CheckAutopilotCompatibility
+    state: unsupported
+    reason: "Autopilot is not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: CompleteControlPlaneUpgrade
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: CompleteIPRotation
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: CompleteNodePoolUpgrade
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: CreateNodePool
+    state: unsupported
+    reason: "node pools are stored records only; explicit Unimplemented stub"
+  - service: container
+    operation: DeleteNodePool
+    state: unsupported
+    reason: "node pools are stored records only; explicit Unimplemented stub"
+  - service: container
+    operation: FetchClusterUpgradeInfo
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: FetchNodePoolUpgradeInfo
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: GetJSONWebKeys
+    state: unsupported
+    reason: "cluster JWKS are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: GetNodePool
+    state: unsupported
+    reason: "node pools are stored records only; explicit Unimplemented stub"
+  - service: container
+    operation: GetServerConfig
+    state: unsupported
+    reason: "server config is not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: ListNodePools
+    state: unsupported
+    reason: "node pools are stored records only; explicit Unimplemented stub"
+  - service: container
+    operation: ListUsableSubnetworks
+    state: unsupported
+    reason: "usable-subnetwork discovery is not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: RollbackNodePoolUpgrade
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: SetAddonsConfig
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: SetLabels
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: SetLegacyAbac
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: SetLocations
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: SetLoggingService
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: SetMaintenancePolicy
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: SetMasterAuth
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: SetMonitoringService
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: SetNetworkPolicy
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: SetNodePoolAutoscaling
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: SetNodePoolManagement
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: SetNodePoolSize
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: StartIPRotation
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: UpdateCluster
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: UpdateMaster
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"
+  - service: container
+    operation: UpdateNodePool
+    state: unsupported
+    reason: "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub"

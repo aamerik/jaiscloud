@@ -329,12 +329,13 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   instead) are not modelled. The engine polls once per second, so sustained throughput is bounded
   by `maxBurstSize` per second rather than `maxDispatchesPerSecond`.
 - **Google Kubernetes Engine (GKE)** — a metadata-only mock of the v1 cluster control plane
-  (`container.googleapis.com`), REST only: cluster `create`/`get`/`list`/`delete` plus the GKE
-  `Operation` records they return (`get`/`list`). A cluster is an instantly-`RUNNING` stored
+  (`container.googleapis.com`), REST + gRPC: cluster `create`/`get`/`list`/`delete` plus the GKE
+  `Operation` records they return (`get`/`list`), served over both the REST surface and the native
+  gRPC `google.container.v1.ClusterManager` transport. A cluster is an instantly-`RUNNING` stored
   record (default master version, a `default-pool`, `network`/`subnetwork`); there is no real
   Kubernetes control plane behind it, no node-pool CRUD or
   update/addon/auth/network/logging/monitoring setters, no `serverConfig`/location discovery, and
-  no Artifact Registry/OCI pull path, and the native gRPC `ClusterManager` transport is not served.
+  no Artifact Registry/OCI pull path; those gRPC methods are explicit `Unimplemented` stubs.
   GKE shares the canonical `/v1/projects/{p}/locations/{l}/clusters` path with Managed Kafka on the
   single emulator origin, so it is disambiguated by host (the first DNS label is `container`, as in
   `container.googleapis.com`) or by the `/container` path prefix Terraform/gcloud use; Managed

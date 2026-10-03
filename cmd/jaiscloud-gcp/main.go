@@ -91,6 +91,7 @@ import (
 	tasksstore "jaiscloud/internal/gcp/store/tasks"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 	"jaiscloud/internal/gcp/throttle"
+	grpccontainer "jaiscloud/internal/gcp/transport/grpc/container"
 	grpcdataproc "jaiscloud/internal/gcp/transport/grpc/dataproc"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpceventarc "jaiscloud/internal/gcp/transport/grpc/eventarc"
@@ -141,6 +142,7 @@ import (
 	coreui "jaiscloud/internal/ui"
 
 	cloudtaskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	containerpb "cloud.google.com/go/container/apiv1/containerpb"
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 	eventarcpb "cloud.google.com/go/eventarc/apiv1/eventarcpb"
@@ -769,6 +771,7 @@ func startCmd() *cobra.Command {
 			workflowsGRPC := grpcworkflows.NewService(workflowsCore, cfg.ProjectID)
 			functionsGRPC := grpcfunctions.NewService(functionsCore, cfg.ProjectID, functionsUploadBase)
 			functionsV2GRPC := grpcfunctions.NewServiceV2(functionsCore, cfg.ProjectID, functionsUploadBase)
+			containerGRPC := grpccontainer.NewService(containerCore, cfg.ProjectID)
 			// The gRPC listener is built and bound only when the gRPC transport
 			// is selected for at least one service; otherwise no :grpc-port
 			// socket is opened.
@@ -818,6 +821,9 @@ func startCmd() *cobra.Command {
 					dataprocpb.RegisterClusterControllerServer(gserv.GRPC(), dataprocGRPC)
 					dataprocpb.RegisterJobControllerServer(gserv.GRPC(), dataprocGRPC)
 					dataprocpb.RegisterWorkflowTemplateServiceServer(gserv.GRPC(), dataprocGRPC)
+				}
+				if transports.GRPCFor("container") {
+					containerpb.RegisterClusterManagerServer(gserv.GRPC(), containerGRPC)
 				}
 				if transports.GRPCFor("functions") {
 					functionspb.RegisterCloudFunctionsServiceServer(gserv.GRPC(), functionsGRPC)

@@ -1,18 +1,18 @@
 {
   "version": 1,
   "summary": {
-    "total": 900,
+    "total": 937,
     "by_state": {
-      "ga": 671,
+      "ga": 677,
       "limited": 111,
       "preview": 14,
-      "unsupported": 104
+      "unsupported": 135
     },
     "by_transport": {
       "grpc": {
-        "ga": 311,
+        "ga": 317,
         "limited": 7,
-        "unsupported": 92
+        "unsupported": 123
       },
       "rest": {
         "ga": 360,
@@ -39,7 +39,8 @@
         "unsupported": 1
       },
       "container": {
-        "ga": 6
+        "ga": 12,
+        "unsupported": 31
       },
       "dataproc": {
         "ga": 42,
@@ -1235,6 +1236,62 @@
     },
     {
       "service": "container",
+      "operation": "CancelOperation",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "CheckAutopilotCompatibility",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "Autopilot is not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "CompleteControlPlaneUpgrade",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "CompleteIPRotation",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "CompleteNodePoolUpgrade",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
       "operation": "Container.CreateCluster",
       "transport": "rest",
       "state": "ga",
@@ -1293,6 +1350,372 @@
       "evidence": [
         "discovery=container.projects.locations.operations.list",
         "postgres=yes"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "CreateCluster",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "CreateNodePool",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "node pools are stored records only; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "DeleteCluster",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "DeleteNodePool",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "node pools are stored records only; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "FetchClusterUpgradeInfo",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "FetchNodePoolUpgradeInfo",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "GetCluster",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=2/2 pass)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "GetJSONWebKeys",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "cluster JWKS are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "GetNodePool",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "node pools are stored records only; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "GetOperation",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "GetServerConfig",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "server config is not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "ListClusters",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "ListNodePools",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "node pools are stored records only; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "ListOperations",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "ListUsableSubnetworks",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "usable-subnetwork discovery is not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "RollbackNodePoolUpgrade",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "SetAddonsConfig",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "SetLabels",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "SetLegacyAbac",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "SetLocations",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "SetLoggingService",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "SetMaintenancePolicy",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "SetMasterAuth",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "SetMonitoringService",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "SetNetworkPolicy",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "SetNodePoolAutoscaling",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "SetNodePoolManagement",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "SetNodePoolSize",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "StartIPRotation",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "UpdateCluster",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "UpdateMaster",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
+      ]
+    },
+    {
+      "service": "container",
+      "operation": "UpdateNodePool",
+      "transport": "grpc",
+      "state": "unsupported",
+      "reason": "GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (proto-conformance pending)"
       ]
     },
     {

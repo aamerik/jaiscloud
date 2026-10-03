@@ -1,19 +1,26 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 337,
-  "passed": 337,
+  "total": 344,
+  "passed": 344,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 23,
-    "checks": 337,
-    "passed": 337,
+    "services": 24,
+    "checks": 344,
+    "passed": 344,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
   },
   "services": [
+    {
+      "service": "container",
+      "total": 7,
+      "passed": 7,
+      "failed": 0,
+      "unimplemented": 0
+    },
     {
       "service": "dataproc",
       "total": 26,
@@ -2346,6 +2353,55 @@
       "method": "InstantiateWorkflowTemplate",
       "status": "pass",
       "key_field": "stored template + parameters run to DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "CreateCluster",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "CREATE_CLUSTER operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "GetCluster",
+      "method": "GetCluster",
+      "status": "pass",
+      "key_field": "name/status/currentMasterVersion round-trip"
+    },
+    {
+      "service": "container",
+      "rpc": "GetCluster (legacy project/zone)",
+      "method": "GetCluster",
+      "status": "pass",
+      "key_field": "legacy project_id/zone/cluster_id addressing"
+    },
+    {
+      "service": "container",
+      "rpc": "ListClusters",
+      "method": "ListClusters",
+      "status": "pass",
+      "key_field": "created cluster present"
+    },
+    {
+      "service": "container",
+      "rpc": "GetOperation",
+      "method": "GetOperation",
+      "status": "pass",
+      "key_field": "operation name/type round-trip"
+    },
+    {
+      "service": "container",
+      "rpc": "ListOperations",
+      "method": "ListOperations",
+      "status": "pass",
+      "key_field": "created operation present"
+    },
+    {
+      "service": "container",
+      "rpc": "DeleteCluster",
+      "method": "DeleteCluster",
+      "status": "pass",
+      "key_field": "DELETE_CLUSTER DONE + NotFound after"
     },
     {
       "service": "functions",
