@@ -19,6 +19,7 @@ import (
 	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
+	"jaiscloud/internal/events"
 	lambdaexec "jaiscloud/internal/executor/lambda"
 	"jaiscloud/internal/gateway"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
@@ -122,6 +123,7 @@ import (
 	restworkflowexecutions "jaiscloud/internal/gcp/transport/rest/workflowexecutions"
 	restworkflows "jaiscloud/internal/gcp/transport/rest/workflows"
 	"jaiscloud/internal/gcp/transportcfg"
+	gcpui "jaiscloud/internal/gcp/ui"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/persistence/snapshot"
@@ -130,6 +132,7 @@ import (
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/snapshottypes"
 	"jaiscloud/internal/store"
+	coreui "jaiscloud/internal/ui"
 
 	cloudtaskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
@@ -1180,6 +1183,34 @@ func startCmd() *cobra.Command {
 				defer hmsServer.Stop()
 			}
 
+			// Optional UI portal on --ui-port (default 4567), served alongside
+			// the emulator gateway. Only compiled in with -tags ui; without the
+			// tag coreui.New returns (nil, nil) and the listener is skipped.
+			var uiServer *coreui.UIServer
+			if cfg.UIEnabled {
+				var uiErr error
+				uiServer, uiErr = coreui.New(gcpui.NewRegistrar(), adminHandler, cfg, events.NewEventBus(), version)
+				if uiErr != nil {
+					slog.Warn("ui server init failed", "err", uiErr)
+				} else if uiServer != nil {
+					go func() {
+						addr := fmt.Sprintf(":%d", cfg.UIPort)
+						slog.Info("ui server starting", "url", fmt.Sprintf("http://localhost:%d/ui/", cfg.UIPort))
+						if err := uiServer.ListenAndServe(addr); err != nil && err != http.ErrServerClosed {
+							slog.Warn("ui server stopped", "err", err)
+						}
+					}()
+					if cfg.UIOpen {
+						coreui.OpenBrowser(fmt.Sprintf("http://localhost:%d/ui/", cfg.UIPort))
+					}
+					defer func() {
+						shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						_ = uiServer.Shutdown(shutCtx)
+					}()
+				}
+			}
+
 			return srv.ListenAndServe()
 		},
 	}
@@ -1201,6 +1232,11 @@ func startCmd() *cobra.Command {
 	cmd.Flags().Int("hms-port", 9083, "Hive Metastore (Thrift) listen port")
 	cmd.Flags().String("transports", "rest,grpc", "GCP wire transports to expose: rest,grpc,both,none")
 	cmd.Flags().String("transport-overrides", "", "Per-service transport overrides, e.g. storage=grpc,pubsub=rest,memorystore=none")
+	cmd.Flags().Bool("ui", false, "Enable the UI Portal listener on --ui-port (default 4567)")
+	cmd.Flags().Int("ui-port", 4567, "Port for the UI Portal HTTP listener")
+	cmd.Flags().Bool("ui-open", false, "Auto-open browser when UI starts (no-op when not a TTY)")
+	cmd.Flags().Bool("ui-dev", false, "UI dev mode: relaxed CORS for the Vite dev server")
+	cmd.Flags().String("dev-ui-origin", "http://localhost:5173", "Allowed dev UI origin when --ui-dev is set")
 	return cmd
 }
 
@@ -1221,6 +1257,11 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("kms_master_key", cmd.Flags().Lookup("kms-master-key"))
 	viper.BindPFlag("transports", cmd.Flags().Lookup("transports"))
 	viper.BindPFlag("transport_overrides", cmd.Flags().Lookup("transport-overrides"))
+	viper.BindPFlag("ui", cmd.Flags().Lookup("ui"))
+	viper.BindPFlag("ui_port", cmd.Flags().Lookup("ui-port"))
+	viper.BindPFlag("ui_open", cmd.Flags().Lookup("ui-open"))
+	viper.BindPFlag("ui_dev", cmd.Flags().Lookup("ui-dev"))
+	viper.BindPFlag("dev_ui_origin", cmd.Flags().Lookup("dev-ui-origin"))
 }
 
 // pubsubNotificationPublisher adapts the emulator's Pub/Sub message store to

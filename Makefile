@@ -99,10 +99,10 @@ IMAGE             := jaiscloud-aws
 # (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
 JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
 
-.PHONY: lint lint-pagination help build build-all build-ui docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools clean \
+.PHONY: lint lint-pagination help build build-all build-ui build-ui-gcp docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools clean \
         server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \
         server-gcp server-gcp-ephemeral server-gcp-postgres \
-        server-ui stop-server up-docker down-docker up-k8s down-k8s \
+        server-ui server-ui-gcp stop-server up-docker down-docker up-k8s down-k8s \
         postgres-up postgres-reset postgres-down \
         test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
@@ -170,6 +170,10 @@ build-ui: ## Build frontend assets then compile jaiscloud-aws with embedded UI (
 	pnpm --dir ui run build
 	CGO_ENABLED=0 go build -tags ui -trimpath -ldflags="-s -w" -o jaiscloud-aws ./cmd/jaiscloud-aws/
 
+build-ui-gcp: ## Build frontend assets then compile jaiscloud-gcp with embedded UI (-tags ui)
+	pnpm --dir ui run build
+	CGO_ENABLED=0 go build -tags ui -trimpath -ldflags="-s -w" -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
+
 docker: docker-aws  ## Build jaiscloud-aws Docker image (default)
 
 docker-all: $(addprefix docker-,$(CLOUDS))  ## Build all cloud Docker images
@@ -233,6 +237,9 @@ test-gcp-tools: ## Unit tests for the GCP dev tools (gcpstatus, paginationcheck)
 server-ui: build-ui ## Build with embedded UI and start with --ui --ui-open (opens browser)
 	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \
 	  ./jaiscloud-aws start --ui --ui-open
+
+server-ui-gcp: build-ui-gcp ## Build jaiscloud-gcp with embedded UI and start with --ui --ui-open (opens browser)
+	./jaiscloud-gcp start --ui --ui-open
 
 server-memory: build ## Default mode: memory stores + periodic state.json saves, mock executors
 	JAISCLOUD_PORT=$(JAISCLOUD_PORT) \

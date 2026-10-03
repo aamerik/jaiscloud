@@ -1,6 +1,6 @@
 # ─── Stage 1: frontend bundle ────────────────────────────────────────────────
 # Builds the React portal. Vite is configured to emit into
-# internal/aws/ui/dist so the Go embed directive can pick it up.
+# internal/ui/dist so the Go embed directive can pick it up.
 FROM --platform=$BUILDPLATFORM node:22-alpine AS ui
 
 RUN npm install -g pnpm@9.15.9
@@ -11,8 +11,8 @@ COPY ui/package.json ui/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY ui/ ./
-# `pnpm build` runs `tsc -b && vite build`; outDir is ../internal/aws/ui/dist
-RUN mkdir -p /src/internal/aws/ui && pnpm run build
+# `pnpm build` runs `tsc -b && vite build`; outDir is ../internal/ui/dist
+RUN mkdir -p /src/internal/ui && pnpm run build
 
 # ─── Stage 2: build ──────────────────────────────────────────────────────────
 # --platform=$BUILDPLATFORM ensures the correct Go binary is used for the target architecture in multi-platform builds.
@@ -34,7 +34,7 @@ RUN go mod download
 
 # Copy source and build a fully static binary with the UI embedded
 COPY . .
-COPY --from=ui /src/internal/aws/ui/dist /src/internal/aws/ui/dist
+COPY --from=ui /src/internal/ui/dist /src/internal/ui/dist
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -tags ui -trimpath -ldflags="-s -w" -o /jaiscloud ./cmd/jaiscloud-${CLOUD}/
 
