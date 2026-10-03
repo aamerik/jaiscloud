@@ -56,6 +56,13 @@ import { KeyRingDetailPage } from './kms/KeyRingDetailPage'
 import { CryptoKeyDetailPage } from './kms/CryptoKeyDetailPage'
 import { SecretsPage } from './secretmanager/SecretsPage'
 import { SecretDetailPage } from './secretmanager/SecretDetailPage'
+import { LogsExplorer } from './logging/LogsExplorer'
+import { MetricsPage as LoggingMetricsPage } from './logging/MetricsPage'
+import { SinksPage } from './logging/SinksPage'
+import { ExclusionsPage } from './logging/ExclusionsPage'
+import { MetricsExplorer } from './monitoring/MetricsExplorer'
+import { AlertingPage } from './monitoring/AlertingPage'
+import { ChannelsPage } from './monitoring/ChannelsPage'
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
 import { useEventStream } from '../hooks/useEventStream'
 import { useMeta } from '../hooks/useMeta'
@@ -306,6 +313,13 @@ function GcpShell() {
           />
           <Route path="/gcp/secretmanager/secrets" element={<SecretsPage />} />
           <Route path="/gcp/secretmanager/secrets/:secret" element={<SecretDetailPage />} />
+          <Route path="/gcp/logging/entries" element={<LogsExplorer />} />
+          <Route path="/gcp/logging/metrics" element={<LoggingMetricsPage />} />
+          <Route path="/gcp/logging/sinks" element={<SinksPage />} />
+          <Route path="/gcp/logging/exclusions" element={<ExclusionsPage />} />
+          <Route path="/gcp/monitoring/metrics" element={<MetricsExplorer />} />
+          <Route path="/gcp/monitoring/alerting" element={<AlertingPage />} />
+          <Route path="/gcp/monitoring/channels" element={<ChannelsPage />} />
           <Route path="/gcp/admin" element={<GcpAdminPage />} />
           <Route path="*" element={<Navigate to="/gcp" replace />} />
         </Routes>

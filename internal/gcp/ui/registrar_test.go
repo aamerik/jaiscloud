@@ -9,6 +9,8 @@ import (
 	firestoreui "jaiscloud/internal/gcp/ui/firestore"
 	iamui "jaiscloud/internal/gcp/ui/iam"
 	kmsui "jaiscloud/internal/gcp/ui/kms"
+	loggingui "jaiscloud/internal/gcp/ui/logging"
+	monitoringui "jaiscloud/internal/gcp/ui/monitoring"
 	pubsubui "jaiscloud/internal/gcp/ui/pubsub"
 	runui "jaiscloud/internal/gcp/ui/run"
 	secretmanagerui "jaiscloud/internal/gcp/ui/secretmanager"
@@ -46,22 +48,28 @@ type fakeSecret struct {
 	secretmanagerui.ProviderInterface
 }
 
+// fakeLogging satisfies logging.ProviderInterface the same way.
+type fakeLogging struct{ loggingui.ProviderInterface }
+
+// fakeMonitoring satisfies monitoring.ProviderInterface the same way.
+type fakeMonitoring struct{ monitoringui.ProviderInterface }
+
 func TestRegistrar_CloudIsGCP(t *testing.T) {
-	reg := NewRegistrar(nil, nil, nil, nil, nil, nil, nil, nil, nil, &config.Config{})
+	reg := NewRegistrar(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, &config.Config{})
 	if got := reg.Cloud(); got != model.CloudGCP {
 		t.Fatalf("Cloud() = %q, want %q", got, model.CloudGCP)
 	}
 }
 
 func TestRegistrar_NoProviders_EmptyCatalog(t *testing.T) {
-	reg := NewRegistrar(nil, nil, nil, nil, nil, nil, nil, nil, nil, &config.Config{})
+	reg := NewRegistrar(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, &config.Config{})
 	if services := reg.Services(); len(services) != 0 {
 		t.Fatalf("Services() = %d entries, want 0", len(services))
 	}
 }
 
 func TestRegistrar_StorageAdvertised(t *testing.T) {
-	reg := NewRegistrar(fakeStorage{}, nil, nil, nil, nil, nil, nil, nil, nil, &config.Config{})
+	reg := NewRegistrar(fakeStorage{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, &config.Config{})
 	services := reg.Services()
 	if len(services) != 1 {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
@@ -72,7 +80,7 @@ func TestRegistrar_StorageAdvertised(t *testing.T) {
 }
 
 func TestRegistrar_PubSubAdvertised(t *testing.T) {
-	reg := NewRegistrar(nil, fakePubSub{}, nil, nil, nil, nil, nil, nil, nil, &config.Config{})
+	reg := NewRegistrar(nil, fakePubSub{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, &config.Config{})
 	services := reg.Services()
 	if len(services) != 1 {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
@@ -87,7 +95,7 @@ func TestRegistrar_PubSubAdvertised(t *testing.T) {
 }
 
 func TestRegistrar_FirestoreAdvertised(t *testing.T) {
-	reg := NewRegistrar(nil, nil, fakeFirestore{}, nil, nil, nil, nil, nil, nil, &config.Config{})
+	reg := NewRegistrar(nil, nil, fakeFirestore{}, nil, nil, nil, nil, nil, nil, nil, nil, &config.Config{})
 	services := reg.Services()
 	if len(services) != 1 {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
@@ -102,7 +110,7 @@ func TestRegistrar_FirestoreAdvertised(t *testing.T) {
 }
 
 func TestRegistrar_ComputeAdvertised(t *testing.T) {
-	reg := NewRegistrar(nil, nil, nil, fakeCompute{}, nil, nil, nil, nil, nil, &config.Config{})
+	reg := NewRegistrar(nil, nil, nil, fakeCompute{}, nil, nil, nil, nil, nil, nil, nil, &config.Config{})
 	services := reg.Services()
 	if len(services) != 1 {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
@@ -117,7 +125,7 @@ func TestRegistrar_ComputeAdvertised(t *testing.T) {
 }
 
 func TestRegistrar_BigQueryAdvertised(t *testing.T) {
-	reg := NewRegistrar(nil, nil, nil, nil, fakeBigQuery{}, nil, nil, nil, nil, &config.Config{})
+	reg := NewRegistrar(nil, nil, nil, nil, fakeBigQuery{}, nil, nil, nil, nil, nil, nil, &config.Config{})
 	services := reg.Services()
 	if len(services) != 1 {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
@@ -132,7 +140,7 @@ func TestRegistrar_BigQueryAdvertised(t *testing.T) {
 }
 
 func TestRegistrar_RunAdvertised(t *testing.T) {
-	reg := NewRegistrar(nil, nil, nil, nil, nil, fakeRun{}, nil, nil, nil, &config.Config{})
+	reg := NewRegistrar(nil, nil, nil, nil, nil, fakeRun{}, nil, nil, nil, nil, nil, &config.Config{})
 	services := reg.Services()
 	if len(services) != 1 {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
@@ -147,7 +155,7 @@ func TestRegistrar_RunAdvertised(t *testing.T) {
 }
 
 func TestRegistrar_IAMAdvertised(t *testing.T) {
-	reg := NewRegistrar(nil, nil, nil, nil, nil, nil, fakeIAM{}, nil, nil, &config.Config{})
+	reg := NewRegistrar(nil, nil, nil, nil, nil, nil, fakeIAM{}, nil, nil, nil, nil, &config.Config{})
 	services := reg.Services()
 	if len(services) != 1 {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
@@ -162,7 +170,7 @@ func TestRegistrar_IAMAdvertised(t *testing.T) {
 }
 
 func TestRegistrar_KMSAdvertised(t *testing.T) {
-	reg := NewRegistrar(nil, nil, nil, nil, nil, nil, nil, fakeKMS{}, nil, &config.Config{})
+	reg := NewRegistrar(nil, nil, nil, nil, nil, nil, nil, fakeKMS{}, nil, nil, nil, &config.Config{})
 	services := reg.Services()
 	if len(services) != 1 {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
@@ -177,7 +185,7 @@ func TestRegistrar_KMSAdvertised(t *testing.T) {
 }
 
 func TestRegistrar_SecretManagerAdvertised(t *testing.T) {
-	reg := NewRegistrar(nil, nil, nil, nil, nil, nil, nil, nil, fakeSecret{}, &config.Config{})
+	reg := NewRegistrar(nil, nil, nil, nil, nil, nil, nil, nil, fakeSecret{}, nil, nil, &config.Config{})
 	services := reg.Services()
 	if len(services) != 1 {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
@@ -191,9 +199,39 @@ func TestRegistrar_SecretManagerAdvertised(t *testing.T) {
 	}
 }
 
+func TestRegistrar_LoggingAdvertised(t *testing.T) {
+	reg := NewRegistrar(nil, nil, nil, nil, nil, nil, nil, nil, nil, fakeLogging{}, nil, &config.Config{})
+	services := reg.Services()
+	if len(services) != 1 {
+		t.Fatalf("Services() = %d entries, want 1", len(services))
+	}
+	got := services[0]
+	if got.ID != "logging" || got.RootPath != "/gcp/logging/entries" || got.Tier != "full" {
+		t.Fatalf("unexpected descriptor: %+v", got)
+	}
+	if len(got.Children) != 4 {
+		t.Fatalf("children = %+v, want entries + metrics + sinks + exclusions", got.Children)
+	}
+}
+
+func TestRegistrar_MonitoringAdvertised(t *testing.T) {
+	reg := NewRegistrar(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, fakeMonitoring{}, &config.Config{})
+	services := reg.Services()
+	if len(services) != 1 {
+		t.Fatalf("Services() = %d entries, want 1", len(services))
+	}
+	got := services[0]
+	if got.ID != "monitoring" || got.RootPath != "/gcp/monitoring/metrics" || got.Tier != "full" {
+		t.Fatalf("unexpected descriptor: %+v", got)
+	}
+	if len(got.Children) != 3 {
+		t.Fatalf("children = %+v, want metrics + alerting + channels", got.Children)
+	}
+}
+
 func TestRegistrar_AllAdvertised(t *testing.T) {
-	reg := NewRegistrar(fakeStorage{}, fakePubSub{}, fakeFirestore{}, fakeCompute{}, fakeBigQuery{}, fakeRun{}, fakeIAM{}, fakeKMS{}, fakeSecret{}, &config.Config{})
-	if services := reg.Services(); len(services) != 9 {
-		t.Fatalf("Services() = %d entries, want 9", len(services))
+	reg := NewRegistrar(fakeStorage{}, fakePubSub{}, fakeFirestore{}, fakeCompute{}, fakeBigQuery{}, fakeRun{}, fakeIAM{}, fakeKMS{}, fakeSecret{}, fakeLogging{}, fakeMonitoring{}, &config.Config{})
+	if services := reg.Services(); len(services) != 11 {
+		t.Fatalf("Services() = %d entries, want 11", len(services))
 	}
 }
