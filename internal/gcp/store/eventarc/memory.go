@@ -214,6 +214,28 @@ func (s *MemoryStore) ListChannels(_ context.Context, projectID, location string
 	return result, nil
 }
 
+func (s *MemoryStore) ListChannelsAllLocations(_ context.Context, projectID string) ([]Channel, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	var result []Channel
+	for key, m := range s.channels {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, c := range m {
+			result = append(result, c)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
+}
+
 func (s *MemoryStore) Reset(_ context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

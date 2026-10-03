@@ -369,6 +369,32 @@ func (s *PostgresStore) ListChannels(ctx context.Context, projectID, location st
 	return result, rows.Err()
 }
 
+func (s *PostgresStore) ListChannelsAllLocations(ctx context.Context, projectID string) ([]Channel, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, location, channel_id, config, labels, uid, etag, activation_token, create_time, update_time
+		FROM jc_eventarc_channels WHERE project_id=$1 ORDER BY location, channel_id
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Channel
+	for rows.Next() {
+		c, err := scanChannel(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, c)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, rows.Err()
+}
+
 func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_eventarc_triggers`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_eventarc_channels`)

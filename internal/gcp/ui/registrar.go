@@ -11,6 +11,7 @@ import (
 	"jaiscloud/internal/config"
 	bigqueryui "jaiscloud/internal/gcp/ui/bigquery"
 	computeui "jaiscloud/internal/gcp/ui/compute"
+	eventarcui "jaiscloud/internal/gcp/ui/eventarc"
 	firestoreui "jaiscloud/internal/gcp/ui/firestore"
 	iamui "jaiscloud/internal/gcp/ui/iam"
 	kmsui "jaiscloud/internal/gcp/ui/kms"
@@ -43,12 +44,13 @@ type Registrar struct {
 	monitoring    monitoringui.ProviderInterface
 	tasks         tasksui.ProviderInterface
 	workflows     workflowsui.ProviderInterface
+	eventarc      eventarcui.ProviderInterface
 	cfg           *config.Config
 }
 
 // NewRegistrar returns the GCP UI registrar. A nil provider leaves that
 // service's pages out of the catalog.
-func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, schedulerProvider schedulerui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, tasksProvider tasksui.ProviderInterface, workflowsProvider workflowsui.ProviderInterface, cfg *config.Config) *Registrar {
+func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, schedulerProvider schedulerui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, tasksProvider tasksui.ProviderInterface, workflowsProvider workflowsui.ProviderInterface, eventarcProvider eventarcui.ProviderInterface, cfg *config.Config) *Registrar {
 	return &Registrar{
 		storage:       storageProvider,
 		pubsub:        pubsubProvider,
@@ -64,6 +66,7 @@ func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pu
 		monitoring:    monitoringProvider,
 		tasks:         tasksProvider,
 		workflows:     workflowsProvider,
+		eventarc:      eventarcProvider,
 		cfg:           cfg,
 	}
 }
@@ -74,7 +77,7 @@ func (r *Registrar) Cloud() model.Cloud { return model.CloudGCP }
 // Services implements coreui.Registrar: only services whose provider is wired
 // are advertised.
 func (r *Registrar) Services() []coreui.ServiceDescriptor {
-	services := make([]coreui.ServiceDescriptor, 0, 13)
+	services := make([]coreui.ServiceDescriptor, 0, 15)
 	if r.storage != nil {
 		services = append(services, coreui.ServiceDescriptor{
 			ID:       "storage",
@@ -156,6 +159,19 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			RootPath: "/gcp/workflows",
 			Tier:     coreui.TierFull,
 			Children: []coreui.ServiceChild{{Label: "Workflows", Path: "/gcp/workflows"}},
+		})
+	}
+	if r.eventarc != nil {
+		services = append(services, coreui.ServiceDescriptor{
+			ID:       "eventarc",
+			Label:    "Eventarc",
+			Category: "Integration",
+			RootPath: "/gcp/eventarc/triggers",
+			Tier:     coreui.TierFull,
+			Children: []coreui.ServiceChild{
+				{Label: "Triggers", Path: "/gcp/eventarc/triggers"},
+				{Label: "Channels", Path: "/gcp/eventarc/channels"},
+			},
 		})
 	}
 	if r.bigquery != nil {
@@ -259,6 +275,9 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 	}
 	if r.workflows != nil {
 		router.Mount("/api/ui/v1/gcp/workflows", workflowsui.BuildRouter(r.workflows, r.cfg))
+	}
+	if r.eventarc != nil {
+		router.Mount("/api/ui/v1/gcp/eventarc", eventarcui.BuildRouter(r.eventarc, r.cfg))
 	}
 	if r.bigquery != nil {
 		router.Mount("/api/ui/v1/gcp/bigquery", bigqueryui.BuildRouter(r.bigquery, r.cfg))

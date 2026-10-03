@@ -48,6 +48,10 @@ import { JobsPage as SchedulerJobsPage } from './scheduler/JobsPage'
 import { JobDetailPage as SchedulerJobDetailPage } from './scheduler/JobDetailPage'
 import { QueuesPage as TasksQueuesPage } from './tasks/QueuesPage'
 import { QueueDetailPage as TasksQueueDetailPage } from './tasks/QueueDetailPage'
+import { TriggersPage as EventarcTriggersPage } from './eventarc/TriggersPage'
+import { TriggerDetailPage as EventarcTriggerDetailPage } from './eventarc/TriggerDetailPage'
+import { ChannelsPage as EventarcChannelsPage } from './eventarc/ChannelsPage'
+import { ChannelDetailPage as EventarcChannelDetailPage } from './eventarc/ChannelDetailPage'
 import { WorkflowsPage } from './workflows/WorkflowsPage'
 import { WorkflowDetailPage } from './workflows/WorkflowDetailPage'
 import { ExecutionDetailPage as WorkflowExecutionDetailPage } from './workflows/ExecutionDetailPage'
@@ -311,6 +315,16 @@ function GcpShell() {
           <Route
             path="/gcp/tasks/queues/:location/:queue"
             element={<TasksQueueDetailPage />}
+          />
+          <Route path="/gcp/eventarc/triggers" element={<EventarcTriggersPage />} />
+          <Route
+            path="/gcp/eventarc/triggers/:location/:trigger"
+            element={<EventarcTriggerDetailPage />}
+          />
+          <Route path="/gcp/eventarc/channels" element={<EventarcChannelsPage />} />
+          <Route
+            path="/gcp/eventarc/channels/:location/:channel"
+            element={<EventarcChannelDetailPage />}
           />
           <Route path="/gcp/workflows" element={<WorkflowsPage />} />
           <Route path="/gcp/workflows/:location/:workflow" element={<WorkflowDetailPage />} />
