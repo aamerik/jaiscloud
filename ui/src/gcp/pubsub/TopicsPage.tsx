@@ -2,9 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
-  Box,
   Button,
-  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -12,24 +10,29 @@ import {
   IconButton,
   Link,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   TextField,
   Tooltip,
-  Typography,
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import SendOutlinedIcon from '@mui/icons-material/SendOutlined'
 import { Link as RouterLink } from 'react-router-dom'
-import { createTopic, deleteTopic, listTopics } from '../../api/gcp/pubsub'
+import { createTopic, deleteTopic, listTopics, type Topic } from '../../api/gcp/pubsub'
 import { useAccount } from '../../context/AccountContext'
 import { PublishDialog } from './PublishDialog'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
+
+function topicLabels(topic: Topic): string {
+  return topic.labels
+    ? Object.entries(topic.labels)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ')
+    : '—'
+}
 
 /** Pub/Sub topic list with create / delete / publish. */
 export function TopicsPage() {
@@ -39,6 +42,8 @@ export function TopicsPage() {
   const [name, setName] = useState('')
   const [retention, setRetention] = useState('')
   const [publishTopic, setPublishTopic] = useState('')
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
 
   const topics = useQuery({
     queryKey: ['gcp', 'pubsub', 'topics', accountId],
@@ -60,96 +65,112 @@ export function TopicsPage() {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'pubsub', 'topics'] }),
   })
 
-  return (
-    <Box>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <Box>
-          <GcpPageTitle id="pubsub">Topics</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Pub/Sub · project {accountId || '—'}
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-          Create topic
-        </Button>
-      </Stack>
+  const rows = filterRows(topics.data?.topics ?? [], filter, (topic) =>
+    `${topic.name} ${topic.messageRetentionDuration ?? ''} ${topic.kmsKeyName ?? ''} ${topicLabels(topic)}`,
+  )
 
-      {topics.isError && <Alert severity="error">Failed to load topics.</Alert>}
+  const columns: GcpColumn<Topic>[] = [
+    {
+      key: 'name',
+      header: 'Name',
+      sortable: true,
+      sortValue: (topic) => topic.name,
+      render: (topic) => (
+        <Link component={RouterLink} to={`/gcp/pubsub/topics/${encodeURIComponent(topic.name)}`}>
+          {topic.name}
+        </Link>
+      ),
+    },
+    {
+      key: 'retention',
+      header: 'Message retention',
+      sortable: true,
+      sortValue: (topic) => topic.messageRetentionDuration ?? '7 days',
+      render: (topic) => topic.messageRetentionDuration || '7 days',
+    },
+    {
+      key: 'encryption',
+      header: 'Encryption',
+      sortable: true,
+      sortValue: (topic) => (topic.kmsKeyName ? 'CMEK' : 'Google-managed'),
+      render: (topic) => (topic.kmsKeyName ? 'CMEK' : 'Google-managed'),
+    },
+    {
+      key: 'labels',
+      header: 'Labels',
+      sortable: true,
+      sortValue: (topic) => topicLabels(topic),
+      render: (topic) => topicLabels(topic),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (topic) => (
+        <>
+          <Tooltip title="Publish message">
+            <IconButton size="small" onClick={() => setPublishTopic(topic.name)}>
+              <SendOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Delete topic">
+            <span>
+              <IconButton
+                size="small"
+                disabled={remove.isPending}
+                onClick={() => remove.mutate(topic.name)}
+                aria-label={`Delete ${topic.name}`}
+              >
+                <DeleteOutlineIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </>
+      ),
+    },
+  ]
+
+  return (
+    <Stack>
+      <GcpPageHeader
+        id="pubsub"
+        title="Topics"
+        subtitle={`Pub/Sub · project ${accountId || '—'}`}
+        actions={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+            Create topic
+          </Button>
+        }
+      />
+
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter topics"
+        onRefresh={() => void topics.refetch()}
+        refreshing={topics.isFetching}
+      />
+
       {remove.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>
           Delete failed.
         </Alert>
       )}
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Message retention</TableCell>
-              <TableCell>Encryption</TableCell>
-              <TableCell>Labels</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {topics.isLoading && (
-              <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!topics.isLoading && (topics.data?.topics.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No topics in this project.
-                </TableCell>
-              </TableRow>
-            )}
-            {topics.data?.topics.map((topic) => (
-              <TableRow key={topic.name} hover>
-                <TableCell>
-                  <Link component={RouterLink} to={`/gcp/pubsub/topics/${encodeURIComponent(topic.name)}`}>
-                    {topic.name}
-                  </Link>
-                </TableCell>
-                <TableCell>{topic.messageRetentionDuration || '7 days'}</TableCell>
-                <TableCell>{topic.kmsKeyName ? 'CMEK' : 'Google-managed'}</TableCell>
-                <TableCell>
-                  {topic.labels
-                    ? Object.entries(topic.labels)
-                        .map(([k, v]) => `${k}=${v}`)
-                        .join(', ')
-                    : '—'}
-                </TableCell>
-                <TableCell align="right">
-                  <Tooltip title="Publish message">
-                    <IconButton size="small" onClick={() => setPublishTopic(topic.name)}>
-                      <SendOutlinedIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Delete topic">
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={remove.isPending}
-                        onClick={() => remove.mutate(topic.name)}
-                        aria-label={`Delete ${topic.name}`}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpDataTable
+        aria-label="Topics"
+        columns={columns}
+        rows={rows}
+        getRowKey={(topic) => topic.name}
+        loading={topics.isLoading}
+        error={topics.isError ? 'Failed to load topics.' : null}
+        emptyMessage={filter ? 'No topics match the filter.' : 'No topics in this project.'}
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(topic) => <GcpRowDetail row={topic} />}
+        detailTitle={(topic) => topic.name}
+      />
 
       <Dialog open={createOpen} onClose={() => setCreateOpen(false)} fullWidth maxWidth="xs">
         <DialogTitle>Create topic</DialogTitle>
@@ -196,6 +217,6 @@ export function TopicsPage() {
           onClose={() => setPublishTopic('')}
         />
       )}
-    </Box>
+    </Stack>
   )
 }

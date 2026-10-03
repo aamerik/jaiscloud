@@ -1,29 +1,17 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Alert,
-  Box,
-  Button,
-  CircularProgress,
-  IconButton,
-  Link,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tooltip,
-  Typography,
-} from '@mui/material'
+import { Alert, Button, IconButton, Link, Stack, Tooltip } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { deleteSecret, listSecrets, type Secret } from '../../api/gcp/secretmanager'
 import { useAccount } from '../../context/AccountContext'
 import { CreateSecretDialog } from './CreateSecretDialog'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 
 function labelSummary(labels?: Record<string, string>): string {
   if (!labels) return '—'
@@ -37,6 +25,8 @@ export function SecretsPage() {
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
+  const [selected, setSelected] = useState<string[]>([])
+  const [filter, setFilter] = useState('')
   const invalidate = () =>
     void queryClient.invalidateQueries({ queryKey: ['gcp', 'secretmanager'] })
 
@@ -50,90 +40,110 @@ export function SecretsPage() {
     onSuccess: invalidate,
   })
 
-  return (
-    <Box>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <Box>
-          <GcpPageTitle id="secretmanager">Secret Manager</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Secrets · project {accountId || '—'}
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-          Create secret
-        </Button>
-      </Stack>
+  const rows = filterRows(secrets.data?.secrets ?? [], filter, (secret) =>
+    `${secret.secretId ?? ''} ${labelSummary(secret.labels)}`,
+  )
 
-      {secrets.isError && <Alert severity="error">Failed to load secrets.</Alert>}
+  const columns: GcpColumn<Secret>[] = [
+    {
+      key: 'secretId',
+      header: 'Secret ID',
+      sortable: true,
+      sortValue: (secret) => secret.secretId ?? '',
+      render: (secret) => (
+        <Link
+          component={RouterLink}
+          to={`/gcp/secretmanager/secrets/${encodeURIComponent(secret.secretId || '')}`}
+        >
+          {secret.secretId}
+        </Link>
+      ),
+    },
+    {
+      key: 'labels',
+      header: 'Labels',
+      sortable: true,
+      sortValue: (secret) => labelSummary(secret.labels),
+      render: (secret) => labelSummary(secret.labels),
+    },
+    {
+      key: 'rotation',
+      header: 'Rotation',
+      sortable: true,
+      sortValue: (secret) => secret.rotationPeriod ?? null,
+      render: (secret) => secret.rotationPeriod || '—',
+    },
+    {
+      key: 'created',
+      header: 'Created',
+      sortable: true,
+      sortValue: (secret) => secret.createTime ?? null,
+      render: (secret) => secret.createTime || '—',
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (secret) => (
+        <Tooltip title="Delete secret">
+          <span>
+            <IconButton
+              size="small"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(secret)}
+              aria-label={`Delete ${secret.secretId}`}
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      ),
+    },
+  ]
+
+  return (
+    <Stack>
+      <GcpPageHeader
+        id="secretmanager"
+        title="Secret Manager"
+        subtitle={`Secrets · project ${accountId || '—'}`}
+        actions={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+            Create secret
+          </Button>
+        }
+      />
+
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter secrets"
+        onRefresh={() => void secrets.refetch()}
+        refreshing={secrets.isFetching}
+      />
+
       {remove.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>
           Delete failed.
         </Alert>
       )}
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Secret ID</TableCell>
-              <TableCell>Labels</TableCell>
-              <TableCell>Rotation</TableCell>
-              <TableCell>Created</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {secrets.isLoading && (
-              <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!secrets.isLoading && (secrets.data?.secrets.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No secrets in this project.
-                </TableCell>
-              </TableRow>
-            )}
-            {secrets.data?.secrets.map((secret) => (
-              <TableRow key={secret.name} hover>
-                <TableCell>
-                  <Link
-                    component={RouterLink}
-                    to={`/gcp/secretmanager/secrets/${encodeURIComponent(secret.secretId || '')}`}
-                  >
-                    {secret.secretId}
-                  </Link>
-                </TableCell>
-                <TableCell>{labelSummary(secret.labels)}</TableCell>
-                <TableCell>{secret.rotationPeriod || '—'}</TableCell>
-                <TableCell>{secret.createTime || '—'}</TableCell>
-                <TableCell align="right">
-                  <Tooltip title="Delete secret">
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={remove.isPending}
-                        onClick={() => remove.mutate(secret)}
-                        aria-label={`Delete ${secret.secretId}`}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpDataTable
+        aria-label="Secrets"
+        columns={columns}
+        rows={rows}
+        getRowKey={(secret) => secret.name}
+        loading={secrets.isLoading}
+        error={secrets.isError ? 'Failed to load secrets.' : null}
+        emptyMessage={filter ? 'No secrets match the filter.' : 'No secrets in this project.'}
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(secret) => <GcpRowDetail row={secret} />}
+        detailTitle={(secret) => secret.secretId || secret.name}
+      />
 
       <CreateSecretDialog open={createOpen} onClose={() => setCreateOpen(false)} />
-    </Box>
+    </Stack>
   )
 }

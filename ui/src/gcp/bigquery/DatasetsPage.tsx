@@ -1,35 +1,25 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Alert,
-  Box,
-  Button,
-  CircularProgress,
-  IconButton,
-  Link,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tooltip,
-  Typography,
-} from '@mui/material'
+import { Alert, Button, IconButton, Link, Stack, Tooltip } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { deleteDataset, listDatasets, type BigQueryDataset } from '../../api/gcp/bigquery'
 import { useAccount } from '../../context/AccountContext'
 import { CreateDatasetDialog } from './CreateDatasetDialog'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 
 /** BigQuery datasets in the project, with create and delete. */
 export function DatasetsPage() {
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'bigquery'] })
 
   const datasets = useQuery({
@@ -42,88 +32,103 @@ export function DatasetsPage() {
     onSuccess: invalidate,
   })
 
-  return (
-    <Box>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <Box>
-          <GcpPageTitle id="bigquery">BigQuery</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Datasets · project {accountId || '—'}
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-          Create dataset
-        </Button>
-      </Stack>
+  const rows = filterRows(datasets.data?.datasets ?? [], filter, (dataset) =>
+    `${dataset.datasetId} ${dataset.location ?? ''} ${dataset.friendlyName ?? ''}`,
+  )
 
-      {datasets.isError && <Alert severity="error">Failed to load datasets.</Alert>}
+  const columns: GcpColumn<BigQueryDataset>[] = [
+    {
+      key: 'datasetId',
+      header: 'Dataset ID',
+      sortable: true,
+      sortValue: (dataset) => dataset.datasetId,
+      render: (dataset) => (
+        <Link
+          component={RouterLink}
+          to={`/gcp/bigquery/datasets/${encodeURIComponent(dataset.datasetId)}`}
+        >
+          {dataset.datasetId}
+        </Link>
+      ),
+    },
+    {
+      key: 'location',
+      header: 'Location',
+      sortable: true,
+      sortValue: (dataset) => dataset.location ?? null,
+      render: (dataset) => dataset.location || '—',
+    },
+    {
+      key: 'friendlyName',
+      header: 'Friendly name',
+      sortable: true,
+      sortValue: (dataset) => dataset.friendlyName ?? null,
+      render: (dataset) => dataset.friendlyName || '—',
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (dataset) => (
+        <Tooltip title="Delete dataset">
+          <span>
+            <IconButton
+              size="small"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(dataset)}
+              aria-label={`Delete ${dataset.datasetId}`}
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      ),
+    },
+  ]
+
+  return (
+    <Stack>
+      <GcpPageHeader
+        id="bigquery"
+        title="BigQuery"
+        subtitle={`Datasets · project ${accountId || '—'}`}
+        actions={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+            Create dataset
+          </Button>
+        }
+      />
+
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter datasets"
+        onRefresh={() => void datasets.refetch()}
+        refreshing={datasets.isFetching}
+      />
+
       {remove.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>
           Delete failed.
         </Alert>
       )}
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Dataset ID</TableCell>
-              <TableCell>Location</TableCell>
-              <TableCell>Friendly name</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {datasets.isLoading && (
-              <TableRow>
-                <TableCell colSpan={4} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!datasets.isLoading && (datasets.data?.datasets.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={4} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No datasets in this project.
-                </TableCell>
-              </TableRow>
-            )}
-            {datasets.data?.datasets.map((dataset) => (
-              <TableRow key={dataset.datasetId} hover>
-                <TableCell>
-                  <Link
-                    component={RouterLink}
-                    to={`/gcp/bigquery/datasets/${encodeURIComponent(dataset.datasetId)}`}
-                  >
-                    {dataset.datasetId}
-                  </Link>
-                </TableCell>
-                <TableCell>{dataset.location || '—'}</TableCell>
-                <TableCell>{dataset.friendlyName || '—'}</TableCell>
-                <TableCell align="right">
-                  <Tooltip title="Delete dataset">
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={remove.isPending}
-                        onClick={() => remove.mutate(dataset)}
-                        aria-label={`Delete ${dataset.datasetId}`}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpDataTable
+        aria-label="BigQuery datasets"
+        columns={columns}
+        rows={rows}
+        getRowKey={(dataset) => dataset.datasetId}
+        loading={datasets.isLoading}
+        error={datasets.isError ? 'Failed to load datasets.' : null}
+        emptyMessage={filter ? 'No datasets match the filter.' : 'No datasets in this project.'}
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(dataset) => <GcpRowDetail row={dataset} />}
+        detailTitle={(dataset) => dataset.datasetId}
+      />
 
       <CreateDatasetDialog open={createOpen} onClose={() => setCreateOpen(false)} />
-    </Box>
+    </Stack>
   )
 }

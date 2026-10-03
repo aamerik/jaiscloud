@@ -2,21 +2,12 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
-  Box,
   Button,
   Chip,
-  CircularProgress,
   IconButton,
   Link,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   Tooltip,
-  Typography,
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
@@ -25,13 +16,19 @@ import { deleteChannel, listChannels, type EventarcChannel } from '../../api/gcp
 import { useAccount } from '../../context/AccountContext'
 import { ChannelDialog } from './ChannelDialog'
 import { channelProviderLabel, channelStateColor, shortDate } from './util'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 
 /** Eventarc channels across every location, with create/delete. */
 export function ChannelsPage() {
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'eventarc'] })
 
@@ -45,98 +42,134 @@ export function ChannelsPage() {
     onSuccess: invalidate,
   })
 
-  return (
-    <Box>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <Box>
-          <GcpPageTitle id="eventarc">Eventarc</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Channels · project {accountId || '—'}
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-          Create channel
-        </Button>
-      </Stack>
+  const rows = filterRows(channels.data?.channels ?? [], filter, (channel) =>
+    [
+      channel.name,
+      channel.location,
+      channel.state ?? '',
+      channelProviderLabel(channel),
+      channel.pubsubTopic ?? '',
+    ].join(' '),
+  )
 
-      {channels.isError && <Alert severity="error">Failed to load channels.</Alert>}
+  const columns: GcpColumn<EventarcChannel>[] = [
+    {
+      key: 'name',
+      header: 'Name',
+      sortable: true,
+      sortValue: (channel) => channel.name,
+      render: (channel) => (
+        <Link
+          component={RouterLink}
+          to={`/gcp/eventarc/channels/${encodeURIComponent(channel.location)}/${encodeURIComponent(channel.name)}`}
+        >
+          {channel.name}
+        </Link>
+      ),
+    },
+    {
+      key: 'location',
+      header: 'Location',
+      sortable: true,
+      sortValue: (channel) => channel.location,
+      render: (channel) => channel.location || '—',
+    },
+    {
+      key: 'state',
+      header: 'State',
+      sortable: true,
+      sortValue: (channel) => channel.state ?? '',
+      render: (channel) => (
+        <Chip size="small" label={channel.state || '—'} color={channelStateColor(channel.state)} />
+      ),
+    },
+    {
+      key: 'provider',
+      header: 'Provider',
+      sortable: true,
+      sortValue: (channel) => channelProviderLabel(channel),
+      render: (channel) => channelProviderLabel(channel),
+    },
+    {
+      key: 'pubsubTopic',
+      header: 'Pub/Sub topic',
+      sortable: true,
+      sortValue: (channel) => channel.pubsubTopic ?? '',
+      render: (channel) => channel.pubsubTopic || '—',
+    },
+    {
+      key: 'created',
+      header: 'Created',
+      sortable: true,
+      sortValue: (channel) => channel.createTime ?? '',
+      render: (channel) => shortDate(channel.createTime),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (channel) => (
+        <Tooltip title="Delete channel">
+          <span>
+            <IconButton
+              size="small"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(channel)}
+              aria-label={`Delete ${channel.name}`}
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      ),
+    },
+  ]
+
+  return (
+    <Stack>
+      <GcpPageHeader
+        id="eventarc"
+        title="Eventarc"
+        subtitle={`Channels · project ${accountId || '—'}`}
+        actions={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+            Create channel
+          </Button>
+        }
+      />
+
       {remove.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {(remove.error as Error).message}
         </Alert>
       )}
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Location</TableCell>
-              <TableCell>State</TableCell>
-              <TableCell>Provider</TableCell>
-              <TableCell>Pub/Sub topic</TableCell>
-              <TableCell>Created</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {channels.isLoading && (
-              <TableRow>
-                <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!channels.isLoading && (channels.data?.channels.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={7} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No Eventarc channels in this project.
-                </TableCell>
-              </TableRow>
-            )}
-            {channels.data?.channels.map((channel) => (
-              <TableRow key={`${channel.location}/${channel.name}`} hover>
-                <TableCell>
-                  <Link
-                    component={RouterLink}
-                    to={`/gcp/eventarc/channels/${encodeURIComponent(channel.location)}/${encodeURIComponent(channel.name)}`}
-                  >
-                    {channel.name}
-                  </Link>
-                </TableCell>
-                <TableCell>{channel.location || '—'}</TableCell>
-                <TableCell>
-                  <Chip size="small" label={channel.state || '—'} color={channelStateColor(channel.state)} />
-                </TableCell>
-                <TableCell>{channelProviderLabel(channel)}</TableCell>
-                <TableCell sx={{ maxWidth: 340, overflowWrap: 'anywhere' }}>
-                  {channel.pubsubTopic || '—'}
-                </TableCell>
-                <TableCell>{shortDate(channel.createTime)}</TableCell>
-                <TableCell align="right">
-                  <Tooltip title="Delete channel">
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={remove.isPending}
-                        onClick={() => remove.mutate(channel)}
-                        aria-label={`Delete ${channel.name}`}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter channels"
+        onRefresh={() => void channels.refetch()}
+        refreshing={channels.isFetching}
+      />
+
+      <GcpDataTable
+        aria-label="Eventarc channels"
+        columns={columns}
+        rows={rows}
+        getRowKey={(channel) => `${channel.location}/${channel.name}`}
+        loading={channels.isLoading}
+        error={channels.isError ? 'Failed to load channels.' : null}
+        emptyMessage={
+          filter ? 'No channels match the filter.' : 'No Eventarc channels in this project.'
+        }
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(channel) => <GcpRowDetail row={channel} />}
+        detailTitle={(channel) => channel.name}
+      />
 
       <ChannelDialog open={createOpen} onClose={() => setCreateOpen(false)} />
-    </Box>
+    </Stack>
   )
 }

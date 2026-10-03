@@ -1,21 +1,6 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Alert,
-  Box,
-  Chip,
-  CircularProgress,
-  IconButton,
-  Link,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tooltip,
-  Typography,
-} from '@mui/material'
+import { Alert, Chip, IconButton, Link, Stack, Tooltip } from '@mui/material'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import StopIcon from '@mui/icons-material/Stop'
@@ -29,7 +14,11 @@ import {
 } from '../../api/gcp/dataproc'
 import { useAccount } from '../../context/AccountContext'
 import { clusterStateColor, shortDate } from './util'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 
 function target(cluster: DataprocCluster) {
   return { region: cluster.region, cluster: cluster.id }
@@ -39,6 +28,8 @@ function target(cluster: DataprocCluster) {
 export function ClustersPage() {
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'dataproc'] })
 
@@ -66,113 +57,143 @@ export function ClustersPage() {
   const busy = remove.isPending || start.isPending || stop.isPending
   const actionError = remove.error ?? start.error ?? stop.error
 
-  return (
-    <Box>
-      <Stack sx={{ mb: 2 }}>
-        <GcpPageTitle id="dataproc">Dataproc</GcpPageTitle>
-        <Typography variant="body2" color="text.secondary">
-          Clusters · project {accountId || '—'}
-        </Typography>
-      </Stack>
+  const rows = filterRows(clusters.data?.clusters ?? [], filter, (cluster) =>
+    [cluster.id, cluster.region, cluster.status, cluster.clusterUuid ?? ''].join(' '),
+  )
 
-      {clusters.isError && <Alert severity="error">Failed to load clusters.</Alert>}
+  const columns: GcpColumn<DataprocCluster>[] = [
+    {
+      key: 'id',
+      header: 'Name',
+      sortable: true,
+      sortValue: (cluster) => cluster.id,
+      render: (cluster) => (
+        <Link
+          component={RouterLink}
+          to={`/gcp/dataproc/clusters/${encodeURIComponent(cluster.region)}/${encodeURIComponent(cluster.id)}`}
+        >
+          {cluster.id}
+        </Link>
+      ),
+    },
+    {
+      key: 'region',
+      header: 'Region',
+      sortable: true,
+      sortValue: (cluster) => cluster.region,
+      render: (cluster) => cluster.region || '—',
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      sortable: true,
+      sortValue: (cluster) => cluster.status,
+      render: (cluster) => (
+        <Chip size="small" label={cluster.status || '—'} color={clusterStateColor(cluster.status)} />
+      ),
+    },
+    {
+      key: 'clusterUuid',
+      header: 'Cluster UUID',
+      sortable: true,
+      sortValue: (cluster) => cluster.clusterUuid ?? '',
+      render: (cluster) => cluster.clusterUuid || '—',
+    },
+    {
+      key: 'created',
+      header: 'Created',
+      sortable: true,
+      sortValue: (cluster) => cluster.createTime ?? '',
+      render: (cluster) => shortDate(cluster.createTime),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (cluster) => (
+        <>
+          {cluster.status === 'STOPPED' ? (
+            <Tooltip title="Start">
+              <span>
+                <IconButton
+                  size="small"
+                  disabled={busy || cluster.status !== 'STOPPED'}
+                  onClick={() => start.mutate(target(cluster))}
+                  aria-label={`Start ${cluster.id}`}
+                >
+                  <PlayArrowIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          ) : (
+            <Tooltip title="Stop">
+              <span>
+                <IconButton
+                  size="small"
+                  disabled={busy || cluster.status !== 'RUNNING'}
+                  onClick={() => stop.mutate(target(cluster))}
+                  aria-label={`Stop ${cluster.id}`}
+                >
+                  <StopIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
+          <Tooltip title="Delete cluster">
+            <span>
+              <IconButton
+                size="small"
+                disabled={busy}
+                onClick={() => remove.mutate(target(cluster))}
+                aria-label={`Delete ${cluster.id}`}
+              >
+                <DeleteOutlineIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </>
+      ),
+    },
+  ]
+
+  return (
+    <Stack>
+      <GcpPageHeader
+        id="dataproc"
+        title="Dataproc"
+        subtitle={`Clusters · project ${accountId || '—'}`}
+      />
+
       {actionError && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {(actionError as Error).message}
         </Alert>
       )}
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Region</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell>Cluster UUID</TableCell>
-              <TableCell>Created</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {clusters.isLoading && (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!clusters.isLoading && (clusters.data?.clusters.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No Dataproc clusters in this project.
-                </TableCell>
-              </TableRow>
-            )}
-            {clusters.data?.clusters.map((cluster) => (
-              <TableRow key={`${cluster.region}/${cluster.id}`} hover>
-                <TableCell>
-                  <Link
-                    component={RouterLink}
-                    to={`/gcp/dataproc/clusters/${encodeURIComponent(cluster.region)}/${encodeURIComponent(cluster.id)}`}
-                  >
-                    {cluster.id}
-                  </Link>
-                </TableCell>
-                <TableCell>{cluster.region || '—'}</TableCell>
-                <TableCell>
-                  <Chip size="small" label={cluster.status || '—'} color={clusterStateColor(cluster.status)} />
-                </TableCell>
-                <TableCell sx={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {cluster.clusterUuid || '—'}
-                </TableCell>
-                <TableCell>{shortDate(cluster.createTime)}</TableCell>
-                <TableCell align="right">
-                  {cluster.status === 'STOPPED' ? (
-                    <Tooltip title="Start">
-                      <span>
-                        <IconButton
-                          size="small"
-                          disabled={busy || cluster.status !== 'STOPPED'}
-                          onClick={() => start.mutate(target(cluster))}
-                          aria-label={`Start ${cluster.id}`}
-                        >
-                          <PlayArrowIcon fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
-                  ) : (
-                    <Tooltip title="Stop">
-                      <span>
-                        <IconButton
-                          size="small"
-                          disabled={busy || cluster.status !== 'RUNNING'}
-                          onClick={() => stop.mutate(target(cluster))}
-                          aria-label={`Stop ${cluster.id}`}
-                        >
-                          <StopIcon fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
-                  )}
-                  <Tooltip title="Delete cluster">
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={busy}
-                        onClick={() => remove.mutate(target(cluster))}
-                        aria-label={`Delete ${cluster.id}`}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
-    </Box>
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter clusters"
+        onRefresh={() => void clusters.refetch()}
+        refreshing={clusters.isFetching}
+      />
+
+      <GcpDataTable
+        aria-label="Dataproc clusters"
+        columns={columns}
+        rows={rows}
+        getRowKey={(cluster) => `${cluster.region}/${cluster.id}`}
+        loading={clusters.isLoading}
+        error={clusters.isError ? 'Failed to load clusters.' : null}
+        emptyMessage={
+          filter ? 'No clusters match the filter.' : 'No Dataproc clusters in this project.'
+        }
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(cluster) => <GcpRowDetail row={cluster} />}
+        detailTitle={(cluster) => cluster.id}
+      />
+    </Stack>
   )
 }

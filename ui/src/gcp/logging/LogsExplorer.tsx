@@ -23,7 +23,7 @@ import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight'
 import { listEntries, listLogs, type LogEntry } from '../../api/gcp/logging'
 import { useAccount } from '../../context/AccountContext'
 import { lastSegment, payloadPreview, severityColor, shortDate } from './util'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpPageHeader } from '../common/GcpPageHeader'
 
 /** Cloud Logging Logs Explorer: filter, browse and inspect log entries. */
 export function LogsExplorer() {
@@ -47,17 +47,11 @@ export function LogsExplorer() {
 
   return (
     <Box>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 1, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <Box>
-          <GcpPageTitle id="logging">Cloud Logging</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Logs explorer · project {accountId || '—'}
-          </Typography>
-        </Box>
-      </Stack>
+      <GcpPageHeader
+        id="logging"
+        title="Cloud Logging"
+        subtitle={`Logs explorer · project ${accountId || '—'}`}
+      />
 
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 2 }}>
         <TextField

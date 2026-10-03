@@ -1,23 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Alert,
-  Box,
-  Button,
-  Chip,
-  CircularProgress,
-  IconButton,
-  Link,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tooltip,
-  Typography,
-} from '@mui/material'
+import { Alert, Button, Chip, IconButton, Link, Stack, Tooltip } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import { Link as RouterLink } from 'react-router-dom'
@@ -25,7 +8,11 @@ import { deleteWorkflow, listWorkflows, type Workflow } from '../../api/gcp/work
 import { useAccount } from '../../context/AccountContext'
 import { WorkflowDialog } from './WorkflowDialog'
 import { shortDate, workflowStateColor } from './util'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 
 function target(workflow: Workflow) {
   return { location: workflow.location, workflow: workflow.id }
@@ -36,6 +23,8 @@ export function WorkflowsPage() {
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'workflows'] })
 
@@ -50,94 +39,123 @@ export function WorkflowsPage() {
     onSuccess: invalidate,
   })
 
-  return (
-    <Box>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <Box>
-          <GcpPageTitle id="workflows">Workflows</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Workflows · project {accountId || '—'}
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-          Create workflow
-        </Button>
-      </Stack>
+  const rows = filterRows(workflows.data?.workflows ?? [], filter, (workflow) =>
+    `${workflow.id} ${workflow.location} ${workflow.state ?? ''}`,
+  )
 
-      {workflows.isError && <Alert severity="error">Failed to load workflows.</Alert>}
+  const columns: GcpColumn<Workflow>[] = [
+    {
+      key: 'id',
+      header: 'Name',
+      sortable: true,
+      sortValue: (workflow) => workflow.id,
+      render: (workflow) => (
+        <Link
+          component={RouterLink}
+          to={`/gcp/workflows/${encodeURIComponent(workflow.location)}/${encodeURIComponent(workflow.id)}`}
+        >
+          {workflow.id}
+        </Link>
+      ),
+    },
+    {
+      key: 'location',
+      header: 'Location',
+      sortable: true,
+      sortValue: (workflow) => workflow.location ?? null,
+      render: (workflow) => workflow.location || '—',
+    },
+    {
+      key: 'state',
+      header: 'State',
+      sortable: true,
+      sortValue: (workflow) => workflow.state ?? null,
+      render: (workflow) => (
+        <Chip
+          size="small"
+          label={workflow.state || '—'}
+          color={workflowStateColor(workflow.state)}
+        />
+      ),
+    },
+    {
+      key: 'revisionId',
+      header: 'Revision',
+      sortable: true,
+      sortValue: (workflow) => workflow.revisionId ?? null,
+      render: (workflow) => workflow.revisionId || '—',
+    },
+    {
+      key: 'updateTime',
+      header: 'Last updated',
+      sortable: true,
+      sortValue: (workflow) => workflow.updateTime ?? null,
+      render: (workflow) => shortDate(workflow.updateTime),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (workflow) => (
+        <Tooltip title="Delete workflow">
+          <span>
+            <IconButton
+              size="small"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(target(workflow))}
+              aria-label={`Delete ${workflow.id}`}
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      ),
+    },
+  ]
+
+  return (
+    <Stack>
+      <GcpPageHeader
+        id="workflows"
+        title="Workflows"
+        subtitle={`Workflows · project ${accountId || '—'}`}
+        actions={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+            Create workflow
+          </Button>
+        }
+      />
+
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter workflows"
+        onRefresh={() => void workflows.refetch()}
+        refreshing={workflows.isFetching}
+      />
+
       {remove.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {(remove.error as Error).message}
         </Alert>
       )}
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Location</TableCell>
-              <TableCell>State</TableCell>
-              <TableCell>Revision</TableCell>
-              <TableCell>Last updated</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {workflows.isLoading && (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!workflows.isLoading && (workflows.data?.workflows.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No workflows in this project.
-                </TableCell>
-              </TableRow>
-            )}
-            {workflows.data?.workflows.map((workflow) => (
-              <TableRow key={`${workflow.location}/${workflow.id}`} hover>
-                <TableCell>
-                  <Link
-                    component={RouterLink}
-                    to={`/gcp/workflows/${encodeURIComponent(workflow.location)}/${encodeURIComponent(workflow.id)}`}
-                  >
-                    {workflow.id}
-                  </Link>
-                </TableCell>
-                <TableCell>{workflow.location || '—'}</TableCell>
-                <TableCell>
-                  <Chip size="small" label={workflow.state || '—'} color={workflowStateColor(workflow.state)} />
-                </TableCell>
-                <TableCell>{workflow.revisionId || '—'}</TableCell>
-                <TableCell>{shortDate(workflow.updateTime)}</TableCell>
-                <TableCell align="right">
-                  <Tooltip title="Delete workflow">
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={remove.isPending}
-                        onClick={() => remove.mutate(target(workflow))}
-                        aria-label={`Delete ${workflow.id}`}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpDataTable
+        aria-label="Workflows"
+        columns={columns}
+        rows={rows}
+        getRowKey={(workflow) => `${workflow.location}/${workflow.id}`}
+        loading={workflows.isLoading}
+        error={workflows.isError ? 'Failed to load workflows.' : null}
+        emptyMessage={filter ? 'No workflows match the filter.' : 'No workflows in this project.'}
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(workflow) => <GcpRowDetail row={workflow} />}
+        detailTitle={(workflow) => workflow.id}
+      />
 
       <WorkflowDialog open={createOpen} onClose={() => setCreateOpen(false)} />
-    </Box>
+    </Stack>
   )
 }

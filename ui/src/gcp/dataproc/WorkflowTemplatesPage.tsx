@@ -1,89 +1,111 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import {
-  Alert,
-  Box,
-  CircularProgress,
-  Link,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Typography,
-} from '@mui/material'
+import { Link, Stack } from '@mui/material'
 import { Link as RouterLink } from 'react-router-dom'
-import { listWorkflowTemplates } from '../../api/gcp/dataproc'
+import {
+  listWorkflowTemplates,
+  type DataprocWorkflowTemplate,
+} from '../../api/gcp/dataproc'
 import { useAccount } from '../../context/AccountContext'
 import { shortDate } from './util'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 
 /** Dataproc workflow templates across every region. */
 export function WorkflowTemplatesPage() {
   const { accountId } = useAccount()
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
 
   const templates = useQuery({
     queryKey: ['gcp', 'dataproc', 'workflow-templates', accountId],
     queryFn: listWorkflowTemplates,
   })
 
+  const rows = filterRows(templates.data?.templates ?? [], filter, (template) =>
+    [template.id, template.region, String(template.version)].join(' '),
+  )
+
+  const columns: GcpColumn<DataprocWorkflowTemplate>[] = [
+    {
+      key: 'id',
+      header: 'Template',
+      sortable: true,
+      sortValue: (template) => template.id,
+      render: (template) => (
+        <Link
+          component={RouterLink}
+          to={`/gcp/dataproc/workflow-templates/${encodeURIComponent(template.region)}/${encodeURIComponent(template.id)}`}
+        >
+          {template.id}
+        </Link>
+      ),
+    },
+    {
+      key: 'region',
+      header: 'Region',
+      sortable: true,
+      sortValue: (template) => template.region,
+      render: (template) => template.region || '—',
+    },
+    {
+      key: 'version',
+      header: 'Version',
+      sortable: true,
+      sortValue: (template) => template.version,
+      render: (template) => template.version || '—',
+    },
+    {
+      key: 'created',
+      header: 'Created',
+      sortable: true,
+      sortValue: (template) => template.createTime ?? '',
+      render: (template) => shortDate(template.createTime),
+    },
+    {
+      key: 'updated',
+      header: 'Updated',
+      sortable: true,
+      sortValue: (template) => template.updateTime ?? '',
+      render: (template) => shortDate(template.updateTime),
+    },
+  ]
+
   return (
-    <Box>
-      <Stack sx={{ mb: 2 }}>
-        <GcpPageTitle id="dataproc">Dataproc</GcpPageTitle>
-        <Typography variant="body2" color="text.secondary">
-          Workflow templates · project {accountId || '—'}
-        </Typography>
-      </Stack>
+    <Stack>
+      <GcpPageHeader
+        id="dataproc"
+        title="Dataproc"
+        subtitle={`Workflow templates · project ${accountId || '—'}`}
+      />
 
-      {templates.isError && <Alert severity="error">Failed to load workflow templates.</Alert>}
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter workflow templates"
+        onRefresh={() => void templates.refetch()}
+        refreshing={templates.isFetching}
+      />
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Template</TableCell>
-              <TableCell>Region</TableCell>
-              <TableCell>Version</TableCell>
-              <TableCell>Created</TableCell>
-              <TableCell>Updated</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {templates.isLoading && (
-              <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!templates.isLoading && (templates.data?.templates.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No workflow templates in this project.
-                </TableCell>
-              </TableRow>
-            )}
-            {templates.data?.templates.map((template) => (
-              <TableRow key={`${template.region}/${template.id}`} hover>
-                <TableCell>
-                  <Link
-                    component={RouterLink}
-                    to={`/gcp/dataproc/workflow-templates/${encodeURIComponent(template.region)}/${encodeURIComponent(template.id)}`}
-                  >
-                    {template.id}
-                  </Link>
-                </TableCell>
-                <TableCell>{template.region || '—'}</TableCell>
-                <TableCell>{template.version || '—'}</TableCell>
-                <TableCell>{shortDate(template.createTime)}</TableCell>
-                <TableCell>{shortDate(template.updateTime)}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
-    </Box>
+      <GcpDataTable
+        aria-label="Dataproc workflow templates"
+        columns={columns}
+        rows={rows}
+        getRowKey={(template) => `${template.region}/${template.id}`}
+        loading={templates.isLoading}
+        error={templates.isError ? 'Failed to load workflow templates.' : null}
+        emptyMessage={
+          filter ? 'No workflow templates match the filter.' : 'No workflow templates in this project.'
+        }
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(template) => <GcpRowDetail row={template} />}
+        detailTitle={(template) => template.id}
+      />
+    </Stack>
   )
 }

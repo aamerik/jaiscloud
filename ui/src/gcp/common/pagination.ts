@@ -22,3 +22,39 @@ export function filterRows<T>(rows: T[], query: string, toText: (row: T) => stri
   if (!q) return rows
   return rows.filter((row) => toText(row).toLowerCase().includes(q))
 }
+
+export type SortDirection = 'asc' | 'desc'
+
+/**
+ * Compare two cell values for sorting. `null`/`undefined` always sort last
+ * regardless of direction (handled by the caller negating only the primary
+ * comparison), numbers compare numerically, dates chronologically and
+ * everything else as case-insensitive strings.
+ */
+function compareValues(a: unknown, b: unknown): number {
+  if (a == null && b == null) return 0
+  if (a == null) return 1
+  if (b == null) return -1
+  if (typeof a === 'number' && typeof b === 'number') return a - b
+  if (a instanceof Date && b instanceof Date) return a.getTime() - b.getTime()
+  return String(a).toLowerCase().localeCompare(String(b).toLowerCase())
+}
+
+/**
+ * Return a sorted copy of `rows` by the value derived from `getValue`. Sorting
+ * is stable and never mutates the input; `null`/`undefined` values sort last.
+ */
+export function sortRows<T>(
+  rows: T[],
+  getValue: (row: T) => unknown,
+  direction: SortDirection,
+): T[] {
+  const factor = direction === 'desc' ? -1 : 1
+  return [...rows].sort((a, b) => {
+    const av = getValue(a)
+    const bv = getValue(b)
+    // Keep nulls last in both directions, mirroring the console.
+    if (av == null || bv == null) return compareValues(av, bv)
+    return factor * compareValues(av, bv)
+  })
+}

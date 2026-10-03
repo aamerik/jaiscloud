@@ -1,33 +1,24 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import {
-  Alert,
-  Box,
-  Button,
-  CircularProgress,
-  Link,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  TextField,
-  Typography,
-} from '@mui/material'
+import { Button, Link, Stack, TextField } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import { Link as RouterLink } from 'react-router-dom'
-import { listKeyRings } from '../../api/gcp/kms'
+import { listKeyRings, type KeyRing } from '../../api/gcp/kms'
 import { useAccount } from '../../context/AccountContext'
 import { CreateKeyRingDialog } from './CreateKeyRingDialog'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 
 /** KMS key rings in one location, with create. */
 export function KeyRingsPage() {
   const { accountId } = useAccount()
   const [location, setLocation] = useState('global')
   const [createOpen, setCreateOpen] = useState(false)
+  const [selected, setSelected] = useState<string[]>([])
+  const [filter, setFilter] = useState('')
 
   const keyRings = useQuery({
     queryKey: ['gcp', 'kms', 'keyRings', location, accountId],
@@ -35,81 +26,99 @@ export function KeyRingsPage() {
     enabled: Boolean(location),
   })
 
+  const rows = filterRows(keyRings.data?.keyRings ?? [], filter, (keyRing) =>
+    `${keyRing.keyRingId ?? ''} ${keyRing.location ?? ''}`,
+  )
+
+  const columns: GcpColumn<KeyRing>[] = [
+    {
+      key: 'keyRingId',
+      header: 'Key ring',
+      sortable: true,
+      sortValue: (keyRing) => keyRing.keyRingId ?? keyRing.name,
+      render: (keyRing) => (
+        <Link
+          component={RouterLink}
+          to={`/gcp/kms/keyrings/${encodeURIComponent(keyRing.location || location)}/${encodeURIComponent(keyRing.keyRingId || '')}`}
+        >
+          {keyRing.keyRingId}
+        </Link>
+      ),
+    },
+    {
+      key: 'location',
+      header: 'Location',
+      sortable: true,
+      sortValue: (keyRing) => keyRing.location ?? null,
+      render: (keyRing) => keyRing.location || '—',
+    },
+    {
+      key: 'createTime',
+      header: 'Created',
+      sortable: true,
+      sortValue: (keyRing) => keyRing.createTime ?? null,
+      render: (keyRing) => keyRing.createTime || '—',
+    },
+  ]
+
   return (
-    <Box>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <Box>
-          <GcpPageTitle id="kms">Cloud KMS</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Key rings · project {accountId || '—'}
-          </Typography>
-        </Box>
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-          <TextField
-            label="Location"
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            size="small"
-          />
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            disabled={!location}
-            onClick={() => setCreateOpen(true)}
-          >
-            Create key ring
-          </Button>
-        </Stack>
-      </Stack>
+    <Stack>
+      <GcpPageHeader
+        id="kms"
+        title="Cloud KMS"
+        subtitle={`Key rings · project ${accountId || '—'}`}
+        actions={
+          <>
+            <TextField
+              label="Location"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              size="small"
+            />
+            <Button
+              variant="contained"
+              startIcon={<AddIcon />}
+              disabled={!location}
+              onClick={() => setCreateOpen(true)}
+            >
+              Create key ring
+            </Button>
+          </>
+        }
+      />
 
-      {keyRings.isError && <Alert severity="error">Failed to load key rings.</Alert>}
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter key rings"
+        onRefresh={() => void keyRings.refetch()}
+        refreshing={keyRings.isFetching}
+      />
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Key ring</TableCell>
-              <TableCell>Location</TableCell>
-              <TableCell>Created</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {keyRings.isLoading && (
-              <TableRow>
-                <TableCell colSpan={3} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!keyRings.isLoading && (keyRings.data?.keyRings.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={3} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No key rings in {location || 'this location'}.
-                </TableCell>
-              </TableRow>
-            )}
-            {keyRings.data?.keyRings.map((keyRing) => (
-              <TableRow key={keyRing.name} hover>
-                <TableCell>
-                  <Link
-                    component={RouterLink}
-                    to={`/gcp/kms/keyrings/${encodeURIComponent(keyRing.location || location)}/${encodeURIComponent(keyRing.keyRingId || '')}`}
-                  >
-                    {keyRing.keyRingId}
-                  </Link>
-                </TableCell>
-                <TableCell>{keyRing.location}</TableCell>
-                <TableCell>{keyRing.createTime || '—'}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpDataTable
+        aria-label="Key rings"
+        columns={columns}
+        rows={rows}
+        getRowKey={(keyRing) => keyRing.name}
+        loading={keyRings.isLoading}
+        error={keyRings.isError ? 'Failed to load key rings.' : null}
+        emptyMessage={
+          filter
+            ? 'No key rings match the filter.'
+            : `No key rings in ${location || 'this location'}.`
+        }
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(keyRing) => <GcpRowDetail row={keyRing} />}
+        detailTitle={(keyRing) => keyRing.keyRingId || keyRing.name}
+      />
 
-      <CreateKeyRingDialog open={createOpen} location={location} onClose={() => setCreateOpen(false)} />
-    </Box>
+      <CreateKeyRingDialog
+        open={createOpen}
+        location={location}
+        onClose={() => setCreateOpen(false)}
+      />
+    </Stack>
   )
 }

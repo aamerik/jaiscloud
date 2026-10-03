@@ -1,29 +1,24 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Alert,
-  Box,
-  Button,
-  Chip,
-  CircularProgress,
-  IconButton,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tooltip,
-  Typography,
-} from '@mui/material'
+import { Alert, Box, Button, Chip, IconButton, Tooltip } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import { deleteExclusion, listExclusions, type LogExclusion } from '../../api/gcp/logging'
 import { useAccount } from '../../context/AccountContext'
 import { ExclusionDialog } from './ExclusionDialog'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
+
+const ellipsisSx = {
+  maxWidth: 360,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+} as const
 
 /** Resource-level log exclusions: list, create, edit and delete. */
 export function ExclusionsPage() {
@@ -31,6 +26,8 @@ export function ExclusionsPage() {
   const queryClient = useQueryClient()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<LogExclusion | undefined>(undefined)
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
 
   const exclusions = useQuery({
     queryKey: ['gcp', 'logging', 'exclusions', accountId],
@@ -42,108 +39,122 @@ export function ExclusionsPage() {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'logging', 'exclusions'] }),
   })
 
-  const rows = exclusions.data?.exclusions ?? []
+  const rows = filterRows(exclusions.data?.exclusions ?? [], filter, (exclusion) => exclusion.name)
+
+  const columns: GcpColumn<LogExclusion>[] = [
+    {
+      key: 'name',
+      header: 'Name',
+      sortable: true,
+      sortValue: (exclusion) => exclusion.name,
+      render: (exclusion) => exclusion.name,
+    },
+    {
+      key: 'filter',
+      header: 'Filter',
+      sortable: true,
+      sortValue: (exclusion) => exclusion.filter,
+      render: (exclusion) => <Box sx={ellipsisSx}>{exclusion.filter}</Box>,
+    },
+    {
+      key: 'description',
+      header: 'Description',
+      sortable: true,
+      sortValue: (exclusion) => exclusion.description ?? '',
+      render: (exclusion) => exclusion.description || '—',
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      sortable: true,
+      sortValue: (exclusion) => (exclusion.disabled ? 'DISABLED' : 'ENABLED'),
+      render: (exclusion) => (
+        <Chip
+          size="small"
+          label={exclusion.disabled ? 'DISABLED' : 'ENABLED'}
+          color={exclusion.disabled ? 'default' : 'success'}
+        />
+      ),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (exclusion) => (
+        <>
+          <Tooltip title="Edit exclusion">
+            <IconButton
+              size="small"
+              onClick={() => {
+                setEditing(exclusion)
+                setDialogOpen(true)
+              }}
+            >
+              <EditOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Delete exclusion">
+            <IconButton
+              size="small"
+              onClick={() => remove.mutate(exclusion.name)}
+              disabled={remove.isPending}
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </>
+      ),
+    },
+  ]
 
   return (
     <Box>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <Box>
-          <GcpPageTitle id="logging">Exclusions</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Excluded entries are not ingested · project {accountId || '—'}
-          </Typography>
-        </Box>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => {
-            setEditing(undefined)
-            setDialogOpen(true)
-          }}
-        >
-          Create exclusion
-        </Button>
-      </Stack>
+      <GcpPageHeader
+        id="logging"
+        title="Exclusions"
+        subtitle={`Excluded entries are not ingested · project ${accountId || '—'}`}
+        actions={
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => {
+              setEditing(undefined)
+              setDialogOpen(true)
+            }}
+          >
+            Create exclusion
+          </Button>
+        }
+      />
 
-      {exclusions.isError && <Alert severity="error">Failed to load exclusions.</Alert>}
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter exclusions"
+        onRefresh={() => void exclusions.refetch()}
+        refreshing={exclusions.isFetching}
+      />
+
       {remove.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>
           Delete failed.
         </Alert>
       )}
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Filter</TableCell>
-              <TableCell>Description</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {exclusions.isLoading && (
-              <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!exclusions.isLoading && rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No exclusions in this project.
-                </TableCell>
-              </TableRow>
-            )}
-            {rows.map((exclusion) => (
-              <TableRow key={exclusion.name} hover>
-                <TableCell>{exclusion.name}</TableCell>
-                <TableCell
-                  sx={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                >
-                  {exclusion.filter}
-                </TableCell>
-                <TableCell>{exclusion.description || '—'}</TableCell>
-                <TableCell>
-                  <Chip
-                    size="small"
-                    label={exclusion.disabled ? 'DISABLED' : 'ENABLED'}
-                    color={exclusion.disabled ? 'default' : 'success'}
-                  />
-                </TableCell>
-                <TableCell align="right">
-                  <Tooltip title="Edit exclusion">
-                    <IconButton
-                      size="small"
-                      onClick={() => {
-                        setEditing(exclusion)
-                        setDialogOpen(true)
-                      }}
-                    >
-                      <EditOutlinedIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Delete exclusion">
-                    <IconButton
-                      size="small"
-                      onClick={() => remove.mutate(exclusion.name)}
-                      disabled={remove.isPending}
-                    >
-                      <DeleteOutlineIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpDataTable
+        aria-label="Log exclusions"
+        columns={columns}
+        rows={rows}
+        getRowKey={(exclusion) => exclusion.name}
+        loading={exclusions.isLoading}
+        error={exclusions.isError ? 'Failed to load exclusions.' : null}
+        emptyMessage={filter ? 'No exclusions match the filter.' : 'No exclusions in this project.'}
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(exclusion) => <GcpRowDetail row={exclusion} />}
+        detailTitle={(exclusion) => exclusion.name}
+      />
 
       <ExclusionDialog open={dialogOpen} onClose={() => setDialogOpen(false)} initial={editing} />
     </Box>

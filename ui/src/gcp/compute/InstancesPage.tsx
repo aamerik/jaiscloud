@@ -1,21 +1,6 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Alert,
-  Box,
-  Chip,
-  CircularProgress,
-  IconButton,
-  Link,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tooltip,
-  Typography,
-} from '@mui/material'
+import { Alert, Chip, IconButton, Link, Stack, Tooltip } from '@mui/material'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import StopIcon from '@mui/icons-material/Stop'
@@ -29,7 +14,11 @@ import {
 } from '../../api/gcp/compute'
 import { useAccount } from '../../context/AccountContext'
 import { shortDate, statusColor } from './util'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 
 function target(instance: Instance): { zone: string; instance: string } {
   return { zone: instance.zone, instance: instance.name }
@@ -39,6 +28,8 @@ function target(instance: Instance): { zone: string; instance: string } {
 export function InstancesPage() {
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'compute'] })
 
   const instances = useQuery({
@@ -64,21 +55,134 @@ export function InstancesPage() {
 
   const busy = start.isPending || stop.isPending || remove.isPending
 
-  return (
-    <Box>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <Box>
-          <GcpPageTitle id="compute">Compute Engine</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Instances · project {accountId || '—'}
-          </Typography>
-        </Box>
-      </Stack>
+  const rows = filterRows(instances.data?.instances ?? [], filter, (instance) =>
+    `${instance.name} ${instance.zone} ${instance.status} ${instance.machineType} ${
+      instance.internalIp ?? ''
+    } ${instance.externalIp ?? ''} ${instance.creationTimestamp ?? ''}`,
+  )
 
-      {instances.isError && <Alert severity="error">Failed to load instances.</Alert>}
+  const columns: GcpColumn<Instance>[] = [
+    {
+      key: 'name',
+      header: 'Name',
+      sortable: true,
+      sortValue: (instance) => instance.name,
+      render: (instance) => (
+        <Link
+          component={RouterLink}
+          to={`/gcp/compute/instances/${encodeURIComponent(instance.zone)}/${encodeURIComponent(instance.name)}`}
+        >
+          {instance.name}
+        </Link>
+      ),
+    },
+    {
+      key: 'zone',
+      header: 'Zone',
+      sortable: true,
+      sortValue: (instance) => instance.zone,
+      render: (instance) => instance.zone || '—',
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      sortable: true,
+      sortValue: (instance) => instance.status,
+      render: (instance) => (
+        <Chip size="small" label={instance.status || 'UNKNOWN'} color={statusColor(instance.status)} />
+      ),
+    },
+    {
+      key: 'machineType',
+      header: 'Machine type',
+      sortable: true,
+      sortValue: (instance) => instance.machineType,
+      render: (instance) => instance.machineType || '—',
+    },
+    {
+      key: 'internalIp',
+      header: 'Internal IP',
+      sortable: true,
+      sortValue: (instance) => instance.internalIp ?? '',
+      render: (instance) => instance.internalIp || '—',
+    },
+    {
+      key: 'externalIp',
+      header: 'External IP',
+      sortable: true,
+      sortValue: (instance) => instance.externalIp ?? '',
+      render: (instance) => instance.externalIp || '—',
+    },
+    {
+      key: 'created',
+      header: 'Created',
+      sortable: true,
+      sortValue: (instance) => instance.creationTimestamp ?? '',
+      render: (instance) => shortDate(instance.creationTimestamp),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (instance) => (
+        <>
+          <Tooltip title="Start instance">
+            <span>
+              <IconButton
+                size="small"
+                disabled={busy || instance.status === 'RUNNING'}
+                onClick={() => start.mutate(target(instance))}
+                aria-label={`Start ${instance.name}`}
+              >
+                <PlayArrowIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Stop instance">
+            <span>
+              <IconButton
+                size="small"
+                disabled={busy || instance.status !== 'RUNNING'}
+                onClick={() => stop.mutate(target(instance))}
+                aria-label={`Stop ${instance.name}`}
+              >
+                <StopIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Delete instance">
+            <span>
+              <IconButton
+                size="small"
+                disabled={busy}
+                onClick={() => remove.mutate(target(instance))}
+                aria-label={`Delete ${instance.name}`}
+              >
+                <DeleteOutlineIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </>
+      ),
+    },
+  ]
+
+  return (
+    <Stack>
+      <GcpPageHeader
+        id="compute"
+        title="Compute Engine"
+        subtitle={`Instances · project ${accountId || '—'}`}
+      />
+
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter instances"
+        onRefresh={() => void instances.refetch()}
+        refreshing={instances.isFetching}
+      />
+
       {start.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>
           Start failed.
@@ -95,96 +199,20 @@ export function InstancesPage() {
         </Alert>
       )}
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Zone</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell>Machine type</TableCell>
-              <TableCell>Internal IP</TableCell>
-              <TableCell>External IP</TableCell>
-              <TableCell>Created</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {instances.isLoading && (
-              <TableRow>
-                <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!instances.isLoading && (instances.data?.instances.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={8} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No instances in this project.
-                </TableCell>
-              </TableRow>
-            )}
-            {instances.data?.instances.map((instance) => (
-              <TableRow key={`${instance.zone}/${instance.name}`} hover>
-                <TableCell>
-                  <Link
-                    component={RouterLink}
-                    to={`/gcp/compute/instances/${encodeURIComponent(instance.zone)}/${encodeURIComponent(instance.name)}`}
-                  >
-                    {instance.name}
-                  </Link>
-                </TableCell>
-                <TableCell>{instance.zone || '—'}</TableCell>
-                <TableCell>
-                  <Chip size="small" label={instance.status || 'UNKNOWN'} color={statusColor(instance.status)} />
-                </TableCell>
-                <TableCell>{instance.machineType || '—'}</TableCell>
-                <TableCell>{instance.internalIp || '—'}</TableCell>
-                <TableCell>{instance.externalIp || '—'}</TableCell>
-                <TableCell>{shortDate(instance.creationTimestamp)}</TableCell>
-                <TableCell align="right">
-                  <Tooltip title="Start instance">
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={busy || instance.status === 'RUNNING'}
-                        onClick={() => start.mutate(target(instance))}
-                        aria-label={`Start ${instance.name}`}
-                      >
-                        <PlayArrowIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                  <Tooltip title="Stop instance">
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={busy || instance.status !== 'RUNNING'}
-                        onClick={() => stop.mutate(target(instance))}
-                        aria-label={`Stop ${instance.name}`}
-                      >
-                        <StopIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                  <Tooltip title="Delete instance">
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={busy}
-                        onClick={() => remove.mutate(target(instance))}
-                        aria-label={`Delete ${instance.name}`}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
-    </Box>
+      <GcpDataTable
+        aria-label="Compute Engine instances"
+        columns={columns}
+        rows={rows}
+        getRowKey={(instance) => `${instance.zone}/${instance.name}`}
+        loading={instances.isLoading}
+        error={instances.isError ? 'Failed to load instances.' : null}
+        emptyMessage={filter ? 'No instances match the filter.' : 'No instances in this project.'}
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(instance) => <GcpRowDetail row={instance} />}
+        detailTitle={(instance) => instance.name}
+      />
+    </Stack>
   )
 }

@@ -1,30 +1,17 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Alert,
-  Box,
-  Button,
-  CircularProgress,
-  IconButton,
-  Link,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tooltip,
-  Typography,
-} from '@mui/material'
+import { Alert, Button, IconButton, Link, Stack, Tooltip } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
-import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import { Link as RouterLink, useParams } from 'react-router-dom'
-import { deleteDocument, listDocuments } from '../../api/gcp/firestore'
+import { deleteDocument, listDocuments, type FirestoreDocument } from '../../api/gcp/firestore'
 import { useAccount } from '../../context/AccountContext'
 import { CreateDocumentDialog } from './CreateDocumentDialog'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 
 function shortDate(value?: string): string {
   if (!value) return '—'
@@ -38,6 +25,8 @@ export function DocumentsPage() {
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
 
   const documents = useQuery({
     queryKey: ['gcp', 'firestore', 'documents', collection, accountId],
@@ -50,98 +39,102 @@ export function DocumentsPage() {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'firestore'] }),
   })
 
-  return (
-    <Box>
-      <Stack
-        direction="row"
-        spacing={1}
-        sx={{ alignItems: 'center', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <IconButton
-          component={RouterLink}
-          to="/gcp/firestore/collections"
-          aria-label="Back to collections"
-        >
-          <ArrowBackIcon />
-        </IconButton>
-        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <GcpPageTitle id="firestore">{collection}</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Firestore collection · project {accountId || '—'}
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-          Create document
-        </Button>
-      </Stack>
+  const rows = filterRows(documents.data?.documents ?? [], filter, (document) =>
+    `${document.id} ${document.updateTime ?? ''}`,
+  )
 
-      {documents.isError && <Alert severity="error">Failed to load documents.</Alert>}
+  const columns: GcpColumn<FirestoreDocument>[] = [
+    {
+      key: 'id',
+      header: 'Document ID',
+      sortable: true,
+      sortValue: (document) => document.id,
+      render: (document) => (
+        <Link
+          component={RouterLink}
+          to={`/gcp/firestore/collections/${encodeURIComponent(collection)}/documents/${encodeURIComponent(document.id)}`}
+        >
+          {document.id}
+        </Link>
+      ),
+    },
+    {
+      key: 'updated',
+      header: 'Updated',
+      sortable: true,
+      sortValue: (document) => document.updateTime ?? '',
+      render: (document) => shortDate(document.updateTime),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (document) => (
+        <Tooltip title="Delete document">
+          <span>
+            <IconButton
+              size="small"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(document.id)}
+              aria-label={`Delete ${document.id}`}
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      ),
+    },
+  ]
+
+  return (
+    <Stack>
+      <GcpPageHeader
+        id="firestore"
+        title={collection}
+        subtitle={`Firestore collection · project ${accountId || '—'}`}
+        backTo="/gcp/firestore/collections"
+        backAriaLabel="Back to collections"
+        actions={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+            Create document
+          </Button>
+        }
+      />
+
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter documents"
+        onRefresh={() => void documents.refetch()}
+        refreshing={documents.isFetching}
+      />
+
       {remove.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>
           Delete failed.
         </Alert>
       )}
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Document ID</TableCell>
-              <TableCell>Updated</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {documents.isLoading && (
-              <TableRow>
-                <TableCell colSpan={3} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!documents.isLoading && (documents.data?.documents.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={3} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No documents in this collection.
-                </TableCell>
-              </TableRow>
-            )}
-            {documents.data?.documents.map((doc) => (
-              <TableRow key={doc.id} hover>
-                <TableCell>
-                  <Link
-                    component={RouterLink}
-                    to={`/gcp/firestore/collections/${encodeURIComponent(collection)}/documents/${encodeURIComponent(doc.id)}`}
-                  >
-                    {doc.id}
-                  </Link>
-                </TableCell>
-                <TableCell>{shortDate(doc.updateTime)}</TableCell>
-                <TableCell align="right">
-                  <Tooltip title="Delete document">
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={remove.isPending}
-                        onClick={() => remove.mutate(doc.id)}
-                        aria-label={`Delete ${doc.id}`}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpDataTable
+        aria-label="Documents"
+        columns={columns}
+        rows={rows}
+        getRowKey={(document) => document.id}
+        loading={documents.isLoading}
+        error={documents.isError ? 'Failed to load documents.' : null}
+        emptyMessage={filter ? 'No documents match the filter.' : 'No documents in this collection.'}
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(document) => <GcpRowDetail row={document} />}
+        detailTitle={(document) => document.id}
+      />
 
       <CreateDocumentDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         collection={collection}
       />
-    </Box>
+    </Stack>
   )
 }

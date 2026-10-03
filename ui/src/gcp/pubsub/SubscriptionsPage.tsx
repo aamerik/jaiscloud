@@ -2,10 +2,8 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
-  Box,
   Button,
   Checkbox,
-  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -15,15 +13,8 @@ import {
   Link,
   MenuItem,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   TextField,
   Tooltip,
-  Typography,
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
@@ -33,9 +24,14 @@ import {
   deleteSubscription,
   listSubscriptions,
   listTopics,
+  type Subscription,
 } from '../../api/gcp/pubsub'
 import { useAccount } from '../../context/AccountContext'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpRowDetail } from '../common/GcpRowDetail'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
 
 /** Pub/Sub subscription list with create / delete. */
 export function SubscriptionsPage() {
@@ -49,9 +45,11 @@ export function SubscriptionsPage() {
   const [pushEndpoint, setPushEndpoint] = useState('')
   const [ackDeadline, setAckDeadline] = useState('')
   const [retention, setRetention] = useState('')
-  const [filter, setFilter] = useState('')
+  const [subscriptionFilter, setSubscriptionFilter] = useState('')
   const [exactlyOnce, setExactlyOnce] = useState(false)
   const [ordering, setOrdering] = useState(false)
+  const [filter, setFilter] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
 
   const subscriptions = useQuery({
     queryKey: ['gcp', 'pubsub', 'subscriptions', accountId],
@@ -73,7 +71,7 @@ export function SubscriptionsPage() {
       setPushEndpoint('')
       setAckDeadline('')
       setRetention('')
-      setFilter('')
+      setSubscriptionFilter('')
       setExactlyOnce(false)
       setOrdering(false)
     },
@@ -92,95 +90,124 @@ export function SubscriptionsPage() {
       ...(delivery === 'push' ? { pushEndpoint } : {}),
       ...(ackDeadline ? { ackDeadlineSeconds: Number(ackDeadline) } : {}),
       ...(retention ? { messageRetentionDuration: retention } : {}),
-      ...(filter ? { filter } : {}),
+      ...(subscriptionFilter ? { filter: subscriptionFilter } : {}),
       ...(exactlyOnce ? { enableExactlyOnceDelivery: true } : {}),
       ...(ordering ? { enableMessageOrdering: true } : {}),
     })
 
-  return (
-    <Box>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <Box>
-          <GcpPageTitle id="pubsub">Subscriptions</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Pub/Sub · project {accountId || '—'}
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-          Create subscription
-        </Button>
-      </Stack>
+  const rows = filterRows(subscriptions.data?.subscriptions ?? [], filter, (sub) =>
+    `${sub.name} ${sub.topic ?? ''} ${sub.pushEndpoint ? 'Push' : 'Pull'} ${
+      sub.ackDeadlineSeconds ?? ''
+    } ${sub.detached ? 'Detached' : sub.state || 'ACTIVE'}`,
+  )
 
-      {subscriptions.isError && <Alert severity="error">Failed to load subscriptions.</Alert>}
+  const columns: GcpColumn<Subscription>[] = [
+    {
+      key: 'name',
+      header: 'Name',
+      sortable: true,
+      sortValue: (sub) => sub.name,
+      render: (sub) => (
+        <Link
+          component={RouterLink}
+          to={`/gcp/pubsub/subscriptions/${encodeURIComponent(sub.name)}`}
+        >
+          {sub.name}
+        </Link>
+      ),
+    },
+    {
+      key: 'topic',
+      header: 'Topic',
+      sortable: true,
+      sortValue: (sub) => sub.topic ?? '',
+      render: (sub) => sub.topic || '—',
+    },
+    {
+      key: 'delivery',
+      header: 'Delivery',
+      sortable: true,
+      sortValue: (sub) => (sub.pushEndpoint ? 'Push' : 'Pull'),
+      render: (sub) => (sub.pushEndpoint ? 'Push' : 'Pull'),
+    },
+    {
+      key: 'ackDeadline',
+      header: 'Ack deadline',
+      sortable: true,
+      sortValue: (sub) => sub.ackDeadlineSeconds ?? null,
+      render: (sub) => (sub.ackDeadlineSeconds ? `${sub.ackDeadlineSeconds}s` : '—'),
+    },
+    {
+      key: 'state',
+      header: 'State',
+      sortable: true,
+      sortValue: (sub) => (sub.detached ? 'Detached' : sub.state || 'ACTIVE'),
+      render: (sub) => (sub.detached ? 'Detached' : sub.state || 'ACTIVE'),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (sub) => (
+        <Tooltip title="Delete subscription">
+          <span>
+            <IconButton
+              size="small"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(sub.name)}
+              aria-label={`Delete ${sub.name}`}
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      ),
+    },
+  ]
+
+  return (
+    <Stack>
+      <GcpPageHeader
+        id="pubsub"
+        title="Subscriptions"
+        subtitle={`Pub/Sub · project ${accountId || '—'}`}
+        actions={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+            Create subscription
+          </Button>
+        }
+      />
+
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter subscriptions"
+        onRefresh={() => void subscriptions.refetch()}
+        refreshing={subscriptions.isFetching}
+      />
+
       {remove.isError && (
         <Alert severity="error" sx={{ mb: 2 }}>
           Delete failed.
         </Alert>
       )}
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Topic</TableCell>
-              <TableCell>Delivery</TableCell>
-              <TableCell>Ack deadline</TableCell>
-              <TableCell>State</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {subscriptions.isLoading && (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!subscriptions.isLoading && (subscriptions.data?.subscriptions.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No subscriptions in this project.
-                </TableCell>
-              </TableRow>
-            )}
-            {subscriptions.data?.subscriptions.map((sub) => (
-              <TableRow key={sub.name} hover>
-                <TableCell>
-                  <Link
-                    component={RouterLink}
-                    to={`/gcp/pubsub/subscriptions/${encodeURIComponent(sub.name)}`}
-                  >
-                    {sub.name}
-                  </Link>
-                </TableCell>
-                <TableCell>{sub.topic || '—'}</TableCell>
-                <TableCell>{sub.pushEndpoint ? 'Push' : 'Pull'}</TableCell>
-                <TableCell>{sub.ackDeadlineSeconds ? `${sub.ackDeadlineSeconds}s` : '—'}</TableCell>
-                <TableCell>{sub.detached ? 'Detached' : sub.state || 'ACTIVE'}</TableCell>
-                <TableCell align="right">
-                  <Tooltip title="Delete subscription">
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={remove.isPending}
-                        onClick={() => remove.mutate(sub.name)}
-                        aria-label={`Delete ${sub.name}`}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpDataTable
+        aria-label="Subscriptions"
+        columns={columns}
+        rows={rows}
+        getRowKey={(sub) => sub.name}
+        loading={subscriptions.isLoading}
+        error={subscriptions.isError ? 'Failed to load subscriptions.' : null}
+        emptyMessage={
+          filter ? 'No subscriptions match the filter.' : 'No subscriptions in this project.'
+        }
+        selectable
+        selectedKeys={selected}
+        onSelectionChange={setSelected}
+        renderDetail={(sub) => <GcpRowDetail row={sub} />}
+        detailTitle={(sub) => sub.name}
+      />
 
       <Dialog open={createOpen} onClose={() => setCreateOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>Create subscription</DialogTitle>
@@ -241,8 +268,8 @@ export function SubscriptionsPage() {
             />
             <TextField
               label="Filter (immutable after create)"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
+              value={subscriptionFilter}
+              onChange={(e) => setSubscriptionFilter(e.target.value)}
               fullWidth
             />
             <FormControlLabel
@@ -274,6 +301,6 @@ export function SubscriptionsPage() {
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </Stack>
   )
 }
