@@ -1,13 +1,14 @@
 // Package ui contributes the GCP service catalog and API routes to the shared
 // UI core. It exposes the GCP cloud identity and mounts per-service UI APIs
-// (Cloud Storage, Pub/Sub, Firestore; Compute, ... follow) over the providers
-// wired in cmd/jaiscloud-gcp.
+// (Cloud Storage, Pub/Sub, Firestore, Compute; the rest follow) over the
+// providers wired in cmd/jaiscloud-gcp.
 package ui
 
 import (
 	"github.com/go-chi/chi/v5"
 
 	"jaiscloud/internal/config"
+	computeui "jaiscloud/internal/gcp/ui/compute"
 	firestoreui "jaiscloud/internal/gcp/ui/firestore"
 	pubsubui "jaiscloud/internal/gcp/ui/pubsub"
 	storageui "jaiscloud/internal/gcp/ui/storage"
@@ -20,13 +21,14 @@ type Registrar struct {
 	storage   storageui.ProviderInterface
 	pubsub    pubsubui.ProviderInterface
 	firestore firestoreui.ProviderInterface
+	compute   computeui.ProviderInterface
 	cfg       *config.Config
 }
 
 // NewRegistrar returns the GCP UI registrar. A nil provider leaves that
 // service's pages out of the catalog.
-func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, cfg *config.Config) *Registrar {
-	return &Registrar{storage: storageProvider, pubsub: pubsubProvider, firestore: firestoreProvider, cfg: cfg}
+func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, cfg *config.Config) *Registrar {
+	return &Registrar{storage: storageProvider, pubsub: pubsubProvider, firestore: firestoreProvider, compute: computeProvider, cfg: cfg}
 }
 
 // Cloud implements coreui.Registrar.
@@ -69,6 +71,16 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Children: []coreui.ServiceChild{{Label: "Collections", Path: "/gcp/firestore/collections"}},
 		})
 	}
+	if r.compute != nil {
+		services = append(services, coreui.ServiceDescriptor{
+			ID:       "compute",
+			Label:    "Compute Engine",
+			Category: "Compute",
+			RootPath: "/gcp/compute/instances",
+			Tier:     coreui.TierFull,
+			Children: []coreui.ServiceChild{{Label: "Instances", Path: "/gcp/compute/instances"}},
+		})
+	}
 	return services
 }
 
@@ -83,5 +95,8 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 	}
 	if r.firestore != nil {
 		router.Mount("/api/ui/v1/gcp/firestore", firestoreui.BuildRouter(r.firestore, r.cfg))
+	}
+	if r.compute != nil {
+		router.Mount("/api/ui/v1/gcp/compute", computeui.BuildRouter(r.compute, r.cfg))
 	}
 }
