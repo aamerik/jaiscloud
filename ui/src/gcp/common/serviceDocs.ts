@@ -15,6 +15,7 @@ export const SERVICE_DOCS: Record<string, string> = {
   eventarc: 'https://cloud.google.com/eventarc/docs',
   bigquery: 'https://cloud.google.com/bigquery/docs',
   dataproc: 'https://cloud.google.com/dataproc/docs',
+  managedkafka: 'https://cloud.google.com/managed-service-for-apache-kafka/docs',
   iam: 'https://cloud.google.com/iam/docs',
   kms: 'https://cloud.google.com/kms/docs',
   secretmanager: 'https://cloud.google.com/secret-manager/docs',

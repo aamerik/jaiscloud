@@ -51,6 +51,18 @@ func runStoreTests(t *testing.T, s Store) {
 		t.Fatalf("update not persisted: %+v", list[0])
 	}
 
+	// Cross-location project listing backs the region-optional console list.
+	if err := s.CreateCluster(ctx, "proj", "europe-west1", Cluster{Name: "eu-cluster"}); err != nil {
+		t.Fatalf("create eu cluster: %v", err)
+	}
+	byLoc, err := s.ListClustersByProject(ctx, "proj")
+	if err != nil || len(byLoc) != 2 {
+		t.Fatalf("list clusters by project: %v %d", err, len(byLoc))
+	}
+	if byLoc[0].Location != "europe-west1" || byLoc[1].Location != "us-central1" {
+		t.Fatalf("clusters not sorted by location: %+v", byLoc)
+	}
+
 	// Topics
 	if _, err := s.GetTopic(ctx, "proj", "us-central1", "my-cluster", "nope"); err != ErrNoSuchTopic {
 		t.Fatalf("expected ErrNoSuchTopic, got %v", err)
@@ -74,6 +86,19 @@ func runStoreTests(t *testing.T, s Store) {
 	if err != nil || len(tlist) != 1 || tlist[0].PartitionCount != 6 {
 		t.Fatalf("list topics: %v %+v", err, tlist)
 	}
+
+	// Cross-cluster project listing backs the region-optional console list.
+	if err := s.CreateTopic(ctx, "proj", "europe-west1", "eu-cluster", Topic{Name: "eu-topic", PartitionCount: 1, ReplicationFactor: 1}); err != nil {
+		t.Fatalf("create eu topic: %v", err)
+	}
+	allTopics, err := s.ListTopicsByProject(ctx, "proj")
+	if err != nil || len(allTopics) != 2 {
+		t.Fatalf("list topics by project: %v %d", err, len(allTopics))
+	}
+	if allTopics[0].Location != "europe-west1" || allTopics[1].Location != "us-central1" {
+		t.Fatalf("topics not sorted by location: %+v", allTopics)
+	}
+
 	if err := s.DeleteTopic(ctx, "proj", "us-central1", "my-cluster", "t1"); err != nil {
 		t.Fatalf("delete topic: %v", err)
 	}

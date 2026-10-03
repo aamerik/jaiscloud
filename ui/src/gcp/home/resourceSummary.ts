@@ -6,6 +6,7 @@ import { listTopics } from '../../api/gcp/pubsub'
 import { listCollections } from '../../api/gcp/firestore'
 import { listDatasets } from '../../api/gcp/bigquery'
 import { listClusters } from '../../api/gcp/dataproc'
+import { listClusters as listManagedKafkaClusters } from '../../api/gcp/managedkafka'
 import { listWorkflows } from '../../api/gcp/workflows'
 import { listJobs as listSchedulerJobs } from '../../api/gcp/scheduler'
 import { listQueues } from '../../api/gcp/tasks'
@@ -57,6 +58,7 @@ export const RESOURCE_SUMMARY_SOURCES: ResourceSummarySource[] = [
   { service: 'firestore', label: 'Collections', path: '/gcp/firestore/collections', arrayKey: 'collections', list: listCollections },
   { service: 'bigquery', label: 'Datasets', path: '/gcp/bigquery/datasets', arrayKey: 'datasets', list: listDatasets },
   { service: 'dataproc', label: 'Clusters', path: '/gcp/dataproc/clusters', arrayKey: 'clusters', list: listClusters },
+  { service: 'managedkafka', label: 'Clusters', path: '/gcp/managedkafka/clusters', arrayKey: 'clusters', list: listManagedKafkaClusters },
   { service: 'workflows', label: 'Workflows', path: '/gcp/workflows', arrayKey: 'workflows', list: listWorkflows },
   { service: 'scheduler', label: 'Jobs', path: '/gcp/scheduler/jobs', arrayKey: 'jobs', list: listSchedulerJobs },
   { service: 'tasks', label: 'Queues', path: '/gcp/tasks/queues', arrayKey: 'queues', list: listQueues },
