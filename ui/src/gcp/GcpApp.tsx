@@ -48,6 +48,13 @@ import { DatasetDetailPage } from './bigquery/DatasetDetailPage'
 import { TableDetailPage } from './bigquery/TableDetailPage'
 import { JobsPage } from './bigquery/JobsPage'
 import { JobDetailPage } from './bigquery/JobDetailPage'
+import { ServiceAccountsPage } from './iam/ServiceAccountsPage'
+import { ServiceAccountDetailPage } from './iam/ServiceAccountDetailPage'
+import { KeyRingsPage } from './kms/KeyRingsPage'
+import { KeyRingDetailPage } from './kms/KeyRingDetailPage'
+import { CryptoKeyDetailPage } from './kms/CryptoKeyDetailPage'
+import { SecretsPage } from './secretmanager/SecretsPage'
+import { SecretDetailPage } from './secretmanager/SecretDetailPage'
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
@@ -271,6 +278,16 @@ function GcpShell() {
           />
           <Route path="/gcp/bigquery/jobs" element={<JobsPage />} />
           <Route path="/gcp/bigquery/jobs/:job" element={<JobDetailPage />} />
+          <Route path="/gcp/iam/service-accounts" element={<ServiceAccountsPage />} />
+          <Route path="/gcp/iam/service-accounts/:email" element={<ServiceAccountDetailPage />} />
+          <Route path="/gcp/kms/keyrings" element={<KeyRingsPage />} />
+          <Route path="/gcp/kms/keyrings/:location/:keyRing" element={<KeyRingDetailPage />} />
+          <Route
+            path="/gcp/kms/keyrings/:location/:keyRing/keys/:key"
+            element={<CryptoKeyDetailPage />}
+          />
+          <Route path="/gcp/secretmanager/secrets" element={<SecretsPage />} />
+          <Route path="/gcp/secretmanager/secrets/:secret" element={<SecretDetailPage />} />
           <Route path="/gcp/admin" element={<GcpAdminPage />} />
           <Route path="*" element={<Navigate to="/gcp" replace />} />
         </Routes>

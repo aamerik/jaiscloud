@@ -256,9 +256,12 @@ The console is a single React app embedded in the binary (no separate server or 
 - **Compute Engine** — instances over `/api/ui/v1/gcp/compute`: an aggregated list across zones with detail, start, stop and delete.
 - **Cloud Run** — services and revisions over `/api/ui/v1/gcp/run`: services aggregated across regions, service/revision detail, and delete.
 - **BigQuery** — datasets, tables and jobs over `/api/ui/v1/gcp/bigquery`: list/create/delete datasets and tables, view a table's schema and a read-only row preview, and list/inspect/cancel/delete jobs.
+- **IAM** — service accounts over `/api/ui/v1/gcp/iam`: list/create/delete, detail (enable/disable/update), service-account keys (create with one-time private key, disable/enable/delete) and the service-account IAM policy.
+- **Cloud KMS** — key rings, crypto keys and versions over `/api/ui/v1/gcp/kms`: list/create key rings per location, list/create crypto keys, list/rotate/destroy/disable/enable versions, set the primary version, and edit key-ring/crypto-key IAM policies (cryptoKey policies are enforced default-permissively).
+- **Secret Manager** — secrets and versions over `/api/ui/v1/gcp/secretmanager`: list/create/update/delete secrets, add/reveal/destroy/disable/enable versions, and edit the secret IAM policy.
 - **Admin** — emulator status, clock control (real/fixed/offset), state reset, export, and named snapshots (create/revert/delete). Backed by the cloud-neutral `/api/ui/v1/admin` plane, which the shared UI core mounts for every cloud.
 
-Further service pages (IAM/KMS/Secret Manager, Logging/Monitoring, Dataproc/Workflows/Scheduler/Tasks/Eventarc/Functions, ...) ship separately.
+Further service pages (Logging/Monitoring, Dataproc/Workflows/Scheduler/Tasks/Eventarc/Functions, ...) ship separately.
 
 ---
 
