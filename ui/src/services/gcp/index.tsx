@@ -7,10 +7,18 @@ import {
   Table,
   TextContent,
 } from '@cloudscape-design/components'
+import { ConsoleHome } from '../../components/ConsoleHome'
 import { useMeta } from '../../hooks/useMeta'
+import { useServices } from '../../hooks/useServices'
 
 export function GCPRoutes() {
   const { data: meta } = useMeta()
+  const { data: servicesData } = useServices()
+  const services = servicesData?.services ?? []
+
+  // Once service backends ship, the generic Console Home is the GCP landing;
+  // until then keep the shell-only placeholder.
+  if (services.length > 0) return <ConsoleHome />
 
   return (
     <ContentLayout
