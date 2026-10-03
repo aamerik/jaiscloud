@@ -11,9 +11,9 @@ export interface GcpPageTitleProps {
 }
 
 /**
- * Page heading with the service product glyph, mirroring the real console's
- * icon + title header. Kept intentionally small — W6.4's shared page scaffold
- * absorbs it into `GcpPageHeader`.
+ * Page heading with the service product glyph. Superseded by `GcpPageHeader`
+ * (pin + docs + actions); retained until the remaining pages are migrated
+ * onto the shared scaffold.
  */
 export function GcpPageTitle({ id, children }: GcpPageTitleProps) {
   return (

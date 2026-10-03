@@ -13,7 +13,6 @@ import {
   IconButton,
   MenuItem,
   Paper,
-  Snackbar,
   Stack,
   Table,
   TableBody,
@@ -41,8 +40,7 @@ import {
   type Snapshot,
 } from '../../api/admin'
 import { GcpPageTitle } from '../common/PageTitle'
-
-type Feedback = { severity: 'success' | 'error'; message: string }
+import { useGcpSnackbar } from '../common/SnackbarProvider'
 
 const MODE_OPTIONS: { value: ClockState['mode']; label: string }[] = [
   { value: 'real', label: 'real (wall clock)' },
@@ -58,8 +56,6 @@ function shortDate(value?: string): string {
 
 /** Cloud-neutral admin panel (status, clock, reset, export, snapshots) in MUI. */
 export function GcpAdminPage() {
-  const [feedback, setFeedback] = useState<Feedback | null>(null)
-
   return (
     <Box>
       <GcpPageTitle id="admin">Admin</GcpPageTitle>
@@ -76,23 +72,12 @@ export function GcpAdminPage() {
           }}
         >
           <StatusCard />
-          <ClockCard notify={setFeedback} />
-          <ResetCard notify={setFeedback} />
+          <ClockCard />
+          <ResetCard />
           <ExportCard />
         </Box>
-        <SnapshotsSection notify={setFeedback} />
+        <SnapshotsSection />
       </Stack>
-
-      <Snackbar
-        open={feedback != null}
-        autoHideDuration={6000}
-        onClose={() => setFeedback(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert severity={feedback?.severity ?? 'success'} onClose={() => setFeedback(null)}>
-          {feedback?.message}
-        </Alert>
-      </Snackbar>
     </Box>
   )
 }
@@ -176,7 +161,8 @@ function StatusCard() {
   )
 }
 
-function ClockCard({ notify }: { notify: (f: Feedback) => void }) {
+function ClockCard() {
+  const { notify } = useGcpSnackbar()
   const queryClient = useQueryClient()
   const { data: clock, isLoading } = useQuery({
     queryKey: ['admin', 'clock'],
@@ -193,9 +179,9 @@ function ClockCard({ notify }: { notify: (f: Feedback) => void }) {
     onSuccess: (result, req) => {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'clock'] })
       setOpen(false)
-      notify({ severity: 'success', message: `Clock set to ${result.mode ?? req.mode}` })
+      notify(`Clock set to ${result.mode ?? req.mode}`)
     },
-    onError: (err) => notify({ severity: 'error', message: `Set clock failed: ${(err as Error).message}` }),
+    onError: (err) => notify(`Set clock failed: ${(err as Error).message}`, { severity: 'error' }),
   })
 
   const openDialog = () => {
@@ -267,7 +253,8 @@ function ClockCard({ notify }: { notify: (f: Feedback) => void }) {
   )
 }
 
-function ResetCard({ notify }: { notify: (f: Feedback) => void }) {
+function ResetCard() {
+  const { notify } = useGcpSnackbar()
   const queryClient = useQueryClient()
   const [confirm, setConfirm] = useState(false)
 
@@ -276,9 +263,9 @@ function ResetCard({ notify }: { notify: (f: Feedback) => void }) {
     onSuccess: () => {
       void queryClient.invalidateQueries()
       setConfirm(false)
-      notify({ severity: 'success', message: 'State reset.' })
+      notify('State reset.')
     },
-    onError: (err) => notify({ severity: 'error', message: `Reset failed: ${(err as Error).message}` }),
+    onError: (err) => notify(`Reset failed: ${(err as Error).message}`, { severity: 'error' }),
   })
 
   return (
@@ -328,7 +315,8 @@ function ExportCard() {
   )
 }
 
-function SnapshotsSection({ notify }: { notify: (f: Feedback) => void }) {
+function SnapshotsSection() {
+  const { notify } = useGcpSnackbar()
   const queryClient = useQueryClient()
   const { data, isLoading, isError } = useQuery({
     queryKey: ['admin', 'snapshots'],
@@ -347,11 +335,11 @@ function SnapshotsSection({ notify }: { notify: (f: Feedback) => void }) {
     onSuccess: () => {
       invalidate()
       setCreateOpen(false)
-      notify({ severity: 'success', message: `Snapshot "${name}" created.` })
+      notify(`Snapshot "${name}" created.`)
       setName('')
       setDescription('')
     },
-    onError: (err) => notify({ severity: 'error', message: `Create failed: ${(err as Error).message}` }),
+    onError: (err) => notify(`Create failed: ${(err as Error).message}`, { severity: 'error' }),
   })
 
   const revert = useMutation({
@@ -359,9 +347,9 @@ function SnapshotsSection({ notify }: { notify: (f: Feedback) => void }) {
     onSuccess: (_result, snapshot) => {
       invalidate()
       setRevertTarget(null)
-      notify({ severity: 'success', message: `Reverted to "${snapshot}".` })
+      notify(`Reverted to "${snapshot}".`)
     },
-    onError: (err) => notify({ severity: 'error', message: `Revert failed: ${(err as Error).message}` }),
+    onError: (err) => notify(`Revert failed: ${(err as Error).message}`, { severity: 'error' }),
   })
 
   const remove = useMutation({
@@ -369,9 +357,9 @@ function SnapshotsSection({ notify }: { notify: (f: Feedback) => void }) {
     onSuccess: (_result, snapshot) => {
       invalidate()
       setDeleteTarget(null)
-      notify({ severity: 'success', message: `Snapshot "${snapshot}" deleted.` })
+      notify(`Snapshot "${snapshot}" deleted.`)
     },
-    onError: (err) => notify({ severity: 'error', message: `Delete failed: ${(err as Error).message}` }),
+    onError: (err) => notify(`Delete failed: ${(err as Error).message}`, { severity: 'error' }),
   })
 
   const snapshots = data?.snapshots ?? []

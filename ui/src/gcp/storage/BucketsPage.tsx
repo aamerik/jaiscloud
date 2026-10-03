@@ -2,9 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
-  Box,
   Button,
-  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -13,22 +11,19 @@ import {
   Link,
   MenuItem,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   TextField,
   Tooltip,
-  Typography,
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import { Link as RouterLink } from 'react-router-dom'
-import { createBucket, deleteBucket, listBuckets } from '../../api/gcp/storage'
+import { createBucket, deleteBucket, listBuckets, type Bucket } from '../../api/gcp/storage'
 import { useAccount } from '../../context/AccountContext'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpToolbar } from '../common/GcpToolbar'
+import { filterRows } from '../common/pagination'
+import { useGcpSnackbar } from '../common/SnackbarProvider'
 
 const LOCATIONS = ['US', 'EU', 'ASIA']
 
@@ -38,13 +33,15 @@ function shortDate(value?: string): string {
   return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
 }
 
-/** Cloud Storage bucket list — the sample GCP service page. */
+/** Cloud Storage bucket list — the reference page for the shared scaffold. */
 export function BucketsPage() {
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
+  const { notify } = useGcpSnackbar()
   const [createOpen, setCreateOpen] = useState(false)
   const [name, setName] = useState('')
   const [location, setLocation] = useState('US')
+  const [filter, setFilter] = useState('')
 
   const buckets = useQuery({
     queryKey: ['gcp', 'storage', 'buckets', accountId],
@@ -58,95 +55,95 @@ export function BucketsPage() {
       setCreateOpen(false)
       setName('')
       setLocation('US')
+      notify('Bucket created.')
     },
   })
 
   const remove = useMutation({
     mutationFn: deleteBucket,
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'storage', 'buckets'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['gcp', 'storage', 'buckets'] })
+      notify('Bucket deleted.')
+    },
+    onError: () =>
+      notify('Delete failed. The bucket may not be empty.', { severity: 'error' }),
   })
 
+  const rows = filterRows(buckets.data?.items ?? [], filter, (bucket) => bucket.name)
+
+  const columns: GcpColumn<Bucket>[] = [
+    {
+      key: 'name',
+      header: 'Name',
+      render: (bucket) => (
+        <Link component={RouterLink} to={`/gcp/storage/buckets/${bucket.name}`}>
+          {bucket.name}
+        </Link>
+      ),
+    },
+    { key: 'location', header: 'Location', render: (bucket) => bucket.location || '—' },
+    {
+      key: 'storageClass',
+      header: 'Storage class',
+      render: (bucket) => bucket.storageClass || 'STANDARD',
+    },
+    { key: 'created', header: 'Created', render: (bucket) => shortDate(bucket.timeCreated) },
+    {
+      key: 'versioning',
+      header: 'Versioning',
+      render: (bucket) => (bucket.versioning ? 'Enabled' : 'Off'),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (bucket) => (
+        <Tooltip title="Delete bucket">
+          <span>
+            <IconButton
+              size="small"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(bucket.name)}
+              aria-label={`Delete ${bucket.name}`}
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      ),
+    },
+  ]
+
   return (
-    <Box>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <Box>
-          <GcpPageTitle id="storage">Buckets</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Cloud Storage · project {accountId || '—'}
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-          Create bucket
-        </Button>
-      </Stack>
+    <Stack>
+      <GcpPageHeader
+        id="storage"
+        title="Buckets"
+        subtitle={`Cloud Storage · project ${accountId || '—'}`}
+        actions={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+            Create bucket
+          </Button>
+        }
+      />
 
-      {buckets.isError && <Alert severity="error">Failed to load buckets.</Alert>}
-      {remove.isError && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          Delete failed. The bucket may not be empty.
-        </Alert>
-      )}
+      <GcpToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        filterPlaceholder="Filter buckets"
+        onRefresh={() => void buckets.refetch()}
+        refreshing={buckets.isFetching}
+      />
 
-      <TableContainer sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Location</TableCell>
-              <TableCell>Storage class</TableCell>
-              <TableCell>Created</TableCell>
-              <TableCell>Versioning</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {buckets.isLoading && (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 4 }}>
-                  <CircularProgress size={24} />
-                </TableCell>
-              </TableRow>
-            )}
-            {!buckets.isLoading && (buckets.data?.items.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                  No buckets in this project.
-                </TableCell>
-              </TableRow>
-            )}
-            {buckets.data?.items.map((bucket) => (
-              <TableRow key={bucket.name} hover>
-                <TableCell>
-                  <Link component={RouterLink} to={`/gcp/storage/buckets/${bucket.name}`}>
-                    {bucket.name}
-                  </Link>
-                </TableCell>
-                <TableCell>{bucket.location || '—'}</TableCell>
-                <TableCell>{bucket.storageClass || 'STANDARD'}</TableCell>
-                <TableCell>{shortDate(bucket.timeCreated)}</TableCell>
-                <TableCell>{bucket.versioning ? 'Enabled' : 'Off'}</TableCell>
-                <TableCell align="right">
-                  <Tooltip title="Delete bucket">
-                    <span>
-                      <IconButton
-                        size="small"
-                        disabled={remove.isPending}
-                        onClick={() => remove.mutate(bucket.name)}
-                        aria-label={`Delete ${bucket.name}`}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <GcpDataTable
+        aria-label="Buckets"
+        columns={columns}
+        rows={rows}
+        getRowKey={(bucket) => bucket.name}
+        loading={buckets.isLoading}
+        error={buckets.isError ? 'Failed to load buckets.' : null}
+        emptyMessage={filter ? 'No buckets match the filter.' : 'No buckets in this project.'}
+      />
 
       <Dialog open={createOpen} onClose={() => setCreateOpen(false)} fullWidth maxWidth="xs">
         <DialogTitle>Create bucket</DialogTitle>
@@ -187,6 +184,6 @@ export function BucketsPage() {
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </Stack>
   )
 }

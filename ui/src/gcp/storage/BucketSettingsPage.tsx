@@ -12,18 +12,15 @@ import {
   Link,
   Stack,
   Switch,
-  Tab,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableRow,
-  Tabs,
   TextField,
   Typography,
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
-import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import { Link as RouterLink, useParams } from 'react-router-dom'
 import {
@@ -44,43 +41,41 @@ import {
   type IamPolicy,
 } from '../../api/gcp/storage'
 import { useAccount } from '../../context/AccountContext'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpPageHeader } from '../common/GcpPageHeader'
+import { GcpTabs } from '../common/GcpTabs'
 
 /** Bucket configuration: versioning, lifecycle, retention/holds, permissions. */
 export function BucketSettingsPage() {
   const { bucket = '' } = useParams()
   const [tab, setTab] = useState(0)
 
+  const objectsPath = `/gcp/storage/buckets/${encodeURIComponent(bucket)}`
+
   return (
     <Box>
-      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1, flexWrap: 'wrap', rowGap: 1 }}>
-        <IconButton
-          component={RouterLink}
-          to={`/gcp/storage/buckets/${encodeURIComponent(bucket)}`}
-          aria-label="Back to objects"
-        >
-          <ArrowBackIcon />
-        </IconButton>
-        <Box sx={{ minWidth: 0 }}>
-          <GcpPageTitle id="storage">{bucket}</GcpPageTitle>
-          <Link component={RouterLink} to={`/gcp/storage/buckets/${encodeURIComponent(bucket)}`}>
+      <GcpPageHeader
+        id="storage"
+        title={bucket}
+        backTo={objectsPath}
+        backAriaLabel="Back to objects"
+        subtitle={
+          <Link component={RouterLink} to={objectsPath}>
             Objects
           </Link>
-        </Box>
-      </Stack>
+        }
+      />
 
-      <Tabs
+      <GcpTabs
+        aria-label="Bucket settings"
         value={tab}
-        onChange={(_, v: number) => setTab(v)}
-        variant="scrollable"
-        scrollButtons="auto"
-        sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}
-      >
-        <Tab label="Versioning" />
-        <Tab label="Lifecycle" />
-        <Tab label="Retention & holds" />
-        <Tab label="Permissions" />
-      </Tabs>
+        onChange={(value) => setTab(Number(value))}
+        tabs={[
+          { label: 'Versioning', value: 0 },
+          { label: 'Lifecycle', value: 1 },
+          { label: 'Retention & holds', value: 2 },
+          { label: 'Permissions', value: 3 },
+        ]}
+      />
 
       {tab === 0 && <VersioningTab bucket={bucket} />}
       {tab === 1 && <LifecycleTab bucket={bucket} />}

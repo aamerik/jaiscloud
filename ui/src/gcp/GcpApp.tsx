@@ -93,6 +93,7 @@ import { AccountProvider, useAccount } from '../context/AccountContext'
 import { useEventStream } from '../hooks/useEventStream'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
+import { GcpSnackbarProvider } from './common/SnackbarProvider'
 
 const DRAWER_WIDTH = 256
 
@@ -360,9 +361,11 @@ export function GcpApp() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <AccountProvider>
-        <GcpShell appearance={appearance} />
-      </AccountProvider>
+      <GcpSnackbarProvider>
+        <AccountProvider>
+          <GcpShell appearance={appearance} />
+        </AccountProvider>
+      </GcpSnackbarProvider>
     </ThemeProvider>
   )
 }
