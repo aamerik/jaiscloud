@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"reflect"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -121,6 +122,118 @@ func UIError(w http.ResponseWriter, code, message string, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"code": code, "message": message}) //nolint:errcheck
+}
+
+// Str returns m[key] as a string, or "" when absent or not a string.
+func Str(m map[string]any, key string) string {
+	s, _ := m[key].(string)
+	return s
+}
+
+// MapAt returns m[key] as a map[string]any, or nil.
+func MapAt(m map[string]any, key string) map[string]any {
+	v, _ := m[key].(map[string]any)
+	return v
+}
+
+// StringMapAt extracts a string-valued map, dropping non-string entries. The
+// provider may render labels as a typed map[string]string or a generic
+// map[string]any, so both are accepted.
+func StringMapAt(m map[string]any, key string) map[string]string {
+	switch raw := m[key].(type) {
+	case map[string]string:
+		if len(raw) == 0 {
+			return nil
+		}
+		return raw
+	case map[string]any:
+		out := make(map[string]string, len(raw))
+		for k, v := range raw {
+			if s, ok := v.(string); ok {
+				out[k] = s
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	}
+	return nil
+}
+
+// StringMapToAny converts a string map into the map[string]any the provider's
+// body readers expect (they type-assert on map[string]any).
+func StringMapToAny(in map[string]string) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+// PageParams forwards the console's list query parameters (pageSize/pageToken)
+// onto the provider request so paging.Apply/Page paginates correctly.
+func PageParams(r *http.Request, params map[string]any) {
+	for _, key := range []string{"pageSize", "pageToken"} {
+		if v := r.URL.Query().Get(key); v != "" {
+			params[key] = v
+		}
+	}
+}
+
+// Segment returns the decoded, single-segment value of a URL path parameter. A
+// decoded '/' is rejected: callers use this for ids that are one segment.
+func Segment(r *http.Request, key string) (string, bool) {
+	v := PathParam(r, key)
+	if v == "" || strings.Contains(v, "/") {
+		return "", false
+	}
+	return v, true
+}
+
+// IamBinding is one role-to-members binding in an IAM policy. It is shared by
+// the GCP UI service packages so their policy editors speak one shape.
+type IamBinding struct {
+	Role      string         `json:"role"`
+	Members   []string       `json:"members"`
+	Condition map[string]any `json:"condition,omitempty"`
+}
+
+// IamPolicy mirrors google.iam.v1.Policy for the UI policy editors.
+type IamPolicy struct {
+	Bindings []IamBinding `json:"bindings,omitempty"`
+	Etag     string       `json:"etag,omitempty"`
+	Version  int          `json:"version,omitempty"`
+}
+
+// IamPolicyBody converts a UI IamPolicy into the map[string]any shape the
+// providers' policy.Set expects (bindings as []any).
+func IamPolicyBody(p IamPolicy) map[string]any {
+	bindings := make([]any, 0, len(p.Bindings))
+	for _, b := range p.Bindings {
+		entry := map[string]any{"role": b.Role, "members": StringsToAny(b.Members)}
+		if b.Condition != nil {
+			entry["condition"] = b.Condition
+		}
+		bindings = append(bindings, entry)
+	}
+	out := map[string]any{"bindings": bindings}
+	if p.Etag != "" {
+		out["etag"] = p.Etag
+	}
+	if p.Version > 0 {
+		out["version"] = p.Version
+	}
+	return out
+}
+
+// StringsToAny widens a []string into the []any the provider body readers use.
+func StringsToAny(in []string) []any {
+	out := make([]any, 0, len(in))
+	for _, s := range in {
+		out = append(out, s)
+	}
+	return out
 }
 
 // NR constructs a NormalizedRequest for direct provider calls from UI handlers.

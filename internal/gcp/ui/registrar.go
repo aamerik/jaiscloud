@@ -1,7 +1,8 @@
 // Package ui contributes the GCP service catalog and API routes to the shared
 // UI core. It exposes the GCP cloud identity and mounts per-service UI APIs
-// (Cloud Storage, Pub/Sub, Firestore, Compute, Cloud Run, BigQuery; the rest
-// follow) over the providers wired in cmd/jaiscloud-gcp.
+// (Cloud Storage, Pub/Sub, Firestore, Compute, Cloud Run, BigQuery, IAM, Cloud
+// KMS, Secret Manager; the rest follow) over the providers wired in
+// cmd/jaiscloud-gcp.
 package ui
 
 import (
@@ -11,8 +12,11 @@ import (
 	bigqueryui "jaiscloud/internal/gcp/ui/bigquery"
 	computeui "jaiscloud/internal/gcp/ui/compute"
 	firestoreui "jaiscloud/internal/gcp/ui/firestore"
+	iamui "jaiscloud/internal/gcp/ui/iam"
+	kmsui "jaiscloud/internal/gcp/ui/kms"
 	pubsubui "jaiscloud/internal/gcp/ui/pubsub"
 	runui "jaiscloud/internal/gcp/ui/run"
+	secretmanagerui "jaiscloud/internal/gcp/ui/secretmanager"
 	storageui "jaiscloud/internal/gcp/ui/storage"
 	"jaiscloud/internal/model"
 	coreui "jaiscloud/internal/ui"
@@ -20,19 +24,33 @@ import (
 
 // Registrar is the GCP implementation of coreui.Registrar.
 type Registrar struct {
-	storage   storageui.ProviderInterface
-	pubsub    pubsubui.ProviderInterface
-	firestore firestoreui.ProviderInterface
-	compute   computeui.ProviderInterface
-	bigquery  bigqueryui.ProviderInterface
-	run       runui.ProviderInterface
-	cfg       *config.Config
+	storage       storageui.ProviderInterface
+	pubsub        pubsubui.ProviderInterface
+	firestore     firestoreui.ProviderInterface
+	compute       computeui.ProviderInterface
+	bigquery      bigqueryui.ProviderInterface
+	run           runui.ProviderInterface
+	iam           iamui.ProviderInterface
+	kms           kmsui.ProviderInterface
+	secretmanager secretmanagerui.ProviderInterface
+	cfg           *config.Config
 }
 
 // NewRegistrar returns the GCP UI registrar. A nil provider leaves that
 // service's pages out of the catalog.
-func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, cfg *config.Config) *Registrar {
-	return &Registrar{storage: storageProvider, pubsub: pubsubProvider, firestore: firestoreProvider, compute: computeProvider, bigquery: bigqueryProvider, run: runProvider, cfg: cfg}
+func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, cfg *config.Config) *Registrar {
+	return &Registrar{
+		storage:       storageProvider,
+		pubsub:        pubsubProvider,
+		firestore:     firestoreProvider,
+		compute:       computeProvider,
+		bigquery:      bigqueryProvider,
+		run:           runProvider,
+		iam:           iamProvider,
+		kms:           kmsProvider,
+		secretmanager: secretProvider,
+		cfg:           cfg,
+	}
 }
 
 // Cloud implements coreui.Registrar.
@@ -41,7 +59,7 @@ func (r *Registrar) Cloud() model.Cloud { return model.CloudGCP }
 // Services implements coreui.Registrar: only services whose provider is wired
 // are advertised.
 func (r *Registrar) Services() []coreui.ServiceDescriptor {
-	services := make([]coreui.ServiceDescriptor, 0, 6)
+	services := make([]coreui.ServiceDescriptor, 0, 9)
 	if r.storage != nil {
 		services = append(services, coreui.ServiceDescriptor{
 			ID:       "storage",
@@ -108,6 +126,36 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			},
 		})
 	}
+	if r.iam != nil {
+		services = append(services, coreui.ServiceDescriptor{
+			ID:       "iam",
+			Label:    "IAM",
+			Category: "Security",
+			RootPath: "/gcp/iam/service-accounts",
+			Tier:     coreui.TierFull,
+			Children: []coreui.ServiceChild{{Label: "Service accounts", Path: "/gcp/iam/service-accounts"}},
+		})
+	}
+	if r.kms != nil {
+		services = append(services, coreui.ServiceDescriptor{
+			ID:       "kms",
+			Label:    "Cloud KMS",
+			Category: "Security",
+			RootPath: "/gcp/kms/keyrings",
+			Tier:     coreui.TierFull,
+			Children: []coreui.ServiceChild{{Label: "Key rings", Path: "/gcp/kms/keyrings"}},
+		})
+	}
+	if r.secretmanager != nil {
+		services = append(services, coreui.ServiceDescriptor{
+			ID:       "secretmanager",
+			Label:    "Secret Manager",
+			Category: "Security",
+			RootPath: "/gcp/secretmanager/secrets",
+			Tier:     coreui.TierFull,
+			Children: []coreui.ServiceChild{{Label: "Secrets", Path: "/gcp/secretmanager/secrets"}},
+		})
+	}
 	return services
 }
 
@@ -131,5 +179,14 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 	}
 	if r.bigquery != nil {
 		router.Mount("/api/ui/v1/gcp/bigquery", bigqueryui.BuildRouter(r.bigquery, r.cfg))
+	}
+	if r.iam != nil {
+		router.Mount("/api/ui/v1/gcp/iam", iamui.BuildRouter(r.iam, r.cfg))
+	}
+	if r.kms != nil {
+		router.Mount("/api/ui/v1/gcp/kms", kmsui.BuildRouter(r.kms, r.cfg))
+	}
+	if r.secretmanager != nil {
+		router.Mount("/api/ui/v1/gcp/secretmanager", secretmanagerui.BuildRouter(r.secretmanager, r.cfg))
 	}
 }
