@@ -35,6 +35,7 @@ import {
   listTopics,
 } from '../../api/gcp/pubsub'
 import { useAccount } from '../../context/AccountContext'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** Pub/Sub subscription list with create / delete. */
 export function SubscriptionsPage() {
@@ -103,7 +104,7 @@ export function SubscriptionsPage() {
         sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
       >
         <Box>
-          <Typography variant="h5">Subscriptions</Typography>
+          <GcpPageTitle id="pubsub">Subscriptions</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Pub/Sub · project {accountId || '—'}
           </Typography>

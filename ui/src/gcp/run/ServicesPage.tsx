@@ -21,6 +21,7 @@ import { Link as RouterLink } from 'react-router-dom'
 import { deleteService, listServices, type RunService } from '../../api/gcp/run'
 import { useAccount } from '../../context/AccountContext'
 import { lastSegment, shortDate } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 function target(service: RunService) {
   return { region: service.region, service: service.id }
@@ -50,7 +51,7 @@ export function ServicesPage() {
         sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
       >
         <Box>
-          <Typography variant="h5">Cloud Run</Typography>
+          <GcpPageTitle id="run">Cloud Run</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Services · project {accountId || '—'}
           </Typography>

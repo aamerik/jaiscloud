@@ -24,6 +24,7 @@ import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
 import { deleteService, getService, listRevisions } from '../../api/gcp/run'
 import { useAccount } from '../../context/AccountContext'
 import { firstImage, lastSegment, shortDate, templateContainers } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : ''
@@ -85,9 +86,7 @@ export function ServiceDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {service}
-          </Typography>
+          <GcpPageTitle id="run">{service}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             {region} · project {accountId || '—'}
           </Typography>

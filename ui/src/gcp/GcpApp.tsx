@@ -23,7 +23,9 @@ import { Link as RouterLink, Navigate, Route, Routes, useLocation } from 'react-
 import '@fontsource/roboto/400.css'
 import '@fontsource/roboto/500.css'
 import '@fontsource/roboto/700.css'
-import { gcpTheme } from './theme'
+import { createGcpTheme } from './theme'
+import { useGcpAppearance, type GcpAppearance } from './appearance'
+import { GcpServiceIcon } from './icons/GcpServiceIcon'
 import { GcpHome } from './GcpHome'
 import { GcpAdminPage } from './admin/GcpAdminPage'
 import { GcpGlobalSearch } from './chrome/GcpGlobalSearch'
@@ -95,7 +97,7 @@ import { useServices } from '../hooks/useServices'
 const DRAWER_WIDTH = 256
 
 /** Material shell approximating the Google Cloud Console chrome. */
-function GcpShell() {
+function GcpShell({ appearance }: { appearance: GcpAppearance }) {
   const location = useLocation()
   const { data: meta } = useMeta()
   const { accountId } = useAccount()
@@ -139,6 +141,9 @@ function GcpShell() {
             selected={isSelected(service.rootPath)}
             onClick={() => rememberRecentService(service.id)}
           >
+            <ListItemIcon sx={{ minWidth: 36 }}>
+              <GcpServiceIcon id={service.id} size={20} />
+            </ListItemIcon>
             <ListItemText primary={service.label} secondary={service.category} />
           </ListItemButton>
         ))}
@@ -214,7 +219,7 @@ function GcpShell() {
               {accountId || meta?.accountId || 'Select a project'}
             </Typography>
           </Button>
-          <ChromeActions connected={connected} />
+          <ChromeActions connected={connected} appearance={appearance} />
           <AccountMenu onSelectProject={() => setProjectOpen(true)} />
         </Toolbar>
       </AppBar>
@@ -346,11 +351,17 @@ function GcpShell() {
 
 /** GCP console: Material Design, rendered only when meta.cloud === 'gcp'. */
 export function GcpApp() {
+  const appearance = useGcpAppearance()
+  const theme = useMemo(
+    () => createGcpTheme(appearance.mode, appearance.density),
+    [appearance.mode, appearance.density],
+  )
+
   return (
-    <ThemeProvider theme={gcpTheme}>
+    <ThemeProvider theme={theme}>
       <CssBaseline />
       <AccountProvider>
-        <GcpShell />
+        <GcpShell appearance={appearance} />
       </AccountProvider>
     </ThemeProvider>
   )

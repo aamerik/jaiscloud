@@ -45,6 +45,7 @@ import { IamPolicyPanel } from '../common/IamPolicyPanel'
 import { QueueDialog } from './QueueDialog'
 import { TaskDialog } from './TaskDialog'
 import { queueStateColor, rateLabel, shortDate, taskTargetLabel } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** A small label/value row for the queue overview. */
 function Detail({ label, children }: { label: string; children: ReactNode }) {
@@ -117,9 +118,7 @@ export function QueueDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {queueName}
-          </Typography>
+          <GcpPageTitle id="tasks">{queueName}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Cloud Tasks · {location || '—'}
           </Typography>

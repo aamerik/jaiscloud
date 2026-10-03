@@ -43,6 +43,7 @@ import { IamPolicyPanel } from '../common/IamPolicyPanel'
 import { AddVersionDialog } from './AddVersionDialog'
 import { EditSecretDialog } from './EditSecretDialog'
 import { fromBase64 } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** One Secret Manager secret: metadata, versions and IAM policy. */
 export function SecretDetailPage() {
@@ -112,9 +113,7 @@ export function SecretDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {secret}
-          </Typography>
+          <GcpPageTitle id="secretmanager">{secret}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Secret · project {accountId || '—'}
           </Typography>

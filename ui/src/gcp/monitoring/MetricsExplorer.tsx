@@ -19,6 +19,7 @@ import {
 import { listMetricDescriptors, listTimeSeries } from '../../api/gcp/monitoring'
 import { useAccount } from '../../context/AccountContext'
 import { formatTypedValue, seriesLabel, shortDate } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** Cloud Monitoring Metrics Explorer: browse metric descriptors and their series. */
 export function MetricsExplorer() {
@@ -44,7 +45,7 @@ export function MetricsExplorer() {
   return (
     <Box>
       <Box sx={{ mb: 2 }}>
-        <Typography variant="h5">Metrics explorer</Typography>
+        <GcpPageTitle id="monitoring">Metrics explorer</GcpPageTitle>
         <Typography variant="body2" color="text.secondary">
           Metric descriptors and stored time series · project {accountId || '—'}
         </Typography>

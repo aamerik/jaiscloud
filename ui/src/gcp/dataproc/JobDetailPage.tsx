@@ -17,6 +17,7 @@ import { cancelJob, getJob } from '../../api/gcp/dataproc'
 import { useAccount } from '../../context/AccountContext'
 import { Detail, JsonBlock } from './common'
 import { jobStateColor, jobTypeLabel, shortDate } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** True for a job that has reached a terminal state and cannot be cancelled. */
 function isTerminal(state?: string): boolean {
@@ -48,9 +49,7 @@ export function JobDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {jobID}
-          </Typography>
+          <GcpPageTitle id="dataproc">{jobID}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Dataproc job · {region || '—'}
           </Typography>

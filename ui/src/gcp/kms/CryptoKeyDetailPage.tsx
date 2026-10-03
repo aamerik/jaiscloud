@@ -34,6 +34,7 @@ import {
 } from '../../api/gcp/kms'
 import { useAccount } from '../../context/AccountContext'
 import { IamPolicyPanel } from '../common/IamPolicyPanel'
+import { GcpPageTitle } from '../common/PageTitle'
 
 function versionColor(state?: string): 'success' | 'default' | 'warning' | 'error' {
   switch (state) {
@@ -107,9 +108,7 @@ export function CryptoKeyDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {key}
-          </Typography>
+          <GcpPageTitle id="kms">{key}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Crypto key · {keyRing} · {location} · project {accountId || '—'}
           </Typography>

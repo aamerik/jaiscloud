@@ -24,6 +24,7 @@ import { getKeyRing, getKeyRingIam, listCryptoKeys, putKeyRingIam } from '../../
 import { useAccount } from '../../context/AccountContext'
 import { IamPolicyPanel } from '../common/IamPolicyPanel'
 import { CreateCryptoKeyDialog } from './CreateCryptoKeyDialog'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** One KMS key ring: its crypto keys and IAM policy. */
 export function KeyRingDetailPage() {
@@ -54,9 +55,7 @@ export function KeyRingDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {keyRing}
-          </Typography>
+          <GcpPageTitle id="kms">{keyRing}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Key ring · {location} · project {accountId || '—'}
           </Typography>

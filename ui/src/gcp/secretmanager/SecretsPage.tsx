@@ -23,6 +23,7 @@ import { Link as RouterLink } from 'react-router-dom'
 import { deleteSecret, listSecrets, type Secret } from '../../api/gcp/secretmanager'
 import { useAccount } from '../../context/AccountContext'
 import { CreateSecretDialog } from './CreateSecretDialog'
+import { GcpPageTitle } from '../common/PageTitle'
 
 function labelSummary(labels?: Record<string, string>): string {
   if (!labels) return '—'
@@ -56,7 +57,7 @@ export function SecretsPage() {
         sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
       >
         <Box>
-          <Typography variant="h5">Secret Manager</Typography>
+          <GcpPageTitle id="secretmanager">Secret Manager</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Secrets · project {accountId || '—'}
           </Typography>

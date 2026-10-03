@@ -44,6 +44,7 @@ import {
 import { useAccount } from '../../context/AccountContext'
 import { IamPolicyPanel } from '../common/IamPolicyPanel'
 import { EditServiceAccountDialog } from './EditServiceAccountDialog'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** One IAM service account: metadata, keys and IAM policy. */
 export function ServiceAccountDetailPage() {
@@ -117,9 +118,7 @@ export function ServiceAccountDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {email}
-          </Typography>
+          <GcpPageTitle id="iam">{email}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Service account · project {accountId || '—'}
           </Typography>

@@ -25,6 +25,7 @@ import { deleteWorkflow, listWorkflows, type Workflow } from '../../api/gcp/work
 import { useAccount } from '../../context/AccountContext'
 import { WorkflowDialog } from './WorkflowDialog'
 import { shortDate, workflowStateColor } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 function target(workflow: Workflow) {
   return { location: workflow.location, workflow: workflow.id }
@@ -56,7 +57,7 @@ export function WorkflowsPage() {
         sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
       >
         <Box>
-          <Typography variant="h5">Workflows</Typography>
+          <GcpPageTitle id="workflows">Workflows</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Workflows · project {accountId || '—'}
           </Typography>

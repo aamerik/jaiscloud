@@ -21,6 +21,7 @@ import { Link as RouterLink } from 'react-router-dom'
 import { cancelJob, listJobs, type DataprocJob } from '../../api/gcp/dataproc'
 import { useAccount } from '../../context/AccountContext'
 import { jobStateColor, jobTypeLabel, shortDate } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** True for a job that has reached a terminal state and cannot be cancelled. */
 function isTerminal(state: string): boolean {
@@ -47,7 +48,7 @@ export function JobsPage() {
   return (
     <Box>
       <Stack sx={{ mb: 2 }}>
-        <Typography variant="h5">Dataproc</Typography>
+        <GcpPageTitle id="dataproc">Dataproc</GcpPageTitle>
         <Typography variant="body2" color="text.secondary">
           Jobs · project {accountId || '—'}
         </Typography>

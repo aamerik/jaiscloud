@@ -23,6 +23,7 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import { deleteMetric, listMetrics, type LogMetric } from '../../api/gcp/logging'
 import { useAccount } from '../../context/AccountContext'
 import { MetricDialog } from './MetricDialog'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** Logs-based metrics: list, create, edit and delete. */
 export function MetricsPage() {
@@ -50,7 +51,7 @@ export function MetricsPage() {
         sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
       >
         <Box>
-          <Typography variant="h5">Logs-based metrics</Typography>
+          <GcpPageTitle id="logging">Logs-based metrics</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Count log entries matching a filter · project {accountId || '—'}
           </Typography>

@@ -25,6 +25,7 @@ import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
 import { deleteInstance, getInstance, startInstance, stopInstance } from '../../api/gcp/compute'
 import { useAccount } from '../../context/AccountContext'
 import { asArray, asRecord, shortDate, statusColor, text } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 interface NetworkInterface {
   name?: string
@@ -123,9 +124,7 @@ export function InstanceDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {instanceName}
-          </Typography>
+          <GcpPageTitle id="compute">{instanceName}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             {zone} · project {accountId || '—'}
           </Typography>

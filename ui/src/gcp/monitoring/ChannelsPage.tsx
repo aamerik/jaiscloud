@@ -28,6 +28,7 @@ import {
 import { useAccount } from '../../context/AccountContext'
 import { ChannelDialog } from './ChannelDialog'
 import { resourceID, verificationColor } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** Notification channels: list, create, edit and delete. */
 export function ChannelsPage() {
@@ -55,7 +56,7 @@ export function ChannelsPage() {
         sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
       >
         <Box>
-          <Typography variant="h5">Notification channels</Typography>
+          <GcpPageTitle id="monitoring">Notification channels</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Destinations for alert notifications · project {accountId || '—'}
           </Typography>

@@ -44,6 +44,7 @@ import {
   type IamPolicy,
 } from '../../api/gcp/storage'
 import { useAccount } from '../../context/AccountContext'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** Bucket configuration: versioning, lifecycle, retention/holds, permissions. */
 export function BucketSettingsPage() {
@@ -61,9 +62,7 @@ export function BucketSettingsPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {bucket}
-          </Typography>
+          <GcpPageTitle id="storage">{bucket}</GcpPageTitle>
           <Link component={RouterLink} to={`/gcp/storage/buckets/${encodeURIComponent(bucket)}`}>
             Objects
           </Link>

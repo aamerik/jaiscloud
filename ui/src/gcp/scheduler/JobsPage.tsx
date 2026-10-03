@@ -35,6 +35,7 @@ import {
 import { useAccount } from '../../context/AccountContext'
 import { JobDialog } from './JobDialog'
 import { shortDate, stateColor, targetLabel } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 function target(job: SchedulerJob) {
   return { location: job.location, job: job.name }
@@ -80,7 +81,7 @@ export function JobsPage() {
         sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
       >
         <Box>
-          <Typography variant="h5">Cloud Scheduler</Typography>
+          <GcpPageTitle id="scheduler">Cloud Scheduler</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Jobs · project {accountId || '—'}
           </Typography>

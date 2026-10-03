@@ -19,6 +19,7 @@ import { deleteCluster, getCluster, startCluster, stopCluster } from '../../api/
 import { useAccount } from '../../context/AccountContext'
 import { Detail, JsonBlock } from './common'
 import { clusterStateColor, shortDate } from './util'
+import { GcpPageTitle } from '../common/PageTitle'
 
 /** A single Dataproc cluster: overview, config and status history. */
 export function ClusterDetailPage() {
@@ -56,9 +57,7 @@ export function ClusterDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
-            {clusterName}
-          </Typography>
+          <GcpPageTitle id="dataproc">{clusterName}</GcpPageTitle>
           <Typography variant="body2" color="text.secondary">
             Dataproc · {region || '—'}
           </Typography>
