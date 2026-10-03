@@ -23,7 +23,6 @@ import { useMeta } from '../hooks/useMeta'
 import { useEventStream } from '../hooks/useEventStream'
 import { useServices } from '../hooks/useServices'
 import { useActiveTerminology } from '../hooks/useTerminology'
-import { getActiveCloud } from '../lib/cloud'
 import { docsLink } from '../lib/cloudLinks'
 import { buildBreadcrumbItems, groupByCategory, serviceForPath, type NavSection } from './nav'
 import { NotificationsProvider, useNotifications } from './notifications'
@@ -91,13 +90,11 @@ function Shell({ children }: Props) {
   const [mode, setMode] = useState<Mode>(() =>
     localStorage.getItem('jaiscloud-mode') === 'dark' ? Mode.Dark : Mode.Light,
   )
-  const [density, setDensity] = useState<Density>(() => {
-    const stored = localStorage.getItem('jaiscloud-density')
-    if (stored === 'compact') return Density.Compact
-    if (stored === 'comfortable') return Density.Comfortable
-    // GCP defaults to the console's compact density unless the user chose.
-    return getActiveCloud() === 'gcp' ? Density.Compact : Density.Comfortable
-  })
+  const [density, setDensity] = useState<Density>(() =>
+    localStorage.getItem('jaiscloud-density') === 'compact'
+      ? Density.Compact
+      : Density.Comfortable,
+  )
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const { data: meta } = useMeta()

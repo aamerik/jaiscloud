@@ -7,14 +7,14 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import { api } from './api/client'
 import type { Meta } from './hooks/useMeta'
-import { setActiveCloud } from './lib/cloud'
-import { applyCloudTheme } from './theme/selectTheme'
+import { applyAwsConsoleTheme } from './theme/aws/theme'
 import './theme/aws/console.css'
 
-// Cloudscape OneTheme base; the cloud-specific palette is applied in
-// bootstrap() once /api/ui/v1/meta identifies the cloud.
+// Cloudscape is the design system for the AWS/Azure consoles; the GCP console
+// renders its own Material theme (see src/gcp). Apply the AWS palette at boot.
 setThemeClass(Theme.OneTheme)
 applyMode(localStorage.getItem('jaiscloud-mode') === 'dark' ? Mode.Dark : Mode.Light)
+applyAwsConsoleTheme()
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -30,23 +30,17 @@ if (!root) throw new Error('Root element not found')
 const container = createRoot(root)
 
 /**
- * Resolve the cloud identity before the first paint so the console theme and
- * cloud-dependent defaults (density, terminology) are correct on the initial
- * render, then seed the query cache so App does not refetch meta. A failed
+ * Resolve the cloud identity before the first paint, then seed the query cache
+ * so App renders against the right shell without refetching meta. A failed
  * fetch falls through to the connection error App already renders.
  */
 async function bootstrap() {
-  let cloud = 'aws'
   try {
     const meta = await api.get<Meta>('/api/ui/v1/meta')
-    cloud = meta.cloud || cloud
     queryClient.setQueryData(['meta'], meta)
   } catch {
     /* App renders the connection error */
   }
-
-  setActiveCloud(cloud)
-  applyCloudTheme(cloud)
 
   container.render(
     <StrictMode>

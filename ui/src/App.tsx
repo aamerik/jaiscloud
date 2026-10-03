@@ -5,7 +5,7 @@ import { Layout } from './components/Layout'
 import { ConsoleHome } from './components/ConsoleHome'
 import { ResourceFavorites } from './components/ResourceFavorites'
 import { AzureRoutes } from './services/azure'
-import { GCPRoutes } from './services/gcp'
+import { GcpApp } from './gcp/GcpApp'
 import { SQSRoutes } from './services/aws/sqs'
 import { LambdaRoutes } from './services/aws/lambda'
 import { LogsRoutes } from './services/aws/logs'
@@ -72,17 +72,9 @@ export default function App() {
   }
 
   if (meta.cloud === 'gcp') {
-    return (
-      <Layout>
-        <Routes>
-          <Route path="/" element={<Navigate to="/gcp" replace />} />
-          <Route path="/gcp/*" element={<GCPRoutes />} />
-          <Route path="/favorites" element={<ResourceFavorites />} />
-          <Route path="/admin" element={<AdminPanel />} />
-          <Route path="*" element={<Navigate to="/gcp" replace />} />
-        </Routes>
-      </Layout>
-    )
+    // The GCP console is a Material Design app, separate from the Cloudscape
+    // shell used by AWS/Azure.
+    return <GcpApp />
   }
 
   return (
