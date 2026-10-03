@@ -107,6 +107,17 @@ func (s *Service) ListWorkflows(ctx context.Context, project, location string, p
 	return page, next, nil
 }
 
+// ListWorkflowsByProject lists every workflow in a project across all
+// locations, sorted by location then ID. It backs the location-optional console
+// list, which aggregates locations rather than requiring a location picker.
+func (s *Service) ListWorkflowsByProject(ctx context.Context, project string) ([]workflowsstore.Workflow, error) {
+	wfs, err := s.workflows.ListWorkflowsByProject(ctx, project)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	return wfs, nil
+}
+
 // GetWorkflow returns one workflow, or NotFound.
 func (s *Service) GetWorkflow(ctx context.Context, project, location, id string) (workflowsstore.Workflow, error) {
 	if location == "" || id == "" {
