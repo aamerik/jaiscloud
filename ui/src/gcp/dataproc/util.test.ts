@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { clusterStateColor, jobStateColor, jobTypeLabel, shortDate } from './util'
+import {
+  buildVirtualClusterConfig,
+  clusterStateColor,
+  jobStateColor,
+  jobTypeLabel,
+  parseJsonObject,
+  shortDate,
+} from './util'
 
 describe('shortDate', () => {
   it('renders an em dash when absent', () => {
@@ -47,5 +54,59 @@ describe('jobTypeLabel', () => {
 
   it('renders an em dash when absent', () => {
     expect(jobTypeLabel()).toBe('—')
+  })
+})
+
+describe('parseJsonObject', () => {
+  it('parses a JSON object', () => {
+    expect(parseJsonObject('{"gceClusterConfig":{}}')).toEqual({
+      value: { gceClusterConfig: {} },
+    })
+  })
+
+  it('rejects invalid JSON and non-objects', () => {
+    expect(parseJsonObject('{')).toHaveProperty('error')
+    expect(parseJsonObject('[]')).toEqual({ error: 'Config must be a JSON object.' })
+    expect(parseJsonObject('null')).toEqual({ error: 'Config must be a JSON object.' })
+  })
+})
+
+describe('buildVirtualClusterConfig', () => {
+  it('composes the kubernetes config with a target and namespace', () => {
+    expect(
+      buildVirtualClusterConfig({
+        gkeClusterTarget: 'projects/p/locations/us-central1/clusters/gke-1',
+        kubernetesNamespace: 'dataproc',
+      }),
+    ).toEqual({
+      kubernetesClusterConfig: {
+        kubernetesNamespace: 'dataproc',
+        gkeClusterConfig: {
+          gkeClusterTarget: 'projects/p/locations/us-central1/clusters/gke-1',
+        },
+      },
+    })
+  })
+
+  it('uses a node pool target when no cluster target is given', () => {
+    expect(
+      buildVirtualClusterConfig({
+        gkeClusterTarget: '',
+        kubernetesNamespace: 'dp',
+        nodePool: 'projects/p/locations/us-central1/clusters/gke-1/nodePools/default',
+      }),
+    ).toEqual({
+      kubernetesClusterConfig: {
+        kubernetesNamespace: 'dp',
+        gkeClusterConfig: {
+          nodePoolTarget: [
+            {
+              nodePool: 'projects/p/locations/us-central1/clusters/gke-1/nodePools/default',
+              roles: ['DEFAULT'],
+            },
+          ],
+        },
+      },
+    })
   })
 })

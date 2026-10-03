@@ -20,6 +20,12 @@ type ProviderInterface interface {
 	// GetCluster returns one cluster.
 	GetCluster(ctx context.Context, project, region, name string) (dpstore.Cluster, error)
 
+	// CreateCluster creates a cluster in CREATING state from a GCE config or a
+	// GKE virtualClusterConfig. The returned long-running operation is
+	// discarded (the cluster settles lazily on a later read), so the console
+	// shows CREATING and then RUNNING on refresh.
+	CreateCluster(ctx context.Context, project, region, name string, in dataproccore.ClusterInput) (dpstore.Cluster, error)
+
 	// StartCluster / StopCluster transition a cluster's state. The returned
 	// operation is discarded (the transition settles lazily on the next read).
 	StartCluster(ctx context.Context, project, region, name string) (dpstore.Cluster, error)
@@ -83,6 +89,13 @@ func (p *Provider) StopCluster(ctx context.Context, project, region, name string
 func (p *Provider) DeleteCluster(ctx context.Context, project, region, name string) error {
 	_, err := p.svc.DeleteCluster(ctx, project, region, name)
 	return err
+}
+
+// CreateCluster implements ProviderInterface; the create operation is discarded
+// and the cluster is returned in CREATING state.
+func (p *Provider) CreateCluster(ctx context.Context, project, region, name string, in dataproccore.ClusterInput) (dpstore.Cluster, error) {
+	c, _, err := p.svc.CreateCluster(ctx, project, region, name, in)
+	return c, err
 }
 
 // ListAllJobs implements ProviderInterface.

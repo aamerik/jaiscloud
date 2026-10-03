@@ -65,3 +65,51 @@ export function jobTypeLabel(type?: string): string {
       return type
   }
 }
+
+/**
+ * parseJsonObject parses a raw JSON object typed into the create form. It
+ * returns the parsed value or a human-readable error for a non-object/invalid
+ * payload.
+ */
+export function parseJsonObject(text: string): { value?: Record<string, unknown>; error?: string } {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch (err) {
+    return { error: `Invalid JSON: ${(err as Error).message}` }
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { error: 'Config must be a JSON object.' }
+  }
+  return { value: parsed as Record<string, unknown> }
+}
+
+/** Fields collected by the GKE branch of the create-cluster form. */
+export interface GkeClusterInput {
+  /** `gkeClusterTarget` (the target GKE cluster resource name), if given. */
+  gkeClusterTarget: string
+  /** `kubernetesNamespace` the Dataproc jobs land in. */
+  kubernetesNamespace: string
+  /** Optional `nodePoolTarget` resource name. */
+  nodePool?: string
+}
+
+/**
+ * buildVirtualClusterConfig composes a Dataproc-on-GKE VirtualClusterConfig
+ * from the structured GKE fields. A target cluster or at least one node pool is
+ * required by the API, so an empty gkeClusterConfig is omitted rather than sent;
+ * callers validate presence before submitting.
+ */
+export function buildVirtualClusterConfig(input: GkeClusterInput): Record<string, unknown> {
+  const gkeClusterConfig: Record<string, unknown> = {}
+  const target = input.gkeClusterTarget.trim()
+  if (target) gkeClusterConfig.gkeClusterTarget = target
+  const nodePool = input.nodePool?.trim()
+  if (nodePool) gkeClusterConfig.nodePoolTarget = [{ nodePool, roles: ['DEFAULT'] }]
+
+  const kubernetesClusterConfig: Record<string, unknown> = {
+    kubernetesNamespace: input.kubernetesNamespace.trim(),
+    gkeClusterConfig,
+  }
+  return { kubernetesClusterConfig }
+}
