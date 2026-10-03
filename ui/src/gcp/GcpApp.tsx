@@ -52,6 +52,8 @@ import { TriggersPage as EventarcTriggersPage } from './eventarc/TriggersPage'
 import { TriggerDetailPage as EventarcTriggerDetailPage } from './eventarc/TriggerDetailPage'
 import { ChannelsPage as EventarcChannelsPage } from './eventarc/ChannelsPage'
 import { ChannelDetailPage as EventarcChannelDetailPage } from './eventarc/ChannelDetailPage'
+import { FunctionsPage } from './functions/FunctionsPage'
+import { FunctionDetailPage } from './functions/FunctionDetailPage'
 import { WorkflowsPage } from './workflows/WorkflowsPage'
 import { WorkflowDetailPage } from './workflows/WorkflowDetailPage'
 import { ExecutionDetailPage as WorkflowExecutionDetailPage } from './workflows/ExecutionDetailPage'
@@ -326,6 +328,8 @@ function GcpShell() {
             path="/gcp/eventarc/channels/:location/:channel"
             element={<EventarcChannelDetailPage />}
           />
+          <Route path="/gcp/functions" element={<FunctionsPage />} />
+          <Route path="/gcp/functions/:location/:function" element={<FunctionDetailPage />} />
           <Route path="/gcp/workflows" element={<WorkflowsPage />} />
           <Route path="/gcp/workflows/:location/:workflow" element={<WorkflowDetailPage />} />
           <Route

@@ -125,6 +125,7 @@ import (
 	"jaiscloud/internal/gcp/transportcfg"
 	gcpui "jaiscloud/internal/gcp/ui"
 	eventarcui "jaiscloud/internal/gcp/ui/eventarc"
+	functionsui "jaiscloud/internal/gcp/ui/functions"
 	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/model"
@@ -1214,7 +1215,14 @@ func startCmd() *cobra.Command {
 				if eventarcCore != nil {
 					eventarcUI = eventarcui.NewProvider(eventarcCore)
 				}
-				uiServer, uiErr = coreui.New(gcpui.NewRegistrar(storageP, pubsubP, firestoreP, computeP, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, cfg), adminHandler, cfg, eventBus, version)
+				// Cloud Functions is advertised only when the service is
+				// enabled (otherwise functionsCore is nil, and a typed nil must
+				// not be boxed into the interface or the catalog would list it).
+				var functionsUI functionsui.ProviderInterface
+				if functionsCore != nil {
+					functionsUI = functionsui.NewProvider(functionsCore)
+				}
+				uiServer, uiErr = coreui.New(gcpui.NewRegistrar(storageP, pubsubP, firestoreP, computeP, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, cfg), adminHandler, cfg, eventBus, version)
 				if uiErr != nil {
 					slog.Warn("ui server init failed", "err", uiErr)
 				} else if uiServer != nil {

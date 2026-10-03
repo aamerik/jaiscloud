@@ -1,8 +1,9 @@
 // Package ui contributes the GCP service catalog and API routes to the shared
 // UI core. It exposes the GCP cloud identity and mounts per-service UI APIs
-// (Cloud Storage, Pub/Sub, Firestore, Compute, Cloud Run, Cloud Scheduler,
-// Cloud Tasks, Workflows, BigQuery, IAM, Cloud KMS, Secret Manager; the rest
-// follow) over the providers wired in cmd/jaiscloud-gcp.
+// (Cloud Storage, Pub/Sub, Firestore, Compute, Cloud Run, Cloud Functions, Cloud
+// Scheduler, Cloud Tasks, Workflows, Eventarc, BigQuery, IAM, Cloud KMS, Secret
+// Manager, Logging, Monitoring; the rest follow) over the providers wired in
+// cmd/jaiscloud-gcp.
 package ui
 
 import (
@@ -13,6 +14,7 @@ import (
 	computeui "jaiscloud/internal/gcp/ui/compute"
 	eventarcui "jaiscloud/internal/gcp/ui/eventarc"
 	firestoreui "jaiscloud/internal/gcp/ui/firestore"
+	functionsui "jaiscloud/internal/gcp/ui/functions"
 	iamui "jaiscloud/internal/gcp/ui/iam"
 	kmsui "jaiscloud/internal/gcp/ui/kms"
 	loggingui "jaiscloud/internal/gcp/ui/logging"
@@ -45,12 +47,13 @@ type Registrar struct {
 	tasks         tasksui.ProviderInterface
 	workflows     workflowsui.ProviderInterface
 	eventarc      eventarcui.ProviderInterface
+	functions     functionsui.ProviderInterface
 	cfg           *config.Config
 }
 
 // NewRegistrar returns the GCP UI registrar. A nil provider leaves that
 // service's pages out of the catalog.
-func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, schedulerProvider schedulerui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, tasksProvider tasksui.ProviderInterface, workflowsProvider workflowsui.ProviderInterface, eventarcProvider eventarcui.ProviderInterface, cfg *config.Config) *Registrar {
+func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, schedulerProvider schedulerui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, tasksProvider tasksui.ProviderInterface, workflowsProvider workflowsui.ProviderInterface, eventarcProvider eventarcui.ProviderInterface, functionsProvider functionsui.ProviderInterface, cfg *config.Config) *Registrar {
 	return &Registrar{
 		storage:       storageProvider,
 		pubsub:        pubsubProvider,
@@ -67,6 +70,7 @@ func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pu
 		tasks:         tasksProvider,
 		workflows:     workflowsProvider,
 		eventarc:      eventarcProvider,
+		functions:     functionsProvider,
 		cfg:           cfg,
 	}
 }
@@ -77,7 +81,7 @@ func (r *Registrar) Cloud() model.Cloud { return model.CloudGCP }
 // Services implements coreui.Registrar: only services whose provider is wired
 // are advertised.
 func (r *Registrar) Services() []coreui.ServiceDescriptor {
-	services := make([]coreui.ServiceDescriptor, 0, 15)
+	services := make([]coreui.ServiceDescriptor, 0, 16)
 	if r.storage != nil {
 		services = append(services, coreui.ServiceDescriptor{
 			ID:       "storage",
@@ -129,6 +133,16 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			RootPath: "/gcp/run/services",
 			Tier:     coreui.TierFull,
 			Children: []coreui.ServiceChild{{Label: "Services", Path: "/gcp/run/services"}},
+		})
+	}
+	if r.functions != nil {
+		services = append(services, coreui.ServiceDescriptor{
+			ID:       "functions",
+			Label:    "Cloud Functions",
+			Category: "Compute",
+			RootPath: "/gcp/functions",
+			Tier:     coreui.TierFull,
+			Children: []coreui.ServiceChild{{Label: "Functions", Path: "/gcp/functions"}},
 		})
 	}
 	if r.scheduler != nil {
@@ -278,6 +292,9 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 	}
 	if r.eventarc != nil {
 		router.Mount("/api/ui/v1/gcp/eventarc", eventarcui.BuildRouter(r.eventarc, r.cfg))
+	}
+	if r.functions != nil {
+		router.Mount("/api/ui/v1/gcp/functions", functionsui.BuildRouter(r.functions, r.cfg))
 	}
 	if r.bigquery != nil {
 		router.Mount("/api/ui/v1/gcp/bigquery", bigqueryui.BuildRouter(r.bigquery, r.cfg))
