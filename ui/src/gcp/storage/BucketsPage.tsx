@@ -67,7 +67,10 @@ export function BucketsPage() {
 
   return (
     <Box>
-      <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+      <Stack
+        direction="row"
+        sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
+      >
         <Box>
           <Typography variant="h5">Buckets</Typography>
           <Typography variant="body2" color="text.secondary">

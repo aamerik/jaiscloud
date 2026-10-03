@@ -36,8 +36,10 @@ export function SubscriptionDetailPage() {
         >
           <ArrowBackIcon />
         </IconButton>
-        <Box>
-          <Typography variant="h5">{subscription}</Typography>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
+            {subscription}
+          </Typography>
           <Typography variant="body2" color="text.secondary">
             Pub/Sub subscription
           </Typography>
@@ -189,7 +191,7 @@ function DetailsTab({ name }: { name: string }) {
           size="small"
           disabled={!d || !deadLetterTopic}
         />
-        <Stack direction="row" spacing={1}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
           <TextField
             label="Min retry backoff (e.g. 10s)"
             value={minBackoff}
@@ -226,7 +228,9 @@ function DetailRow({ label, value }: { label: string; value: string }) {
       <Typography variant="caption" color="text.secondary">
         {label}
       </Typography>
-      <Typography variant="body2">{value}</Typography>
+      <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
+        {value}
+      </Typography>
     </Box>
   )
 }

@@ -98,12 +98,18 @@ export function ObjectsPage() {
 
   return (
     <Box>
-      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 2 }}>
+      <Stack
+        direction="row"
+        spacing={1}
+        sx={{ alignItems: 'center', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
+      >
         <IconButton component={RouterLink} to="/gcp/storage/buckets" aria-label="Back to buckets">
           <ArrowBackIcon />
         </IconButton>
-        <Box sx={{ flexGrow: 1 }}>
-          <Typography variant="h5">{bucket}</Typography>
+        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
+            {bucket}
+          </Typography>
           <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
             <Link component={RouterLink} to={`/gcp/storage/buckets/${encodeURIComponent(bucket)}`}>
               {prefix ? 'Buckets / ' + prefix : 'Objects'}
@@ -203,8 +209,8 @@ export function ObjectsPage() {
                   onClick={() => setSelected({ name: object.name, generation: object.generation })}
                 >
                   <TableCell>
-                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-                      <span>{object.name}</span>
+                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center', minWidth: 0 }}>
+                      <span style={{ wordBreak: 'break-all' }}>{object.name}</span>
                       {object.temporaryHold && <Chip size="small" label="temp hold" />}
                       {object.eventBasedHold && <Chip size="small" label="event hold" />}
                       {dead && <Chip size="small" color="default" label="noncurrent" />}
@@ -303,7 +309,7 @@ function ObjectDrawer({ bucket, selection, onClose, onChanged }: ObjectDrawerPro
 
   return (
     <Drawer anchor="right" open={open} onClose={onClose}>
-      <Box sx={{ width: DRAWER_WIDTH, p: 2 }} role="presentation">
+      <Box sx={{ width: { xs: '100vw', sm: DRAWER_WIDTH }, maxWidth: '100%', p: 2 }} role="presentation">
         <Stack direction="row" sx={{ alignItems: 'center', mb: 1 }}>
           <Typography variant="h6" sx={{ flexGrow: 1, wordBreak: 'break-all' }}>
             {name}

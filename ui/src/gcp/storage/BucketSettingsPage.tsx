@@ -52,7 +52,7 @@ export function BucketSettingsPage() {
 
   return (
     <Box>
-      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1, flexWrap: 'wrap', rowGap: 1 }}>
         <IconButton
           component={RouterLink}
           to={`/gcp/storage/buckets/${encodeURIComponent(bucket)}`}
@@ -60,15 +60,23 @@ export function BucketSettingsPage() {
         >
           <ArrowBackIcon />
         </IconButton>
-        <Box>
-          <Typography variant="h5">{bucket}</Typography>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
+            {bucket}
+          </Typography>
           <Link component={RouterLink} to={`/gcp/storage/buckets/${encodeURIComponent(bucket)}`}>
             Objects
           </Link>
         </Box>
       </Stack>
 
-      <Tabs value={tab} onChange={(_, v: number) => setTab(v)} sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
+      <Tabs
+        value={tab}
+        onChange={(_, v: number) => setTab(v)}
+        variant="scrollable"
+        scrollButtons="auto"
+        sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}
+      >
         <Tab label="Versioning" />
         <Tab label="Lifecycle" />
         <Tab label="Retention & holds" />

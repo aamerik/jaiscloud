@@ -24,10 +24,10 @@ export function GcpHome() {
   return (
     <Box>
       <Typography variant="h4" sx={{ fontWeight: 400 }}>
-        Google Cloud
+        JaisCloud
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mt: 0.5 }}>
-        Local JaisCloud emulator · project {accountId || meta?.accountId || '—'} ·{' '}
+        Local GCP emulator · project {accountId || meta?.accountId || '—'} ·{' '}
         {meta?.region ?? 'global'}
       </Typography>
 

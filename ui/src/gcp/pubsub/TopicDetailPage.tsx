@@ -40,12 +40,18 @@ export function TopicDetailPage() {
 
   return (
     <Box>
-      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+      <Stack
+        direction="row"
+        spacing={1}
+        sx={{ alignItems: 'center', mb: 1, flexWrap: 'wrap', rowGap: 1 }}
+      >
         <IconButton component={RouterLink} to="/gcp/pubsub/topics" aria-label="Back to topics">
           <ArrowBackIcon />
         </IconButton>
-        <Box sx={{ flexGrow: 1 }}>
-          <Typography variant="h5">{topic}</Typography>
+        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+          <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
+            {topic}
+          </Typography>
           <Typography variant="body2" color="text.secondary">
             Pub/Sub topic · project {accountId || '—'}
           </Typography>
@@ -150,7 +156,9 @@ function DetailRow({ label, value }: { label: string; value: string }) {
       <Typography variant="caption" color="text.secondary">
         {label}
       </Typography>
-      <Typography variant="body1">{value}</Typography>
+      <Typography variant="body1" sx={{ overflowWrap: 'anywhere' }}>
+        {value}
+      </Typography>
       <Divider sx={{ mt: 1 }} />
     </Box>
   )
