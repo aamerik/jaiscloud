@@ -236,6 +236,31 @@ func TestOperations(t *testing.T) {
 	}
 }
 
+func TestListAllServicesAcrossLocations(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateService(ctx, "proj", "us-central1", "beta", createRequest()); err != nil {
+		t.Fatalf("CreateService beta: %v", err)
+	}
+	if _, err := s.CreateService(ctx, "proj", "europe-west1", "alpha", createRequest()); err != nil {
+		t.Fatalf("CreateService alpha: %v", err)
+	}
+	if _, err := s.CreateService(ctx, "other", "us-central1", "gamma", createRequest()); err != nil {
+		t.Fatalf("CreateService gamma: %v", err)
+	}
+
+	svcs, err := s.ListAllServices(ctx, "proj")
+	if err != nil {
+		t.Fatalf("ListAllServices: %v", err)
+	}
+	if len(svcs) != 2 {
+		t.Fatalf("got %d services, want 2", len(svcs))
+	}
+	if svcs[0].ID != "alpha" || svcs[0].Location != "europe-west1" || svcs[1].ID != "beta" || svcs[1].Location != "us-central1" {
+		t.Fatalf("unexpected order/scope: %+v", svcs)
+	}
+}
+
 func isNotFound(err error) bool {
 	var perr *model.ProviderError
 	return errors.As(err, &perr) && perr.HTTPStatus == 404
