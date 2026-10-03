@@ -31,6 +31,10 @@ import { GcpAdminPage } from './admin/GcpAdminPage'
 import { BucketsPage } from './storage/BucketsPage'
 import { ObjectsPage } from './storage/ObjectsPage'
 import { BucketSettingsPage } from './storage/BucketSettingsPage'
+import { TopicsPage } from './pubsub/TopicsPage'
+import { TopicDetailPage } from './pubsub/TopicDetailPage'
+import { SubscriptionsPage } from './pubsub/SubscriptionsPage'
+import { SubscriptionDetailPage } from './pubsub/SubscriptionDetailPage'
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
@@ -60,7 +64,7 @@ function GcpShell() {
       <Toolbar />
       <Box sx={{ px: 2, py: 1.5 }}>
         <Typography variant="overline" color="text.secondary">
-          Google Cloud
+          JaisCloud
         </Typography>
         <Typography variant="subtitle1">Console</Typography>
       </Box>
@@ -116,21 +120,41 @@ function GcpShell() {
           >
             <MenuIcon />
           </IconButton>
-          <Typography
-            component={RouterLink}
-            to="/gcp"
-            variant="h6"
-            sx={{ color: 'text.primary', textDecoration: 'none', fontWeight: 500, mr: 3 }}
-          >
-            Google Cloud
-          </Typography>
-          <Box sx={{ flexGrow: 1 }} />
+          <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, minWidth: 0, mr: 2 }}>
+            <Typography
+              component={RouterLink}
+              to="/gcp"
+              variant="h6"
+              noWrap
+              sx={{
+                color: 'text.primary',
+                textDecoration: 'none',
+                fontWeight: 500,
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              JaisCloud
+            </Typography>
+          </Box>
           <Button
             color="inherit"
-            sx={{ color: 'text.primary' }}
+            sx={{ color: 'text.primary', minWidth: 0, flexShrink: 1 }}
             onClick={(event) => setProjectAnchor(event.currentTarget)}
           >
-            {accountId || meta?.accountId || 'Project'}
+            <Box
+              component="span"
+              sx={{
+                display: 'block',
+                maxWidth: { xs: 120, sm: 280 },
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {accountId || meta?.accountId || 'Project'}
+            </Box>
           </Button>
           <Menu
             anchorEl={projectAnchor}
@@ -195,6 +219,7 @@ function GcpShell() {
         component="main"
         sx={{
           flexGrow: 1,
+          minWidth: 0,
           p: 3,
           bgcolor: 'background.default',
           minHeight: '100vh',
@@ -207,6 +232,10 @@ function GcpShell() {
           <Route path="/gcp/storage/buckets" element={<BucketsPage />} />
           <Route path="/gcp/storage/buckets/:bucket" element={<ObjectsPage />} />
           <Route path="/gcp/storage/buckets/:bucket/settings" element={<BucketSettingsPage />} />
+          <Route path="/gcp/pubsub/topics" element={<TopicsPage />} />
+          <Route path="/gcp/pubsub/topics/:topic" element={<TopicDetailPage />} />
+          <Route path="/gcp/pubsub/subscriptions" element={<SubscriptionsPage />} />
+          <Route path="/gcp/pubsub/subscriptions/:subscription" element={<SubscriptionDetailPage />} />
           <Route path="/gcp/admin" element={<GcpAdminPage />} />
           <Route path="*" element={<Navigate to="/gcp" replace />} />
         </Routes>
