@@ -318,3 +318,39 @@ func TestUpdateWorkflowMaskAcceptsProtoAndJSONPaths(t *testing.T) {
 		t.Errorf("expected error for unknown updateMask field")
 	}
 }
+
+func TestListWorkflowsByProjectAggregatesLocations(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(workflowsstore.NewMemoryStore())
+
+	for _, in := range []struct {
+		id, location string
+	}{
+		{"alpha", "us-central1"},
+		{"beta", "europe-west1"},
+		{"alpha", "europe-west1"},
+	} {
+		if _, _, err := s.CreateWorkflow(ctx, "proj", in.location, CreateInput{ID: in.id, SourceContents: simpleSource}); err != nil {
+			t.Fatalf("create %s/%s: %v", in.location, in.id, err)
+		}
+	}
+	// An unrelated project is not aggregated.
+	if _, _, err := s.CreateWorkflow(ctx, "other", "us-central1", CreateInput{ID: "zzz", SourceContents: simpleSource}); err != nil {
+		t.Fatalf("create other: %v", err)
+	}
+
+	got, err := s.ListWorkflowsByProject(ctx, "proj")
+	if err != nil {
+		t.Fatalf("ListWorkflowsByProject: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d workflows, want 3", len(got))
+	}
+	// Sorted by location then ID.
+	want := [][2]string{{"europe-west1", "alpha"}, {"europe-west1", "beta"}, {"us-central1", "alpha"}}
+	for i, w := range want {
+		if got[i].Location != w[0] || got[i].ID != w[1] {
+			t.Fatalf("row %d = %s/%s, want %s/%s", i, got[i].Location, got[i].ID, w[0], w[1])
+		}
+	}
+}

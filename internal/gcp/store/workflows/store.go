@@ -113,6 +113,11 @@ type Store interface {
 	UpdateWorkflowAtomic(ctx context.Context, projectID, location, id string, mutate func(Workflow) (Workflow, error)) (Workflow, error)
 	DeleteWorkflow(ctx context.Context, projectID, location, id string) error
 	ListWorkflows(ctx context.Context, projectID, location string) ([]Workflow, error)
+	// ListWorkflowsByProject returns every workflow in a project across all
+	// locations, sorted by location then workflow ID. It backs the
+	// location-optional console list, which aggregates locations and shows the
+	// location as a read-only row field.
+	ListWorkflowsByProject(ctx context.Context, projectID string) ([]Workflow, error)
 
 	CreateExecution(ctx context.Context, projectID, location, workflowID, id string, e Execution) error
 	GetExecution(ctx context.Context, projectID, location, workflowID, id string) (Execution, error)

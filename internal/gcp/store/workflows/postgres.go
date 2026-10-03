@@ -201,6 +201,27 @@ func (s *PostgresStore) ListWorkflows(ctx context.Context, projectID, location s
 	return result, rows.Err()
 }
 
+func (s *PostgresStore) ListWorkflowsByProject(ctx context.Context, projectID string) ([]Workflow, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT workflow_id, location, description, labels, service_account, source_contents,
+		       state, revision_id, create_time, update_time, call_log_level, user_env_vars, tags
+		FROM jc_workflows WHERE project_id=$1 ORDER BY location, workflow_id
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Workflow
+	for rows.Next() {
+		w, err := scanWorkflow(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, w)
+	}
+	return result, rows.Err()
+}
+
 func (s *PostgresStore) CreateExecution(ctx context.Context, projectID, location, workflowID, id string, e Execution) error {
 	errJSON := nullableJSON(e.Error)
 	labels, _ := json.Marshal(e.Labels)

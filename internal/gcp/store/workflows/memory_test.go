@@ -63,6 +63,32 @@ func TestMemoryStoreWorkflowCRUD(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreListWorkflowsByProject(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+
+	_ = s.CreateWorkflow(ctx, "proj", "us-central1", "b", Workflow{ID: "b", Location: "us-central1"})
+	_ = s.CreateWorkflow(ctx, "proj", "europe-west1", "a", Workflow{ID: "a", Location: "europe-west1"})
+	_ = s.CreateWorkflow(ctx, "proj", "us-central1", "a", Workflow{ID: "a", Location: "us-central1"})
+	// Another project must not leak into the aggregation.
+	_ = s.CreateWorkflow(ctx, "other", "us-central1", "z", Workflow{ID: "z", Location: "us-central1"})
+
+	got, err := s.ListWorkflowsByProject(ctx, "proj")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d workflows, want 3: %+v", len(got), got)
+	}
+	// Sorted by location, then ID.
+	want := [][2]string{{"europe-west1", "a"}, {"us-central1", "a"}, {"us-central1", "b"}}
+	for i, w := range want {
+		if got[i].Location != w[0] || got[i].ID != w[1] {
+			t.Fatalf("row %d = %s/%s, want %s/%s", i, got[i].Location, got[i].ID, w[0], w[1])
+		}
+	}
+}
+
 func TestMemoryStoreExecutionCRUD(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()

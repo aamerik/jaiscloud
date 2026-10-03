@@ -1,8 +1,8 @@
 // Package ui contributes the GCP service catalog and API routes to the shared
 // UI core. It exposes the GCP cloud identity and mounts per-service UI APIs
 // (Cloud Storage, Pub/Sub, Firestore, Compute, Cloud Run, Cloud Scheduler,
-// Cloud Tasks, BigQuery, IAM, Cloud KMS, Secret Manager; the rest follow) over
-// the providers wired in cmd/jaiscloud-gcp.
+// Cloud Tasks, Workflows, BigQuery, IAM, Cloud KMS, Secret Manager; the rest
+// follow) over the providers wired in cmd/jaiscloud-gcp.
 package ui
 
 import (
@@ -22,6 +22,7 @@ import (
 	secretmanagerui "jaiscloud/internal/gcp/ui/secretmanager"
 	storageui "jaiscloud/internal/gcp/ui/storage"
 	tasksui "jaiscloud/internal/gcp/ui/tasks"
+	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	"jaiscloud/internal/model"
 	coreui "jaiscloud/internal/ui"
 )
@@ -41,12 +42,13 @@ type Registrar struct {
 	logging       loggingui.ProviderInterface
 	monitoring    monitoringui.ProviderInterface
 	tasks         tasksui.ProviderInterface
+	workflows     workflowsui.ProviderInterface
 	cfg           *config.Config
 }
 
 // NewRegistrar returns the GCP UI registrar. A nil provider leaves that
 // service's pages out of the catalog.
-func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, schedulerProvider schedulerui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, tasksProvider tasksui.ProviderInterface, cfg *config.Config) *Registrar {
+func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, schedulerProvider schedulerui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, tasksProvider tasksui.ProviderInterface, workflowsProvider workflowsui.ProviderInterface, cfg *config.Config) *Registrar {
 	return &Registrar{
 		storage:       storageProvider,
 		pubsub:        pubsubProvider,
@@ -61,6 +63,7 @@ func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pu
 		logging:       loggingProvider,
 		monitoring:    monitoringProvider,
 		tasks:         tasksProvider,
+		workflows:     workflowsProvider,
 		cfg:           cfg,
 	}
 }
@@ -143,6 +146,16 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			RootPath: "/gcp/tasks/queues",
 			Tier:     coreui.TierFull,
 			Children: []coreui.ServiceChild{{Label: "Queues", Path: "/gcp/tasks/queues"}},
+		})
+	}
+	if r.workflows != nil {
+		services = append(services, coreui.ServiceDescriptor{
+			ID:       "workflows",
+			Label:    "Workflows",
+			Category: "Integration",
+			RootPath: "/gcp/workflows",
+			Tier:     coreui.TierFull,
+			Children: []coreui.ServiceChild{{Label: "Workflows", Path: "/gcp/workflows"}},
 		})
 	}
 	if r.bigquery != nil {
@@ -243,6 +256,9 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 	}
 	if r.tasks != nil {
 		router.Mount("/api/ui/v1/gcp/tasks", tasksui.BuildRouter(r.tasks, r.cfg))
+	}
+	if r.workflows != nil {
+		router.Mount("/api/ui/v1/gcp/workflows", workflowsui.BuildRouter(r.workflows, r.cfg))
 	}
 	if r.bigquery != nil {
 		router.Mount("/api/ui/v1/gcp/bigquery", bigqueryui.BuildRouter(r.bigquery, r.cfg))

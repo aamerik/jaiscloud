@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -107,6 +108,28 @@ func (s *MemoryStore) ListWorkflows(_ context.Context, projectID, location strin
 		result = append(result, w)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}
+
+func (s *MemoryStore) ListWorkflowsByProject(_ context.Context, projectID string) ([]Workflow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := projectID + "/"
+	var result []Workflow
+	for key, m := range s.workflows {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		for _, w := range m {
+			result = append(result, w)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Location != result[j].Location {
+			return result[i].Location < result[j].Location
+		}
+		return result[i].ID < result[j].ID
+	})
 	return result, nil
 }
 

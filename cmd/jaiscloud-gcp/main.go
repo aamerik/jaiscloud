@@ -124,6 +124,7 @@ import (
 	restworkflows "jaiscloud/internal/gcp/transport/rest/workflows"
 	"jaiscloud/internal/gcp/transportcfg"
 	gcpui "jaiscloud/internal/gcp/ui"
+	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/persistence/snapshot"
@@ -1198,7 +1199,14 @@ func startCmd() *cobra.Command {
 			var uiServer *coreui.UIServer
 			if cfg.UIEnabled {
 				var uiErr error
-				uiServer, uiErr = coreui.New(gcpui.NewRegistrar(storageP, pubsubP, firestoreP, computeP, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, cfg), adminHandler, cfg, eventBus, version)
+				// The Workflows console spans the Workflows management and
+				// Workflow Executions cores; it is advertised only when the
+				// workflows service is enabled (otherwise workflowsCore is nil).
+				var workflowsUI workflowsui.ProviderInterface
+				if workflowsCore != nil {
+					workflowsUI = workflowsui.NewProvider(workflowsCore, workflowExecutionsCore)
+				}
+				uiServer, uiErr = coreui.New(gcpui.NewRegistrar(storageP, pubsubP, firestoreP, computeP, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, cfg), adminHandler, cfg, eventBus, version)
 				if uiErr != nil {
 					slog.Warn("ui server init failed", "err", uiErr)
 				} else if uiServer != nil {
