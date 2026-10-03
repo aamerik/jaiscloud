@@ -101,6 +101,46 @@ jobs:
           cache-from: type=gha,scope=jaiscloud
           cache-to: type=gha,mode=max,scope=jaiscloud
 
+  # ─── UI lint + build ───────────────────────────────────────────────────────
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint UI
+        working-directory: ui
+        run: pnpm lint
+
+      - name: Test UI
+        working-directory: ui
+        run: pnpm test
+
+      - name: Build UI assets
+        working-directory: ui
+        run: pnpm build
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Verify UI-enabled server builds
+        run: go build -tags ui -o /tmp/jaiscloud-ui ./cmd/jaiscloud-aws/
+
   # ─── GCP unit + integration + persistence tests ────────────────────────────
 
   # Unit tests for the shared engine packages the GCP Dataproc/Spark path
