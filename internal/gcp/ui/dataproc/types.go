@@ -1,0 +1,94 @@
+// Package dataprocui serves the Cloud Dataproc console UI API. Handlers call
+// the transport-neutral Dataproc core directly (in-process) rather than over the
+// wire.
+//
+// The console is region-optional: lists aggregate every resource in the project
+// across all regions (no region picker) and show the region as a read-only
+// field. Detail/actions link back with the region carried from the list row, so
+// a resource id never has to be disambiguated by hand.
+//
+// This surface is read + lifecycle only: clusters list/detail with
+// start/stop/delete, jobs list/detail with cancel, and workflow templates
+// list/detail. Cluster create, job submit and workflow-template CRUD are
+// deferred (see the console-UI plan's deferral rows).
+package dataprocui
+
+import "encoding/json"
+
+// StatusEvent is one entry of a resource's status history (cluster or job).
+type StatusEvent struct {
+	State     string `json:"state"`
+	Detail    string `json:"detail,omitempty"`
+	StartTime string `json:"stateStartTime,omitempty"`
+}
+
+// Cluster is the console rendering of a Dataproc cluster, flattened across
+// regions for the list page. Config/VirtualClusterConfig carry the full wire
+// config and are only populated on the detail read, not the list.
+type Cluster struct {
+	ID                   string            `json:"id"`
+	Name                 string            `json:"name"`
+	Region               string            `json:"region"`
+	Status               string            `json:"status"`
+	StatusDetail         string            `json:"statusDetail,omitempty"`
+	StatusHistory        []StatusEvent     `json:"statusHistory,omitempty"`
+	ClusterUUID          string            `json:"clusterUuid,omitempty"`
+	Labels               map[string]string `json:"labels,omitempty"`
+	GKEBacked            bool              `json:"gkeBacked,omitempty"`
+	Config               json.RawMessage   `json:"config,omitempty"`
+	VirtualClusterConfig json.RawMessage   `json:"virtualClusterConfig,omitempty"`
+	CreateTime           string            `json:"createTime,omitempty"`
+	UpdateTime           string            `json:"updateTime,omitempty"`
+}
+
+// ListClustersResponse is the response for GET /clusters.
+type ListClustersResponse struct {
+	Clusters []Cluster `json:"clusters"`
+	Total    int       `json:"total"`
+}
+
+// Job is the console rendering of a Dataproc job, flattened across regions for
+// the list page. TypeJob carries the type-specific body (sparkJob, pysparkJob,
+// ...) and is only populated on the detail read.
+type Job struct {
+	ID                      string            `json:"id"`
+	Name                    string            `json:"name"`
+	Region                  string            `json:"region"`
+	ClusterName             string            `json:"clusterName,omitempty"`
+	Type                    string            `json:"type,omitempty"`
+	TypeJob                 json.RawMessage   `json:"typeJob,omitempty"`
+	Status                  string            `json:"status"`
+	StatusDetail            string            `json:"statusDetail,omitempty"`
+	Substate                string            `json:"substate,omitempty"`
+	StatusHistory           []StatusEvent     `json:"statusHistory,omitempty"`
+	Labels                  map[string]string `json:"labels,omitempty"`
+	DriverOutputResourceURI string            `json:"driverOutputResourceUri,omitempty"`
+	DriverControlFilesURI   string            `json:"driverControlFilesUri,omitempty"`
+	JobUUID                 string            `json:"jobUuid,omitempty"`
+	CreateTime              string            `json:"createTime,omitempty"`
+}
+
+// ListJobsResponse is the response for GET /jobs.
+type ListJobsResponse struct {
+	Jobs  []Job `json:"jobs"`
+	Total int   `json:"total"`
+}
+
+// WorkflowTemplate is the console rendering of a Dataproc workflow template,
+// flattened across regions for the list page. Definition carries the full wire
+// workflow object and is only populated on the detail read.
+type WorkflowTemplate struct {
+	ID         string          `json:"id"`
+	Name       string          `json:"name"`
+	Region     string          `json:"region"`
+	Version    int32           `json:"version"`
+	Definition json.RawMessage `json:"definition,omitempty"`
+	CreateTime string          `json:"createTime,omitempty"`
+	UpdateTime string          `json:"updateTime,omitempty"`
+}
+
+// ListWorkflowTemplatesResponse is the response for GET /workflow-templates.
+type ListWorkflowTemplatesResponse struct {
+	Templates []WorkflowTemplate `json:"templates"`
+	Total     int                `json:"total"`
+}

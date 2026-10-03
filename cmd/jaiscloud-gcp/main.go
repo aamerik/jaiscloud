@@ -124,6 +124,7 @@ import (
 	restworkflows "jaiscloud/internal/gcp/transport/rest/workflows"
 	"jaiscloud/internal/gcp/transportcfg"
 	gcpui "jaiscloud/internal/gcp/ui"
+	dataprocui "jaiscloud/internal/gcp/ui/dataproc"
 	eventarcui "jaiscloud/internal/gcp/ui/eventarc"
 	functionsui "jaiscloud/internal/gcp/ui/functions"
 	workflowsui "jaiscloud/internal/gcp/ui/workflows"
@@ -1222,7 +1223,14 @@ func startCmd() *cobra.Command {
 				if functionsCore != nil {
 					functionsUI = functionsui.NewProvider(functionsCore)
 				}
-				uiServer, uiErr = coreui.New(gcpui.NewRegistrar(storageP, pubsubP, firestoreP, computeP, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, cfg), adminHandler, cfg, eventBus, version)
+				// Dataproc is advertised only when the service is enabled
+				// (otherwise dataprocCore is nil, and a typed nil must not be
+				// boxed into the interface or the catalog would list it).
+				var dataprocUI dataprocui.ProviderInterface
+				if dataprocCore != nil {
+					dataprocUI = dataprocui.NewProvider(dataprocCore)
+				}
+				uiServer, uiErr = coreui.New(gcpui.NewRegistrar(storageP, pubsubP, firestoreP, computeP, dataprocUI, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, cfg), adminHandler, cfg, eventBus, version)
 				if uiErr != nil {
 					slog.Warn("ui server init failed", "err", uiErr)
 				} else if uiServer != nil {

@@ -262,6 +262,27 @@ func TestPostgresStoreProjectRegionRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPostgresStoreByProject runs the shared cross-region list contract against
+// Postgres so the SQL paths order and scope identically to the memory store.
+func TestPostgresStoreByProject(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres by-project test")
+	}
+	ctx := context.Background()
+
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	runByProjectTests(t, NewPostgresStore(pg.Pool()))
+}
+
 // TestPostgresStoreSnapshotRoundTrip verifies that terminal-job fields
 // (driverOutputResourceUri, driverControlFilesUri, and statusHistory, including
 // the terminal status.details) survive a Postgres Snapshot/Restore round trip

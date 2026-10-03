@@ -62,6 +62,12 @@ import { DatasetDetailPage } from './bigquery/DatasetDetailPage'
 import { TableDetailPage } from './bigquery/TableDetailPage'
 import { JobsPage } from './bigquery/JobsPage'
 import { JobDetailPage } from './bigquery/JobDetailPage'
+import { ClustersPage as DataprocClustersPage } from './dataproc/ClustersPage'
+import { ClusterDetailPage as DataprocClusterDetailPage } from './dataproc/ClusterDetailPage'
+import { JobsPage as DataprocJobsPage } from './dataproc/JobsPage'
+import { JobDetailPage as DataprocJobDetailPage } from './dataproc/JobDetailPage'
+import { WorkflowTemplatesPage as DataprocWorkflowTemplatesPage } from './dataproc/WorkflowTemplatesPage'
+import { WorkflowTemplateDetailPage as DataprocWorkflowTemplateDetailPage } from './dataproc/WorkflowTemplateDetailPage'
 import { ServiceAccountsPage } from './iam/ServiceAccountsPage'
 import { ServiceAccountDetailPage } from './iam/ServiceAccountDetailPage'
 import { KeyRingsPage } from './kms/KeyRingsPage'
@@ -344,6 +350,18 @@ function GcpShell() {
           />
           <Route path="/gcp/bigquery/jobs" element={<JobsPage />} />
           <Route path="/gcp/bigquery/jobs/:job" element={<JobDetailPage />} />
+          <Route path="/gcp/dataproc/clusters" element={<DataprocClustersPage />} />
+          <Route
+            path="/gcp/dataproc/clusters/:region/:cluster"
+            element={<DataprocClusterDetailPage />}
+          />
+          <Route path="/gcp/dataproc/jobs" element={<DataprocJobsPage />} />
+          <Route path="/gcp/dataproc/jobs/:region/:job" element={<DataprocJobDetailPage />} />
+          <Route path="/gcp/dataproc/workflow-templates" element={<DataprocWorkflowTemplatesPage />} />
+          <Route
+            path="/gcp/dataproc/workflow-templates/:region/:template"
+            element={<DataprocWorkflowTemplateDetailPage />}
+          />
           <Route path="/gcp/iam/service-accounts" element={<ServiceAccountsPage />} />
           <Route path="/gcp/iam/service-accounts/:email" element={<ServiceAccountDetailPage />} />
           <Route path="/gcp/kms/keyrings" element={<KeyRingsPage />} />
