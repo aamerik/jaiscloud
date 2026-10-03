@@ -368,7 +368,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `google.cloud.run.v2.Services`/`Revisions` transport is not served, and Jobs, WorkerPools, traffic
   splitting, autoscaling/scale-to-zero, sidecars, volumes, custom domains, probes and IAM invocation
   enforcement are not modelled. The k8s executor shares the Pod/ClusterIP-Service lifecycle helper
-  in `internal/k8shelpers` with Managed Kafka; Docker execution mode is not scheduled.
+  in `internal/k8shelpers` with Managed Kafka; Docker execution mode is not scheduled. The execution
+  path is verified end to end on k3d — `tests/persistent_mode/gcp/cloudrun/`
+  (`make test-e2e-cloudrun-k8s`), and the floci-gcp Java suite's `CloudRunTest` passes 7/7 with
+  execution enabled (`make test-e2e-cloudrun-java`).
 - **Not implemented at all (out of scope for v1.x)** — Artifact Registry, Cloud
   Endpoints, Deployment Manager, and Firebase Auth (Identity Toolkit): no emulator surface
   (requests are unhandled). Artifact Registry is engine-bearing (registry proxy) and is deliberately

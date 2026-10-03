@@ -65,6 +65,17 @@ GCP_SAMPLES_MODULES  := pubsub:spring-cloud-gcp-pubsub-sample \
                         firestore:spring-cloud-gcp-data-firestore-sample \
                         datastore:spring-cloud-gcp-data-datastore-basic-sample
 
+# floci-gcp compatibility suite (scratch checkout; the Java gate runs its suite
+# against the deployed k3d emulator through the in-cluster portmux). CloudRunTest
+# asserts the synthesized authority is ".<location>.run.floci-gcp:4588" when
+# execution is enabled, so the Java target overrides the emulator's URL suffix
+# and port to those values for the duration of the run.
+FLOCI_COMPAT_DIR     ?= $(HOME)/code/floci-gcp/compatibility-tests
+CLOUDRUN_URL_SUFFIX  ?= run.floci-gcp
+CLOUDRUN_URL_PORT    ?= 4588
+# Bound the full floci Java suite so a hung test cannot wedge the target.
+CLOUDRUN_JAVA_TIMEOUT ?= 2400
+
 # ─── K8s configuration ────────────────────────────────────────────────────────
 K8S_NAMESPACE           ?= jaiscloud
 JAISCLOUD_K8S_APISERVER ?= $(shell kubectl config view --context docker-desktop --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)
@@ -116,6 +127,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-e2e-gcp-samples-k3d \
         test-dataproc-streaming-k8s test-dataproc-streaming-kafka \
         test-managedkafka-broker-k8s \
+        test-e2e-cloudrun-k8s test-e2e-cloudrun-java \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all test-all-gcp \
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
         _start-k8s _stop-k8s \
@@ -911,6 +923,49 @@ test-managedkafka-broker-k8s: _check-managedkafka-broker-k8s-prereq _refresh-gcp
 	go clean -testcache
 	K8S_NAMESPACE=$(K8S_NAMESPACE) \
 	  go test -v -tags managedkafka_broker_e2e -timeout 20m ./tests/persistent_mode/gcp/managedkafka-broker/
+
+test-e2e-cloudrun-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud Run k8s execution e2e on k3d — tests/persistent_mode/gcp/cloudrun/ (tag: cloudrun_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
+	go clean -testcache
+	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=k8s
+	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
+	K8S_NAMESPACE=$(K8S_NAMESPACE) CLOUDRUN_E2E_K8S=1 \
+	  go test -v -tags cloudrun_e2e -timeout 20m ./tests/persistent_mode/gcp/cloudrun/
+
+test-e2e-cloudrun-java: _check-gcp-samples-prereq _refresh-gcp-image ## floci-gcp Java suite against the k3d emulator with Cloud Run k8s execution, through the in-cluster portmux (asserts CloudRunTest 7/7; JAVA_HOME/mvn on PATH — see AGENTS.md)
+	@test -d $(FLOCI_COMPAT_DIR)/sdk-test-java || (echo "ERROR: $(FLOCI_COMPAT_DIR)/sdk-test-java not found — set FLOCI_COMPAT_DIR"; exit 1)
+	@command -v mvn >/dev/null 2>&1 || (echo "ERROR: mvn not on PATH — export JAVA_HOME and /tmp/opencode/toolchain/maven/bin (see AGENTS.md)"; exit 1)
+	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp \
+	  JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=k8s \
+	  JAISCLOUD_CLOUDRUN_URL_SUFFIX=$(CLOUDRUN_URL_SUFFIX) \
+	  JAISCLOUD_CLOUDRUN_URL_PORT=$(CLOUDRUN_URL_PORT)
+	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
+	@set -e; \
+	  kubectl -n $(K8S_NAMESPACE) port-forward svc/portmux $(CLOUDRUN_URL_PORT):$(CLOUDRUN_URL_PORT) >/tmp/cloudrun-portmux.log 2>&1 & \
+	  pf=$$!; \
+	  trap 'kill $$pf 2>/dev/null || true' EXIT INT TERM; \
+	  n=0; until curl -sf http://127.0.0.1:$(CLOUDRUN_URL_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 60 ]; then echo "ERROR: portmux not healthy on :$(CLOUDRUN_URL_PORT)"; cat /tmp/cloudrun-portmux.log; exit 1; fi; sleep 1; \
+	  done; \
+	  cd $(FLOCI_COMPAT_DIR)/sdk-test-java; \
+	  FLOCI_GCP_ENDPOINT="http://127.0.0.1:$(CLOUDRUN_URL_PORT)" \
+	  FLOCI_GCP_HOST="127.0.0.1:$(CLOUDRUN_URL_PORT)" \
+	  FLOCI_GCP_PROJECT="test-project" \
+	  GOOGLE_CLOUD_PROJECT="test-project" \
+	  GOOGLE_OAUTH_ACCESS_TOKEN="fake-token-floci-gcp" \
+	  PUBSUB_EMULATOR_HOST="127.0.0.1:$(CLOUDRUN_URL_PORT)" \
+	  FIRESTORE_EMULATOR_HOST="127.0.0.1:$(CLOUDRUN_URL_PORT)" \
+	  DATASTORE_EMULATOR_HOST="127.0.0.1:$(CLOUDRUN_URL_PORT)" \
+	  SECRET_MANAGER_EMULATOR_HOST="127.0.0.1:$(CLOUDRUN_URL_PORT)" \
+	  STORAGE_EMULATOR_HOST="http://127.0.0.1:$(CLOUDRUN_URL_PORT)" \
+	  STORAGE_EMULATOR_HOST_GRPC="127.0.0.1:$(CLOUDRUN_URL_PORT)" \
+	  FLOCI_GCP_CLOUDRUN_EXECUTION_ENABLED=true \
+	  timeout $(CLOUDRUN_JAVA_TIMEOUT) mvn test -q || true; \
+	  res=$$(sed -n 's/.*tests="\([0-9]*\)" errors="\([0-9]*\)" skipped="\([0-9]*\)" failures="\([0-9]*\)".*/\1 \2 \3 \4/p' target/surefire-reports/TEST-io.floci.gcp.test.CloudRunTest.xml | head -1); \
+	  echo "CloudRunTest surefire (tests errors skipped failures): $$res"; \
+	  case "$$res" in \
+	    "7 0 0 0") echo "CloudRunTest 7/7 with execution enabled";; \
+	    *) echo "ERROR: CloudRunTest did not pass 7/7 (got '$$res'); see target/surefire-reports"; exit 1;; \
+	  esac
 
 # Rebuild the emulator image from the working tree and roll the deployment so the
 # pipeline always runs against the code under test, not whatever happens to be in
