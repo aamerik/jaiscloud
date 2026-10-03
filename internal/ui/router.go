@@ -9,6 +9,7 @@ import (
 
 	"jaiscloud/internal/admin"
 	"jaiscloud/internal/config"
+	"jaiscloud/internal/ui/adminpanel"
 	"jaiscloud/internal/ui/middleware"
 	"jaiscloud/internal/ui/sse"
 )
@@ -44,6 +45,11 @@ func BuildRouter(
 		r.Use(middleware.Auth(token))
 
 		r.Get("/api/ui/v1/events/stream", broker.ServeHTTP)
+
+		// Cloud-neutral admin plane: the shared admin.Handler is the same for
+		// every cloud, so the panel is mounted once in the core rather than by
+		// each Registrar. Handlers assume a valid session token.
+		r.Mount("/api/ui/v1/admin", adminpanel.BuildRouter(adminHandler))
 
 		// Cloud-specific service routes.
 		reg.MountRoutes(r)

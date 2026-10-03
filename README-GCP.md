@@ -251,6 +251,7 @@ The console is a single React app embedded in the binary (no separate server or 
 **Current GCP surface:**
 
 - **Cloud Storage** — list, create and delete buckets; browse objects and folders within a bucket. Backed by `GET/POST/DELETE /api/ui/v1/gcp/storage/buckets` and `GET /api/ui/v1/gcp/storage/buckets/{bucket}/objects`.
+- **Admin** — emulator status, clock control (real/fixed/offset), state reset, export, and named snapshots (create/revert/delete). Backed by the cloud-neutral `/api/ui/v1/admin` plane, which the shared UI core mounts for every cloud.
 
 Further service pages (Pub/Sub, Firestore, Compute, Cloud Run, BigQuery, IAM/KMS/Secret Manager, Logging/Monitoring, ...) ship separately.
 
