@@ -91,6 +91,8 @@ export function EKSClusters() {
         <ErrorState header="Failed to load clusters" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="eks"
+          favorite={(c) => ({ id: c.name, label: c.name, href: '/aws/eks/clusters', type: 'cluster' })}
           items={items}
           columns={columns}
           trackBy={(c) => c.name}

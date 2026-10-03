@@ -99,6 +99,8 @@ export function S3List() {
         <ErrorState header="Failed to load buckets" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="s3"
+          favorite={(b) => ({ id: b.name, label: b.name, href: '/aws/s3/' + encodeURIComponent(b.name), type: 'bucket' })}
           items={buckets}
           columns={columns}
           trackBy={(b) => b.name}

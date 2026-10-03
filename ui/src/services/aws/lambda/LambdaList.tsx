@@ -90,6 +90,8 @@ export function LambdaList() {
         <ErrorState header="Failed to load functions" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="lambda"
+          favorite={(fn) => ({ id: fn.name, label: fn.name, href: '/aws/lambda/' + encodeURIComponent(fn.name), type: 'function' })}
           items={functions}
           columns={columns}
           trackBy={(fn) => fn.arn}

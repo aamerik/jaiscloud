@@ -125,6 +125,8 @@ export function EventBridgeBuses() {
         <ErrorState header="Failed to load event buses" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="eventbridge"
+          favorite={(b) => ({ id: b.name, label: b.name, href: '/aws/eventbridge/buses', type: 'event bus' })}
           items={buses}
           columns={columns}
           trackBy={(b) => b.name}

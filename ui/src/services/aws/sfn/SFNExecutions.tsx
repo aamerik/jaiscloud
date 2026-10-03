@@ -145,6 +145,8 @@ export function SFNExecutions() {
       ) : (
         <SpaceBetween size="l">
           <ResourceTable
+            favoriteService="sfn"
+            favorite={(e) => ({ id: e.arn, label: e.name, href: '/aws/sfn/executions', type: 'execution' })}
             items={executions}
             columns={columns}
             trackBy={(e) => e.arn}

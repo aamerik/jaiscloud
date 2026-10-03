@@ -114,6 +114,8 @@ export function DynamoDBList() {
         <ErrorState header="Failed to load tables" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="dynamodb"
+          favorite={(t) => ({ id: t.name, label: t.name, href: '/aws/dynamodb/' + encodeURIComponent(t.name), type: 'table' })}
           items={tables}
           columns={columns}
           trackBy={(t) => t.name}

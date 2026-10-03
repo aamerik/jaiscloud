@@ -136,6 +136,8 @@ export function RDSInstances() {
         <ErrorState header="Failed to load RDS instances" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="rds"
+          favorite={(i) => ({ id: i.id, label: i.id, href: '/aws/rds/instances', type: 'database' })}
           items={items}
           columns={columns}
           trackBy={(i) => i.id}

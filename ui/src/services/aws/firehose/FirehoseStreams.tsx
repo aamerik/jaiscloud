@@ -95,6 +95,8 @@ export function FirehoseStreams() {
         <ErrorState header="Failed to load delivery streams" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="firehose"
+          favorite={(s) => ({ id: s.name, label: s.name, href: '/aws/firehose/streams', type: 'delivery stream' })}
           items={items}
           columns={columns}
           trackBy={(s) => s.name}

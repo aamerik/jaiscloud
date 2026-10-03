@@ -218,6 +218,8 @@ export function CloudWatchAlarms() {
         <ErrorState header="Failed to load alarms" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="cloudwatch"
+          favorite={(a) => ({ id: a.alarmName, label: a.alarmName, href: '/aws/cloudwatch/alarms', type: 'alarm' })}
           items={alarms}
           columns={columns}
           trackBy={(a) => a.alarmName}

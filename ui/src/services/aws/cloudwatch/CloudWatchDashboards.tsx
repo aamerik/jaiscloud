@@ -133,6 +133,8 @@ export function CloudWatchDashboards() {
         <ErrorState header="Failed to load dashboards" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="cloudwatch"
+          favorite={(d) => ({ id: d.dashboardName, label: d.dashboardName, href: '/aws/cloudwatch/dashboards', type: 'dashboard' })}
           items={dashboards}
           columns={columns}
           trackBy={(d) => d.dashboardName}

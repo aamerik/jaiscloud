@@ -92,6 +92,8 @@ export function KinesisStreams() {
         <ErrorState header="Failed to load streams" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="kinesis"
+          favorite={(s) => ({ id: s.name, label: s.name, href: '/aws/kinesis/streams', type: 'stream' })}
           items={items}
           columns={columns}
           trackBy={(s) => s.name}

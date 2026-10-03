@@ -88,6 +88,8 @@ export function CloudWatchMetrics() {
       ) : (
         <SpaceBetween size="l">
           <ResourceTable
+            favoriteService="cloudwatch"
+            favorite={(m) => ({ id: m.namespace + '/' + m.metricName, label: m.namespace + '/' + m.metricName, href: '/aws/cloudwatch/metrics', type: 'metric' })}
             items={metrics}
             columns={columns}
             trackBy={(m) => `${m.namespace}/${m.metricName}`}

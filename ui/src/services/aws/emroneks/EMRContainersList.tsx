@@ -124,6 +124,8 @@ export function EMRContainersList() {
         <ErrorState header="Failed to load virtual clusters" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="emr-containers"
+          favorite={(vc) => ({ id: vc.id, label: vc.name, href: '/aws/emr-containers/' + encodeURIComponent(vc.id), type: 'virtual cluster' })}
           items={virtualClusters}
           columns={columns}
           trackBy={(vc) => vc.id}

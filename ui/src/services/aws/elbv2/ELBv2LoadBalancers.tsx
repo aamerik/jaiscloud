@@ -115,6 +115,8 @@ export function ELBv2LoadBalancers() {
         <ErrorState header="Failed to load load balancers" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="elbv2"
+          favorite={(lb) => ({ id: lb.arn, label: lb.name, href: '/aws/elbv2/load-balancers', type: 'load balancer' })}
           items={items}
           columns={columns}
           trackBy={(lb) => lb.arn}

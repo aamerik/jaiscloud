@@ -159,6 +159,8 @@ export function GlueDatabases() {
           <ErrorState header="Failed to load databases" message={(error as Error).message} />
         ) : (
           <ResourceTable
+            favoriteService="glue"
+            favorite={(d) => ({ id: d.name, label: d.name, href: '/aws/glue/databases', type: 'database' })}
             items={databases}
             columns={columns}
             trackBy={(db) => db.name}

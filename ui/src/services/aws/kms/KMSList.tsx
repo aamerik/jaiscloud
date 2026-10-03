@@ -196,6 +196,8 @@ export function KMSList() {
         <ErrorState header="Failed to load keys" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="kms"
+          favorite={(k) => ({ id: k.keyId, label: k.description || k.keyId, href: '/aws/kms', type: 'key' })}
           items={keys}
           columns={columns}
           trackBy={(k) => k.keyId}

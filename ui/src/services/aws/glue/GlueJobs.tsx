@@ -130,6 +130,8 @@ export function GlueJobs() {
           <ErrorState header="Failed to load jobs" message={(error as Error).message} />
         ) : (
           <ResourceTable
+            favoriteService="glue"
+            favorite={(j) => ({ id: j.name, label: j.name, href: '/aws/glue/jobs', type: 'job' })}
             items={jobs}
             columns={columns}
             trackBy={(j) => j.name}

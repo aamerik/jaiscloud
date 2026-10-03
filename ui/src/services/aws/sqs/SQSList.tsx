@@ -95,6 +95,8 @@ export function SQSList() {
         <ErrorState header="Failed to load queues" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="sqs"
+          favorite={(q) => ({ id: q.url, label: q.name, href: '/aws/sqs/' + encodeURIComponent(q.url), type: 'queue' })}
           items={queues}
           columns={columns}
           trackBy={(q) => q.url}

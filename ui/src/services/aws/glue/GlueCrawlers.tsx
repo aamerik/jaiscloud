@@ -140,6 +140,8 @@ export function GlueCrawlers() {
         <ErrorState header="Failed to load crawlers" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="glue"
+          favorite={(c) => ({ id: c.name, label: c.name, href: '/aws/glue/crawlers', type: 'crawler' })}
           items={crawlers}
           columns={columns}
           trackBy={(c) => c.name}

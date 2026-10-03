@@ -133,6 +133,8 @@ export function EMRList() {
         <ErrorState header="Failed to load clusters" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="emr"
+          favorite={(c) => ({ id: c.id, label: c.name, href: '/aws/emr/' + encodeURIComponent(c.id), type: 'cluster' })}
           items={clusters}
           columns={columns}
           trackBy={(c) => c.id}

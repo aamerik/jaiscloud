@@ -98,6 +98,8 @@ export function SESIdentities() {
         <ErrorState header="Failed to load identities" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="ses"
+          favorite={(i) => ({ id: i.identity, label: i.identity, href: '/aws/ses/identities', type: 'identity' })}
           items={items}
           columns={columns}
           trackBy={(i) => i.identity}

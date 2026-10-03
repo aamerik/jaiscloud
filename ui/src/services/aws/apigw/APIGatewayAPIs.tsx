@@ -152,6 +152,8 @@ export function APIGatewayAPIs() {
       ) : (
         <SpaceBetween size="l">
           <ResourceTable
+            favoriteService="apigateway"
+            favorite={(a) => ({ id: a.id, label: a.name, href: '/aws/apigateway/apis', type: 'REST API' })}
             items={apis}
             columns={columns}
             trackBy={(a) => a.id}

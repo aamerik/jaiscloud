@@ -181,6 +181,8 @@ export function EventBridgeRules() {
           <ErrorState header="Failed to load rules" message={(error as Error).message} onRetry={() => void refetch()} />
         ) : (
           <ResourceTable
+            favoriteService="eventbridge"
+            favorite={(r) => ({ id: r.name, label: r.name, href: '/aws/eventbridge/rules', type: 'rule' })}
             items={rules}
             columns={columns}
             trackBy={(r) => r.name}

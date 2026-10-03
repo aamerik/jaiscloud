@@ -106,6 +106,8 @@ export function Route53Zones() {
       ) : (
         <SpaceBetween size="l">
           <ResourceTable
+            favoriteService="route53"
+            favorite={(z) => ({ id: z.id, label: z.name, href: '/aws/route53/zones', type: 'hosted zone' })}
             items={items}
             columns={columns}
             trackBy={(z) => z.id}

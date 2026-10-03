@@ -99,6 +99,8 @@ export function CFNStacks() {
         <ErrorState header="Failed to load stacks" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="cloudformation"
+          favorite={(s) => ({ id: s.name, label: s.name, href: '/aws/cloudformation/stacks', type: 'stack' })}
           items={items}
           columns={columns}
           trackBy={(s) => s.name}

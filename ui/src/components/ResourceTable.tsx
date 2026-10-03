@@ -14,6 +14,8 @@ import type {
   TableProps,
 } from '@cloudscape-design/components'
 import { loadTablePrefs, readTableUrl, saveTablePrefs, tableKey } from '../lib/tableState'
+import { FavoriteButton } from './FavoriteButton'
+import type { ResourceFavorite } from '../hooks/useResourceFavorites'
 
 export interface ResourceColumn<T> extends TableProps.ColumnDefinition<T> {
   /** Label shown in the filter property dropdown. */
@@ -41,6 +43,10 @@ interface ResourceTableProps<T> {
   expandableRows?: TableProps.ExpandableRows<T>
   /** Namespace for URL/localStorage state. Defaults to a slug of `title`. */
   urlKey?: string
+  /** Service id used when favoriting rows; enables the leading star column. */
+  favoriteService?: string
+  /** Resolve a row to a favorite (omit `service`, taken from favoriteService). */
+  favorite?: (item: T) => Omit<ResourceFavorite, 'service'> | null
 }
 
 /**
@@ -68,6 +74,8 @@ export function ResourceTable<T>({
   stickyHeader = true,
   expandableRows,
   urlKey,
+  favoriteService,
+  favorite,
 }: ResourceTableProps<T>) {
   const [searchParams, setSearchParams] = useSearchParams()
   const key = useMemo(() => tableKey(title, urlKey), [title, urlKey])
@@ -151,7 +159,23 @@ export function ResourceTable<T>({
     sorting: { defaultState: defaultSorting },
   })
 
-  const shownColumns = enrichedColumns.filter((column) => visibleColumns.includes(String(column.id)))
+  const shownColumns: TableProps.ColumnDefinition<T>[] = [
+    ...(favorite && favoriteService
+      ? [
+          {
+            id: '__favorite',
+            header: '',
+            width: 44,
+            minWidth: 44,
+            cell: (item: T) => {
+              const resolved = favorite(item)
+              return resolved ? <FavoriteButton service={favoriteService} {...resolved} /> : null
+            },
+          } as TableProps.ColumnDefinition<T>,
+        ]
+      : []),
+    ...enrichedColumns.filter((column) => visibleColumns.includes(String(column.id))),
+  ]
 
   // Mirror collection state into the URL.
   const filterJson =

@@ -135,6 +135,8 @@ export function SFNStateMachines() {
         <ErrorState header="Failed to load state machines" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="sfn"
+          favorite={(sm) => ({ id: sm.arn, label: sm.name, href: '/aws/sfn/state-machines', type: 'state machine' })}
           items={machines}
           columns={columns}
           trackBy={(sm) => sm.arn}

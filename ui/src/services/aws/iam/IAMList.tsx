@@ -146,6 +146,8 @@ function RolesTab() {
         <ErrorState header="Failed to load roles" message={(error as Error).message} />
       ) : (
         <ResourceTable
+          favoriteService="iam"
+          favorite={(r) => ({ id: r.arn, label: r.roleName, href: '/aws/iam', type: 'role' })}
           items={roles}
           columns={columns}
           trackBy={(r) => r.arn}
@@ -351,6 +353,8 @@ function UsersTab() {
         <ErrorState header="Failed to load users" message={(error as Error).message} />
       ) : (
         <ResourceTable
+          favoriteService="iam"
+          favorite={(u) => ({ id: u.arn, label: u.userName, href: '/aws/iam', type: 'user' })}
           items={users}
           columns={columns}
           trackBy={(u) => u.arn}
@@ -615,6 +619,8 @@ function PoliciesTab() {
         <ErrorState header="Failed to load policies" message={(error as Error).message} />
       ) : (
         <ResourceTable
+          favoriteService="iam"
+          favorite={(p) => ({ id: p.arn, label: p.policyName, href: '/aws/iam', type: 'policy' })}
           items={policies}
           columns={columns}
           trackBy={(p) => p.arn}

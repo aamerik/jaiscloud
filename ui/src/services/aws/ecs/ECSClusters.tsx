@@ -126,6 +126,8 @@ export function ECSClusters() {
       ) : (
         <SpaceBetween size="l">
           <ResourceTable
+            favoriteService="ecs"
+            favorite={(c) => ({ id: c.name, label: c.name, href: '/aws/ecs/clusters', type: 'cluster' })}
             items={items}
             columns={columns}
             trackBy={(c) => c.name}

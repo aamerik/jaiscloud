@@ -156,6 +156,8 @@ export function SSMList() {
             />
           </FormField>
           <ResourceTable
+            favoriteService="ssm"
+            favorite={(p) => ({ id: p.name, label: p.name, href: '/aws/ssm', type: 'parameter' })}
             items={params}
             columns={columns}
             trackBy={(p) => p.name}

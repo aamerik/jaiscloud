@@ -116,6 +116,8 @@ export function SecretsList() {
         <ErrorState header="Failed to load secrets" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="secretsmanager"
+          favorite={(s) => ({ id: s.name, label: s.name, href: '/aws/secretsmanager/' + encodeURIComponent(s.name), type: 'secret' })}
           items={secrets}
           columns={columns}
           trackBy={(s) => s.arn}

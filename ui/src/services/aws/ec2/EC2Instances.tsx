@@ -135,6 +135,8 @@ export function EC2Instances() {
         <ErrorState header="Failed to load instances" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="ec2"
+          favorite={(i) => ({ id: i.id, label: i.id, href: '/aws/ec2/instances', type: 'instance' })}
           items={items}
           columns={columns}
           trackBy={(i) => i.id}

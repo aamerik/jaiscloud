@@ -138,6 +138,8 @@ export function SNSList() {
         <ErrorState header="Failed to load topics" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="sns"
+          favorite={(t) => ({ id: t.arn, label: t.name, href: '/aws/sns/' + encodeURIComponent(t.arn), type: 'topic' })}
           items={topics}
           columns={columns}
           trackBy={(t) => t.arn}

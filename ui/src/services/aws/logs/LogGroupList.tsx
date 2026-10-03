@@ -108,6 +108,8 @@ export function LogGroupList() {
         <ErrorState header="Failed to load log groups" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="logs"
+          favorite={(g) => ({ id: g.name, label: g.name, href: '/aws/logs/groups/' + encodeURIComponent(g.name), type: 'log group' })}
           items={groups}
           columns={columns}
           trackBy={(g) => g.arn || g.name}

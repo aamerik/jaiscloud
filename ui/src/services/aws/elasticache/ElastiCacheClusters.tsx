@@ -117,6 +117,8 @@ export function ElastiCacheClusters() {
         <ErrorState header="Failed to load clusters" message={(error as Error).message} onRetry={() => void refetch()} />
       ) : (
         <ResourceTable
+          favoriteService="elasticache"
+          favorite={(c) => ({ id: c.id, label: c.id, href: '/aws/elasticache/clusters', type: 'cluster' })}
           items={items}
           columns={columns}
           trackBy={(c) => c.id}

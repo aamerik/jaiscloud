@@ -22,7 +22,6 @@ import type {
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useEventStream } from '../hooks/useEventStream'
-import { useFavorites } from '../hooks/useFavorites'
 import { useServices } from '../hooks/useServices'
 import { groupByCategory, serviceForPath, type NavSection } from './nav'
 import { NotificationsProvider, useNotifications } from './notifications'
@@ -113,7 +112,6 @@ function Shell({ children }: Props) {
   const currentService = serviceForPath(services, pathname)
   const { breadcrumbItems, onFollow } = useConsoleNav(services)
   const { items: notifications } = useNotifications()
-  const { favorites } = useFavorites()
 
   useEffect(() => {
     applyMode(mode)
@@ -160,32 +158,16 @@ function Shell({ children }: Props) {
       })
       .filter((group) => group.items.length > 0)
 
-    const favoriteGroup: SideNavigationProps.SectionGroup | null =
-      favorites.length > 0
-        ? {
-            type: 'section-group',
-            title: 'Favorites',
-            items: favorites
-              .map((id) => services.find((service) => service.id === id))
-              .filter((service): service is NavSection => service != null)
-              .map((service) => serviceItem(service, false)),
-          }
-        : null
-
     const items: SideNavigationProps.Item[] = [
       { type: 'link', text: 'Console home', href: href('/'), icon: <Icon name="view-full" /> },
-    ]
-    if (favoriteGroup && favoriteGroup.items.length > 0) {
-      items.push(favoriteGroup)
-    }
-    items.push(
+      { type: 'link', text: 'Favorites', href: href('/favorites'), icon: <Icon name="star" /> },
       { type: 'divider' },
       ...groups,
       { type: 'divider' },
       { type: 'link', text: 'Admin', href: href('/admin'), icon: <Icon name="security" /> },
-    )
+    ]
     return items
-  }, [search, pathname, services, favorites])
+  }, [search, pathname, services])
 
   const utilities = useMemo<TopNavigationProps.Utility[]>(() => {
     const items: TopNavigationProps.Utility[] = [
