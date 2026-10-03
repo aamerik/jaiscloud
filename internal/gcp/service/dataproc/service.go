@@ -28,6 +28,7 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/sparkgcp"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
@@ -99,6 +100,9 @@ type Service struct {
 	// state-change type receives them directly (independent of the Pub/Sub
 	// topic). Nil disables direct delivery.
 	eventDispatcher eventing.Dispatcher
+	// eventBus carries cloud-neutral status events to the console's live
+	// stream. Nil disables them; publishing is best-effort.
+	eventBus *events.EventBus
 
 	// blobSink stages a job's driver output/control files into the emulated
 	// GCS. Nil (unit tests / mock deployments) keeps the advertised URIs but

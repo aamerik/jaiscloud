@@ -46,6 +46,7 @@ export function useEventStream(): { connected: boolean } {
           const event = JSON.parse(evt.data) as {
             type: string
             resource?: string
+            keys?: string[]
             id?: string
             state?: string
           }
@@ -57,8 +58,15 @@ export function useEventStream(): { connected: boolean } {
             es.close()
             return
           }
-          if (event.resource) {
-            qc.invalidateQueries({ queryKey: [event.resource] })
+          // GCP status events carry the exact React Query key prefix to
+          // invalidate; AWS events fall back to the resource name.
+          const key = event.keys?.length
+            ? event.keys
+            : event.resource
+              ? [event.resource]
+              : null
+          if (key) {
+            qc.invalidateQueries({ queryKey: key })
           }
         } catch {
           // malformed event — ignore

@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/policy"
 	runstore "jaiscloud/internal/gcp/store/run"
@@ -46,6 +47,10 @@ type Service struct {
 	lro       lro.Mode
 	runtime   RuntimeManager
 	urlSuffix string
+	// eventBus publishes cloud-neutral status events for the console's live
+	// stream. Nil disables them (unit tests that only exercise the control
+	// plane).
+	eventBus *events.EventBus
 }
 
 // Option customises a Service.
@@ -71,6 +76,16 @@ func WithURLSuffix(suffix string) Option {
 	return func(s *Service) {
 		if suffix != "" {
 			s.urlSuffix = strings.TrimPrefix(suffix, ".")
+		}
+	}
+}
+
+// WithEventBus wires the shared event bus the console's live status stream
+// subscribes to. Nil (the default) disables status events.
+func WithEventBus(bus *events.EventBus) Option {
+	return func(s *Service) {
+		if bus != nil {
+			s.eventBus = bus
 		}
 	}
 }
@@ -405,7 +420,32 @@ func (s *Service) recordOperation(ctx context.Context, project, location, verb s
 	if err := s.store.CreateOperation(ctx, project, location, op); err != nil {
 		return runstore.Operation{}, mapStoreErr(err)
 	}
+	s.emitStatus(verb, svc)
 	return op, nil
+}
+
+// emitStatus publishes a console status event for a service mutation on the
+// shared event bus. It is best-effort: a nil bus is a no-op, so the control
+// plane never fails because of the UI stream.
+func (s *Service) emitStatus(verb string, svc runstore.Service) {
+	if s.eventBus == nil {
+		return
+	}
+	state := "READY"
+	if verb == "delete" {
+		state = "DELETED"
+	}
+	s.eventBus.Publish(events.Event{
+		Type: events.EventStatus,
+		Payload: events.StatusEvent{
+			Cloud:    model.CloudGCP,
+			Keys:     []string{"gcp", "run"},
+			Resource: "gcp-run-service",
+			ID:       svc.ID,
+			State:    state,
+			Detail:   verb + " " + ServiceName(svc.ProjectID, svc.Location, svc.ID),
+		},
+	})
 }
 
 // settle derives the rendered state of a persisted operation from its stored

@@ -3,6 +3,7 @@ import {
   AppBar,
   Box,
   Button,
+  Chip,
   CssBaseline,
   Divider,
   Drawer,
@@ -56,6 +57,7 @@ import { CryptoKeyDetailPage } from './kms/CryptoKeyDetailPage'
 import { SecretsPage } from './secretmanager/SecretsPage'
 import { SecretDetailPage } from './secretmanager/SecretDetailPage'
 import { AccountProvider, useAccount, useAccounts } from '../context/AccountContext'
+import { useEventStream } from '../hooks/useEventStream'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
 import { docsLink } from '../lib/cloudLinks'
@@ -72,6 +74,7 @@ function GcpShell() {
   const services = servicesData?.services ?? []
   const accounts = accountsData?.accounts ?? (accountId ? [accountId] : [])
   const docs = docsLink('gcp')
+  const { connected } = useEventStream()
 
   const [mobileOpen, setMobileOpen] = useState(false)
   const [projectAnchor, setProjectAnchor] = useState<HTMLElement | null>(null)
@@ -195,6 +198,21 @@ function GcpShell() {
               </MenuItem>
             ))}
           </Menu>
+          <Tooltip
+            title={
+              connected
+                ? 'Live updates active'
+                : 'Stream disconnected — falling back to polling'
+            }
+          >
+            <Chip
+              size="small"
+              label={connected ? 'Live' : 'Polling'}
+              color={connected ? 'success' : 'default'}
+              variant="outlined"
+              sx={{ mr: 1 }}
+            />
+          </Tooltip>
           <Tooltip title={docs.label}>
             <IconButton
               color="inherit"
