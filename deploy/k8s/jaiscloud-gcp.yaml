@@ -89,6 +89,15 @@ spec:
             # address).
             - name: JAISCLOUD_KAFKA_BROKER_MODE
               value: k8s
+            # Cloud Run k8s execution: each revision's template image runs as a
+            # Pod + ClusterIP Service (namespace jaiscloud) and data-plane
+            # requests addressed to the synthesized *.run.app authority are
+            # reverse-proxied to it. The jaiscloud ServiceAccount already has
+            # pod/service create+delete from rbac.yaml. The URI suffix/port are
+            # left at the real-GCP default; compatibility runs that need floci's
+            # synthesized authority override them per-target (see the Makefile).
+            - name: JAISCLOUD_CLOUDRUN_EXECUTOR_MODE
+              value: k8s
           readinessProbe:
             httpGet:
               path: /_jaiscloud/health
