@@ -14,6 +14,8 @@ import (
 	firestoreui "jaiscloud/internal/gcp/ui/firestore"
 	iamui "jaiscloud/internal/gcp/ui/iam"
 	kmsui "jaiscloud/internal/gcp/ui/kms"
+	loggingui "jaiscloud/internal/gcp/ui/logging"
+	monitoringui "jaiscloud/internal/gcp/ui/monitoring"
 	pubsubui "jaiscloud/internal/gcp/ui/pubsub"
 	runui "jaiscloud/internal/gcp/ui/run"
 	secretmanagerui "jaiscloud/internal/gcp/ui/secretmanager"
@@ -33,12 +35,14 @@ type Registrar struct {
 	iam           iamui.ProviderInterface
 	kms           kmsui.ProviderInterface
 	secretmanager secretmanagerui.ProviderInterface
+	logging       loggingui.ProviderInterface
+	monitoring    monitoringui.ProviderInterface
 	cfg           *config.Config
 }
 
 // NewRegistrar returns the GCP UI registrar. A nil provider leaves that
 // service's pages out of the catalog.
-func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, cfg *config.Config) *Registrar {
+func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, cfg *config.Config) *Registrar {
 	return &Registrar{
 		storage:       storageProvider,
 		pubsub:        pubsubProvider,
@@ -49,6 +53,8 @@ func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pu
 		iam:           iamProvider,
 		kms:           kmsProvider,
 		secretmanager: secretProvider,
+		logging:       loggingProvider,
+		monitoring:    monitoringProvider,
 		cfg:           cfg,
 	}
 }
@@ -59,7 +65,7 @@ func (r *Registrar) Cloud() model.Cloud { return model.CloudGCP }
 // Services implements coreui.Registrar: only services whose provider is wired
 // are advertised.
 func (r *Registrar) Services() []coreui.ServiceDescriptor {
-	services := make([]coreui.ServiceDescriptor, 0, 9)
+	services := make([]coreui.ServiceDescriptor, 0, 11)
 	if r.storage != nil {
 		services = append(services, coreui.ServiceDescriptor{
 			ID:       "storage",
@@ -156,6 +162,35 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Children: []coreui.ServiceChild{{Label: "Secrets", Path: "/gcp/secretmanager/secrets"}},
 		})
 	}
+	if r.logging != nil {
+		services = append(services, coreui.ServiceDescriptor{
+			ID:       "logging",
+			Label:    "Cloud Logging",
+			Category: "Operations",
+			RootPath: "/gcp/logging/entries",
+			Tier:     coreui.TierFull,
+			Children: []coreui.ServiceChild{
+				{Label: "Logs explorer", Path: "/gcp/logging/entries"},
+				{Label: "Logs-based metrics", Path: "/gcp/logging/metrics"},
+				{Label: "Log router", Path: "/gcp/logging/sinks"},
+				{Label: "Exclusions", Path: "/gcp/logging/exclusions"},
+			},
+		})
+	}
+	if r.monitoring != nil {
+		services = append(services, coreui.ServiceDescriptor{
+			ID:       "monitoring",
+			Label:    "Cloud Monitoring",
+			Category: "Operations",
+			RootPath: "/gcp/monitoring/metrics",
+			Tier:     coreui.TierFull,
+			Children: []coreui.ServiceChild{
+				{Label: "Metrics explorer", Path: "/gcp/monitoring/metrics"},
+				{Label: "Alerting", Path: "/gcp/monitoring/alerting"},
+				{Label: "Notification channels", Path: "/gcp/monitoring/channels"},
+			},
+		})
+	}
 	return services
 }
 
@@ -188,5 +223,11 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 	}
 	if r.secretmanager != nil {
 		router.Mount("/api/ui/v1/gcp/secretmanager", secretmanagerui.BuildRouter(r.secretmanager, r.cfg))
+	}
+	if r.logging != nil {
+		router.Mount("/api/ui/v1/gcp/logging", loggingui.BuildRouter(r.logging, r.cfg))
+	}
+	if r.monitoring != nil {
+		router.Mount("/api/ui/v1/gcp/monitoring", monitoringui.BuildRouter(r.monitoring, r.cfg))
 	}
 }
