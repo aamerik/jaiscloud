@@ -2,213 +2,271 @@ package lambda
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"jaiscloud/internal/k8stypes"
 )
 
-// fakeK8s is a minimal fake Kubernetes API server for unit tests.
-type fakeK8s struct {
-	mu      sync.Mutex
-	pods    []string // pod names created
-	svcs    []string // service names created
-	deleted []string // names deleted (pods and services)
-}
-
-func newFakeK8sServer(f *fakeK8s) *httptest.Server {
-	mux := http.NewServeMux()
-
-	// POST pod
-	mux.HandleFunc("/api/v1/namespaces/jaiscloud/pods", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			var body map[string]any
-			json.NewDecoder(r.Body).Decode(&body)
-			meta, _ := body["metadata"].(map[string]any)
-			name, _ := meta["name"].(string)
-			f.mu.Lock()
-			f.pods = append(f.pods, name)
-			f.mu.Unlock()
-			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(body)
-			return
-		}
-		// GET list pods by label
-		if r.Method == http.MethodGet {
-			f.mu.Lock()
-			items := make([]map[string]any, len(f.pods))
-			for i, n := range f.pods {
-				items[i] = map[string]any{"metadata": map[string]any{"name": n}}
-			}
-			f.mu.Unlock()
-			json.NewEncoder(w).Encode(map[string]any{"items": items})
-		}
-	})
-
-	// DELETE or GET individual pod
-	mux.HandleFunc("/api/v1/namespaces/jaiscloud/pods/", func(w http.ResponseWriter, r *http.Request) {
-		name := strings.TrimPrefix(r.URL.Path, "/api/v1/namespaces/jaiscloud/pods/")
-		if r.Method == http.MethodDelete {
-			f.mu.Lock()
-			f.deleted = append(f.deleted, name)
-			f.mu.Unlock()
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		// GET — return Running+Ready pod status
-		resp := map[string]any{
-			"status": map[string]any{
-				"phase": "Running",
-				"conditions": []map[string]any{
-					{"type": "Ready", "status": "True"},
-				},
-			},
-		}
-		json.NewEncoder(w).Encode(resp)
-	})
-
-	// POST service
-	mux.HandleFunc("/api/v1/namespaces/jaiscloud/services", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			var body map[string]any
-			json.NewDecoder(r.Body).Decode(&body)
-			meta, _ := body["metadata"].(map[string]any)
-			name, _ := meta["name"].(string)
-			f.mu.Lock()
-			f.svcs = append(f.svcs, name)
-			f.mu.Unlock()
-			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(body)
-			return
-		}
-		// GET list services by label
-		if r.Method == http.MethodGet {
-			f.mu.Lock()
-			items := make([]map[string]any, len(f.svcs))
-			for i, n := range f.svcs {
-				items[i] = map[string]any{"metadata": map[string]any{"name": n}}
-			}
-			f.mu.Unlock()
-			json.NewEncoder(w).Encode(map[string]any{"items": items})
-		}
-	})
-
-	// DELETE individual service
-	mux.HandleFunc("/api/v1/namespaces/jaiscloud/services/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodDelete {
-			name := strings.TrimPrefix(r.URL.Path, "/api/v1/namespaces/jaiscloud/services/")
-			f.mu.Lock()
-			f.deleted = append(f.deleted, name)
-			f.mu.Unlock()
-		}
-		w.WriteHeader(http.StatusOK)
-	})
-
-	return httptest.NewTLSServer(mux)
-}
-
-func newTestK8sExecutor(t *testing.T, srv *httptest.Server) *K8sExecutor {
+// newTestK8sExecutor builds a K8sExecutor backed by a kubernetes/fake client.
+// The workload probe always succeeds — the fake cluster has no live endpoints.
+func newTestK8sExecutor(t *testing.T, client *fake.Clientset) *K8sExecutor {
 	t.Helper()
-	cfg := LambdaConfig{
-		Namespace:     "jaiscloud",
-		APIServer:     srv.URL,
-		KeepaliveSecs: 300,
-	}
-	e := &K8sExecutor{
-		cfg:    cfg,
-		k8s:    srv.Client(),
+	return &K8sExecutor{
+		cfg: LambdaConfig{
+			Namespace:     "jaiscloud",
+			InstanceID:    "testinst",
+			KeepaliveSecs: 300,
+		},
+		client: client,
 		invoke: &http.Client{Timeout: 5 * time.Second},
+		probe:  func(string) bool { return true },
 		pods:   make(map[string]*warmPod),
 		done:   make(chan struct{}),
 	}
-	return e
+}
+
+func ownedLabels() map[string]string {
+	return map[string]string{"app": labelApp, "jaiscloud.io/instance-id": "testinst"}
 }
 
 func TestK8sLambda_Close_DeletesAllWarmPods(t *testing.T) {
-	f := &fakeK8s{}
-	srv := newFakeK8sServer(f)
-	defer srv.Close()
-
-	e := newTestK8sExecutor(t, srv)
+	client := fake.NewSimpleClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "jc-lambda-fn-a-0001", Namespace: "jaiscloud"}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "jc-lambda-fn-a-0001", Namespace: "jaiscloud"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "jc-lambda-fn-b-0002", Namespace: "jaiscloud"}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "jc-lambda-fn-b-0002", Namespace: "jaiscloud"}},
+	)
+	e := newTestK8sExecutor(t, client)
 
 	// Manually insert warm pods.
-	e.pods["fn-a"] = &warmPod{podName: "jc-lambda-fn-a-0001", svcName: "jc-lambda-fn-a", endpoint: "http://fake:8080"}
-	e.pods["fn-b"] = &warmPod{podName: "jc-lambda-fn-b-0002", svcName: "jc-lambda-fn-b", endpoint: "http://fake:8080"}
+	e.pods["fn-a"] = &warmPod{name: "jc-lambda-fn-a-0001", endpoint: "http://fake:8080"}
+	e.pods["fn-b"] = &warmPod{name: "jc-lambda-fn-b-0002", endpoint: "http://fake:8080"}
 
 	require.NoError(t, e.Close())
 
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	assert.Contains(t, f.deleted, "jc-lambda-fn-a-0001")
-	assert.Contains(t, f.deleted, "jc-lambda-fn-b-0002")
-	assert.Contains(t, f.deleted, "jc-lambda-fn-a")
-	assert.Contains(t, f.deleted, "jc-lambda-fn-b")
+	ctx := context.Background()
+	for _, name := range []string{"jc-lambda-fn-a-0001", "jc-lambda-fn-b-0002"} {
+		_, podErr := client.CoreV1().Pods("jaiscloud").Get(ctx, name, metav1.GetOptions{})
+		assert.Error(t, podErr, "pod %s must be deleted", name)
+		_, svcErr := client.CoreV1().Services("jaiscloud").Get(ctx, name, metav1.GetOptions{})
+		assert.Error(t, svcErr, "service %s must be deleted", name)
+	}
 }
 
 func TestK8sLambda_CleanupOrphans_DeletesOrphanedPodsAndServices(t *testing.T) {
-	f := &fakeK8s{
-		pods: []string{"jc-lambda-old-pod-aaaa"},
-		svcs: []string{"jc-lambda-old-svc"},
-	}
-	srv := newFakeK8sServer(f)
-	defer srv.Close()
-
-	e := newTestK8sExecutor(t, srv)
+	client := fake.NewSimpleClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "jc-lambda-old-pod-aaaa", Namespace: "jaiscloud", Labels: ownedLabels()}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "jc-lambda-old-svc", Namespace: "jaiscloud", Labels: ownedLabels()}},
+	)
+	e := newTestK8sExecutor(t, client)
 	e.cleanupOrphans()
 
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	assert.Contains(t, f.deleted, "jc-lambda-old-pod-aaaa")
-	assert.Contains(t, f.deleted, "jc-lambda-old-svc")
+	ctx := context.Background()
+	if _, err := client.CoreV1().Pods("jaiscloud").Get(ctx, "jc-lambda-old-pod-aaaa", metav1.GetOptions{}); err == nil {
+		t.Error("owned orphan pod survived cleanup")
+	}
+	if _, err := client.CoreV1().Services("jaiscloud").Get(ctx, "jc-lambda-old-svc", metav1.GetOptions{}); err == nil {
+		t.Error("owned orphan service survived cleanup")
+	}
 }
 
-func TestK8sLambda_CleanupOrphans_NoOrphans_NoOp(t *testing.T) {
-	f := &fakeK8s{}
-	srv := newFakeK8sServer(f)
-	defer srv.Close()
-
-	e := newTestK8sExecutor(t, srv)
+func TestK8sLambda_CleanupOrphans_LeavesOtherInstancesAndUnlabeled(t *testing.T) {
+	other := map[string]string{"app": labelApp, "jaiscloud.io/instance-id": "someone-else"}
+	client := fake.NewSimpleClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "other-instance", Namespace: "jaiscloud", Labels: other}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "unlabeled", Namespace: "jaiscloud"}},
+	)
+	e := newTestK8sExecutor(t, client)
 	e.cleanupOrphans()
 
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	assert.Empty(t, f.deleted)
+	ctx := context.Background()
+	for _, name := range []string{"other-instance", "unlabeled"} {
+		if _, err := client.CoreV1().Pods("jaiscloud").Get(ctx, name, metav1.GetOptions{}); err != nil {
+			t.Errorf("foreign pod %s was swept: %v", name, err)
+		}
+	}
 }
 
 func TestK8sLambda_DeleteFunction_RemovesPodAndService(t *testing.T) {
-	f := &fakeK8s{}
-	srv := newFakeK8sServer(f)
-	defer srv.Close()
-
-	e := newTestK8sExecutor(t, srv)
-	e.pods["my-fn"] = &warmPod{
-		podName:  "jc-lambda-my-fn-1234",
-		svcName:  "jc-lambda-my-fn",
-		endpoint: "http://fake:8080",
-	}
+	client := fake.NewSimpleClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "jc-lambda-my-fn-1234", Namespace: "jaiscloud", Labels: ownedLabels()}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "jc-lambda-my-fn-1234", Namespace: "jaiscloud", Labels: ownedLabels()}},
+	)
+	e := newTestK8sExecutor(t, client)
+	e.pods["my-fn"] = &warmPod{name: "jc-lambda-my-fn-1234", endpoint: "http://fake:8080"}
 
 	e.DeleteFunction(context.Background(), "my-fn")
 
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	assert.Contains(t, f.deleted, "jc-lambda-my-fn-1234")
-	assert.Contains(t, f.deleted, "jc-lambda-my-fn")
+	ctx := context.Background()
+	if _, err := client.CoreV1().Pods("jaiscloud").Get(ctx, "jc-lambda-my-fn-1234", metav1.GetOptions{}); err == nil {
+		t.Error("pod survived DeleteFunction")
+	}
+	if _, err := client.CoreV1().Services("jaiscloud").Get(ctx, "jc-lambda-my-fn-1234", metav1.GetOptions{}); err == nil {
+		t.Error("service survived DeleteFunction")
+	}
 
 	e.mu.Lock()
 	_, exists := e.pods["my-fn"]
 	e.mu.Unlock()
 	assert.False(t, exists, "pod entry must be removed from map")
+}
+
+// TestK8sLambda_CreatePod_EnsuresWorkload drives createPod through the shared
+// k8shelpers lifecycle against kubernetes/fake and asserts the Pod + ClusterIP
+// Service shape (image, args, resources, labels/selector, port, endpoint).
+func TestK8sLambda_CreatePod_EnsuresWorkload(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	e := newTestK8sExecutor(t, client)
+	e.cfg.ServiceAccount = "executor-sa"
+
+	pod, err := e.createPod(context.Background(), InvokeRequest{
+		FunctionName: "MyFn",
+		Runtime:      "python3.12",
+		Handler:      "app.handler",
+		MemoryMB:     256,
+		AccountID:    "acct",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, pod.name)
+
+	ctx := context.Background()
+	list, err := client.CoreV1().Pods("jaiscloud").List(ctx, metav1.ListOptions{LabelSelector: "function=myfn"})
+	require.NoError(t, err)
+	require.Len(t, list.Items, 1)
+	got := list.Items[0]
+
+	assert.Equal(t, "public.ecr.aws/lambda/python:3.12", got.Spec.Containers[0].Image)
+	assert.Equal(t, []string{"app.handler"}, got.Spec.Containers[0].Args)
+	assert.Equal(t, corev1.RestartPolicyNever, got.Spec.RestartPolicy)
+	assert.Equal(t, "executor-sa", got.Spec.ServiceAccountName)
+	assert.Equal(t, "256Mi", got.Spec.Containers[0].Resources.Limits.Memory().String())
+	assert.Equal(t, "testinst", got.Labels["jaiscloud.io/instance-id"])
+
+	svc, err := client.CoreV1().Services("jaiscloud").Get(ctx, pod.name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, corev1.ServiceTypeClusterIP, svc.Spec.Type)
+	require.Len(t, svc.Spec.Ports, 1)
+	assert.Equal(t, int32(riePort), svc.Spec.Ports[0].Port)
+	assert.Equal(t, "myfn", svc.Spec.Selector["function"])
+	assert.Equal(t, "testinst", svc.Spec.Selector["jaiscloud.io/instance-id"])
+
+	assert.Equal(t, "http://"+pod.name+".jaiscloud.svc.cluster.local:8080", pod.endpoint)
+}
+
+// TestNewK8sExecutor_InjectsClientAndProbe guards the option wiring: the
+// constructor must use an injected client/probe rather than building its own.
+func TestNewK8sExecutor_InjectsClientAndProbe(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	probe := func(string) bool { return true }
+	e := NewK8sExecutor(LambdaConfig{Namespace: "jaiscloud", InstanceID: "inst"}, nil,
+		WithK8sClient(client), WithWorkloadProbe(probe))
+	defer e.Close()
+
+	assert.Equal(t, client, e.client)
+	assert.NotNil(t, e.probe)
+}
+
+// TestK8sLambda_CreatePod_BoundsWorkloadName is the CR9 regression for the
+// 63-char DNS-1123 label limit: the Pod and its ClusterIP Service now share one
+// name, so a long function name (plus a 16-char instance id) must still yield a
+// valid Service name. kubernetes/fake does not validate names, so assert here.
+func TestK8sLambda_CreatePod_BoundsWorkloadName(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	e := newTestK8sExecutor(t, client)
+	e.cfg.InstanceID = "0123456789abcdef"
+
+	pod, err := e.createPod(context.Background(), InvokeRequest{
+		FunctionName: strings.Repeat("LongFunctionName", 5),
+		Runtime:      "python3.12",
+	})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(pod.name), 63, "workload name must be a DNS-1123 label")
+	assert.Regexp(t, `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, pod.name)
+	if _, err := client.CoreV1().Services("jaiscloud").Get(context.Background(), pod.name, metav1.GetOptions{}); err != nil {
+		t.Errorf("service with bounded name not created: %v", err)
+	}
+}
+
+// TestK8sLambda_CreatePod_NotReady_Reaps asserts a readiness failure propagates
+// and leaves no Pod/Service behind (EnsureWorkload's own reap), which the old
+// raw-HTTP path did not do.
+func TestK8sLambda_CreatePod_NotReady_Reaps(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	e := newTestK8sExecutor(t, client)
+	e.probe = func(string) bool { return false }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err := e.createPod(ctx, InvokeRequest{FunctionName: "Fn", Runtime: "python3.12"})
+	require.Error(t, err)
+
+	list, err := client.CoreV1().Pods("jaiscloud").List(context.Background(), metav1.ListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, list.Items, "a never-ready pod must be reaped")
+	svcs, err := client.CoreV1().Services("jaiscloud").List(context.Background(), metav1.ListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, svcs.Items, "a never-ready service must be reaped")
+}
+
+// TestCoreV1PodSpec_ConvertsPlatformFields guards the k8stypes -> corev1
+// conversion for the field groups the platform layer and code mount add:
+// env valueFrom, volumes, probes and resource quantities.
+func TestCoreV1PodSpec_ConvertsPlatformFields(t *testing.T) {
+	spec := k8stypes.PodSpec{
+		RestartPolicy:      "Never",
+		ServiceAccountName: "executor-sa",
+		InitContainers:     []k8stypes.Container{{Name: "code-fetch", Image: "alpine:latest"}},
+		Containers: []k8stypes.Container{{
+			Name:  "lambda",
+			Image: "img:1",
+			Env: []k8stypes.EnvVar{
+				{Name: "PLAIN", Value: "v"},
+				{Name: "FROM_SECRET", ValueFrom: &k8stypes.EnvVarSource{
+					SecretKeyRef: &k8stypes.SecretKeySelector{Name: "s", Key: "k"},
+				}},
+			},
+			Resources:      &k8stypes.Resources{Limits: map[string]string{"memory": "256Mi"}},
+			ReadinessProbe: &k8stypes.Probe{TCPSocket: &k8stypes.TCPSocketAction{Port: riePort}},
+		}},
+		Volumes: []k8stypes.Volume{
+			{Name: "code", EmptyDir: &k8stypes.EmptyDirVol{}},
+			{Name: "tls", Secret: &k8stypes.SecretVol{SecretName: "tls-secret"}},
+		},
+	}
+
+	out, err := coreV1PodSpec(spec)
+	require.NoError(t, err)
+
+	assert.Equal(t, corev1.RestartPolicyNever, out.RestartPolicy)
+	assert.Equal(t, "executor-sa", out.ServiceAccountName)
+	require.Len(t, out.InitContainers, 1)
+	assert.Equal(t, "code-fetch", out.InitContainers[0].Name)
+	require.Len(t, out.Containers, 1)
+	require.Len(t, out.Containers[0].Env, 2)
+	assert.Equal(t, "v", out.Containers[0].Env[0].Value)
+	require.NotNil(t, out.Containers[0].Env[1].ValueFrom)
+	require.NotNil(t, out.Containers[0].Env[1].ValueFrom.SecretKeyRef)
+	assert.Equal(t, "s", out.Containers[0].Env[1].ValueFrom.SecretKeyRef.Name)
+	require.NotNil(t, out.Containers[0].ReadinessProbe)
+	require.NotNil(t, out.Containers[0].ReadinessProbe.TCPSocket)
+	assert.Equal(t, int32(riePort), out.Containers[0].ReadinessProbe.TCPSocket.Port.IntVal)
+	assert.Equal(t, "256Mi", out.Containers[0].Resources.Limits.Memory().String())
+	require.Len(t, out.Volumes, 2)
+	assert.NotNil(t, out.Volumes[0].EmptyDir)
+	require.NotNil(t, out.Volumes[1].Secret)
+	assert.Equal(t, "tls-secret", out.Volumes[1].Secret.SecretName)
 }
 
 // fakeCodeLoader satisfies CodeLoader so applyCodeMount treats the loader as
