@@ -179,12 +179,20 @@ func detectV1Service(path string) string {
 	if pi >= 0 && pi+1 == len(seg)-1 && isDatastoreVerb(seg[pi+1]) {
 		return "datastore"
 	}
+	// Cloud Resource Manager collection route: /v1/projects (the "projects"
+	// segment is the last segment) is projects.list (GET) / projects.create
+	// (POST). It has no project segment, so the project-last guard below does
+	// not match.
+	if pi >= 0 && pi == len(seg)-1 {
+		return "resourcemanager"
+	}
 	// Cloud Resource Manager project surface: when the project segment is the
 	// LAST segment there is no trailing resource type — either the bare project
 	// resource (GET /v1/projects/{project} → projects.get) or a project-segment
 	// custom method (POST /v1/projects/{project}:getIamPolicy|setIamPolicy|
-	// testIamPermissions). This must run before the pi+2 guard below, which
-	// assumes a trailing resource-type segment and would otherwise return "".
+	// testIamPermissions) / delete (DELETE) / undelete (POST). This must run
+	// before the pi+2 guard below, which assumes a trailing resource-type
+	// segment and would otherwise return "".
 	if pi >= 0 && pi+1 == len(seg)-1 {
 		return "resourcemanager"
 	}

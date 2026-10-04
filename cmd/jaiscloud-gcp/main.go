@@ -715,12 +715,17 @@ func startCmd() *cobra.Command {
 			if lroMode.Async() {
 				workflowsP.SetOperationResolvers(metastoreP, managedkafkaP)
 				// The top-level /v1/operations/{id} route is decoded as a
-				// Functions v1 operation, so wire Service Usage (which shares
-				// the operations/{id} namespace) as a fallback resolver: a
-				// Service Usage poll 404s in Functions first, then resolves
-				// here. Sync mode returns every operation done inline, so
+				// Functions v1 operation, so wire Service Usage and Resource
+				// Manager (which share the operations/{id} namespace) as
+				// fallback resolvers: a poll 404s in Functions first, then
+				// resolves here, and each resolver declines ids it does not
+				// own. Sync mode returns every operation done inline, so
 				// nothing is wired and the REST contract is unchanged.
-				functionsP.SetOperationResolvers(serviceusageP)
+				if resourceManagerCore != nil {
+					functionsP.SetOperationResolvers(serviceusageP, resourcemanagerP)
+				} else {
+					functionsP.SetOperationResolvers(serviceusageP)
+				}
 			}
 
 			// Register only services enabled on at least one transport, so a
@@ -916,6 +921,16 @@ func startCmd() *cobra.Command {
 				// v1.1.0 contract) unchanged. Mirrors the REST fallback wiring.
 				if lroMode.Async() && transports.GRPCFor("serviceusage") && serviceUsageCore != nil {
 					opsResolvers = append(opsResolvers, serviceUsageGRPC)
+				}
+				// Cloud Resource Manager publishes top-level operations
+				// (operations/{id}) too. Like Service Usage it is consulted
+				// BEFORE Cloud Functions v1 (which claims the same namespace
+				// and answers an unknown id with NotFound) and returns
+				// handled=false for ids it does not own. It is registered only
+				// in the opt-in async mode: in sync mode every project
+				// mutation is returned done inline, so nothing polls.
+				if lroMode.Async() && transports.GRPCFor("resourcemanager") && resourceManagerCore != nil {
+					opsResolvers = append(opsResolvers, resourceManagerGRPC)
 				}
 				// Cloud Functions publishes typed operations (J58); v1 names are
 				// top-level (operations/{id}) and v2 names are location-scoped.

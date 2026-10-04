@@ -148,9 +148,11 @@ func (s *Service) ListProjects(ctx context.Context, pageSize int, pageToken stri
 }
 
 // DeleteProject marks a project DELETE_REQUESTED (real GCP keeps it restorable
-// for a 30-day window). Deleting an unknown id is NotFound; deleting one already
-// marked is FailedPrecondition. A configured project with no registry entry is
-// materialized so the new state persists.
+// for a 30-day window). Deleting an unknown id is NotFound. Deleting a project
+// that is already DELETE_REQUESTED is idempotent, matching the v3 proto
+// ("deleting a DELETE_REQUESTED project will not cause an error, but also won't
+// do anything"). A configured project with no registry entry is materialized so
+// the new state persists.
 func (s *Service) DeleteProject(ctx context.Context, project string) (Project, Operation, error) {
 	if project == "" {
 		return Project{}, Operation{}, invalidArgument("project is required")
@@ -164,7 +166,8 @@ func (s *Service) DeleteProject(ctx context.Context, project string) (Project, O
 			cur.CreateTime = clock.Now().UTC()
 		}
 		if cur.State == StateDeleteRequested {
-			return Project{}, failedPrecondition(fmt.Sprintf("Project %s is already marked for deletion.", project))
+			// Idempotent: a second delete succeeds and changes nothing.
+			return cur, nil
 		}
 		now := clock.Now().UTC()
 		cur.State = StateDeleteRequested

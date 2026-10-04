@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **937**
+Cells: **941**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 677 |
+| ga | 681 |
 | limited | 111 |
 | preview | 14 |
 | unsupported | 135 |
@@ -21,7 +21,7 @@ Cells: **937**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 360 | 104 | 14 | 12 |
+| rest | 364 | 104 | 14 | 12 |
 | grpc | 317 | 7 | 0 | 123 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -918,7 +918,7 @@ _45 cell(s): ga=45 limited=0 preview=0 unsupported=0_
 
 ## resourcemanager
 
-_15 cell(s): ga=8 limited=0 preview=0 unsupported=7_
+_19 cell(s): ga=12 limited=0 preview=0 unsupported=7_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -928,10 +928,14 @@ _15 cell(s): ga=8 limited=0 preview=0 unsupported=7_
 | GetProject | grpc | ga | — |
 | ListProjects | grpc | unsupported | projects are synthesized, never created; explicit Unimplemented stub |
 | MoveProject | grpc | unsupported | project parent/ancestry is not modelled; explicit Unimplemented stub |
+| ResourceManager.ProjectCreate | rest | ga | — |
+| ResourceManager.ProjectDelete | rest | ga | — |
 | ResourceManager.ProjectGet | rest | ga | — |
 | ResourceManager.ProjectGetIamPolicy | rest | ga | — |
+| ResourceManager.ProjectList | rest | ga | — |
 | ResourceManager.ProjectSetIamPolicy | rest | ga | — |
 | ResourceManager.ProjectTestIamPermissions | rest | ga | — |
+| ResourceManager.ProjectUndelete | rest | ga | — |
 | SearchProjects | grpc | unsupported | projects are synthesized, never created; explicit Unimplemented stub |
 | SetIamPolicy | grpc | ga | — |
 | TestIamPermissions | grpc | ga | — |

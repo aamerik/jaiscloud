@@ -27,6 +27,17 @@ func TestDetectServiceDatastoreVerbs(t *testing.T) {
 	}
 }
 
+// TestDetectServiceResourceManagerCollection locks the REST collection route:
+// GET/POST /v1/projects resolve to "resourcemanager" (projects.list/create).
+func TestDetectServiceResourceManagerCollection(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		r, _ := http.NewRequest(method, "/v1/projects", nil)
+		if svc, _ := DetectService(r); svc != "resourcemanager" {
+			t.Errorf("%s /v1/projects detected as %q, want resourcemanager", method, svc)
+		}
+	}
+}
+
 // TestDetectServiceLoggingAndFunctionsV2 locks the /v2/ namespace split: Cloud
 // Logging's entries/logs/descriptors paths resolve to "logging", while Cloud
 // Functions v2's project-location paths still resolve to "functions".

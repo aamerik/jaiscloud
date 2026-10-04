@@ -239,11 +239,14 @@ func TestDetectV1Service(t *testing.T) {
 		"/v1/projects/p/services:batchEnable":                "serviceusage",
 		"/v1/projects/p/services/run.googleapis.com:enable":  "serviceusage",
 		"/v1/projects/p/services/run.googleapis.com:disable": "serviceusage",
-		// Cloud Resource Manager v1 project surface (project segment is last).
+		// Cloud Resource Manager v1 project surface (project segment is last),
+		// including the collection route.
+		"/v1/projects":                      "resourcemanager",
 		"/v1/projects/p":                    "resourcemanager",
 		"/v1/projects/p:getIamPolicy":       "resourcemanager",
 		"/v1/projects/p:setIamPolicy":       "resourcemanager",
 		"/v1/projects/p:testIamPermissions": "resourcemanager",
+		"/v1/projects/p:undelete":           "resourcemanager",
 		"/storage/v1/b/bkt/o":               "",
 	}
 	for path, want := range cases {

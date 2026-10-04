@@ -147,9 +147,16 @@ func TestDeleteAndUndelete(t *testing.T) {
 		t.Errorf("delete operation = %+v, want done inline", op)
 	}
 
-	// A second delete is FailedPrecondition.
-	if _, _, err := s.DeleteProject(ctx, "delete-me-123"); codeOf(t, err) != "FailedPrecondition" {
-		t.Errorf("second delete code = %q, want FailedPrecondition", codeOf(t, err))
+	// A second delete is idempotent (v3): it succeeds and changes nothing.
+	second, secondOp, err := s.DeleteProject(ctx, "delete-me-123")
+	if err != nil {
+		t.Fatalf("second delete: %v", err)
+	}
+	if second.State != StateDeleteRequested || !second.DeleteTime.Equal(p.DeleteTime) {
+		t.Errorf("second delete = %+v, want unchanged DELETE_REQUESTED", second)
+	}
+	if !secondOp.Done {
+		t.Errorf("second delete operation = %+v, want done inline", secondOp)
 	}
 
 	// A project that is not marked for deletion cannot be undeleted.
