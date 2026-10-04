@@ -13,7 +13,7 @@ import {
 } from '@mui/material'
 import { createDocument } from '../../api/gcp/firestore'
 import { JsonEditor } from './JsonEditor'
-import { parseJsonObject } from './util'
+import { parseJsonObject, validateCollectionPath } from './util'
 
 const EMPTY = '{\n  \n}'
 
@@ -81,17 +81,25 @@ export function CreateDocumentDialog({
     setError(parsed.error ?? null)
     if (parsed.error) return
     if (!collection) {
-      if (!collectionId) {
-        setError(collectionPrefix ? 'Subcollection ID is required' : 'Collection ID is required')
-        return
-      }
-      if (collectionId.includes('/')) {
-        setError(
-          collectionPrefix
-            ? 'Subcollection ID must not contain "/"'
-            : 'Collection ID must not contain "/"',
-        )
-        return
+      if (collectionPrefix) {
+        // The typed id is a single subcollection segment appended to the
+        // parent document path.
+        if (!collectionId) {
+          setError('Subcollection ID is required')
+          return
+        }
+        if (collectionId.includes('/')) {
+          setError('Subcollection ID must not contain "/"')
+          return
+        }
+      } else {
+        // A root create may target a nested path directly, e.g.
+        // `users/alice/orders`.
+        const pathError = validateCollectionPath(collectionId)
+        if (pathError) {
+          setError(pathError)
+          return
+        }
       }
     }
     create.mutate()
@@ -114,7 +122,12 @@ export function CreateDocumentDialog({
               value={collectionId}
               onChange={(e) => setCollectionId(e.target.value)}
               disabled={Boolean(collection)}
-              placeholder={collectionPrefix ? 'orders' : 'users'}
+              placeholder={collectionPrefix ? 'orders' : 'users or users/alice/orders'}
+              helperText={
+                !collection && !collectionPrefix
+                  ? 'A nested path like users/alice/orders creates a subcollection document.'
+                  : undefined
+              }
               fullWidth
             />
             <TextField
