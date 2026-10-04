@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 
 	"jaiscloud/internal/admin"
 	"jaiscloud/internal/config"
@@ -31,11 +32,40 @@ func buildMetaHandler(adminHandler *admin.Handler, cfg *config.Config, version s
 	}
 }
 
-func buildAccountsHandler(cfg *config.Config) http.HandlerFunc {
-	accounts := append([]string{cfg.AccountID}, cfg.ExtraAccounts...)
+// buildAccountsHandler serves GET /api/ui/v1/meta/accounts. The configured
+// default + extra accounts are always listed; a Registrar that implements
+// AccountsProvider contributes additional ids (GCP projects created at
+// runtime), so the console's project picker reflects the real registry rather
+// than only the startup config.
+func buildAccountsHandler(cfg *config.Config, reg Registrar) http.HandlerFunc {
+	defaults := append([]string{cfg.AccountID}, cfg.ExtraAccounts...)
+	provider, _ := reg.(AccountsProvider)
 	return func(w http.ResponseWriter, r *http.Request) {
+		accounts := defaults
+		if provider != nil {
+			accounts = mergeAccounts(defaults, provider.Accounts(r.Context()))
+		}
 		writeJSON(w, AccountsResponse{Accounts: accounts})
 	}
+}
+
+// mergeAccounts unions the configured default accounts with the ids a
+// Registrar contributes, dropping empty ids and duplicates and sorting the
+// result so the response is deterministic.
+func mergeAccounts(defaults, extra []string) []string {
+	seen := make(map[string]bool, len(defaults)+len(extra))
+	out := make([]string, 0, len(defaults)+len(extra))
+	for _, list := range [][]string{defaults, extra} {
+		for _, a := range list {
+			if a == "" || seen[a] {
+				continue
+			}
+			seen[a] = true
+			out = append(out, a)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // buildServicesHandler reports the services the active registrar supports.
