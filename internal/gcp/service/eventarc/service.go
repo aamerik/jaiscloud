@@ -412,12 +412,20 @@ func validateCloudRunDestination(project string, m map[string]any) error {
 // trigger and must additionally declare a non-empty "bucket" filter; real
 // Eventarc rejects a Cloud Storage trigger without one, and accepting it would
 // deliver events from every bucket.
+//
+// The filter attributes must also be defined by the trigger's source: "bucket"
+// and "object" only apply to a Cloud Storage trigger, and "topic" does not apply
+// to a Cloud Storage trigger. Real Eventarc rejects such cross-source filters at
+// create with INVALID_ARGUMENT rather than silently ignoring them at match time.
+// The open-ended case — an arbitrary unknown attribute for an arbitrary
+// provider — is deliberately not validated.
 func validateFilters(body map[string]any) error {
 	filters, ok := body["eventFilters"].([]any)
 	if !ok || len(filters) == 0 {
 		return invalidArgument("eventFilters is required")
 	}
-	hasType, hasBucket, storageType := false, false, false
+	hasType, storageType := false, false
+	hasBucket, hasObject, hasTopic := false, false, false
 	for _, f := range filters {
 		fm, ok := f.(map[string]any)
 		if !ok {
@@ -441,6 +449,10 @@ func validateFilters(body map[string]any) error {
 			}
 		case attr == "bucket" && value != "":
 			hasBucket = true
+		case attr == "object" && value != "":
+			hasObject = true
+		case attr == "topic" && value != "":
+			hasTopic = true
 		}
 	}
 	if !hasType {
@@ -448,6 +460,12 @@ func validateFilters(body map[string]any) error {
 	}
 	if storageType && !hasBucket {
 		return invalidArgument(`Cloud Storage triggers must contain a filter with attribute "bucket"`)
+	}
+	if (hasBucket || hasObject) && !storageType {
+		return invalidArgument(`eventFilters "bucket"/"object" attributes are only valid for Cloud Storage triggers`)
+	}
+	if hasTopic && storageType {
+		return invalidArgument(`eventFilters "topic" attribute is not valid for Cloud Storage triggers`)
 	}
 	return nil
 }
