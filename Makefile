@@ -138,7 +138,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-differential record-gcp-differential \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
-        gcp-status gcp-status-audit gcp-status-coverage gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff
+        gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -810,6 +810,10 @@ check-gcp-fidelity-matrix: test-gcp-wire-conformance ## Fail if the committed fi
 	$(MAKE) gen-gcp-fidelity-matrix
 	@git diff --exit-code -- docs/fidelity || \
 	  (echo "ERROR: docs/fidelity is stale — run 'make gen-gcp-fidelity-matrix' and commit the result"; exit 1)
+
+gcp-session-start: ## Guard the checkout, fast-forward the gcp base from upstream, rebuild the ledger (used by /gcp:new)
+	@bash tools/gcp-session-start.sh
+	@$(MAKE) --no-print-directory gcp-status
 
 gcp-status: ## Rebuild the GCP parity status ledger (plan_docs/STATUS.md + status.json) from all plan docs + git/GitHub state
 	@mkdir -p bin
