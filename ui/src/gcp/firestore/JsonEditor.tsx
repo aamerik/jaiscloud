@@ -1,4 +1,4 @@
-import { TextField } from '@mui/material'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 
 export interface JsonEditorProps {
   label: string
@@ -10,8 +10,11 @@ export interface JsonEditorProps {
   disabled?: boolean
 }
 
-/** MUI-native JSON editor: a monospace multiline field. Kept free of the
- * Cloudscape design system so the GCP console stays MUI-only. */
+/**
+ * Firestore's typed-encoding JSON editor. Backed by the shared GCP code editor
+ * (UI63) in JSON mode; the props are unchanged so DocumentDetailPage and
+ * CreateDocumentDialog keep working as-is.
+ */
 export function JsonEditor({
   label,
   value,
@@ -22,23 +25,15 @@ export function JsonEditor({
   disabled,
 }: JsonEditorProps) {
   return (
-    <TextField
+    <GcpCodeEditor
       label={label}
       value={value}
-      onChange={(e) => onChange(e.target.value)}
-      error={Boolean(error)}
-      helperText={error || helperText}
+      onChange={onChange}
+      error={error}
+      helperText={helperText}
       disabled={disabled}
-      fullWidth
-      multiline
+      language="json"
       minRows={minRows}
-      spellCheck={false}
-      slotProps={{
-        input: {
-          sx: { fontFamily: 'monospace', fontSize: 13, lineHeight: 1.5, alignItems: 'flex-start' },
-        },
-        htmlInput: { 'aria-label': label },
-      }}
     />
   )
 }
