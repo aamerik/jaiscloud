@@ -283,7 +283,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   honoring `path`, so it needs a ready revision and works without DNS; a Pub/Sub publish carries the
   push-delivery JSON, a GCS object finalize/delete the object-metadata body with source
   `//storage.googleapis.com/projects/_/buckets/{bucket}`; GKE/Workflows destinations are not
-  delivered); Managed Kafka is metadata-only by default
+  delivered; delivery is exercised end-to-end on k3d by `make test-e2e-eventarc-k8s`, which asserts
+  a published Pub/Sub message and a GCS object finalize reach a real HTTP sink with the right
+  `ce-*` headers and body, and that `cloudRun` delivery lands through the run runtime); Managed
+  Kafka is metadata-only by default
   (an opt-in k8s/native broker mode stands up a real Redpanda endpoint behind `bootstrapAddress`,
   over which topic create/update/delete and ACL mutations are mirrored and consumer groups are read
   from its group coordinator — with no broker the list is empty and get/update/delete return
