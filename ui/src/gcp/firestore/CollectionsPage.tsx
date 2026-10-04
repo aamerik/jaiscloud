@@ -11,6 +11,7 @@ import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
 import { GcpToolbar } from '../common/GcpToolbar'
 import { filterRows } from '../common/pagination'
+import { encodeFirestorePath } from './util'
 
 /** Firestore root collections. Clicking a collection browses its documents. */
 export function CollectionsPage() {
@@ -35,7 +36,7 @@ export function CollectionsPage() {
       render: (collection) => (
         <Link
           component={RouterLink}
-          to={`/gcp/firestore/collections/${encodeURIComponent(collection.id)}`}
+          to={`/gcp/firestore/collections/${encodeFirestorePath(collection.id)}`}
         >
           {collection.id}
         </Link>

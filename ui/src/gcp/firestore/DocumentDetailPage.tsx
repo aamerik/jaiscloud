@@ -26,7 +26,7 @@ import {
 } from '../../api/gcp/firestore'
 import { useAccount } from '../../context/AccountContext'
 import { JsonEditor } from './JsonEditor'
-import { parseJsonObject } from './util'
+import { parseJsonObject, decodeFirestoreId, decodeFirestorePath, encodeFirestorePath } from './util'
 import { CreateDocumentDialog } from './CreateDocumentDialog'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageTitle } from '../common/PageTitle'
@@ -39,7 +39,9 @@ function shortDate(value?: string): string {
 
 /** A single Firestore document: edit the fields as JSON and save or delete. */
 export function DocumentDetailPage() {
-  const { collection = '', document: documentId = '' } = useParams()
+  const { collection: collectionParam = '', document: documentParam = '' } = useParams()
+  const collection = decodeFirestorePath(collectionParam)
+  const documentId = decodeFirestoreId(documentParam)
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -84,7 +86,7 @@ export function DocumentDetailPage() {
     mutationFn: () => deleteDocument(collection, documentId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['gcp', 'firestore'] })
-      navigate(`/gcp/firestore/collections/${encodeURIComponent(collection)}`)
+      navigate(`/gcp/firestore/collections/${encodeFirestorePath(collection)}`)
     },
   })
 
@@ -112,7 +114,7 @@ export function DocumentDetailPage() {
       render: (sub) => (
         <Link
           component={RouterLink}
-          to={`/gcp/firestore/collections/${encodeURIComponent(
+          to={`/gcp/firestore/collections/${encodeFirestorePath(
             `${collection}/${documentId}/${sub.id}`,
           )}`}
         >
@@ -131,7 +133,7 @@ export function DocumentDetailPage() {
       >
         <IconButton
           component={RouterLink}
-          to={`/gcp/firestore/collections/${encodeURIComponent(collection)}`}
+          to={`/gcp/firestore/collections/${encodeFirestorePath(collection)}`}
           aria-label="Back to documents"
         >
           <ArrowBackIcon />
@@ -255,7 +257,7 @@ export function DocumentDetailPage() {
         collectionPrefix={`${collection}/${documentId}`}
         onCreated={(createdCollection) => {
           // The dialog already invalidates the firestore queries on success.
-          navigate(`/gcp/firestore/collections/${encodeURIComponent(createdCollection)}`)
+          navigate(`/gcp/firestore/collections/${encodeFirestorePath(createdCollection)}`)
         }}
       />
     </Box>

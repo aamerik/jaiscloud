@@ -72,3 +72,53 @@ export function parentDocument(
     document: segments[segments.length - 2] as string,
   }
 }
+
+/**
+ * Firestore path URL codec.
+ *
+ * A collection/document path is slash-separated, but it travels through React
+ * Router as a single route param. The naive `encodeURIComponent(path)` scheme
+ * breaks: React Router decodes each matched segment with `decodeURIComponent`
+ * and then rewrites any `%2F` back to `/`, so an id containing the literal
+ * uppercase sequence `%2F` (encoded as `%252F`) is decoded twice — once to
+ * `%2F`, then to `/` — and addresses the wrong path.
+ *
+ * Instead we use the console-style `~2F` escape (the real Cloud/Firebase
+ * Firestore console addresses `/<collection>/<document>` as
+ * `/~2F<collection>~2F<document>`), extended with `~7E` for a literal `~`. We
+ * apply it *after* percent-encoding so the resulting param contains no `%` and
+ * no `/` at all: React Router then leaves it completely untouched. `~` in an id
+ * is escaped as `~7E` first, so the `~2F` sequence stays unambiguous.
+ *
+ * Note: a Firestore id may not contain `/`, so the only `/` any input has are
+ * the path separators that `encodeFirestorePath` turns into `~2F`. That is what
+ * keeps `decodeFirestorePath`'s `~2F` split unambiguous.
+ */
+
+/** encodeFirestoreId makes one collection/document id safe to place in a URL
+ * path segment. E.g. `a/b` -> `a~2Fb`, `a%2Fb` -> `a~252Fb`. */
+export function encodeFirestoreId(id: string): string {
+  return encodeURIComponent(id.replace(/~/g, '~7E')).replace(/%/g, '~')
+}
+
+/** decodeFirestoreId reverses encodeFirestoreId. A malformed segment (e.g. a
+ * hand-typed URL with a stray `%` or a `~` not followed by two hex digits)
+ * decodes to itself rather than throwing. */
+export function decodeFirestoreId(encoded: string): string {
+  try {
+    return decodeURIComponent(encoded.replace(/~/g, '%'))
+  } catch {
+    return encoded
+  }
+}
+
+/** encodeFirestorePath encodes a slash-separated collection path into a single
+ * URL path segment. E.g. `users/alice/orders` -> `users~2Falice~2Forders`. */
+export function encodeFirestorePath(path: string): string {
+  return pathSegments(path).map(encodeFirestoreId).join('~2F')
+}
+
+/** decodeFirestorePath reverses encodeFirestorePath. */
+export function decodeFirestorePath(encoded: string): string {
+  return encoded.split('~2F').map(decodeFirestoreId).join('/')
+}

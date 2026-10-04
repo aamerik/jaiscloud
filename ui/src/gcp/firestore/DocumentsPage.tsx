@@ -12,7 +12,14 @@ import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
 import { GcpToolbar } from '../common/GcpToolbar'
 import { filterRows } from '../common/pagination'
-import { collectionId, isNestedCollection, parentDocument } from './util'
+import {
+  collectionId,
+  decodeFirestorePath,
+  encodeFirestoreId,
+  encodeFirestorePath,
+  isNestedCollection,
+  parentDocument,
+} from './util'
 
 function shortDate(value?: string): string {
   if (!value) return '—'
@@ -22,7 +29,8 @@ function shortDate(value?: string): string {
 
 /** Documents in a Firestore collection. */
 export function DocumentsPage() {
-  const { collection = '' } = useParams()
+  const { collection: collectionParam = '' } = useParams()
+  const collection = decodeFirestorePath(collectionParam)
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
@@ -48,7 +56,7 @@ export function DocumentsPage() {
   // document; a root collection backs onto the collections list.
   const parent = parentDocument(collection)
   const backTo = parent
-    ? `/gcp/firestore/collections/${encodeURIComponent(parent.collection)}/documents/${encodeURIComponent(parent.document)}`
+    ? `/gcp/firestore/collections/${encodeFirestorePath(parent.collection)}/documents/${encodeFirestoreId(parent.document)}`
     : '/gcp/firestore/collections'
   const backAriaLabel = parent ? `Back to document ${parent.document}` : 'Back to collections'
   const subtitle = isNestedCollection(collection)
@@ -65,7 +73,7 @@ export function DocumentsPage() {
         <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
           <Link
             component={RouterLink}
-            to={`/gcp/firestore/collections/${encodeURIComponent(collection)}/documents/${encodeURIComponent(document.id)}`}
+            to={`/gcp/firestore/collections/${encodeFirestorePath(collection)}/documents/${encodeFirestoreId(document.id)}`}
           >
             {document.id}
           </Link>
