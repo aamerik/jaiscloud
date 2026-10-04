@@ -40,6 +40,9 @@ func runChecks() []Check {
 		{Service: "run", RPC: "DeleteRevision (retired)", Method: "DeleteRevision", KeyField: "retired revision deleted; NotFound after", Run: checkRunDeleteRetiredRevision},
 		{Service: "run", RPC: "DeleteRevision (serving)", Method: "DeleteRevision", KeyField: "serving revision rejected FailedPrecondition", Run: checkRunDeleteServingRevision},
 		{Service: "run", RPC: "DeleteService", Method: "DeleteService", KeyField: "done operation; NotFound after", Run: checkRunDeleteService},
+		{Service: "run", RPC: "CreateService (validateOnly)", Method: "CreateService", KeyField: "dry-run previews; not persisted", Run: checkRunValidateOnlyCreate},
+		{Service: "run", RPC: "DeleteService (etag)", Method: "DeleteService", KeyField: "stale etag rejected Aborted", Run: checkRunDeleteServiceEtag},
+		{Service: "run", RPC: "UpdateService (allowMissing)", Method: "UpdateService", KeyField: "upserts missing service", Run: checkRunAllowMissingUpdate},
 	}
 }
 
@@ -71,10 +74,9 @@ func runRevisionName(cfg Config, serviceID, revisionID string) string {
 	return runServiceName(cfg, serviceID) + "/revisions/" + revisionID
 }
 
-// createRunService creates a service and returns its ready Service (the create
-// operation is completed inline by the emulator).
-func createRunService(ctx context.Context, client *run.ServicesClient, cfg Config, id string) (*runpb.Service, error) {
-	op, err := client.CreateService(ctx, &runpb.CreateServiceRequest{
+// createRunServiceRequest builds the canonical create request for a probe.
+func createRunServiceRequest(cfg Config, id string) *runpb.CreateServiceRequest {
+	return &runpb.CreateServiceRequest{
 		Parent:    runParent(cfg),
 		ServiceId: id,
 		Service: &runpb.Service{
@@ -82,7 +84,13 @@ func createRunService(ctx context.Context, client *run.ServicesClient, cfg Confi
 				Containers: []*runpb.Container{{Image: "nginx:latest", Ports: []*runpb.ContainerPort{{ContainerPort: 80}}}},
 			},
 		},
-	})
+	}
+}
+
+// createRunService creates a service and returns its ready Service (the create
+// operation is completed inline by the emulator).
+func createRunService(ctx context.Context, client *run.ServicesClient, cfg Config, id string) (*runpb.Service, error) {
+	op, err := client.CreateService(ctx, createRunServiceRequest(cfg, id))
 	if err != nil {
 		return nil, fmt.Errorf("CreateService: %w", err)
 	}
@@ -475,6 +483,80 @@ func checkRunDeleteService(ctx context.Context, cfg Config) error {
 	}
 	if _, err := client.GetService(ctx, &runpb.GetServiceRequest{Name: runServiceName(cfg, id)}); status.Code(err) != codes.NotFound {
 		return fmt.Errorf("GetService after delete code = %v, want NotFound", status.Code(err))
+	}
+	return nil
+}
+
+// Check 13: a validateOnly CreateService previews the service but persists
+// nothing (a following GetService is NotFound).
+func checkRunValidateOnlyCreate(ctx context.Context, cfg Config) error {
+	client, err := newRunServicesClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := cfg.ResourceName("gcpc-run-dryrun")
+	req := createRunServiceRequest(cfg, id)
+	req.ValidateOnly = true
+	op, err := client.CreateService(ctx, req)
+	if err != nil {
+		return fmt.Errorf("validateOnly CreateService: %w", err)
+	}
+	if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("validateOnly CreateService.Wait: %w", err)
+	}
+	if _, err := client.GetService(ctx, &runpb.GetServiceRequest{Name: runServiceName(cfg, id)}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("validateOnly create persisted the service (GetService code %v)", status.Code(err))
+	}
+	return nil
+}
+
+// Check 14: a stale etag on DeleteService is Aborted and leaves the service.
+func checkRunDeleteServiceEtag(ctx context.Context, cfg Config) error {
+	client, err := newRunServicesClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := cfg.ResourceName("gcpc-run-deletag")
+	if _, err := createRunService(ctx, client, cfg, id); err != nil {
+		return err
+	}
+	defer deleteRunService(ctx, client, cfg, id)
+	_, err = client.DeleteService(ctx, &runpb.DeleteServiceRequest{Name: runServiceName(cfg, id), Etag: "stale-token"})
+	if status.Code(err) != codes.Aborted {
+		return fmt.Errorf("stale-etag DeleteService code = %v, want Aborted", status.Code(err))
+	}
+	if _, err := client.GetService(ctx, &runpb.GetServiceRequest{Name: runServiceName(cfg, id)}); err != nil {
+		return fmt.Errorf("stale-etag delete removed the service: %w", err)
+	}
+	return nil
+}
+
+// Check 15: an UpdateService with allowMissing=true upserts a missing service.
+func checkRunAllowMissingUpdate(ctx context.Context, cfg Config) error {
+	client, err := newRunServicesClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := cfg.ResourceName("gcpc-run-allowmissing")
+	if _, err := client.UpdateService(ctx, &runpb.UpdateServiceRequest{
+		Service: &runpb.Service{
+			Name:     runServiceName(cfg, id),
+			Template: &runpb.RevisionTemplate{Containers: []*runpb.Container{{Image: "nginx:latest"}}},
+		},
+		UpdateMask:   &fieldmaskpb.FieldMask{Paths: []string{"template"}},
+		AllowMissing: true,
+	}); err != nil {
+		return fmt.Errorf("allowMissing UpdateService: %w", err)
+	}
+	defer deleteRunService(ctx, client, cfg, id)
+	if _, err := client.GetService(ctx, &runpb.GetServiceRequest{Name: runServiceName(cfg, id)}); err != nil {
+		return fmt.Errorf("allowMissing update did not create the service: %w", err)
 	}
 	return nil
 }

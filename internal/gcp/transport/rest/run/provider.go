@@ -51,7 +51,7 @@ func (p *Provider) Reset(ctx context.Context) { p.core.Reset(ctx) }
 
 func (p *Provider) CreateService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	op, err := p.core.CreateService(ctx, strParam(nr, "project"), strParam(nr, "location"),
-		strParam(nr, "serviceId"), bodyOf(nr))
+		strParam(nr, "serviceId"), bodyOf(nr), boolParam(nr, "validateOnly"))
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,8 @@ func (p *Provider) ListServices(ctx context.Context, nr *model.NormalizedRequest
 
 func (p *Provider) UpdateService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	op, err := p.core.UpdateService(ctx, strParam(nr, "project"), strParam(nr, "location"),
-		strParam(nr, "service"), bodyOf(nr), strParam(nr, "updateMask"))
+		strParam(nr, "service"), bodyOf(nr), strParam(nr, "updateMask"),
+		boolParam(nr, "validateOnly"), boolParam(nr, "allowMissing"))
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +94,8 @@ func (p *Provider) UpdateService(ctx context.Context, nr *model.NormalizedReques
 }
 
 func (p *Provider) DeleteService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	op, err := p.core.DeleteService(ctx, strParam(nr, "project"), strParam(nr, "location"), strParam(nr, "service"))
+	op, err := p.core.DeleteService(ctx, strParam(nr, "project"), strParam(nr, "location"),
+		strParam(nr, "service"), boolParam(nr, "validateOnly"), strParam(nr, "etag"))
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +155,7 @@ func (p *Provider) GetRevision(ctx context.Context, nr *model.NormalizedRequest)
 
 func (p *Provider) DeleteRevision(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	op, err := p.core.DeleteRevision(ctx, strParam(nr, "project"), strParam(nr, "location"),
-		strParam(nr, "service"), strParam(nr, "revision"), boolParam(nr, "validateOnly"))
+		strParam(nr, "service"), strParam(nr, "revision"), boolParam(nr, "validateOnly"), strParam(nr, "etag"))
 	if err != nil {
 		return nil, err
 	}

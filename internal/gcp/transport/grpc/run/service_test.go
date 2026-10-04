@@ -252,3 +252,59 @@ func TestListOperationsDeclinesEmptyLocation(t *testing.T) {
 		t.Errorf("ListOperations with filter should be handled")
 	}
 }
+
+// TestServiceMutationFlagsOverGRPC proves the proto request fields reach the
+// core: validateOnly is a dry run, an etag mismatch is Aborted, and
+// allowMissing upserts.
+func TestServiceMutationFlagsOverGRPC(t *testing.T) {
+	ctx := context.Background()
+	s := newTestAdapter()
+
+	// validateOnly create previews but persists nothing.
+	dry := createReq(testParent, "svc")
+	dry.ValidateOnly = true
+	if op, err := s.CreateService(ctx, dry); err != nil {
+		t.Fatalf("validateOnly CreateService: %v", err)
+	} else if !op.GetDone() {
+		t.Fatalf("validateOnly create operation not done")
+	}
+	if _, err := s.GetService(ctx, &runpb.GetServiceRequest{Name: testParent + "/services/svc"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("validateOnly create persisted the service (%v)", err)
+	}
+
+	if _, err := s.CreateService(ctx, createReq(testParent, "svc")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// A stale etag is Aborted and leaves the service.
+	_, err := s.DeleteService(ctx, &runpb.DeleteServiceRequest{Name: testParent + "/services/svc", Etag: "stale-token"})
+	if status.Code(err) != codes.Aborted {
+		t.Fatalf("stale-etag DeleteService code = %v, want Aborted", status.Code(err))
+	}
+	if _, err := s.GetService(ctx, &runpb.GetServiceRequest{Name: testParent + "/services/svc"}); err != nil {
+		t.Fatalf("stale-etag delete removed the service: %v", err)
+	}
+
+	// validateOnly delete keeps the service.
+	if _, err := s.DeleteService(ctx, &runpb.DeleteServiceRequest{Name: testParent + "/services/svc", ValidateOnly: true}); err != nil {
+		t.Fatalf("validateOnly DeleteService: %v", err)
+	}
+	if _, err := s.GetService(ctx, &runpb.GetServiceRequest{Name: testParent + "/services/svc"}); err != nil {
+		t.Fatalf("validateOnly delete removed the service: %v", err)
+	}
+
+	// allowMissing update upserts the missing service.
+	if _, err := s.UpdateService(ctx, &runpb.UpdateServiceRequest{
+		Service: &runpb.Service{
+			Name:     testParent + "/services/upsert",
+			Template: &runpb.RevisionTemplate{Containers: []*runpb.Container{{Image: "nginx:latest"}}},
+		},
+		UpdateMask:   &fieldmaskpb.FieldMask{Paths: []string{"template"}},
+		AllowMissing: true,
+	}); err != nil {
+		t.Fatalf("allowMissing UpdateService: %v", err)
+	}
+	if _, err := s.GetService(ctx, &runpb.GetServiceRequest{Name: testParent + "/services/upsert"}); err != nil {
+		t.Fatalf("allowMissing update did not create the service: %v", err)
+	}
+}

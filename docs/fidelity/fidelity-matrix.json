@@ -8281,7 +8281,7 @@
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (conformance=1/1 pass)"
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {
@@ -8303,7 +8303,7 @@
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (conformance=1/1 pass)"
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {
@@ -8562,7 +8562,7 @@
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (conformance=1/1 pass)"
+        "transport=grpc (conformance=2/2 pass)"
       ]
     },
     {

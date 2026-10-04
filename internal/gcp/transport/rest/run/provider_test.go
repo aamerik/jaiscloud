@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"testing"
@@ -87,6 +88,79 @@ func TestProviderServiceLifecycle(t *testing.T) {
 	}
 	if op.Data["done"] != true {
 		t.Errorf("delete done = %v", op.Data["done"])
+	}
+}
+
+// TestProviderValidateOnly proves the dry-run flags are threaded from the REST
+// query parameters into the core: a validateOnly request previews the resource
+// but persists nothing, and etag mismatches are Aborted/409.
+func TestProviderValidateOnly(t *testing.T) {
+	ctx := context.Background()
+	p := testProvider()
+	body := map[string]any{"template": map[string]any{"containers": []any{
+		map[string]any{"image": "nginx:latest"},
+	}}}
+
+	// validateOnly create: the operation previews the service, but nothing is
+	// stored (a following get is NotFound).
+	resp, err := p.CreateService(ctx, req("CreateService", map[string]any{
+		"serviceId": "svc", "validateOnly": "true", "body": body}))
+	if err != nil {
+		t.Fatalf("validateOnly CreateService: %v", err)
+	}
+	if resp.Data["done"] != true {
+		t.Errorf("validateOnly create done = %v", resp.Data["done"])
+	}
+	if _, err := p.GetService(ctx, req("GetService", map[string]any{"service": "svc"})); err == nil {
+		t.Fatal("validateOnly create persisted the service")
+	}
+
+	// Real create; then a validateOnly template update must not change it.
+	if _, err := p.CreateService(ctx, req("CreateService", map[string]any{"serviceId": "svc", "body": body})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	before, _ := p.GetService(ctx, req("GetService", map[string]any{"service": "svc"}))
+	newBody := map[string]any{"template": map[string]any{"containers": []any{map[string]any{"image": "httpd:latest"}}}}
+	if _, err := p.UpdateService(ctx, req("UpdateService", map[string]any{
+		"service": "svc", "updateMask": "template", "validateOnly": "true", "body": newBody})); err != nil {
+		t.Fatalf("validateOnly UpdateService: %v", err)
+	}
+	after, _ := p.GetService(ctx, req("GetService", map[string]any{"service": "svc"}))
+	if after.Data["latestReadyRevision"] != before.Data["latestReadyRevision"] {
+		t.Errorf("validateOnly update changed the revision: %v -> %v",
+			before.Data["latestReadyRevision"], after.Data["latestReadyRevision"])
+	}
+
+	// etag mismatch on delete is Aborted/409 and leaves the service.
+	if _, err := p.DeleteService(ctx, req("DeleteService", map[string]any{
+		"service": "svc", "etag": "stale-token"})); err == nil {
+		t.Fatal("stale-etag DeleteService accepted")
+	} else {
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) || perr.HTTPStatus != 409 {
+			t.Fatalf("stale-etag delete err = %v, want 409", err)
+		}
+	}
+	if _, err := p.GetService(ctx, req("GetService", map[string]any{"service": "svc"})); err != nil {
+		t.Fatalf("stale-etag delete removed the service: %v", err)
+	}
+
+	// validateOnly delete keeps the service.
+	if _, err := p.DeleteService(ctx, req("DeleteService", map[string]any{
+		"service": "svc", "validateOnly": "true"})); err != nil {
+		t.Fatalf("validateOnly DeleteService: %v", err)
+	}
+	if _, err := p.GetService(ctx, req("GetService", map[string]any{"service": "svc"})); err != nil {
+		t.Fatalf("validateOnly delete removed the service: %v", err)
+	}
+
+	// allowMissing update upserts a missing service.
+	if _, err := p.UpdateService(ctx, req("UpdateService", map[string]any{
+		"service": "upsert", "updateMask": "template", "allowMissing": "true", "body": body})); err != nil {
+		t.Fatalf("allowMissing UpdateService: %v", err)
+	}
+	if _, err := p.GetService(ctx, req("GetService", map[string]any{"service": "upsert"})); err != nil {
+		t.Fatalf("allowMissing update did not create the service: %v", err)
 	}
 }
 

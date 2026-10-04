@@ -49,7 +49,7 @@ func (m *mockProvider) GetRevision(_ context.Context, _, region, service, revisi
 	return m.revision, m.err
 }
 
-func (m *mockProvider) DeleteService(_ context.Context, _, region, service string) (runstore.Operation, error) {
+func (m *mockProvider) DeleteService(_ context.Context, _, region, service string, _ bool, _ string) (runstore.Operation, error) {
 	m.gotRegion, m.gotService = region, service
 	m.deleted = true
 	return runstore.Operation{}, m.err

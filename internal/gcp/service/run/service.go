@@ -115,7 +115,17 @@ func (s *Service) Reset(ctx context.Context) {
 
 // CreateService validates and stores a new service and its first revision, and
 // returns the create operation (done inline in the default synchronous mode).
-func (s *Service) CreateService(ctx context.Context, project, location, serviceID string, body map[string]any) (runstore.Operation, error) {
+// validateOnly validates the request, including the duplicate-id check, and
+// returns an unpersisted operation whose response previews the would-be service
+// without touching the store or the runtime.
+func (s *Service) CreateService(ctx context.Context, project, location, serviceID string, body map[string]any, validateOnly bool) (runstore.Operation, error) {
+	return s.createService(ctx, project, location, serviceID, body, validateOnly, "create")
+}
+
+// createService is the shared create implementation for CreateService and
+// UpdateService's allowMissing upsert. verb labels the operation ("create", or
+// "update" for the upsert) but does not affect the wire shape.
+func (s *Service) createService(ctx context.Context, project, location, serviceID string, body map[string]any, validateOnly bool, verb string) (runstore.Operation, error) {
 	if project == "" || location == "" {
 		return runstore.Operation{}, invalidArgument("project and location are required")
 	}
@@ -163,16 +173,18 @@ func (s *Service) CreateService(ctx context.Context, project, location, serviceI
 		Data:       revisionData(body),
 	}
 
-	if err := s.runtime.EnsureRevision(ctx, svc, rev); err != nil {
-		return runstore.Operation{}, err
+	if !validateOnly {
+		if err := s.runtime.EnsureRevision(ctx, svc, rev); err != nil {
+			return runstore.Operation{}, err
+		}
+		if err := s.store.CreateService(ctx, project, location, svc); err != nil {
+			return runstore.Operation{}, mapStoreErr(err)
+		}
+		if err := s.store.CreateRevision(ctx, project, location, serviceID, rev); err != nil {
+			return runstore.Operation{}, mapStoreErr(err)
+		}
 	}
-	if err := s.store.CreateService(ctx, project, location, svc); err != nil {
-		return runstore.Operation{}, mapStoreErr(err)
-	}
-	if err := s.store.CreateRevision(ctx, project, location, serviceID, rev); err != nil {
-		return runstore.Operation{}, mapStoreErr(err)
-	}
-	return s.recordOperation(ctx, project, location, "create", svc)
+	return s.recordOperation(ctx, project, location, verb, svc, validateOnly)
 }
 
 // GetService returns a service by id.
@@ -204,17 +216,28 @@ func (s *Service) ListAllServices(ctx context.Context, project string) ([]runsto
 }
 
 // UpdateService applies an update mask and returns the update operation. A
-// template change mints the next revision.
-func (s *Service) UpdateService(ctx context.Context, project, location, id string, body map[string]any, updateMask string) (runstore.Operation, error) {
+// template change mints the next revision. The request body's top-level etag is
+// an optimistic-concurrency precondition (a mismatch is Aborted). allowMissing
+// upserts: a missing service is created instead of NotFound. validateOnly
+// validates and previews the result without persisting or touching the runtime.
+func (s *Service) UpdateService(ctx context.Context, project, location, id string, body map[string]any, updateMask string, validateOnly, allowMissing bool) (runstore.Operation, error) {
 	existing, err := s.store.GetService(ctx, project, location, id)
 	if err != nil {
+		if allowMissing && errors.Is(err, runstore.ErrNoSuchService) {
+			return s.createService(ctx, project, location, id, body, validateOnly, "update")
+		}
 		return runstore.Operation{}, mapStoreErr(err)
 	}
-	now := clock.Now()
-	updated := existing
-	if updated.Data == nil {
-		updated.Data = map[string]any{}
+	if err := checkEtag(str(body, "etag"), existing.Etag); err != nil {
+		return runstore.Operation{}, err
 	}
+	now := clock.Now()
+	// Copy the writable Data map before merging: a store may hand back a struct
+	// that aliases the stored map (memory), so applyUpdate on the shared map
+	// would mutate persisted state even on a validate-only request and would
+	// rewrite the map an earlier operation snapshot points at.
+	updated := existing
+	updated.Data = cloneMap(existing.Data)
 	applyUpdate(updated.Data, body, updateMask)
 
 	templateChanged := templateMasked(updateMask) || (strings.TrimSpace(updateMask) == "" && bodyHasTemplate(body))
@@ -227,8 +250,11 @@ func (s *Service) UpdateService(ctx context.Context, project, location, id strin
 		// Tear down the revision currently serving traffic before standing up
 		// its replacement. Revisions are always-on, so the old runtime is only
 		// removed here (and on service delete/reset/orphan sweep). Teardown is
-		// best-effort: a failure must not block the update.
-		s.removeServingRevision(ctx, existing)
+		// best-effort: a failure must not block the update. A validate-only
+		// request previews the new revision but touches nothing.
+		if !validateOnly {
+			s.removeServingRevision(ctx, existing)
+		}
 		revID := nextRevisionID(id, existing.LatestCreatedRevision)
 		rev = runstore.Revision{
 			ProjectID:  project,
@@ -244,19 +270,23 @@ func (s *Service) UpdateService(ctx context.Context, project, location, id strin
 		}
 		updated.LatestCreatedRevision = RevisionName(project, location, id, revID)
 		updated.LatestReadyRevision = updated.LatestCreatedRevision
-		if err := s.runtime.EnsureRevision(ctx, updated, rev); err != nil {
-			return runstore.Operation{}, err
+		if !validateOnly {
+			if err := s.runtime.EnsureRevision(ctx, updated, rev); err != nil {
+				return runstore.Operation{}, err
+			}
 		}
 	}
-	if err := s.store.UpdateService(ctx, project, location, updated); err != nil {
-		return runstore.Operation{}, mapStoreErr(err)
-	}
-	if templateChanged {
-		if err := s.store.CreateRevision(ctx, project, location, id, rev); err != nil {
+	if !validateOnly {
+		if err := s.store.UpdateService(ctx, project, location, updated); err != nil {
 			return runstore.Operation{}, mapStoreErr(err)
 		}
+		if templateChanged {
+			if err := s.store.CreateRevision(ctx, project, location, id, rev); err != nil {
+				return runstore.Operation{}, mapStoreErr(err)
+			}
+		}
 	}
-	return s.recordOperation(ctx, project, location, "update", updated)
+	return s.recordOperation(ctx, project, location, "update", updated, validateOnly)
 }
 
 // removeServingRevision tears down the runtime of the revision currently
@@ -281,21 +311,28 @@ func (s *Service) removeServingRevision(ctx context.Context, svc runstore.Servic
 
 // DeleteService removes a service and its revisions and returns the delete
 // operation. The operation's response/metadata is the removed service snapshot.
-func (s *Service) DeleteService(ctx context.Context, project, location, id string) (runstore.Operation, error) {
+// etag is an optimistic-concurrency precondition (a mismatch is Aborted).
+// validateOnly validates the request without removing the service.
+func (s *Service) DeleteService(ctx context.Context, project, location, id string, validateOnly bool, etag string) (runstore.Operation, error) {
 	existing, err := s.store.GetService(ctx, project, location, id)
 	if err != nil {
 		return runstore.Operation{}, mapStoreErr(err)
 	}
-	if err := s.runtime.RemoveService(ctx, existing); err != nil {
+	if err := checkEtag(etag, existing.Etag); err != nil {
 		return runstore.Operation{}, err
 	}
 	deleted := existing
-	deleted.DeleteTime = clock.Now()
-	deleted.UpdateTime = deleted.DeleteTime
-	if err := s.store.DeleteService(ctx, project, location, id); err != nil {
-		return runstore.Operation{}, mapStoreErr(err)
+	if !validateOnly {
+		if err := s.runtime.RemoveService(ctx, existing); err != nil {
+			return runstore.Operation{}, err
+		}
+		deleted.DeleteTime = clock.Now()
+		deleted.UpdateTime = deleted.DeleteTime
+		if err := s.store.DeleteService(ctx, project, location, id); err != nil {
+			return runstore.Operation{}, mapStoreErr(err)
+		}
 	}
-	return s.recordOperation(ctx, project, location, "delete", deleted)
+	return s.recordOperation(ctx, project, location, "delete", deleted, validateOnly)
 }
 
 // GetRevision returns a revision by id.
@@ -325,9 +362,10 @@ func (s *Service) ListRevisions(ctx context.Context, project, location, service 
 // DeleteRevision removes a retired revision and returns the delete operation
 // (its response/metadata is the removed Revision). Cloud Run only permits
 // deleting retired revisions — the revision currently serving the service (the
-// latest ready/created one) is a FailedPrecondition. validateOnly validates the
-// request without deleting or recording an operation.
-func (s *Service) DeleteRevision(ctx context.Context, project, location, service, id string, validateOnly bool) (runstore.Operation, error) {
+// latest ready/created one) is a FailedPrecondition. etag is an
+// optimistic-concurrency precondition (a mismatch is Aborted). validateOnly
+// validates the request without deleting or recording an operation.
+func (s *Service) DeleteRevision(ctx context.Context, project, location, service, id string, validateOnly bool, etag string) (runstore.Operation, error) {
 	svc, err := s.store.GetService(ctx, project, location, service)
 	if err != nil {
 		return runstore.Operation{}, mapStoreErr(err)
@@ -335,6 +373,9 @@ func (s *Service) DeleteRevision(ctx context.Context, project, location, service
 	rev, err := s.store.GetRevision(ctx, project, location, service, id)
 	if err != nil {
 		return runstore.Operation{}, mapStoreErr(err)
+	}
+	if err := checkEtag(etag, rev.Etag); err != nil {
+		return runstore.Operation{}, err
 	}
 	revName := RevisionName(project, location, service, id)
 	if revName == svc.LatestReadyRevision || revName == svc.LatestCreatedRevision {
@@ -368,7 +409,9 @@ func (s *Service) recordRevisionOperation(ctx context.Context, project, location
 		CreateTime: now,
 		Revision:   &rev,
 	}
-	if !s.lro.Async() {
+	// A validate-only operation is never persisted, so it must be terminal:
+	// an in-flight op the client cannot poll would be a dead end.
+	if validateOnly || !s.lro.Async() {
 		op.Done = true
 		op.EndTime = now
 	}
@@ -501,7 +544,9 @@ func projectToken(project string) string {
 // --- helpers ---
 
 // recordOperation builds and persists the operation for a service mutation.
-func (s *Service) recordOperation(ctx context.Context, project, location, verb string, svc runstore.Service) (runstore.Operation, error) {
+// A validateOnly request returns the operation unpersisted and emits no status
+// event, so a dry run mutates nothing observable.
+func (s *Service) recordOperation(ctx context.Context, project, location, verb string, svc runstore.Service, validateOnly bool) (runstore.Operation, error) {
 	now := clock.Now()
 	op := runstore.Operation{
 		ProjectID:  project,
@@ -512,9 +557,14 @@ func (s *Service) recordOperation(ctx context.Context, project, location, verb s
 		CreateTime: now,
 		Service:    &svc,
 	}
-	if !s.lro.Async() {
+	// A validate-only operation is never persisted, so it must be terminal:
+	// an in-flight op the client cannot poll would be a dead end.
+	if validateOnly || !s.lro.Async() {
 		op.Done = true
 		op.EndTime = now
+	}
+	if validateOnly {
+		return op, nil
 	}
 	if err := s.store.CreateOperation(ctx, project, location, op); err != nil {
 		return runstore.Operation{}, mapStoreErr(err)
@@ -676,6 +726,27 @@ func str(m map[string]any, key string) string {
 
 func invalidArgument(msg string) error {
 	return model.NewProviderError("InvalidArgument", msg, 400)
+}
+
+// abortedEtagMismatch is the etag-precondition failure, returned as HTTP 409
+// with the ABORTED google.rpc status (matching the shared-IAM/Eventarc OCC
+// contract).
+func abortedEtagMismatch() error {
+	return &model.ProviderError{
+		Code:       "Aborted",
+		Message:    "etag mismatch: optimistic concurrency control failed",
+		HTTPStatus: 409,
+		Status:     "ABORTED",
+	}
+}
+
+// checkEtag enforces a request-supplied etag precondition against the stored
+// value. An empty request etag is a no-op (the caller opted out of OCC).
+func checkEtag(reqEtag, storedEtag string) error {
+	if reqEtag != "" && reqEtag != storedEtag {
+		return abortedEtagMismatch()
+	}
+	return nil
 }
 
 func mapStoreErr(err error) error {

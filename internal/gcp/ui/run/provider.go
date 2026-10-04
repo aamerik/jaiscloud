@@ -24,8 +24,9 @@ type ProviderInterface interface {
 	GetRevision(ctx context.Context, project, location, service, id string) (runstore.Revision, error)
 
 	// DeleteService removes a service and its revisions, returning the delete
-	// operation.
-	DeleteService(ctx context.Context, project, location, id string) (runstore.Operation, error)
+	// operation. The console issues an unconditional delete (validateOnly false,
+	// no etag precondition), but the signature follows the core's OCC/flags API.
+	DeleteService(ctx context.Context, project, location, id string, validateOnly bool, etag string) (runstore.Operation, error)
 }
 
 // compile-time check that the core satisfies the UI seam.
