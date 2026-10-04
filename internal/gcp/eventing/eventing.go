@@ -94,6 +94,25 @@ type Dispatcher interface {
 	DispatchEvent(ctx context.Context, ev Event)
 }
 
+// Fanout delivers each event to every member in order. Producers hold a single
+// Dispatcher; the binary composes the Cloud Functions and Eventarc delivery
+// engines with a Fanout so both observe the event without either core importing
+// the other. Nil members (a disabled service) are skipped, and a nil Fanout
+// delivers nothing.
+type Fanout []Dispatcher
+
+// DispatchEvent calls each non-nil member's DispatchEvent. Each engine filters
+// the event to its own destination kind, so an event is never delivered twice
+// by two engines.
+func (f Fanout) DispatchEvent(ctx context.Context, ev Event) {
+	for _, d := range f {
+		if d == nil {
+			continue
+		}
+		d.DispatchEvent(ctx, ev)
+	}
+}
+
 // Target is a Cloud Functions function that an external trigger (an Eventarc
 // trigger whose destination is a cloudFunction) routes matching events to.
 type Target struct {
