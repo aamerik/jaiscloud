@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -656,6 +657,14 @@ func startCmd() *cobra.Command {
 			}
 			runCore := runcore.NewService(stores.run, stores.resources, runOpts...)
 			runP := restrun.NewProvider(runCore)
+
+			// Eventarc delivers a destination.cloudRun trigger through the run
+			// core's runtime seam (not an HTTP call to the generated host), so
+			// delivery works in k8s executor mode without DNS. The core is
+			// always built, so the invoker is wired whenever Eventarc exists.
+			if eventarcCore != nil {
+				eventarcCore.SetCloudRunInvoker(cloudRunEventarcInvoker{run: runCore})
+			}
 
 			// Service Usage v1's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports run
@@ -1422,6 +1431,49 @@ func (p pubsubNotificationPublisher) Publish(ctx context.Context, topic string, 
 		PublishTime: clock.Now(),
 		WrappedDEK:  wrappedDEK,
 	})
+}
+
+// cloudRunEventarcInvoker adapts the Cloud Run core to Eventarc's
+// CloudRunInvoker seam: it resolves the stored service and forwards the
+// CloudEvents POST through the runtime manager, so a destination.cloudRun
+// trigger is delivered without DNS or the generated host.
+type cloudRunEventarcInvoker struct {
+	run *runcore.Service
+}
+
+// Invoke forwards one CloudEvents request to a Cloud Run service's latest ready
+// revision. A missing service maps to 404 and an unavailable runtime to the
+// runtime's own 502/503/504, mirroring the Cloud Run data-plane contract
+// (ErrNoReadyRuntime, e.g. the default mock runtime, -> 503).
+func (i cloudRunEventarcInvoker) Invoke(ctx context.Context, project, region, service, path string, headers map[string]string, body []byte) (int, error) {
+	svc, err := i.run.GetService(ctx, project, region, service)
+	if err != nil {
+		return providerHTTPStatus(err), err
+	}
+	inv, err := i.run.Invoke(ctx, runcore.InvocationRequest{
+		Service: svc,
+		Method:  http.MethodPost,
+		Path:    path,
+		Headers: headers,
+		Body:    body,
+	})
+	if err != nil {
+		if errors.Is(err, runcore.ErrNoReadyRuntime) {
+			return http.StatusServiceUnavailable, err
+		}
+		return providerHTTPStatus(err), err
+	}
+	return inv.Status, nil
+}
+
+// providerHTTPStatus extracts the HTTP status from a *model.ProviderError,
+// defaulting to 502 (Bad Gateway) for an unmapped delivery failure.
+func providerHTTPStatus(err error) int {
+	var pe *model.ProviderError
+	if errors.As(err, &pe) && pe.HTTPStatus > 0 {
+		return pe.HTTPStatus
+	}
+	return http.StatusBadGateway
 }
 
 // stores bundles the per-mode store backends constructed by initStores.

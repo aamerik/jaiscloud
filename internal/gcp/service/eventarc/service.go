@@ -18,10 +18,10 @@
 // cannot drift.
 //
 // The core also owns event delivery for non-function destinations: on a Pub/Sub
-// publish it matches triggers and POSTs a binary-mode CloudEvents request to
-// destination.httpEndpoint (a later phase adds cloudRun and Cloud Storage
-// sources). Cloud Functions destinations are delivered by the functions engine;
-// this package only routes to them via eventing.TargetIndex.
+// publish it matches triggers and sends a binary-mode CloudEvents request to
+// destination.httpEndpoint or destination.cloudRun (a later phase adds Cloud
+// Storage sources). Cloud Functions destinations are delivered by the functions
+// engine; this package only routes to them via eventing.TargetIndex.
 package eventarc
 
 import (
@@ -69,6 +69,7 @@ type Service struct {
 	resources     store.ResourceStore  // shared control-plane store (Pub/Sub topic existence + IAM)
 	workflows     workflowsstore.Store // Cloud Workflows store (destination.workflow existence)
 	functions     FunctionExister      // Cloud Functions existence (destination.cloudFunction)
+	cloudRun      CloudRunInvoker      // Cloud Run delivery seam (destination.cloudRun)
 	subscriptions eventing.SubscriptionProvisioner
 	httpClient    httpDoer       // outbound delivery client; nil disables delivery
 	deliveryWG    sync.WaitGroup // tracks in-flight fire-and-forget deliveries (tests)
@@ -88,6 +89,11 @@ func NewService(s eventarcstore.Store, resources store.ResourceStore, workflows 
 // SetFunctionExister wires the Cloud Functions existence check used to validate
 // a destination.cloudFunction. A nil exister (the default) skips the check.
 func (s *Service) SetFunctionExister(f FunctionExister) { s.functions = f }
+
+// SetCloudRunInvoker wires the Cloud Run delivery seam used by a
+// destination.cloudRun trigger. A nil invoker (the default) logs-and-drops
+// cloudRun deliveries, matching a destination the emulator cannot reach.
+func (s *Service) SetCloudRunInvoker(inv CloudRunInvoker) { s.cloudRun = inv }
 
 // SetSubscriptionProvisioner wires the Pub/Sub provisioner that creates the
 // transport subscription backing an Eventarc trigger (its dead-letter surface).
