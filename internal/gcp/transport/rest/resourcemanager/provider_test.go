@@ -224,6 +224,56 @@ func TestListProjectsIncludesCreated(t *testing.T) {
 	}
 }
 
+func TestListProjectsFilter(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	for _, id := range []string{"filter-alpha-1", "filter-beta-1"} {
+		if _, err := p.CreateProject(ctx, createNR(id, "")); err != nil {
+			t.Fatalf("create(%s): %v", id, err)
+		}
+	}
+
+	// An id filter narrows the page to the matching project.
+	resp, err := p.ListProjects(ctx, newNR(map[string]any{"filter": "id:filter-alpha-1"}))
+	if err != nil {
+		t.Fatalf("listProjects(filter): %v", err)
+	}
+	projects, _ := resp.Data["projects"].([]any)
+	if len(projects) != 1 {
+		t.Fatalf("filtered page = %v, want exactly filter-alpha-1", projects)
+	}
+	if m, _ := projects[0].(map[string]any); m["projectId"] != "filter-alpha-1" {
+		t.Fatalf("filtered page project = %v, want filter-alpha-1", projects[0])
+	}
+
+	// lifecycleState:ACTIVE drops the DELETE_REQUESTED project (which the v1
+	// list otherwise keeps visible).
+	if _, err := p.DeleteProject(ctx, newNR(map[string]any{"project": "filter-beta-1"})); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	resp, err = p.ListProjects(ctx, newNR(map[string]any{"filter": "lifecycleState:ACTIVE"}))
+	if err != nil {
+		t.Fatalf("listProjects(ACTIVE): %v", err)
+	}
+	if containsProject(resp, "filter-beta-1") {
+		t.Error("lifecycleState:ACTIVE must exclude the DELETE_REQUESTED project")
+	}
+	resp, err = p.ListProjects(ctx, newNR(map[string]any{"filter": "lifecycleState:DELETE_REQUESTED"}))
+	if err != nil {
+		t.Fatalf("listProjects(DELETE_REQUESTED): %v", err)
+	}
+	if !containsProject(resp, "filter-beta-1") || containsProject(resp, "filter-alpha-1") {
+		t.Errorf("lifecycleState:DELETE_REQUESTED page = %v, want only filter-beta-1", resp.Data["projects"])
+	}
+
+	// An invalid filter is 400 InvalidArgument, never a silently unfiltered page.
+	_, err = p.ListProjects(ctx, newNR(map[string]any{"filter": "bogus"}))
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) || pe.HTTPStatus != 400 {
+		t.Errorf("invalid filter err = %v, want 400 InvalidArgument", err)
+	}
+}
+
 func TestCreateProjectDuplicateConflict(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider()

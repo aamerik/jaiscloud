@@ -61,10 +61,10 @@ func (p *Provider) GetProject(ctx context.Context, nr *model.NormalizedRequest) 
 
 // ListProjects returns a page of the v1 Project shape. The v1 contract keeps
 // DELETE_REQUESTED projects visible to list until deletion completes (which the
-// emulator never does), so showDeleted is always set; the request filter is not
-// evaluated (recorded as a deferral).
+// emulator never does), so showDeleted is always set; the request filter is
+// evaluated by the core.
 func (p *Provider) ListProjects(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	page, next, err := p.core.ListProjects(ctx, intOf(nr.Params["pageSize"]), strParam(nr, "pageToken"), true)
+	page, next, err := p.core.ListProjects(ctx, intOf(nr.Params["pageSize"]), strParam(nr, "pageToken"), true, strParam(nr, "filter"))
 	if err != nil {
 		return nil, err
 	}

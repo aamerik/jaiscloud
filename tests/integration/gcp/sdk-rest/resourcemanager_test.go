@@ -51,6 +51,20 @@ func TestSDKResourceManagerProjects(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, listHasProject(list, id), "undeleted project must return to the list")
 
+	// The v1 filter narrows the list: id:<id> returns only this project.
+	filtered, err := svc.Projects.List().Filter("id:" + id).Do()
+	require.NoError(t, err)
+	require.True(t, listHasProject(filtered, id), "id filter must keep the created project")
+	for _, p := range filtered.Projects {
+		require.Equal(t, id, p.ProjectId, "id filter must exclude every other project")
+	}
+
+	// A malformed filter is a 400 InvalidArgument.
+	_, err = svc.Projects.List().Filter("bogus").Do()
+	var ferr *googleapi.Error
+	require.ErrorAs(t, err, &ferr)
+	require.Equal(t, 400, ferr.Code, "malformed filter must be InvalidArgument")
+
 	// A duplicate create is a 409 Conflict.
 	_, err = svc.Projects.Create(&cloudresourcemanager.Project{ProjectId: id}).Do()
 	var gerr *googleapi.Error

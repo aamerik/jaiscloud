@@ -66,7 +66,7 @@ func TestPostgresProjectRegistryRoundTrip(t *testing.T) {
 	if deleted.State != StateDeleteRequested {
 		t.Fatalf("restored configured project state = %q, want DELETE_REQUESTED", deleted.State)
 	}
-	page, _, err := s.ListProjects(ctx, 0, "", true)
+	page, _, err := s.ListProjects(ctx, 0, "", true, "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

@@ -65,7 +65,7 @@ func (s *Service) GetProject(ctx context.Context, req *resourcemanagerpb.GetProj
 // org/folder hierarchy, so the required parent is ignored and every project is
 // listed (recorded as a deferral).
 func (s *Service) ListProjects(ctx context.Context, req *resourcemanagerpb.ListProjectsRequest) (*resourcemanagerpb.ListProjectsResponse, error) {
-	page, next, err := s.core.ListProjects(ctx, int(req.GetPageSize()), req.GetPageToken(), req.GetShowDeleted())
+	page, next, err := s.core.ListProjects(ctx, int(req.GetPageSize()), req.GetPageToken(), req.GetShowDeleted(), "")
 	if err != nil {
 		return nil, mapError(err)
 	}
