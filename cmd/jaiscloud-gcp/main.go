@@ -26,6 +26,7 @@ import (
 	gcauth "jaiscloud/internal/gcp/auth"
 	kafkabroker "jaiscloud/internal/gcp/broker/kafka"
 	"jaiscloud/internal/gcp/crypto"
+	"jaiscloud/internal/gcp/eventing"
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
 	grpcfirestoreadmin "jaiscloud/internal/gcp/grpc/firestoreadmin"
@@ -378,11 +379,11 @@ func startCmd() *cobra.Command {
 				}
 			}
 			functionsP := restfunctions.NewProvider(functionsCore, cfg.ProjectID)
-			// Producers hand events to the functions core's delivery engine. The
-			// core is nil when functions is disabled, so only wire it then.
+			// Producers hand events to the delivery engines; the dispatcher is
+			// wired below, once the Eventarc core exists, so a single fan-out
+			// reaches both the functions engine and the Eventarc engine. The
+			// core is nil when functions is disabled.
 			if functionsCore != nil {
-				pubsubP.SetFunctionDispatcher(functionsCore)
-				storageP.SetFunctionDispatcher(functionsCore)
 				// Dead-letter resolution/forwarding (FD9) goes through the Pub/Sub
 				// provider; the Eventarc trigger provisioner is wired below once
 				// the Eventarc core exists.
@@ -563,6 +564,24 @@ func startCmd() *cobra.Command {
 				// (FD9); the functions core holds it as an interface so it never
 				// imports the Eventarc core.
 				functionsCore.SetTriggerProvisioner(eventarcCore)
+			}
+			// One fan-out dispatcher feeds both delivery engines: the Cloud
+			// Functions engine owns destination.cloudFunction, the Eventarc engine
+			// owns httpEndpoint (and, later, cloudRun). The destinations are
+			// disjoint, so no event is delivered twice. Dataproc keeps its
+			// functions-only dispatcher.
+			var producerDispatcher eventing.Dispatcher
+			switch {
+			case functionsCore != nil && eventarcCore != nil:
+				producerDispatcher = eventing.Fanout{functionsCore, eventarcCore}
+			case functionsCore != nil:
+				producerDispatcher = functionsCore
+			case eventarcCore != nil:
+				producerDispatcher = eventarcCore
+			}
+			if producerDispatcher != nil {
+				pubsubP.SetFunctionDispatcher(producerDispatcher)
+				storageP.SetFunctionDispatcher(producerDispatcher)
 			}
 			eventarcP := resteventarc.NewProvider(eventarcCore, cfg.ProjectID)
 

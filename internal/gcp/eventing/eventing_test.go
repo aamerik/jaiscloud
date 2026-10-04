@@ -1,6 +1,35 @@
 package eventing
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
+
+// recordingDispatcher counts the events it receives.
+type recordingDispatcher struct{ got []Event }
+
+func (d *recordingDispatcher) DispatchEvent(_ context.Context, ev Event) {
+	d.got = append(d.got, ev)
+}
+
+func TestFanoutCallsEveryNonNilMember(t *testing.T) {
+	a := &recordingDispatcher{}
+	b := &recordingDispatcher{}
+	f := Fanout{nil, a, b}
+	ev := Event{Project: "p", EventType: TypePubSubPublish}
+	f.DispatchEvent(context.Background(), ev)
+	if len(a.got) != 1 || len(b.got) != 1 {
+		t.Fatalf("fanout delivered to %d/%d members, want 1/1", len(a.got), len(b.got))
+	}
+	if a.got[0].Project != "p" || b.got[0].EventType != TypePubSubPublish {
+		t.Fatalf("unexpected event: %+v / %+v", a.got[0], b.got[0])
+	}
+}
+
+func TestNilFanoutDeliversNothing(t *testing.T) {
+	var f Fanout
+	f.DispatchEvent(context.Background(), Event{}) // must not panic
+}
 
 func TestNormalizeEventType(t *testing.T) {
 	cases := map[string]string{

@@ -17,11 +17,11 @@
 // dual-protocol invariant: one core, one piece of state, so the transports
 // cannot drift.
 //
-// The emulator never stands up an event-delivery engine, so a Trigger/Channel
-// is a stored metadata record. Source/destination references are validated
-// structurally (a transport.pubsub.topic must name an existing Pub/Sub topic; a
-// destination.workflow must name an existing Workflow), and any real Eventarc
-// method not implemented fails loud with Unimplemented at the transport.
+// The core also owns event delivery for non-function destinations: on a Pub/Sub
+// publish it matches triggers and POSTs a binary-mode CloudEvents request to
+// destination.httpEndpoint (a later phase adds cloudRun and Cloud Storage
+// sources). Cloud Functions destinations are delivered by the functions engine;
+// this package only routes to them via eventing.TargetIndex.
 package eventarc
 
 import (
@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/eventing"
@@ -69,11 +70,19 @@ type Service struct {
 	workflows     workflowsstore.Store // Cloud Workflows store (destination.workflow existence)
 	functions     FunctionExister      // Cloud Functions existence (destination.cloudFunction)
 	subscriptions eventing.SubscriptionProvisioner
+	httpClient    httpDoer       // outbound delivery client; nil disables delivery
+	deliveryWG    sync.WaitGroup // tracks in-flight fire-and-forget deliveries (tests)
 }
 
-// NewService returns an Eventarc core backed by the given stores.
+// NewService returns an Eventarc core backed by the given stores. Outbound
+// event delivery is enabled with a bounded default HTTP client.
 func NewService(s eventarcstore.Store, resources store.ResourceStore, workflows workflowsstore.Store) *Service {
-	return &Service{store: s, resources: resources, workflows: workflows}
+	return &Service{
+		store:      s,
+		resources:  resources,
+		workflows:  workflows,
+		httpClient: eventarcHTTPClient(),
+	}
 }
 
 // SetFunctionExister wires the Cloud Functions existence check used to validate
@@ -961,13 +970,23 @@ func eventarcSourceMatches(body map[string]any, topic string) bool {
 	return eventing.ResourceID(src) == topic
 }
 
-// eventarcFiltersMatch evaluates a trigger's eventFilters against an event. An
-// empty operator is an exact match; "match-path-pattern" is a prefix match on
-// the value (GCP treats the rest as a path wildcard). The required "type" filter
-// is compared through the shared event-type normalization so a trigger may name
-// either the CloudEvent type or a Cloud Functions alias.
+// eventarcFiltersMatch evaluates a trigger's eventFilters against an event for
+// the functions target index. It delegates to filtersMatch with the event's own
+// attributes; the delivery dispatcher passes a synthesized attribute map instead
+// (so a trigger may filter on the reserved type/topic/bucket attributes).
 func eventarcFiltersMatch(body map[string]any, ev eventing.Event) bool {
 	filters, _ := body["eventFilters"].([]any)
+	return filtersMatch(filters, ev.Attributes, ev.EventType)
+}
+
+// filtersMatch evaluates a trigger's eventFilters against an attribute map and
+// an event type. An empty operator is an exact match; "match-path-pattern" is a
+// prefix match on the value (GCP treats the rest as a path wildcard). The
+// required "type" filter is compared through the shared event-type
+// normalization so a trigger may name either the CloudEvent type or a Cloud
+// Functions alias. topic/bucket values additionally match by last path segment
+// (attributeValueMatches), so short and fully-qualified forms are equivalent.
+func filtersMatch(filters []any, attrs map[string]string, eventType string) bool {
 	for _, f := range filters {
 		fm, ok := f.(map[string]any)
 		if !ok {
@@ -980,12 +999,12 @@ func eventarcFiltersMatch(body map[string]any, ev eventing.Event) bool {
 			continue
 		}
 		if attr == "type" {
-			if !eventing.TypeMatches(value, ev.EventType) {
+			if !eventing.TypeMatches(value, eventType) {
 				return false
 			}
 			continue
 		}
-		got := ev.Attributes[attr]
+		got, _ := attrs[attr]
 		if operator == "match-path-pattern" {
 			// GCP's match-path-pattern treats the trailing segment(s) as a
 			// wildcard; the emulator compares the literal prefix.
@@ -994,11 +1013,25 @@ func eventarcFiltersMatch(body map[string]any, ev eventing.Event) bool {
 			}
 			continue
 		}
-		if got != value {
+		if !attributeValueMatches(attr, value, got) {
 			return false
 		}
 	}
 	return true
+}
+
+// attributeValueMatches compares a filter value to an actual event attribute.
+// topic and bucket values fall back to a last-segment comparison so a short
+// value ("my-topic") and a fully-qualified one ("projects/p/topics/my-topic")
+// both match, mirroring floci's matchAttributeValue.
+func attributeValueMatches(name, filterVal, actualVal string) bool {
+	if filterVal == actualVal {
+		return true
+	}
+	if name == "topic" || name == "bucket" {
+		return eventing.ResourceID(filterVal) == eventing.ResourceID(actualVal)
+	}
+	return false
 }
 
 // eventarcRetries reports whether a trigger's retryPolicy retries a failed
