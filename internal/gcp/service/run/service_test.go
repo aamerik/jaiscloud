@@ -301,6 +301,81 @@ func TestListAllServicesAcrossLocations(t *testing.T) {
 	}
 }
 
+func TestDeleteRevisionRetired(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateService(ctx, "proj", "us-central1", "svc", createRequest()); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	newBody := map[string]any{"template": map[string]any{"containers": []any{map[string]any{"image": "httpd:latest"}}}}
+	if _, err := s.UpdateService(ctx, "proj", "us-central1", "svc", newBody, "template"); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	op, err := s.DeleteRevision(ctx, "proj", "us-central1", "svc", "svc-00001", false)
+	if err != nil {
+		t.Fatalf("DeleteRevision: %v", err)
+	}
+	if op.Revision == nil || op.Revision.ID != "svc-00001" {
+		t.Fatalf("op revision = %+v", op.Revision)
+	}
+	if op.Revision.DeleteTime.IsZero() {
+		t.Errorf("delete operation revision has no deleteTime")
+	}
+	resp, _ := OperationJSON(op)["response"].(map[string]any)
+	if resp["@type"] != revisionTypeURL {
+		t.Errorf("response @type = %v, want %v", resp["@type"], revisionTypeURL)
+	}
+	if resp["deleteTime"] == "" || resp["deleteTime"] == nil {
+		t.Errorf("response deleteTime missing: %v", resp["deleteTime"])
+	}
+	if _, err := s.GetRevision(ctx, "proj", "us-central1", "svc", "svc-00001"); !isNotFound(err) {
+		t.Errorf("retired revision still present: %v", err)
+	}
+	if _, err := s.GetRevision(ctx, "proj", "us-central1", "svc", "svc-00002"); err != nil {
+		t.Errorf("serving revision removed: %v", err)
+	}
+}
+
+func TestDeleteRevisionServingRejected(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateService(ctx, "proj", "us-central1", "svc", createRequest()); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	_, err := s.DeleteRevision(ctx, "proj", "us-central1", "svc", "svc-00001", false)
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) || perr.Code != "FailedPrecondition" || perr.HTTPStatus != 400 {
+		t.Fatalf("serving delete err = %v, want FailedPrecondition/400", err)
+	}
+}
+
+func TestDeleteRevisionValidateOnly(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateService(ctx, "proj", "us-central1", "svc", createRequest()); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	newBody := map[string]any{"template": map[string]any{"containers": []any{map[string]any{"image": "httpd:latest"}}}}
+	if _, err := s.UpdateService(ctx, "proj", "us-central1", "svc", newBody, "template"); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if _, err := s.DeleteRevision(ctx, "proj", "us-central1", "svc", "svc-00001", true); err != nil {
+		t.Fatalf("validate-only DeleteRevision: %v", err)
+	}
+	if _, err := s.GetRevision(ctx, "proj", "us-central1", "svc", "svc-00001"); err != nil {
+		t.Errorf("validate-only removed the revision: %v", err)
+	}
+	ops, _ := s.ListOperations(ctx, "proj", "us-central1")
+	for _, op := range ops {
+		if op.Revision != nil {
+			t.Errorf("validate-only recorded an operation: %+v", op)
+		}
+	}
+	if _, err := s.DeleteRevision(ctx, "proj", "us-central1", "svc", "svc-99999", false); !isNotFound(err) {
+		t.Errorf("delete missing revision err = %v, want NotFound", err)
+	}
+}
+
 func isNotFound(err error) bool {
 	var perr *model.ProviderError
 	return errors.As(err, &perr) && perr.HTTPStatus == 404

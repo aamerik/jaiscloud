@@ -153,6 +153,17 @@ func (s *MemoryStore) ListRevisions(_ context.Context, project, location, servic
 	return result, nil
 }
 
+func (s *MemoryStore) DeleteRevision(_ context.Context, project, location, service, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := revScope(project, location, service)
+	if _, ok := s.revisions[key][id]; !ok {
+		return ErrNoSuchRevision
+	}
+	delete(s.revisions[key], id)
+	return nil
+}
+
 func (s *MemoryStore) DeleteRevisions(_ context.Context, project, location, service string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

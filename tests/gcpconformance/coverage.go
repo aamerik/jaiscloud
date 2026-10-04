@@ -100,6 +100,7 @@ var actionOverrides = map[string]string{
 	"Run.TestIamPermissions": "run.projects.locations.services.testIamPermissions",
 	"Run.ListRevisions":      "run.projects.locations.services.revisions.list",
 	"Run.GetRevision":        "run.projects.locations.services.revisions.get",
+	"Run.DeleteRevision":     "run.projects.locations.services.revisions.delete",
 	// The REST :wait custom method maps to operations.get. CancelOperation is
 	// served for direct dispatch but real run v2 has no operations.cancel
 	// discovery method, so it stays uncovered.

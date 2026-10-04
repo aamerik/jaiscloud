@@ -476,6 +476,12 @@ func Scenarios(suffix string) []Scenario {
 			Body: `{"permissions":["run.services.get","run.services.delete"]}`},
 		Scenario{Service: "run", Method: "PATCH", Path: runBase + "/services/" + runSvc + "?updateMask=description",
 			Body: `{"description":"updated"}`},
+		// A template-changing update mints revision {svc}-00002, retiring the
+		// first revision captured as ${runRev}; deleting a retired revision is
+		// the only form the API permits (revisions.delete).
+		Scenario{Service: "run", Method: "PATCH", Path: runBase + "/services/" + runSvc + "?updateMask=template",
+			Body: `{"template":{"containers":[{"image":"nginx:latest","ports":[{"containerPort":80}]}]}}`},
+		Scenario{Service: "run", Method: "DELETE", Path: "/v2/${runRev}"},
 		Scenario{Service: "run", Method: "GET", Path: "/v2/${runOp}"},
 		Scenario{Service: "run", Method: "DELETE", Path: runBase + "/services/" + runSvc},
 		Scenario{Service: "run", Method: "GET", Path: runBase + "/services/" + runSvc},

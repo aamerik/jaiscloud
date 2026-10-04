@@ -277,6 +277,20 @@ func (s *PostgresStore) ListRevisions(ctx context.Context, project, location, se
 	return result, rows.Err()
 }
 
+func (s *PostgresStore) DeleteRevision(ctx context.Context, project, location, service, id string) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_run_revisions
+		WHERE project_id=$1 AND location=$2 AND service_id=$3 AND revision_id=$4
+	`, project, location, service, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchRevision
+	}
+	return nil
+}
+
 func (s *PostgresStore) DeleteRevisions(ctx context.Context, project, location, service string) error {
 	_, err := s.pool.Exec(ctx, `
 		DELETE FROM jc_run_revisions

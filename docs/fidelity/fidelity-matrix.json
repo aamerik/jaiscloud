@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 941,
+    "total": 953,
     "by_state": {
-      "ga": 685,
+      "ga": 697,
       "limited": 111,
       "preview": 14,
       "unsupported": 131
     },
     "by_transport": {
       "grpc": {
-        "ga": 321,
+        "ga": 332,
         "limited": 7,
         "unsupported": 119
       },
       "rest": {
-        "ga": 364,
+        "ga": 365,
         "limited": 104,
         "preview": 14,
         "unsupported": 12
@@ -107,7 +107,7 @@
         "unsupported": 3
       },
       "run": {
-        "ga": 14,
+        "ga": 26,
         "limited": 2
       },
       "scheduler": {
@@ -8275,6 +8275,89 @@
     },
     {
       "service": "run",
+      "operation": "CreateService",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "run",
+      "operation": "DeleteRevision",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=2/2 pass)"
+      ]
+    },
+    {
+      "service": "run",
+      "operation": "DeleteService",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "run",
+      "operation": "GetIamPolicy",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "run",
+      "operation": "GetRevision",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "run",
+      "operation": "GetService",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "run",
+      "operation": "ListRevisions",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "run",
+      "operation": "ListServices",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "run",
       "operation": "Run.CancelOperation",
       "transport": "rest",
       "state": "limited",
@@ -8302,6 +8385,17 @@
       "state": "ga",
       "evidence": [
         "discovery=run.projects.locations.operations.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "run",
+      "operation": "Run.DeleteRevision",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=run.projects.locations.services.revisions.delete",
         "mutating",
         "postgres=yes"
       ]
@@ -8437,6 +8531,38 @@
       "evidence": [
         "discovery=run.projects.locations.operations.get",
         "postgres=yes"
+      ]
+    },
+    {
+      "service": "run",
+      "operation": "SetIamPolicy",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "run",
+      "operation": "TestIamPermissions",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "run",
+      "operation": "UpdateService",
+      "transport": "grpc",
+      "state": "ga",
+      "evidence": [
+        "mutating",
+        "postgres=yes",
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

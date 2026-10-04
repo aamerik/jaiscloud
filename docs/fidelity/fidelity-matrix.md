@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **941**
+Cells: **953**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 685 |
+| ga | 697 |
 | limited | 111 |
 | preview | 14 |
 | unsupported | 131 |
@@ -21,8 +21,8 @@ Cells: **941**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 364 | 104 | 14 | 12 |
-| grpc | 321 | 7 | 0 | 119 |
+| rest | 365 | 104 | 14 | 12 |
+| grpc | 332 | 7 | 0 | 119 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -944,13 +944,22 @@ _19 cell(s): ga=16 limited=0 preview=0 unsupported=3_
 
 ## run
 
-_16 cell(s): ga=14 limited=2 preview=0 unsupported=0_
+_28 cell(s): ga=26 limited=2 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
+| CreateService | grpc | ga | — |
+| DeleteRevision | grpc | ga | — |
+| DeleteService | grpc | ga | — |
+| GetIamPolicy | grpc | ga | — |
+| GetRevision | grpc | ga | — |
+| GetService | grpc | ga | — |
+| ListRevisions | grpc | ga | — |
+| ListServices | grpc | ga | — |
 | Run.CancelOperation | rest | limited | no matching Discovery method (unverified against the official schema) |
 | Run.CreateService | rest | ga | — |
 | Run.DeleteOperation | rest | ga | — |
+| Run.DeleteRevision | rest | ga | — |
 | Run.DeleteService | rest | ga | — |
 | Run.GetIamPolicy | rest | ga | — |
 | Run.GetOperation | rest | ga | — |
@@ -964,6 +973,9 @@ _16 cell(s): ga=14 limited=2 preview=0 unsupported=0_
 | Run.TestIamPermissions | rest | ga | — |
 | Run.UpdateService | rest | ga | — |
 | Run.WaitOperation | rest | ga | — |
+| SetIamPolicy | grpc | ga | — |
+| TestIamPermissions | grpc | ga | — |
+| UpdateService | grpc | ga | — |
 
 ## scheduler
 

@@ -23,6 +23,7 @@ func TestCodecDecodeActions(t *testing.T) {
 		{http.MethodPost, "/v2/projects/p/locations/l/services/svc:testIamPermissions", "TestIamPermissions", map[string]string{"service": "svc"}},
 		{http.MethodGet, "/v2/projects/p/locations/l/services/svc/revisions", "ListRevisions", map[string]string{"service": "svc"}},
 		{http.MethodGet, "/v2/projects/p/locations/l/services/svc/revisions/svc-00001", "GetRevision", map[string]string{"service": "svc", "revision": "svc-00001"}},
+		{http.MethodDelete, "/v2/projects/p/locations/l/services/svc/revisions/svc-00001", "DeleteRevision", map[string]string{"service": "svc", "revision": "svc-00001"}},
 		{http.MethodGet, "/v2/projects/p/locations/l/operations/operation-run-1", "GetOperation", map[string]string{"operation": "operation-run-1"}},
 		{http.MethodPost, "/v2/projects/p/locations/l/operations/operation-run-1:wait", "WaitOperation", map[string]string{"operation": "operation-run-1"}},
 		{http.MethodPost, "/v2/projects/p/locations/l/operations/operation-run-1:cancel", "CancelOperation", map[string]string{"operation": "operation-run-1"}},
