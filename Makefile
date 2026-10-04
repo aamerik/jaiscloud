@@ -931,8 +931,9 @@ test-dataproc-namespace-k8s: _check-dataproc-namespace-k8s-prereq _refresh-gcp-i
 	K8S_NAMESPACE=$(K8S_NAMESPACE) DATAPROC_NAMESPACE_E2E=1 \
 	  go test -v -tags dataproc_namespace_e2e -run '^TestDataprocNamespaceIsolationK3d$$' -timeout 30m ./tests/persistent_mode/gcp/dataproc/
 
-test-managedkafka-broker-k8s: _check-managedkafka-broker-k8s-prereq _refresh-gcp-image ## Real-K8s Managed Kafka broker lifecycle smoke on k3d (tag: managedkafka_broker_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
+test-managedkafka-broker-k8s: _check-managedkafka-broker-k8s-prereq _refresh-gcp-image ## Real-K8s Managed Kafka broker lifecycle smoke on k3d (tag: managedkafka_broker_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator). Applies deploy/k8s/rbac.yaml because per-cluster namespace create/delete needs the jaiscloud-namespace-admin ClusterRoleBinding.
 	go clean -testcache
+	kubectl apply -f deploy/k8s/rbac.yaml
 	K8S_NAMESPACE=$(K8S_NAMESPACE) \
 	  go test -v -tags managedkafka_broker_e2e -timeout 20m ./tests/persistent_mode/gcp/managedkafka-broker/
 
