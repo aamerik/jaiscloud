@@ -94,8 +94,8 @@ spec:
             # requests addressed to the synthesized *.run.app authority are
             # reverse-proxied to it. The jaiscloud ServiceAccount already has
             # pod/service create+delete from rbac.yaml. The URI suffix/port are
-            # left at the real-GCP default; compatibility runs that need floci's
-            # synthesized authority override them per-target (see the Makefile).
+            # left at the real-GCP default; the optional floci interop smoke
+            # run overrides them per-target (see the Makefile).
             - name: JAISCLOUD_CLOUDRUN_EXECUTOR_MODE
               value: k8s
           readinessProbe:

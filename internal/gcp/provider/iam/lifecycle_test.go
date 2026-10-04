@@ -2,6 +2,7 @@ package iam
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"jaiscloud/internal/store"
@@ -91,7 +92,8 @@ func TestServiceAccountKeyDisableEnable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("key create: %v", err)
 	}
-	keyID, _ := kr.Data["keyId"].(string)
+	createdName, _ := kr.Data["name"].(string)
+	keyID := createdName[strings.LastIndex(createdName, "/")+1:]
 	keyName := "serviceAccounts/" + email + "/keys/" + keyID
 
 	dis, err := p.ServiceAccountKeyDisable(ctx, newNR(map[string]any{"name": keyName}))

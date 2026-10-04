@@ -3,6 +3,7 @@ package iamui
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gcp/ui/uihelper"
@@ -44,9 +45,10 @@ func saFromMap(m map[string]any) ServiceAccount {
 }
 
 func keyFromMap(m map[string]any) ServiceAccountKey {
+	name := uihelper.Str(m, "name")
 	return ServiceAccountKey{
-		Name:           uihelper.Str(m, "name"),
-		KeyID:          uihelper.Str(m, "keyId"),
+		Name:           name,
+		KeyID:          keyIDFromName(name),
 		KeyAlgorithm:   uihelper.Str(m, "keyAlgorithm"),
 		KeyOrigin:      uihelper.Str(m, "keyOrigin"),
 		KeyType:        uihelper.Str(m, "keyType"),
@@ -56,6 +58,15 @@ func keyFromMap(m map[string]any) ServiceAccountKey {
 		PublicKeyData:  uihelper.Str(m, "publicKeyData"),
 		PrivateKeyData: uihelper.Str(m, "privateKeyData"),
 	}
+}
+
+// keyIDFromName returns the key id, which real GCP exposes only as the trailing
+// segment of the key's resource name (there is no keyId field).
+func keyIDFromName(name string) string {
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		return name[i+1:]
+	}
+	return name
 }
 
 func boolAt(m map[string]any, key string) bool {

@@ -442,7 +442,7 @@ func TestEventarcDeliveryK8s(t *testing.T) {
 	createBucket(t, base, bucket)
 
 	// Pub/Sub → httpEndpoint. A `type` filter plus the trigger's transport is
-	// what floci/real Eventarc require to select the event.
+	// what real Eventarc requires to select the event.
 	pubsubTrigger := "eventarc-pubsub-" + run
 	t.Cleanup(func() { deleteTrigger(t, base, pubsubTrigger) })
 	createTrigger(t, base, pubsubTrigger, topic,

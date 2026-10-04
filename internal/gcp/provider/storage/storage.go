@@ -3313,10 +3313,10 @@ func objectWriteBlockedError(m gcs.ObjectMeta) *model.ProviderError {
 // naming the specific hold or the retention policy and the attempted verb.
 func objectBlockedError(m gcs.ObjectMeta, verb string) *model.ProviderError {
 	if m.TemporaryHold {
-		return model.NewProviderError("PermissionDenied", "Object is under a temporary hold and cannot be "+verb, 403)
+		return model.NewProviderError("PermissionDenied", "Object is under active Temporary hold and cannot be "+verb+" until the hold is removed.", 403)
 	}
 	if m.EventBasedHold {
-		return model.NewProviderError("PermissionDenied", "Object is under an event-based hold and cannot be "+verb, 403)
+		return model.NewProviderError("PermissionDenied", "Object is under active Event-Based hold and cannot be "+verb+" until the hold is removed.", 403)
 	}
 	if retentionActive(m) {
 		return model.NewProviderError("PermissionDenied", "Object is under an active retention policy and cannot be "+verb, 403)

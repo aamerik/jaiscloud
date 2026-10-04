@@ -83,7 +83,9 @@ below, then `destroy` (also on exit via a trap, so failures still clean up):
 
 ## Provenance
 
-Distilled from the floci-gcp `compat-terraform` / `compat-opentofu` suites,
-pruned to the implemented services and made self-contained (no BATS, no external
-compat repo). See `plan_docs/gcp-terraform-compat-2026-09-22.md` for the
-findings that motivated it.
+Originally adapted from the floci-gcp `compat-terraform` / `compat-opentofu`
+suites, pruned to the implemented services and made self-contained (no BATS, no
+external compat repo). It is now an independent Terraform/OpenTofu provider
+conformance suite; floci-gcp is not its spec (real GCP is). See
+`plan_docs/gcp-terraform-compat-2026-09-22.md` for the findings that motivated
+it.

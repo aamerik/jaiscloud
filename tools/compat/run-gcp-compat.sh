@@ -3,6 +3,13 @@
 # run-gcp-compat.sh — run the localgcp harness and the floci-gcp compatibility
 # suites against a locally-built jaiscloud-gcp emulator.
 #
+# OPTIONAL INTEROP SMOKE, NOT A SPEC. floci-gcp/localgcp are sibling emulators;
+# their assertions encode their own conventions. The authority for GCP wire
+# behavior is the service Discovery document and the official client SDKs (see
+# CLAUDE.md / AGENTS.md). When one of these suites fails on a shape that
+# disagrees with Discovery, classify it TEST-NON-COMPLIANT rather than changing
+# jaiscloud to match.
+#
 # This script is intentionally NOT committed (scratch tooling under tools/compat/).
 #
 # What it does:

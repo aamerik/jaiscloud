@@ -99,7 +99,7 @@ func runAction(rest []string, method string, params map[string]any, prefixed boo
 }
 
 func serviceAction(rest []string, method string, params map[string]any, prefixed bool) string {
-	// Legacy prefixed invocation (floci's CloudRunInvocationController path):
+	// Legacy prefixed invocation path:
 	// /run/v2/.../services/{svc}/<subpath> forwards to the revision runtime. The
 	// exact service path (/services/{svc}) is deliberately left to the control
 	// plane so prefix-mode service reads keep working; real invocation is

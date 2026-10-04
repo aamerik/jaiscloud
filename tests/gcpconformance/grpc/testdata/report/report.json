@@ -2709,7 +2709,7 @@
       "rpc": "GenerateAccessToken",
       "method": "GenerateAccessToken",
       "status": "pass",
-      "key_field": "accessToken carries the emulator prefix; expireTime is in the future"
+      "key_field": "accessToken is a non-empty opaque token; expireTime is in the future"
     },
     {
       "service": "iamcredentials",

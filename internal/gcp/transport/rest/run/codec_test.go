@@ -31,7 +31,7 @@ func TestCodecDecodeActions(t *testing.T) {
 		{http.MethodGet, "/v2/projects/p/locations/l/operations", "ListOperations", nil},
 		// Prefixed form (Terraform/gcloud).
 		{http.MethodGet, "/run/v2/projects/p/locations/l/services/svc", "GetService", map[string]string{"service": "svc"}},
-		// Prefixed subpath is a data-plane invocation (floci invocation path).
+		// Prefixed subpath is a data-plane invocation.
 		{http.MethodGet, "/run/v2/projects/p/locations/l/services/svc/hello", "Invoke", map[string]string{"service": "svc", "invokePath": "/hello"}},
 	}
 	for _, tc := range cases {
