@@ -110,8 +110,14 @@ func (s *Service) CreateProject(ctx context.Context, in CreateProjectInput) (Pro
 // with the configured default + extra projects, deduplicated and sorted by id.
 // DELETE_REQUESTED projects are omitted unless showDeleted is set (the v3
 // ListProjects.ShowDeleted semantics); a persisted registry entry always wins
-// over the synthesized ACTIVE shape for a configured project.
-func (s *Service) ListProjects(ctx context.Context, pageSize int, pageToken string, showDeleted bool) ([]Project, string, error) {
+// over the synthesized ACTIVE shape for a configured project. filter is the v1
+// projects.list expression (empty for the gRPC v3 surface, which has none); it
+// is applied before pagination so the page cursor walks the filtered set.
+func (s *Service) ListProjects(ctx context.Context, pageSize int, pageToken string, showDeleted bool, filter string) ([]Project, string, error) {
+	pred, err := compileProjectFilter(filter)
+	if err != nil {
+		return nil, "", err
+	}
 	entries, err := s.resources.List(ctx, "", "", rtProject, "")
 	if err != nil {
 		return nil, "", err
@@ -135,6 +141,9 @@ func (s *Service) ListProjects(ctx context.Context, pageSize int, pageToken stri
 	out := make([]Project, 0, len(byID))
 	for _, p := range byID {
 		if !showDeleted && p.State == StateDeleteRequested {
+			continue
+		}
+		if !pred.match(p) {
 			continue
 		}
 		out = append(out, p)

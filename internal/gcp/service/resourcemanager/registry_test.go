@@ -198,7 +198,7 @@ func TestListProjectsUnionAndDeleted(t *testing.T) {
 	}
 
 	// showDeleted=false: created ACTIVE + configured projects, no deleted one.
-	page, next, err := s.ListProjects(ctx, 0, "", false)
+	page, next, err := s.ListProjects(ctx, 0, "", false, "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestListProjectsUnionAndDeleted(t *testing.T) {
 	}
 
 	// showDeleted=true includes the marked project.
-	page, _, err = s.ListProjects(ctx, 0, "", true)
+	page, _, err = s.ListProjects(ctx, 0, "", true, "")
 	if err != nil {
 		t.Fatalf("list deleted: %v", err)
 	}
@@ -230,14 +230,14 @@ func TestListProjectsPagination(t *testing.T) {
 			t.Fatalf("create(%s): %v", id, err)
 		}
 	}
-	first, next, err := s.ListProjects(ctx, 2, "", false)
+	first, next, err := s.ListProjects(ctx, 2, "", false, "")
 	if err != nil {
 		t.Fatalf("list page 1: %v", err)
 	}
 	if len(first) != 2 || next == "" {
 		t.Fatalf("page 1 = %v next=%q, want 2 items and a token", projectIDs(first), next)
 	}
-	second, next2, err := s.ListProjects(ctx, 2, next, false)
+	second, next2, err := s.ListProjects(ctx, 2, next, false, "")
 	if err != nil {
 		t.Fatalf("list page 2: %v", err)
 	}

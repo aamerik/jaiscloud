@@ -103,7 +103,7 @@ func (r *Registrar) Accounts(ctx context.Context) []string {
 	var out []string
 	token := ""
 	for {
-		page, next, err := r.resourcemanager.ListProjects(ctx, 0, token, false)
+		page, next, err := r.resourcemanager.ListProjects(ctx, 0, token, false, "")
 		if err != nil {
 			return out
 		}
