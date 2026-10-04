@@ -22,6 +22,11 @@
 #
 # Options:
 #   --suites LIST     comma-separated suites (default: see above)
+#   --test PATTERN    run only the matching test(s) within each suite:
+#                     java `-Dtest=PATTERN` (e.g. CloudRunTest, or
+#                     CloudRunTest,StorageTest), python `-k PATTERN`, go `-run
+#                     PATTERN`, rust the test-name filter. With no --suites this
+#                     defaults to `java` so `--test CloudRunTest` is enough.
 #   --setup           install/refresh suite deps (venv+pip, npm install, mvn
 #                     dependency:resolve, cargo fetch, terraform/tofu init)
 #   --dsn DSN         run the emulator with PostgreSQL (default: ephemeral)
@@ -68,6 +73,7 @@ BLOB_DIR=""
 SUITE_TIMEOUT="${SUITE_TIMEOUT:-1800}"
 EMU_EXTRA_ARGS="${EMU_EXTRA_ARGS:-}"
 SUITES=""
+TEST_FILTER="${TEST_FILTER:-}"
 
 ALL_SUITES=(localgcp java python node go rust gcloud terraform opentofu)
 
@@ -75,6 +81,7 @@ ALL_SUITES=(localgcp java python node go rust gcloud terraform opentofu)
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --suites) SUITES="${2:?--suites needs a value}"; shift 2 ;;
+    --test) TEST_FILTER="${2:?--test needs a value}"; shift 2 ;;
     --setup) DO_SETUP=1; shift ;;
     --dsn) DSN="${2:?--dsn needs a value}"; shift 2 ;;
     --blob-dir) BLOB_DIR="${2:?--blob-dir needs a value}"; shift 2 ;;
@@ -97,6 +104,12 @@ fi
 selected=()
 has_suite() { local s; for s in "${selected[@]}"; do [[ "$s" == "$1" ]] && return 0; done; return 1; }
 tool() { command -v "$1" >/dev/null 2>&1; }
+
+# A --test filter targets the floci Java suite by default, so
+# `--test CloudRunTest` runs exactly one class instead of the whole matrix.
+if [[ -z "$SUITES" && -n "$TEST_FILTER" ]]; then
+  SUITES="java"
+fi
 
 if [[ -z "$SUITES" ]]; then
   selected=(localgcp)
@@ -295,11 +308,11 @@ run_localgcp() {
 # ─── 4. floci suites (mirror compatibility-tests/justfile) ────────────────────
 require_dir() { [[ -d "$1" ]] || { echo "missing dir: $1" >&2; return 1; }; }
 
-run_java()      { require_dir "$FLOCI_COMPAT_DIR/sdk-test-java";       (cd "$FLOCI_COMPAT_DIR/sdk-test-java" && timeout "$SUITE_TIMEOUT" mvn test -q); }
-run_python()    { require_dir "$FLOCI_COMPAT_DIR/sdk-test-python";     (cd "$FLOCI_COMPAT_DIR/sdk-test-python" && timeout "$SUITE_TIMEOUT" .venv/bin/pytest tests/ -v); }
+run_java()      { require_dir "$FLOCI_COMPAT_DIR/sdk-test-java";       (cd "$FLOCI_COMPAT_DIR/sdk-test-java" && timeout "$SUITE_TIMEOUT" mvn test -q ${TEST_FILTER:+-Dtest="$TEST_FILTER"}); }
+run_python()    { require_dir "$FLOCI_COMPAT_DIR/sdk-test-python";     (cd "$FLOCI_COMPAT_DIR/sdk-test-python" && timeout "$SUITE_TIMEOUT" .venv/bin/pytest tests/ -v ${TEST_FILTER:+-k "$TEST_FILTER"}); }
 run_node()      { require_dir "$FLOCI_COMPAT_DIR/sdk-test-node";       (cd "$FLOCI_COMPAT_DIR/sdk-test-node" && timeout "$SUITE_TIMEOUT" npm test); }
-run_go()        { require_dir "$FLOCI_COMPAT_DIR/sdk-test-go";         (cd "$FLOCI_COMPAT_DIR/sdk-test-go" && timeout "$SUITE_TIMEOUT" "$GO" test ./tests/... -v -timeout 120s); }
-run_rust()      { require_dir "$FLOCI_COMPAT_DIR/sdk-test-rust";       (cd "$FLOCI_COMPAT_DIR/sdk-test-rust" && timeout "$SUITE_TIMEOUT" cargo test --locked); }
+run_go()        { require_dir "$FLOCI_COMPAT_DIR/sdk-test-go";         (cd "$FLOCI_COMPAT_DIR/sdk-test-go" && timeout "$SUITE_TIMEOUT" "$GO" test ./tests/... -v -timeout 120s ${TEST_FILTER:+-run "$TEST_FILTER"}); }
+run_rust()      { require_dir "$FLOCI_COMPAT_DIR/sdk-test-rust";       (cd "$FLOCI_COMPAT_DIR/sdk-test-rust" && timeout "$SUITE_TIMEOUT" cargo test --locked ${TEST_FILTER:+$TEST_FILTER}); }
 run_gcloud()    { require_dir "$FLOCI_COMPAT_DIR/sdk-test-gcloud";     (cd "$FLOCI_COMPAT_DIR/sdk-test-gcloud" && timeout "$SUITE_TIMEOUT" bats test/); }
 run_terraform() { require_dir "$FLOCI_COMPAT_DIR/compat-terraform";    (cd "$FLOCI_COMPAT_DIR/compat-terraform" && timeout "$SUITE_TIMEOUT" bats test/terraform.bats); }
 run_opentofu()  { require_dir "$FLOCI_COMPAT_DIR/compat-opentofu";    (cd "$FLOCI_COMPAT_DIR/compat-opentofu" && timeout "$SUITE_TIMEOUT" bats test/opentofu.bats); }
