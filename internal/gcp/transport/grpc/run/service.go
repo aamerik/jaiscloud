@@ -76,7 +76,7 @@ func (s *Service) CreateService(ctx context.Context, req *runpb.CreateServiceReq
 		return nil, invalid("invalid parent: " + req.GetParent())
 	}
 	op, err := s.core.CreateService(ctx, s.project(ctx, project), location,
-		req.GetServiceId(), protojsonToMap(req.GetService()))
+		req.GetServiceId(), protojsonToMap(req.GetService()), req.GetValidateOnly())
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -119,7 +119,7 @@ func (s *Service) UpdateService(ctx context.Context, req *runpb.UpdateServiceReq
 	}
 	mask := strings.Join(req.GetUpdateMask().GetPaths(), ",")
 	op, err := s.core.UpdateService(ctx, s.project(ctx, project), location, id,
-		protojsonToMap(req.GetService()), mask)
+		protojsonToMap(req.GetService()), mask, req.GetValidateOnly(), req.GetAllowMissing())
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -131,7 +131,7 @@ func (s *Service) DeleteService(ctx context.Context, req *runpb.DeleteServiceReq
 	if !ok {
 		return nil, invalid("invalid service name: " + req.GetName())
 	}
-	op, err := s.core.DeleteService(ctx, s.project(ctx, project), location, id)
+	op, err := s.core.DeleteService(ctx, s.project(ctx, project), location, id, req.GetValidateOnly(), req.GetEtag())
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -234,7 +234,7 @@ func (s *Service) DeleteRevision(ctx context.Context, req *runpb.DeleteRevisionR
 	if !ok {
 		return nil, invalid("invalid revision name: " + req.GetName())
 	}
-	op, err := s.core.DeleteRevision(ctx, s.project(ctx, project), location, service, id, req.GetValidateOnly())
+	op, err := s.core.DeleteRevision(ctx, s.project(ctx, project), location, service, id, req.GetValidateOnly(), req.GetEtag())
 	if err != nil {
 		return nil, mapError(err)
 	}

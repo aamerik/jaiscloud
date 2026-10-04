@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 360,
-  "passed": 360,
+  "total": 363,
+  "passed": 363,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 360,
-    "passed": 360,
+    "checks": 363,
+    "passed": 363,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -135,8 +135,8 @@
     },
     {
       "service": "run",
-      "total": 12,
-      "passed": 12,
+      "total": 15,
+      "passed": 15,
       "failed": 0,
       "unimplemented": 0
     },
@@ -2521,6 +2521,27 @@
       "method": "DeleteService",
       "status": "pass",
       "key_field": "done operation; NotFound after"
+    },
+    {
+      "service": "run",
+      "rpc": "CreateService (validateOnly)",
+      "method": "CreateService",
+      "status": "pass",
+      "key_field": "dry-run previews; not persisted"
+    },
+    {
+      "service": "run",
+      "rpc": "DeleteService (etag)",
+      "method": "DeleteService",
+      "status": "pass",
+      "key_field": "stale etag rejected Aborted"
+    },
+    {
+      "service": "run",
+      "rpc": "UpdateService (allowMissing)",
+      "method": "UpdateService",
+      "status": "pass",
+      "key_field": "upserts missing service"
     },
     {
       "service": "functions",

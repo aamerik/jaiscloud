@@ -40,7 +40,7 @@ func runServiceBody() map[string]any {
 func TestCloudRunEventarcInvokerDeliversThroughRuntime(t *testing.T) {
 	rt := &fakeRunRuntime{}
 	core := run.NewService(runstore.NewMemoryStore(), store.NewMemoryResourceStore(), run.WithRuntimeManager(rt))
-	if _, err := core.CreateService(context.Background(), "proj", "us-central1", "svc", runServiceBody()); err != nil {
+	if _, err := core.CreateService(context.Background(), "proj", "us-central1", "svc", runServiceBody(), false); err != nil {
 		t.Fatalf("create service: %v", err)
 	}
 
@@ -65,7 +65,7 @@ func TestCloudRunEventarcInvokerMapsNoReadyRuntime(t *testing.T) {
 	// The default MockRuntime reports ErrNoReadyRuntime; the invoker maps it to
 	// 503 (a service exists but has no running revision).
 	core := run.NewService(runstore.NewMemoryStore(), store.NewMemoryResourceStore())
-	if _, err := core.CreateService(context.Background(), "proj", "us-central1", "svc", runServiceBody()); err != nil {
+	if _, err := core.CreateService(context.Background(), "proj", "us-central1", "svc", runServiceBody(), false); err != nil {
 		t.Fatalf("create service: %v", err)
 	}
 	inv := cloudRunEventarcInvoker{run: core}

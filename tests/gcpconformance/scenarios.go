@@ -487,6 +487,31 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "run", Method: "GET", Path: runBase + "/services/" + runSvc},
 	)
 
+	// Dry-run / optimistic-concurrency probes, each self-contained so they do
+	// not perturb the lifecycle above: a validateOnly create previews but does
+	// not persist; a stale etag on delete is ABORTED and leaves the service; an
+	// allowMissing update upserts; a validateOnly delete keeps the service.
+	drySvc := "conf-run-dry-" + suffix
+	occSvc := "conf-run-occ-" + suffix
+	missSvc := "conf-run-um-" + suffix
+	sc = append(sc,
+		Scenario{Service: "run", Method: "POST", Path: runBase + "/services?serviceId=" + drySvc + "&validateOnly=true",
+			Body: `{"template":{"containers":[{"image":"nginx:latest","ports":[{"containerPort":80}]}]}}`},
+		Scenario{Service: "run", Method: "GET", Path: runBase + "/services/" + drySvc},
+		Scenario{Service: "run", Method: "POST", Path: runBase + "/services?serviceId=" + occSvc,
+			Body: `{"template":{"containers":[{"image":"nginx:latest"}]}}`,
+			Save: map[string]string{"runEtag": "response.etag"}},
+		Scenario{Service: "run", Method: "DELETE", Path: runBase + "/services/" + occSvc + "?etag=stale-token"},
+		Scenario{Service: "run", Method: "GET", Path: runBase + "/services/" + occSvc},
+		Scenario{Service: "run", Method: "DELETE", Path: runBase + "/services/" + occSvc + "?etag=${runEtag}"},
+		Scenario{Service: "run", Method: "PATCH", Path: runBase + "/services/" + missSvc + "?updateMask=template&allowMissing=true",
+			Body: `{"template":{"containers":[{"image":"nginx:latest"}]}}`},
+		Scenario{Service: "run", Method: "GET", Path: runBase + "/services/" + missSvc},
+		Scenario{Service: "run", Method: "DELETE", Path: runBase + "/services/" + missSvc + "?validateOnly=true"},
+		Scenario{Service: "run", Method: "GET", Path: runBase + "/services/" + missSvc},
+		Scenario{Service: "run", Method: "DELETE", Path: runBase + "/services/" + missSvc},
+	)
+
 	return sc
 }
 

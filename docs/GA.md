@@ -238,7 +238,7 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 - **gRPC** — **7** of **458** cells remain `limited`: verified against proto descriptors only.
   The other **332** are `ga` and **119** are explicit `unsupported` stubs (see the `Unimplemented`
   list below), verified with the official `cloud.google.com/go` clients against a live emulator.
-  The conformance harness exercises **360** checks over those `ga` proto methods (Cloud Run 12,
+  The conformance harness exercises **363** checks over those `ga` proto methods (Cloud Run 15,
   Dataproc 26,
   Datastore 15, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 20, IAM 6, KMS 31, Logging 21,
   Managed Kafka 21, Metastore 13, Monitoring 34, Operations 5, Pub/Sub 25, Resource Manager 8,
@@ -364,7 +364,12 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   serving revision is `FAILED_PRECONDITION`), service IAM
   (`getIamPolicy`/`setIamPolicy`/`testIamPermissions` — metadata only, authorization is not
   enforced), and the `google.longrunning.Operation` records the mutations return
-  (`get`/`list`/`wait`/`delete`/`cancel`). Each mutation is returned as a **done** operation inline
+  (`get`/`list`/`wait`/`delete`/`cancel`). Service `create`/`update`/`delete` and revision `delete`
+  honor `validateOnly` (a dry run validates and returns the resource preview inline without
+  persisting or touching the runtime), service `update` honors `allowMissing` (upsert), and a
+  delete honors the request `etag` (and an `update` the service body `etag`) as an
+  optimistic-concurrency precondition (`ABORTED`/409 on a stale value). Each mutation is returned
+  as a **done** operation inline
   (`response`/`metadata` typed `Any`s carrying the `Service`); the opt-in `JAISCLOUD_LRO_MODE=async`
   mode makes them in-flight and settles them lazily on read. The synthesized `uri` is
   `https://{service}-{token}.{location}.run.app` (override the suffix with

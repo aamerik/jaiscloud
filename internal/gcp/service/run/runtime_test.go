@@ -42,7 +42,7 @@ func TestRuntimeLifecycleOnMutations(t *testing.T) {
 	rt := &recordingRuntime{}
 	s := NewService(runstore.NewMemoryStore(), store.NewMemoryResourceStore(), WithRuntimeManager(rt))
 
-	if _, err := s.CreateService(ctx, "p", "l", "svc", createRequest()); err != nil {
+	if _, err := s.CreateService(ctx, "p", "l", "svc", createRequest(), false); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if len(rt.ensured) != 1 || rt.ensured[0] != "svc-00001" {
@@ -50,7 +50,7 @@ func TestRuntimeLifecycleOnMutations(t *testing.T) {
 	}
 
 	// A non-template update must not churn revisions or runtimes.
-	if _, err := s.UpdateService(ctx, "p", "l", "svc", map[string]any{"description": "x"}, "description"); err != nil {
+	if _, err := s.UpdateService(ctx, "p", "l", "svc", map[string]any{"description": "x"}, "description", false, false); err != nil {
 		t.Fatalf("non-template update: %v", err)
 	}
 	if len(rt.removed) != 0 || len(rt.ensured) != 1 {
@@ -59,7 +59,7 @@ func TestRuntimeLifecycleOnMutations(t *testing.T) {
 
 	// A template-changing update tears down the serving revision then starts the
 	// replacement.
-	if _, err := s.UpdateService(ctx, "p", "l", "svc", createRequest(), "template"); err != nil {
+	if _, err := s.UpdateService(ctx, "p", "l", "svc", createRequest(), "template", false, false); err != nil {
 		t.Fatalf("template update: %v", err)
 	}
 	if len(rt.removed) != 1 || rt.removed[0] != "svc-00001" {
@@ -69,7 +69,7 @@ func TestRuntimeLifecycleOnMutations(t *testing.T) {
 		t.Fatalf("ensured after template update = %v", rt.ensured)
 	}
 
-	if _, err := s.DeleteService(ctx, "p", "l", "svc"); err != nil {
+	if _, err := s.DeleteService(ctx, "p", "l", "svc", false, ""); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if len(rt.services) != 1 || rt.services[0] != "svc" {

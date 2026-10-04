@@ -107,7 +107,7 @@ func (h *Handler) DeleteService(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := h.provider.DeleteService(r.Context(), h.account(r), region, service); err != nil {
+	if _, err := h.provider.DeleteService(r.Context(), h.account(r), region, service, false, ""); err != nil {
 		uihelper.WriteError(w, err)
 		return
 	}
