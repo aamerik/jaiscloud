@@ -741,10 +741,14 @@ resourcemanager,GetIamPolicy,grpc,ga,
 resourcemanager,GetProject,grpc,ga,
 resourcemanager,ListProjects,grpc,unsupported,"projects are synthesized, never created; explicit Unimplemented stub"
 resourcemanager,MoveProject,grpc,unsupported,project parent/ancestry is not modelled; explicit Unimplemented stub
+resourcemanager,ResourceManager.ProjectCreate,rest,ga,
+resourcemanager,ResourceManager.ProjectDelete,rest,ga,
 resourcemanager,ResourceManager.ProjectGet,rest,ga,
 resourcemanager,ResourceManager.ProjectGetIamPolicy,rest,ga,
+resourcemanager,ResourceManager.ProjectList,rest,ga,
 resourcemanager,ResourceManager.ProjectSetIamPolicy,rest,ga,
 resourcemanager,ResourceManager.ProjectTestIamPermissions,rest,ga,
+resourcemanager,ResourceManager.ProjectUndelete,rest,ga,
 resourcemanager,SearchProjects,grpc,unsupported,"projects are synthesized, never created; explicit Unimplemented stub"
 resourcemanager,SetIamPolicy,grpc,ga,
 resourcemanager,TestIamPermissions,grpc,ga,

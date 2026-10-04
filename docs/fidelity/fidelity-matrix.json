@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 937,
+    "total": 941,
     "by_state": {
-      "ga": 677,
+      "ga": 681,
       "limited": 111,
       "preview": 14,
       "unsupported": 135
@@ -15,7 +15,7 @@
         "unsupported": 123
       },
       "rest": {
-        "ga": 360,
+        "ga": 364,
         "limited": 104,
         "preview": 14,
         "unsupported": 12
@@ -103,7 +103,7 @@
         "ga": 45
       },
       "resourcemanager": {
-        "ga": 8,
+        "ga": 12,
         "unsupported": 7
       },
       "run": {
@@ -8141,6 +8141,28 @@
     },
     {
       "service": "resourcemanager",
+      "operation": "ResourceManager.ProjectCreate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudresourcemanager.projects.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "ResourceManager.ProjectDelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudresourcemanager.projects.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "resourcemanager",
       "operation": "ResourceManager.ProjectGet",
       "transport": "rest",
       "state": "ga",
@@ -8156,6 +8178,16 @@
       "state": "ga",
       "evidence": [
         "discovery=cloudresourcemanager.projects.getIamPolicy",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "ResourceManager.ProjectList",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudresourcemanager.projects.list",
         "postgres=yes"
       ]
     },
@@ -8177,6 +8209,16 @@
       "state": "ga",
       "evidence": [
         "discovery=cloudresourcemanager.projects.testIamPermissions",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "resourcemanager",
+      "operation": "ResourceManager.ProjectUndelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudresourcemanager.projects.undelete",
         "postgres=yes"
       ]
     },
