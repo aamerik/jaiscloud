@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc"
 
 	cloudtaskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	containerpb "cloud.google.com/go/container/apiv1/containerpb"
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
 	datastorepb "cloud.google.com/go/datastore/apiv1/datastorepb"
 	eventarcpb "cloud.google.com/go/eventarc/apiv1/eventarcpb"
@@ -41,6 +42,7 @@ import (
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
 	grpcstorage "jaiscloud/internal/gcp/grpc/storage"
 	grpcstoragepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
+	grpccontainer "jaiscloud/internal/gcp/transport/grpc/container"
 	grpcdataproc "jaiscloud/internal/gcp/transport/grpc/dataproc"
 	grpcdatastore "jaiscloud/internal/gcp/transport/grpc/datastore"
 	grpceventarc "jaiscloud/internal/gcp/transport/grpc/eventarc"
@@ -81,6 +83,7 @@ var grpcWireService = map[string]string{
 	"google.cloud.dataproc.v1.ClusterController":         "dataproc",
 	"google.cloud.dataproc.v1.JobController":             "dataproc",
 	"google.cloud.dataproc.v1.WorkflowTemplateService":   "dataproc",
+	"google.container.v1.ClusterManager":                 "container",
 	"google.cloud.functions.v1.CloudFunctionsService":    "functions",
 	"google.cloud.functions.v2.FunctionService":          "functions",
 	"google.storage.v2.Storage":                          "storage",
@@ -157,6 +160,7 @@ func EnumerateGRPC() []GRPCService {
 	dataprocpb.RegisterClusterControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterJobControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterWorkflowTemplateServiceServer(reg, &grpcdataproc.Service{})
+	containerpb.RegisterClusterManagerServer(reg, &grpccontainer.Service{})
 	functionspb.RegisterCloudFunctionsServiceServer(reg, &grpcfunctions.Service{})
 	apiv2functionspb.RegisterFunctionServiceServer(reg, &grpcfunctions.ServiceV2{})
 	credentialspb.RegisterIAMCredentialsServer(reg, &grpciamcredentials.Service{})

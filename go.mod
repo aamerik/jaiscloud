@@ -4,6 +4,7 @@ go 1.26.8
 
 require (
 	cloud.google.com/go/cloudtasks v1.19.0
+	cloud.google.com/go/container v1.55.0
 	cloud.google.com/go/dataproc/v2 v2.25.0
 	cloud.google.com/go/datastore v1.22.0
 	cloud.google.com/go/eventarc v1.25.0

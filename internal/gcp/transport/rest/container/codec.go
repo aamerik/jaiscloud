@@ -15,9 +15,9 @@
 // under a "/container" path prefix. The codec accepts both forms — it locates
 // the projects/{project} segment regardless of what precedes it.
 //
-// Real GKE defaults to gRPC (google.container.v1.ClusterManager); this surface is
-// deliberately REST-only (matching floci-gcp and the HttpJson Java suite), so no
-// gRPC server is registered. The Codec is a NormalizedRequest adapter and the
+// Real GKE defaults to gRPC (google.container.v1.ClusterManager), so this REST
+// surface is paired with the gRPC adapter in internal/gcp/transport/grpc/container
+// over the same core. The Codec is a NormalizedRequest adapter and the
 // Provider holds the routes; both delegate to the transport-neutral core Service
 // (internal/gcp/service/container).
 package container

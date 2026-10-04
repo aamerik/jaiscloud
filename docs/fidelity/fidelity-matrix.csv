@@ -95,12 +95,49 @@ compute,Compute.SubnetworksList,rest,limited,metadata-only over ResourceStore (n
 compute,Compute.Unimplemented,rest,unsupported,explicit Unimplemented stub
 compute,Compute.ZonesGet,rest,limited,metadata-only over ResourceStore (no control plane)
 compute,Compute.ZonesList,rest,limited,metadata-only over ResourceStore (no control plane)
+container,CancelOperation,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,CheckAutopilotCompatibility,grpc,unsupported,Autopilot is not modelled; explicit Unimplemented stub
+container,CompleteControlPlaneUpgrade,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,CompleteIPRotation,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,CompleteNodePoolUpgrade,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
 container,Container.CreateCluster,rest,ga,
 container,Container.DeleteCluster,rest,ga,
 container,Container.GetCluster,rest,ga,
 container,Container.GetOperation,rest,ga,
 container,Container.ListClusters,rest,ga,
 container,Container.ListOperations,rest,ga,
+container,CreateCluster,grpc,ga,
+container,CreateNodePool,grpc,unsupported,node pools are stored records only; explicit Unimplemented stub
+container,DeleteCluster,grpc,ga,
+container,DeleteNodePool,grpc,unsupported,node pools are stored records only; explicit Unimplemented stub
+container,FetchClusterUpgradeInfo,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,FetchNodePoolUpgradeInfo,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,GetCluster,grpc,ga,
+container,GetJSONWebKeys,grpc,unsupported,cluster JWKS are not modelled; explicit Unimplemented stub
+container,GetNodePool,grpc,unsupported,node pools are stored records only; explicit Unimplemented stub
+container,GetOperation,grpc,ga,
+container,GetServerConfig,grpc,unsupported,server config is not modelled; explicit Unimplemented stub
+container,ListClusters,grpc,ga,
+container,ListNodePools,grpc,unsupported,node pools are stored records only; explicit Unimplemented stub
+container,ListOperations,grpc,ga,
+container,ListUsableSubnetworks,grpc,unsupported,usable-subnetwork discovery is not modelled; explicit Unimplemented stub
+container,RollbackNodePoolUpgrade,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,SetAddonsConfig,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,SetLabels,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,SetLegacyAbac,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,SetLocations,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,SetLoggingService,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,SetMaintenancePolicy,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,SetMasterAuth,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,SetMonitoringService,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,SetNetworkPolicy,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,SetNodePoolAutoscaling,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,SetNodePoolManagement,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,SetNodePoolSize,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,StartIPRotation,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,UpdateCluster,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,UpdateMaster,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
+container,UpdateNodePool,grpc,unsupported,GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub
 dataproc,CancelJob,grpc,ga,
 dataproc,CreateCluster,grpc,ga,
 dataproc,CreateWorkflowTemplate,grpc,ga,
