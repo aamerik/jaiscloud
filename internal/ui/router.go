@@ -38,7 +38,7 @@ func BuildRouter(
 
 	// Not auth-protected — SPA probes these before the session cookie is set.
 	r.Get("/api/ui/v1/meta", buildMetaHandler(adminHandler, cfg, version, string(reg.Cloud())))
-	r.Get("/api/ui/v1/meta/accounts", buildAccountsHandler(cfg))
+	r.Get("/api/ui/v1/meta/accounts", buildAccountsHandler(cfg, reg))
 	r.Get("/api/ui/v1/services", buildServicesHandler(reg))
 
 	r.Group(func(r chi.Router) {

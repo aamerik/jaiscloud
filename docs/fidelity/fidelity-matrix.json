@@ -3,16 +3,16 @@
   "summary": {
     "total": 941,
     "by_state": {
-      "ga": 681,
+      "ga": 685,
       "limited": 111,
       "preview": 14,
-      "unsupported": 135
+      "unsupported": 131
     },
     "by_transport": {
       "grpc": {
-        "ga": 317,
+        "ga": 321,
         "limited": 7,
-        "unsupported": 123
+        "unsupported": 119
       },
       "rest": {
         "ga": 364,
@@ -103,8 +103,8 @@
         "ga": 45
       },
       "resourcemanager": {
-        "ga": 12,
-        "unsupported": 7
+        "ga": 16,
+        "unsupported": 3
       },
       "run": {
         "ga": 14,
@@ -8076,24 +8076,22 @@
       "service": "resourcemanager",
       "operation": "CreateProject",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "projects are synthesized, never created; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "resourcemanager",
       "operation": "DeleteProject",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "projects are synthesized, never deleted; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -8120,11 +8118,10 @@
       "service": "resourcemanager",
       "operation": "ListProjects",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "projects are synthesized, never created; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -8227,7 +8224,7 @@
       "operation": "SearchProjects",
       "transport": "grpc",
       "state": "unsupported",
-      "reason": "projects are synthesized, never created; explicit Unimplemented stub",
+      "reason": "project search is not modelled; explicit Unimplemented stub",
       "evidence": [
         "postgres=yes",
         "transport=grpc (proto-conformance pending)"
@@ -8258,11 +8255,10 @@
       "service": "resourcemanager",
       "operation": "UndeleteProject",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "projects are synthesized, never deleted; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

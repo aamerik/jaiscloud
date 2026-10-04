@@ -12,17 +12,17 @@ Cells: **941**
 
 | state | count |
 | --- | --- |
-| ga | 681 |
+| ga | 685 |
 | limited | 111 |
 | preview | 14 |
-| unsupported | 135 |
+| unsupported | 131 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 364 | 104 | 14 | 12 |
-| grpc | 317 | 7 | 0 | 123 |
+| grpc | 321 | 7 | 0 | 119 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -918,15 +918,15 @@ _45 cell(s): ga=45 limited=0 preview=0 unsupported=0_
 
 ## resourcemanager
 
-_19 cell(s): ga=12 limited=0 preview=0 unsupported=7_
+_19 cell(s): ga=16 limited=0 preview=0 unsupported=3_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| CreateProject | grpc | unsupported | projects are synthesized, never created; explicit Unimplemented stub |
-| DeleteProject | grpc | unsupported | projects are synthesized, never deleted; explicit Unimplemented stub |
+| CreateProject | grpc | ga | — |
+| DeleteProject | grpc | ga | — |
 | GetIamPolicy | grpc | ga | — |
 | GetProject | grpc | ga | — |
-| ListProjects | grpc | unsupported | projects are synthesized, never created; explicit Unimplemented stub |
+| ListProjects | grpc | ga | — |
 | MoveProject | grpc | unsupported | project parent/ancestry is not modelled; explicit Unimplemented stub |
 | ResourceManager.ProjectCreate | rest | ga | — |
 | ResourceManager.ProjectDelete | rest | ga | — |
@@ -936,10 +936,10 @@ _19 cell(s): ga=12 limited=0 preview=0 unsupported=7_
 | ResourceManager.ProjectSetIamPolicy | rest | ga | — |
 | ResourceManager.ProjectTestIamPermissions | rest | ga | — |
 | ResourceManager.ProjectUndelete | rest | ga | — |
-| SearchProjects | grpc | unsupported | projects are synthesized, never created; explicit Unimplemented stub |
+| SearchProjects | grpc | unsupported | project search is not modelled; explicit Unimplemented stub |
 | SetIamPolicy | grpc | ga | — |
 | TestIamPermissions | grpc | ga | — |
-| UndeleteProject | grpc | unsupported | projects are synthesized, never deleted; explicit Unimplemented stub |
+| UndeleteProject | grpc | ga | — |
 | UpdateProject | grpc | unsupported | project metadata is not modelled; explicit Unimplemented stub |
 
 ## run

@@ -7,9 +7,12 @@
 package ui
 
 import (
+	"context"
+
 	"github.com/go-chi/chi/v5"
 
 	"jaiscloud/internal/config"
+	resourcemanagercore "jaiscloud/internal/gcp/service/resourcemanager"
 	bigqueryui "jaiscloud/internal/gcp/ui/bigquery"
 	computeui "jaiscloud/internal/gcp/ui/compute"
 	dataprocui "jaiscloud/internal/gcp/ui/dataproc"
@@ -53,31 +56,64 @@ type Registrar struct {
 	functions     functionsui.ProviderInterface
 	managedkafka  managedkafkaui.ProviderInterface
 	cfg           *config.Config
+	// resourcemanager is the project registry the console's accounts endpoint
+	// enumerates (created + configured projects). It is nil when the service is
+	// disabled, in which case only the configured accounts are reported.
+	resourcemanager *resourcemanagercore.Service
 }
 
 // NewRegistrar returns the GCP UI registrar. A nil provider leaves that
 // service's pages out of the catalog.
-func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, dataprocProvider dataprocui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, schedulerProvider schedulerui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, tasksProvider tasksui.ProviderInterface, workflowsProvider workflowsui.ProviderInterface, eventarcProvider eventarcui.ProviderInterface, functionsProvider functionsui.ProviderInterface, managedkafkaProvider managedkafkaui.ProviderInterface, cfg *config.Config) *Registrar {
+func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, dataprocProvider dataprocui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, schedulerProvider schedulerui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, tasksProvider tasksui.ProviderInterface, workflowsProvider workflowsui.ProviderInterface, eventarcProvider eventarcui.ProviderInterface, functionsProvider functionsui.ProviderInterface, managedkafkaProvider managedkafkaui.ProviderInterface, resourceManager *resourcemanagercore.Service, cfg *config.Config) *Registrar {
 	return &Registrar{
-		storage:       storageProvider,
-		pubsub:        pubsubProvider,
-		firestore:     firestoreProvider,
-		compute:       computeProvider,
-		dataproc:      dataprocProvider,
-		bigquery:      bigqueryProvider,
-		run:           runProvider,
-		scheduler:     schedulerProvider,
-		iam:           iamProvider,
-		kms:           kmsProvider,
-		secretmanager: secretProvider,
-		logging:       loggingProvider,
-		monitoring:    monitoringProvider,
-		tasks:         tasksProvider,
-		workflows:     workflowsProvider,
-		eventarc:      eventarcProvider,
-		functions:     functionsProvider,
-		managedkafka:  managedkafkaProvider,
-		cfg:           cfg,
+		storage:         storageProvider,
+		pubsub:          pubsubProvider,
+		firestore:       firestoreProvider,
+		compute:         computeProvider,
+		dataproc:        dataprocProvider,
+		bigquery:        bigqueryProvider,
+		run:             runProvider,
+		scheduler:       schedulerProvider,
+		iam:             iamProvider,
+		kms:             kmsProvider,
+		secretmanager:   secretProvider,
+		logging:         loggingProvider,
+		monitoring:      monitoringProvider,
+		tasks:           tasksProvider,
+		workflows:       workflowsProvider,
+		eventarc:        eventarcProvider,
+		functions:       functionsProvider,
+		managedkafka:    managedkafkaProvider,
+		resourcemanager: resourceManager,
+		cfg:             cfg,
+	}
+}
+
+// Accounts implements coreui.AccountsProvider: it contributes every project the
+// Resource Manager registry knows (created projects unioned with the configured
+// default + extra accounts) so the console project picker reflects the real
+// registry instead of only the startup config. A nil resourcemanager core (the
+// service disabled) contributes nothing and the configured accounts stand
+// alone. A store error is swallowed to an empty contribution: the accounts
+// endpoint must never fail the console over a listing problem.
+func (r *Registrar) Accounts(ctx context.Context) []string {
+	if r.resourcemanager == nil {
+		return nil
+	}
+	var out []string
+	token := ""
+	for {
+		page, next, err := r.resourcemanager.ListProjects(ctx, 0, token, false)
+		if err != nil {
+			return out
+		}
+		for _, p := range page {
+			out = append(out, p.ProjectID)
+		}
+		if next == "" {
+			return out
+		}
+		token = next
 	}
 }
 

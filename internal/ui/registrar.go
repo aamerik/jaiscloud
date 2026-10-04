@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"context"
+
 	"github.com/go-chi/chi/v5"
 
 	"jaiscloud/internal/model"
@@ -18,4 +20,14 @@ type Registrar interface {
 	// inside the authenticated route group, so handlers assume a valid
 	// session token.
 	MountRoutes(r chi.Router)
+}
+
+// AccountsProvider is an optional Registrar capability for a cloud whose
+// tenancy unit is enumerable rather than fixed config. When a Registrar
+// implements it, GET /api/ui/v1/meta/accounts returns the configured default +
+// extra accounts unioned with the ids it contributes (e.g. GCP projects
+// created at runtime), deduplicated and sorted. A cloud whose accounts are a
+// fixed config echo simply does not implement it.
+type AccountsProvider interface {
+	Accounts(ctx context.Context) []string
 }
