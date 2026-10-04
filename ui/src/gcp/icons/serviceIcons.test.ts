@@ -25,6 +25,7 @@ const SERVICE_IDS = [
   'secretmanager',
   'logging',
   'monitoring',
+  'resourcemanager',
 ]
 
 describe('serviceIcons', () => {

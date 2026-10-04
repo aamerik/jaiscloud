@@ -2,8 +2,8 @@
 // UI core. It exposes the GCP cloud identity and mounts per-service UI APIs
 // (Cloud Storage, Pub/Sub, Firestore, Compute, Cloud Run, Cloud Functions, Cloud
 // Scheduler, Cloud Tasks, Workflows, Eventarc, BigQuery, Dataproc, Managed Kafka,
-// IAM, Cloud KMS, Secret Manager, Logging, Monitoring; the rest follow) over the
-// providers wired in cmd/jaiscloud-gcp.
+// IAM, Cloud KMS, Secret Manager, Logging, Monitoring, Resource Manager; the
+// rest follow) over the providers wired in cmd/jaiscloud-gcp.
 package ui
 
 import (
@@ -25,6 +25,7 @@ import (
 	managedkafkaui "jaiscloud/internal/gcp/ui/managedkafka"
 	monitoringui "jaiscloud/internal/gcp/ui/monitoring"
 	pubsubui "jaiscloud/internal/gcp/ui/pubsub"
+	resourcemanagerui "jaiscloud/internal/gcp/ui/resourcemanager"
 	runui "jaiscloud/internal/gcp/ui/run"
 	schedulerui "jaiscloud/internal/gcp/ui/scheduler"
 	secretmanagerui "jaiscloud/internal/gcp/ui/secretmanager"
@@ -329,6 +330,16 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			},
 		})
 	}
+	if r.resourcemanager != nil {
+		services = append(services, coreui.ServiceDescriptor{
+			ID:       "resourcemanager",
+			Label:    "Resource Manager",
+			Category: "Management",
+			RootPath: "/gcp/resourcemanager/projects",
+			Tier:     coreui.TierFull,
+			Children: []coreui.ServiceChild{{Label: "Projects", Path: "/gcp/resourcemanager/projects"}},
+		})
+	}
 	return services
 }
 
@@ -388,5 +399,8 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 	}
 	if r.monitoring != nil {
 		router.Mount("/api/ui/v1/gcp/monitoring", monitoringui.BuildRouter(r.monitoring, r.cfg))
+	}
+	if r.resourcemanager != nil {
+		router.Mount("/api/ui/v1/gcp/resourcemanager", resourcemanagerui.BuildRouter(r.resourcemanager))
 	}
 }

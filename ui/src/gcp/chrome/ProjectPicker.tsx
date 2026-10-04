@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
+  Button,
   Dialog,
+  DialogActions,
   DialogContent,
   DialogTitle,
   List,
@@ -10,8 +13,10 @@ import {
   Typography,
 } from '@mui/material'
 import CheckIcon from '@mui/icons-material/Check'
+import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import { useAccount, useAccounts } from '../../context/AccountContext'
 import { useMeta } from '../../hooks/useMeta'
+import { useServices } from '../../hooks/useServices'
 import { pushRecent, readRecent, RECENT_PROJECTS_KEY } from './navModel'
 
 interface Props {
@@ -24,11 +29,17 @@ interface Props {
  * knows, with recently used projects pinned to the top.
  */
 export function ProjectPickerDialog({ open, onClose }: Props) {
+  const navigate = useNavigate()
   const { accountId, setAccountId } = useAccount()
   const { data } = useAccounts()
   const { data: meta } = useMeta()
+  const { data: servicesData } = useServices()
   const [query, setQuery] = useState('')
   const [recent, setRecent] = useState<string[]>(() => readRecent(RECENT_PROJECTS_KEY))
+
+  // Only offer the project manager when the server advertises Resource Manager,
+  // so the picker never links to a page whose service is disabled.
+  const canManage = (servicesData?.services ?? []).some((s) => s.id === 'resourcemanager')
 
   const current = accountId || meta?.accountId || ''
   const accounts = useMemo(
@@ -47,6 +58,11 @@ export function ProjectPickerDialog({ open, onClose }: Props) {
     setRecent(pushRecent(RECENT_PROJECTS_KEY, id))
     setQuery('')
     onClose()
+  }
+
+  const manage = () => {
+    onClose()
+    navigate('/gcp/resourcemanager/projects')
   }
 
   const projectList = (ids: string[]) => (
@@ -99,6 +115,13 @@ export function ProjectPickerDialog({ open, onClose }: Props) {
           </>
         )}
       </DialogContent>
+      <DialogActions>
+        {canManage && (
+          <Button onClick={manage} startIcon={<SettingsOutlinedIcon />} size="small">
+            Manage projects
+          </Button>
+        )}
+      </DialogActions>
     </Dialog>
   )
 }
