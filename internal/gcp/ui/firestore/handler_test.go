@@ -288,6 +288,49 @@ func TestDeleteDocument_PassesName(t *testing.T) {
 	}
 }
 
+func TestListDocuments_RequestsShowMissing(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodGet, "/collections/users/documents", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := mock.lastNR.Params["showMissing"]; got != "true" {
+		t.Fatalf("showMissing = %v, want \"true\"", got)
+	}
+}
+
+func TestListDocuments_FlagsMissingDocuments(t *testing.T) {
+	const base = "projects/test-project/databases/(default)/documents/users/"
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
+		"documents": []any{
+			// No create/update time → a showMissing placeholder.
+			map[string]any{"name": base + "alice"},
+			map[string]any{
+				"name":       base + "bob",
+				"createTime": "2026-01-01T00:00:00Z",
+				"updateTime": "2026-01-02T00:00:00Z",
+			},
+		},
+	}}}
+	w := do(t, mock, http.MethodGet, "/collections/users/documents", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp ListDocumentsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Documents) != 2 {
+		t.Fatalf("got %d documents, want 2", len(resp.Documents))
+	}
+	if !resp.Documents[0].Missing {
+		t.Fatalf("alice should be flagged missing: %+v", resp.Documents[0])
+	}
+	if resp.Documents[1].Missing {
+		t.Fatalf("bob should not be flagged missing: %+v", resp.Documents[1])
+	}
+}
+
 func TestListDocuments_NestedCollectionPath(t *testing.T) {
 	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
 	// encodeURIComponent escapes the nested collection path's '/' as %2F, which

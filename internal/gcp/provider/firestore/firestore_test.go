@@ -515,3 +515,78 @@ func TestFieldNameLimits(t *testing.T) {
 		assertInvalidArgumentErr(t, err)
 	}
 }
+
+// TestListDocumentsShowMissing checks Firestore's documents.list showMissing
+// semantics: a document that has no fields but has sub-documents nested under it
+// is returned with only its name (no fields, no create/update time). It is the
+// mechanism that makes an orphan subcollection browsable.
+func TestListDocumentsShowMissing(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	seed := func(name string) {
+		t.Helper()
+		if err := p.store.CreateDocument(ctx, firestorestore.Document{
+			Name: name, Fields: map[string]*firestorestore.Value{"a": intField(1)},
+			CreateTime: now, UpdateTime: now,
+		}); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	seed("projects/proj/databases/(default)/documents/users/bob")
+	// alice has no document of its own; only its subcollection exists.
+	seed("projects/proj/databases/(default)/documents/users/alice/orders/o1")
+
+	nr := testNR()
+	nr.Params["name"] = "databases/(default)/documents/users"
+
+	docsOf := func(r *model.ProviderResponse) []map[string]any {
+		raw, _ := r.Data["documents"].([]any)
+		out := make([]map[string]any, 0, len(raw))
+		for _, it := range raw {
+			if m, ok := it.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	idsOf := func(docs []map[string]any) []string {
+		out := make([]string, 0, len(docs))
+		for _, d := range docs {
+			name, _ := d["name"].(string)
+			out = append(out, docID(name))
+		}
+		return out
+	}
+
+	resp, err := p.ListDocuments(ctx, nr)
+	if err != nil {
+		t.Fatalf("list without showMissing: %v", err)
+	}
+	if got := idsOf(docsOf(resp)); len(got) != 1 || got[0] != "bob" {
+		t.Fatalf("without showMissing = %v, want [bob]", got)
+	}
+
+	nr.Params["showMissing"] = "true"
+	resp, err = p.ListDocuments(ctx, nr)
+	if err != nil {
+		t.Fatalf("list with showMissing: %v", err)
+	}
+	docs := docsOf(resp)
+	if got := idsOf(docs); len(got) != 2 || got[0] != "alice" || got[1] != "bob" {
+		t.Fatalf("with showMissing = %v, want [alice bob]", got)
+	}
+	missing := docs[0]
+	if _, hasFields := missing["fields"]; hasFields {
+		t.Fatalf("missing document leaked fields: %#v", missing)
+	}
+	if _, hasCreate := missing["createTime"]; hasCreate {
+		t.Fatalf("missing document leaked createTime: %#v", missing)
+	}
+	if _, hasUpdate := missing["updateTime"]; hasUpdate {
+		t.Fatalf("missing document leaked updateTime: %#v", missing)
+	}
+	if real := docs[1]; real["createTime"] == nil {
+		t.Fatalf("real document lost createTime: %#v", real)
+	}
+}

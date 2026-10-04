@@ -95,13 +95,18 @@ func documentFromMap(m map[string]any, collection string) Document {
 	if fields == nil {
 		fields = map[string]any{}
 	}
+	createTime := str(m, "createTime")
+	updateTime := str(m, "updateTime")
 	return Document{
 		ID:         lastSegment(full),
 		Name:       full,
 		Collection: collection,
 		Fields:     fields,
-		CreateTime: str(m, "createTime"),
-		UpdateTime: str(m, "updateTime"),
+		CreateTime: createTime,
+		UpdateTime: updateTime,
+		// A returned document with neither timestamp has no underlying
+		// document — it is a showMissing placeholder.
+		Missing: createTime == "" && updateTime == "",
 	}
 }
 
@@ -171,6 +176,7 @@ func (h *Handler) ListDocuments(w http.ResponseWriter, r *http.Request) {
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "firestore", "Firestore.ListDocuments", "global", account)
 	nr.Params["name"] = h.collectionPath(collection)
+	nr.Params["showMissing"] = "true"
 	pageParams(r, nr.Params)
 
 	resp, err := h.provider.ListDocuments(r.Context(), nr)

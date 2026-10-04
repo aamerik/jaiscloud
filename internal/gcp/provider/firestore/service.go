@@ -363,8 +363,11 @@ func (s *Service) DeleteDocument(ctx context.Context, project, database, path st
 	return nil
 }
 
-// ListDocuments returns the direct children of a collection, paginated.
-func (s *Service) ListDocuments(ctx context.Context, project, database, path string, transaction []byte, mask []string, page pageParams) ([]firestorestore.Document, string, error) {
+// ListDocuments returns the direct children of a collection, paginated. When
+// showMissing is set, documents that do not exist but have sub-documents nested
+// underneath them are also returned, keyed by name with no fields or timestamps
+// (Firestore's documents.list showMissing semantics).
+func (s *Service) ListDocuments(ctx context.Context, project, database, path string, transaction []byte, mask []string, showMissing bool, page pageParams) ([]firestorestore.Document, string, error) {
 	if err := s.requireActive(transaction); err != nil {
 		return nil, "", err
 	}
@@ -374,18 +377,41 @@ func (s *Service) ListDocuments(ctx context.Context, project, database, path str
 	}
 	coll := docName(project, database, path)
 	children := make([]firestorestore.Document, 0)
+	existing := make(map[string]bool)
 	for _, d := range docs {
 		if d.ParentPath == coll {
 			children = append(children, d)
+			existing[docID(d.Name)] = true
 		}
 	}
-	sort.Slice(children, func(i, j int) bool { return children[i].Name < children[j].Name })
+	// A missing document is one that has no document but is an ancestor path of a
+	// deeper document: it appears as the first sub-path segment under this
+	// collection. Track it by full name so the read-set records Exists=false.
+	missing := make(map[string]bool)
+	if showMissing {
+		prefix := coll + "/"
+		for _, d := range docs {
+			if !strings.HasPrefix(d.Name, prefix) {
+				continue
+			}
+			id := d.Name[len(prefix):]
+			if i := strings.IndexByte(id, '/'); i >= 0 {
+				id = id[:i]
+			}
+			name := coll + "/" + id
+			if id == "" || existing[id] || missing[name] {
+				continue
+			}
+			missing[name] = true
+			children = append(children, firestorestore.Document{Name: name})
+		}
+	}
 
 	pageDocs, nextToken := paging.Page(children, func(d firestorestore.Document) string { return d.Name }, page.params())
 
 	if len(transaction) > 0 {
 		for _, d := range pageDocs {
-			s.recordRead(transaction, d.Name, d, true)
+			s.recordRead(transaction, d.Name, d, !missing[d.Name])
 		}
 	}
 
@@ -395,6 +421,14 @@ func (s *Service) ListDocuments(ctx context.Context, project, database, path str
 		}
 	}
 	return pageDocs, nextToken, nil
+}
+
+// docID returns the final path segment of a document resource name.
+func docID(name string) string {
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		return name[i+1:]
+	}
+	return name
 }
 
 // ListCollectionIds returns the distinct subcollection IDs of a document,

@@ -57,9 +57,9 @@ export function DocumentDetailPage() {
   const subcollections = useQuery({
     queryKey: ['gcp', 'firestore', 'subcollections', collection, documentId, accountId],
     queryFn: () => listSubcollections(collection, documentId),
-    // Only load once the parent document itself resolved, so a missing document
-    // surfaces a single error rather than a duplicate doomed request.
-    enabled: Boolean(collection && documentId && query.data),
+    // Load unconditionally: a missing parent document (404 on GET) still has
+    // subcollections, and they are what let the user browse below it.
+    enabled: Boolean(collection && documentId),
   })
 
   // Seed the editor whenever a fresh document snapshot arrives.
@@ -98,6 +98,10 @@ export function DocumentDetailPage() {
   const conflicted =
     save.error instanceof APIError &&
     (save.error.code === 'FailedPrecondition' || save.error.status === 409 || save.error.status === 412)
+
+  // A missing document (Firestore showMissing) has subcollections but no fields
+  // of its own: the GET returns 404, yet the Subcollections section still works.
+  const documentMissing = query.error instanceof APIError && query.error.status === 404
 
   const subcollectionColumns: GcpColumn<Collection>[] = [
     {
@@ -141,7 +145,7 @@ export function DocumentDetailPage() {
         <Button
           variant="contained"
           startIcon={<SaveOutlinedIcon />}
-          disabled={save.isPending || query.isLoading}
+          disabled={save.isPending || query.isLoading || !query.data}
           onClick={submit}
         >
           Save
@@ -149,14 +153,23 @@ export function DocumentDetailPage() {
         <Button
           color="error"
           startIcon={<DeleteOutlineIcon />}
-          disabled={remove.isPending}
+          disabled={remove.isPending || !query.data}
           onClick={() => remove.mutate()}
         >
           Delete
         </Button>
       </Stack>
 
-      {query.isError && <Alert severity="error">Failed to load the document.</Alert>}
+      {query.isError &&
+        (documentMissing ? (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            This document is missing: it has subcollections below it but no fields of its own.
+          </Alert>
+        ) : (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            Failed to load the document.
+          </Alert>
+        ))}
       {query.isLoading && <CircularProgress size={24} />}
       {conflicted && (
         <Alert
@@ -216,27 +229,25 @@ export function DocumentDetailPage() {
         </Box>
       )}
 
-      {query.data && (
-        <Box sx={{ mt: 4 }}>
-          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
-            <Typography variant="h6" sx={{ flexGrow: 1 }}>
-              Subcollections
-            </Typography>
+      <Box sx={{ mt: 4 }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+          <Typography variant="h6" sx={{ flexGrow: 1 }}>
+            Subcollections
+          </Typography>
             <Button startIcon={<AddIcon />} onClick={() => setStartCollectionOpen(true)}>
               Start collection
             </Button>
           </Stack>
-          <GcpDataTable
-            aria-label="Subcollections"
-            columns={subcollectionColumns}
-            rows={subcollections.data?.collections ?? []}
-            getRowKey={(sub) => sub.id}
-            loading={subcollections.isLoading}
-            error={subcollections.isError ? 'Failed to load subcollections.' : null}
-            emptyMessage="No subcollections in this document."
-          />
-        </Box>
-      )}
+        <GcpDataTable
+          aria-label="Subcollections"
+          columns={subcollectionColumns}
+          rows={subcollections.data?.collections ?? []}
+          getRowKey={(sub) => sub.id}
+          loading={subcollections.isLoading}
+          error={subcollections.isError ? 'Failed to load subcollections.' : null}
+          emptyMessage="No subcollections in this document."
+        />
+      </Box>
 
       <CreateDocumentDialog
         open={startCollectionOpen}

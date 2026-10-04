@@ -24,7 +24,9 @@ type ListCollectionsResponse struct {
 
 // Document is the UI representation of a Firestore document. ID is the short
 // document id (the last path segment); Fields is the raw Firestore value
-// encoding.
+// encoding. Missing marks a document that has no fields of its own but has
+// subcollections nested underneath it (Firestore showMissing): it is browsable
+// but has no create/update time.
 type Document struct {
 	ID         string         `json:"id"`
 	Name       string         `json:"name"`
@@ -32,6 +34,7 @@ type Document struct {
 	Fields     map[string]any `json:"fields"`
 	CreateTime string         `json:"createTime,omitempty"`
 	UpdateTime string         `json:"updateTime,omitempty"`
+	Missing    bool           `json:"missing,omitempty"`
 }
 
 // ListDocumentsResponse is the response for GET /collections/{collection}/documents.

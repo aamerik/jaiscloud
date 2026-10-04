@@ -19,7 +19,9 @@ export interface ListCollectionsResponse {
  * The console edits this object verbatim so every value type round-trips. */
 export type FirestoreFields = Record<string, unknown>
 
-/** A Firestore document. */
+/** A Firestore document. `missing` marks a document that has no fields of its
+ * own but has subcollections nested underneath it (Firestore showMissing); it
+ * is browsable but has no create/update time. */
 export interface FirestoreDocument {
   id: string
   name: string
@@ -27,6 +29,7 @@ export interface FirestoreDocument {
   fields: FirestoreFields
   createTime?: string
   updateTime?: string
+  missing?: boolean
 }
 
 export interface ListDocumentsResponse {
