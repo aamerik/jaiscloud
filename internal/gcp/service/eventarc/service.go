@@ -332,16 +332,18 @@ func applyChannelMask(stored, incoming map[string]any, paths []string) (map[stri
 // cloudFunction / cloudRun / gke / workflow / httpEndpoint must be set. A
 // destination.cloudFunction names a deployed function (as the Cloud Functions
 // service itself sets when it provisions an Eventarc trigger); the existence
-// check lives in validateReferences.
-func validateDestination(dest map[string]any) error {
+// check lives in validateReferences. A destination.cloudRun must carry its
+// required fields (see validateCloudRunDestination).
+func validateDestination(project string, dest map[string]any) error {
 	if dest == nil {
 		return invalidArgument("destination is required")
 	}
+	cloudRunDest, _ := dest["cloudRun"].(map[string]any)
 	set := 0
 	if cf, _ := dest["cloudFunction"].(string); cf != "" {
 		set++
 	}
-	if m, _ := dest["cloudRun"].(map[string]any); m != nil {
+	if cloudRunDest != nil {
 		set++
 	}
 	if m, _ := dest["gke"].(map[string]any); m != nil {
@@ -358,6 +360,47 @@ func validateDestination(dest map[string]any) error {
 	}
 	if set > 1 {
 		return invalidArgument("destination must specify exactly one of cloudFunction, cloudRun, gke, workflow, or httpEndpoint")
+	}
+	if cloudRunDest != nil {
+		return validateCloudRunDestination(project, cloudRunDest)
+	}
+	return nil
+}
+
+// validateCloudRunDestination enforces the required shape of a
+// destination.cloudRun, matching the Eventarc v1 CloudRun schema: service and
+// region are both required, and the service must live in the trigger's project.
+// A full service resource name (projects/{p}/locations/{l}/services/{s}) is
+// accepted leniently: when region is omitted it is derived from the name's
+// location, but any other slash-containing value is rejected and an explicit
+// region that disagrees with the name's location is rejected. floci's short-id
+// form ({"service":"svc","region":"us-central1"}) is accepted as-is.
+//
+// This is intentionally stricter than cloudRunDestination (delivery.go), which
+// stays lenient so state stored before this validation existed can still be
+// delivered.
+func validateCloudRunDestination(project string, m map[string]any) error {
+	service := strings.TrimSpace(bodyString(m, "service"))
+	if service == "" {
+		return invalidArgument("destination.cloudRun.service is required")
+	}
+	region := strings.TrimSpace(bodyString(m, "region"))
+	if strings.Contains(service, "/") {
+		name := ParseName(service)
+		if name.Project == "" || name.Location == "" {
+			return invalidArgument("destination.cloudRun.service is not a valid service resource name")
+		}
+		if project != "" && name.Project != project {
+			return invalidArgument("destination.cloudRun.service must be in the trigger's project: " + project)
+		}
+		if region == "" {
+			region = name.Location
+		} else if region != name.Location {
+			return invalidArgument("destination.cloudRun.region disagrees with destination.cloudRun.service location")
+		}
+	}
+	if region == "" {
+		return invalidArgument("destination.cloudRun.region is required")
 	}
 	return nil
 }
@@ -454,7 +497,7 @@ func (s *Service) validateTrigger(ctx context.Context, project string, body map[
 	if err := validateFilters(body); err != nil {
 		return err
 	}
-	if err := validateDestination(bodyMap(body, "destination")); err != nil {
+	if err := validateDestination(project, bodyMap(body, "destination")); err != nil {
 		return err
 	}
 	return s.validateReferences(ctx, project, body)
