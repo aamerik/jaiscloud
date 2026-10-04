@@ -51,7 +51,7 @@ type Item struct {
 	Kind        string   `json:"kind,omitempty"` // backlog | debt | remainder | prose | wave | pr
 	Archived    bool     `json:"archived,omitempty"`
 	DocState    string   `json:"docState,omitempty"`
-	Disposition string   `json:"disposition,omitempty"` // fix | follow-up | no-fix | optional | unknown
+	Disposition string   `json:"disposition,omitempty"` // fix | follow-up | revisit | no-fix | optional | unknown
 	Impact      string   `json:"impact,omitempty"`
 	Pri         int      `json:"pri,omitempty"`   // rank from a Pri column (P1=1)
 	Order       int      `json:"order,omitempty"` // global execution order (lower = earlier)
@@ -951,6 +951,8 @@ func dispositionFrom(verdict, section string) string {
 		return "optional"
 	case hasAny(v, "follow-up", "follow up"):
 		return "follow-up"
+	case hasAny(v, "revisit"):
+		return "revisit"
 	case hasAny(v, "fix"):
 		return "fix"
 	case hasAny(strings.ToLower(section), "deferred"):
@@ -2199,7 +2201,7 @@ func writeMarkdown(path string, items []*Item) error {
 	fmt.Fprintf(&b, "> Regenerate with `make gcp-status`; audit with `make gcp-status-audit`. Sources: every\n")
 	fmt.Fprintf(&b, "> `plan_docs/**/*.md` table + the debt-plan remainder list + base-gcp PRs, joined with git.\n")
 	fmt.Fprintf(&b, "> `state` is evidence-derived (merged/branch/pr from git/gh); `disp` is the declared intent\n")
-	fmt.Fprintf(&b, "> (fix/no-fix/optional); `done?` = a doc claims done but no merged PR/branch was found.\n\n")
+	fmt.Fprintf(&b, "> (fix/follow-up/revisit/no-fix/optional); `done?` = a doc claims done but no merged PR/branch was found.\n\n")
 
 	sections := []struct {
 		title string
