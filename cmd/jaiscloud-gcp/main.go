@@ -700,7 +700,9 @@ func startCmd() *cobra.Command {
 			// The core is only built when resourcemanager is enabled.
 			var resourceManagerCore *resourcemanagercore.Service
 			if serviceEnabled("resourcemanager") {
-				resourceManagerCore = resourcemanagercore.NewService(stores.resources)
+				resourceManagerCore = resourcemanagercore.NewService(stores.resources,
+					resourcemanagercore.WithKnownProjects(cfg.ProjectID, cfg.ExtraAccounts),
+					resourcemanagercore.WithLROMode(lroMode))
 			}
 			resourcemanagerP := restresourcemanager.NewProvider(resourceManagerCore, cfg.ProjectID)
 
