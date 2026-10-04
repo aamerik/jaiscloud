@@ -362,7 +362,7 @@ func TestGCSObjectHoldsAndGenerationDelete(t *testing.T) {
 	// Deleting the held object is forbidden with a message naming the hold.
 	resp, body = do(t, "DELETE", "/storage/v1/b/hold-bucket/o/h.txt", nil, nil)
 	require.Equal(t, http.StatusForbidden, resp.StatusCode)
-	require.Contains(t, string(body), "event-based hold")
+	require.Contains(t, string(body), "active Event-Based hold")
 
 	// Releasing the hold (PATCH) allows the delete.
 	resp, _ = do(t, "PATCH", "/storage/v1/b/hold-bucket/o/h.txt",
