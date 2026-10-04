@@ -910,25 +910,22 @@ func (s *Service) ChannelTestIamPermissions(ctx context.Context, project, locati
 // --- event delivery ---
 
 // TargetsForEvent returns the Cloud Functions functions that Eventarc triggers
-// route an event to. Eventarc delivery is a metadata-driven match: for a
-// Pub/Sub event, every trigger whose transport.pubsub.topic names the event's
-// topic and whose destination.cloudFunction names a function produces one
-// target, provided the trigger's type/attribute eventFilters match. Triggers
-// with non-function destinations (Cloud Run, Workflows, GKE, HTTP) are ignored:
-// the emulator only executes Cloud Functions. It implements eventing.TargetIndex
-// so the functions delivery engine never imports this package.
+// route an event to. Eventarc delivery is a metadata-driven match: a Pub/Sub
+// event routes to every trigger whose transport.pubsub.topic names the event's
+// topic (and whose eventFilters match); a Cloud Storage event routes to every
+// trigger whose eventFilters select the object event. In both cases the
+// trigger's destination.cloudFunction must name a function. Triggers with
+// non-function destinations (Cloud Run, Workflows, GKE, HTTP) are ignored: the
+// emulator only executes Cloud Functions. It implements eventing.TargetIndex so
+// the functions delivery engine never imports this package.
 func (s *Service) TargetsForEvent(ctx context.Context, ev eventing.Event) []eventing.Target {
-	if ev.Source != eventing.SourcePubSub {
-		// Eventarc triggers are backed by a Pub/Sub topic; the emulator's
-		// storage producer does not (yet) publish to the Eventarc-provisioned
-		// topic, so only Pub/Sub events route through Eventarc.
+	if ev.Source != eventing.SourcePubSub && ev.Source != eventing.SourceStorage {
 		return nil
 	}
 	triggers, err := s.store.ListTriggersAllLocations(ctx, ev.Project)
 	if err != nil {
 		return nil
 	}
-	topic := eventing.ResourceID(ev.Resource)
 	var out []eventing.Target
 	for _, t := range triggers {
 		body := decodeBody(t.Config)
@@ -937,23 +934,26 @@ func (s *Service) TargetsForEvent(ctx context.Context, ev eventing.Event) []even
 		if cf == "" {
 			continue
 		}
-		if !eventarcSourceMatches(body, topic) {
-			continue
-		}
-		if !eventarcFiltersMatch(body, ev) {
+		if !eventarcEventMatches(body, ev) {
 			continue
 		}
 		loc, id := locationOf(cf), lastSegment(cf)
 		if loc == "" || id == "" {
 			continue
 		}
-		out = append(out, eventing.Target{
-			Project:      ev.Project,
-			Location:     loc,
-			FunctionID:   id,
-			Retry:        eventarcRetries(body),
-			Subscription: eventing.EventarcSubscriptionID(t.Location, t.Name),
-		})
+		target := eventing.Target{
+			Project:    ev.Project,
+			Location:   loc,
+			FunctionID: id,
+			Retry:      eventarcRetries(body),
+		}
+		// The emulator provisions a backing subscription only for a trigger
+		// whose transport.pubsub.topic is set (SyncTriggerSubscription); do not
+		// advertise a dead-letter surface that does not exist.
+		if triggerTransportTopic(body) != "" {
+			target.Subscription = eventing.EventarcSubscriptionID(t.Location, t.Name)
+		}
+		out = append(out, target)
 	}
 	return out
 }
@@ -974,15 +974,6 @@ func eventarcSourceMatches(body map[string]any, topic string) bool {
 	}
 	src, _ := pubsub["topic"].(string)
 	return eventing.ResourceID(src) == topic
-}
-
-// eventarcFiltersMatch evaluates a trigger's eventFilters against an event for
-// the functions target index. It delegates to filtersMatch with the event's own
-// attributes; the delivery dispatcher passes a synthesized attribute map instead
-// (so a trigger may filter on the reserved type/topic/bucket attributes).
-func eventarcFiltersMatch(body map[string]any, ev eventing.Event) bool {
-	filters, _ := body["eventFilters"].([]any)
-	return filtersMatch(filters, ev.Attributes, ev.EventType)
 }
 
 // filtersMatch evaluates a trigger's eventFilters against an attribute map and

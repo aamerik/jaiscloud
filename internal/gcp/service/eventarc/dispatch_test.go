@@ -362,17 +362,168 @@ func TestCloudRunDestinationResolution(t *testing.T) {
 	}
 }
 
-func TestDispatchEventIgnoresNonPubSubSource(t *testing.T) {
+// storageEvent builds a Cloud Storage object event as the storage producer
+// raises it: canonical event type, resource projects/_/buckets/{bucket},
+// object-metadata JSON body and bucketId/objectId attributes.
+func storageEvent(eventType, bucket, object string) eventing.Event {
+	return eventing.Event{
+		Project:   "proj",
+		EventType: eventType,
+		Resource:  "projects/_/buckets/" + bucket,
+		EventID:   bucket + "/" + object + "/1",
+		Source:    eventing.SourceStorage,
+		Data: []byte(`{"kind":"storage#object","bucket":"` + bucket +
+			`","name":"` + object + `","generation":"1"}`),
+		Attributes: map[string]string{"bucketId": bucket, "objectId": object},
+		OccurredAt: time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+// createStorageHTTPTrigger creates a Cloud Storage trigger (no Pub/Sub transport)
+// with an httpEndpoint destination and the given eventFilters.
+func createStorageHTTPTrigger(t *testing.T, svc *Service, id, uri, filters string) {
+	t.Helper()
+	body := json.RawMessage(`{
+		"destination":{"httpEndpoint":{"uri":"` + uri + `"}},
+		"eventFilters":` + filters + `}`)
+	if _, _, err := svc.CreateTrigger(context.Background(), "proj", "us-central1", id, body, false); err != nil {
+		t.Fatalf("create storage trigger %s: %v", id, err)
+	}
+}
+
+func TestDispatchEventStorageFinalizeToHTTPEndpoint(t *testing.T) {
 	sink := newRequestSink(t)
 	svc := newDispatchService(t, sink)
-	createHTTPTrigger(t, svc, "trig1", sink.URL, `[{"attribute":"type","value":"google.cloud.pubsub.topic.v1.messagePublished"}]`)
+	createStorageHTTPTrigger(t, svc, "gcs", sink.URL,
+		`[{"attribute":"type","value":"google.cloud.storage.object.v1.finalized"},{"attribute":"bucket","value":"mybucket"}]`)
 
-	ev := pubsubEvent()
-	ev.Source = eventing.SourceStorage
+	ev := storageEvent(eventing.TypeStorageFinalize, "mybucket", "dir/obj.txt")
 	svc.DispatchEvent(context.Background(), ev)
 	svc.waitDeliveries()
+
+	got := sink.requests()
+	if len(got) != 1 {
+		t.Fatalf("sink received %d requests, want 1", len(got))
+	}
+	req := got[0]
+	if req.method != http.MethodPost {
+		t.Fatalf("method = %s, want POST", req.method)
+	}
+	if req.header.Get("ce-id") == "" {
+		t.Error("ce-id must be a non-empty unique id")
+	}
+	for k, want := range map[string]string{
+		"ce-source":      "//storage.googleapis.com/projects/_/buckets/mybucket",
+		"ce-specversion": "1.0",
+		"ce-type":        "google.cloud.storage.object.v1.finalized",
+		"ce-time":        "2026-06-25T12:00:00Z",
+		"Content-Type":   "application/json",
+	} {
+		if gotV := req.header.Get(k); gotV != want {
+			t.Errorf("header %s = %q, want %q", k, gotV, want)
+		}
+	}
+	if !bytes.Equal(req.body, ev.Data) {
+		t.Errorf("body = %s, want object metadata %s", req.body, ev.Data)
+	}
+}
+
+func TestDispatchEventStorageDeleteToHTTPEndpoint(t *testing.T) {
+	sink := newRequestSink(t)
+	svc := newDispatchService(t, sink)
+	createStorageHTTPTrigger(t, svc, "gcs", sink.URL,
+		`[{"attribute":"type","value":"google.storage.object.delete"},{"attribute":"bucket","value":"b"}]`)
+
+	svc.DispatchEvent(context.Background(), storageEvent(eventing.TypeStorageDelete, "b", "o"))
+	svc.waitDeliveries()
+
+	got := sink.requests()
+	if len(got) != 1 {
+		t.Fatalf("sink received %d requests, want 1", len(got))
+	}
+	if ce := got[0].header.Get("ce-type"); ce != "google.cloud.storage.object.v1.deleted" {
+		t.Errorf("ce-type = %q, want the deleted CloudEvent spelling", ce)
+	}
+}
+
+func TestDispatchEventStorageBucketLastSegmentFallback(t *testing.T) {
+	sink := newRequestSink(t)
+	svc := newDispatchService(t, sink)
+	// The filter names the fully-qualified bucket while the event carries the
+	// short id; both must match (floci's last-segment comparison).
+	createStorageHTTPTrigger(t, svc, "gcs", sink.URL,
+		`[{"attribute":"type","value":"google.cloud.storage.object.v1.finalized"},{"attribute":"bucket","value":"projects/_/buckets/b"}]`)
+
+	svc.DispatchEvent(context.Background(), storageEvent(eventing.TypeStorageFinalize, "b", "o"))
+	svc.waitDeliveries()
+	if got := sink.requests(); len(got) != 1 {
+		t.Fatalf("sink received %d requests, want 1", len(got))
+	}
+}
+
+func TestDispatchEventStorageObjectFilter(t *testing.T) {
+	sink := newRequestSink(t)
+	svc := newDispatchService(t, sink)
+	createStorageHTTPTrigger(t, svc, "gcs", sink.URL,
+		`[{"attribute":"type","value":"google.cloud.storage.object.v1.finalized"},{"attribute":"bucket","value":"b"},{"attribute":"object","value":"dir/","operator":"match-path-pattern"}]`)
+
+	// A matching object prefix delivers; a different prefix does not.
+	svc.DispatchEvent(context.Background(), storageEvent(eventing.TypeStorageFinalize, "b", "dir/obj.txt"))
+	svc.waitDeliveries()
+	svc.DispatchEvent(context.Background(), storageEvent(eventing.TypeStorageFinalize, "b", "other/obj.txt"))
+	svc.waitDeliveries()
+	if got := sink.requests(); len(got) != 1 {
+		t.Fatalf("sink received %d requests, want 1 (only the dir/ object)", len(got))
+	}
+}
+
+func TestDispatchEventStorageTypeMismatchDoesNotDeliver(t *testing.T) {
+	sink := newRequestSink(t)
+	svc := newDispatchService(t, sink)
+	createStorageHTTPTrigger(t, svc, "gcs", sink.URL,
+		`[{"attribute":"type","value":"google.cloud.storage.object.v1.finalized"},{"attribute":"bucket","value":"b"}]`)
+
+	// A delete event must not match a finalize trigger.
+	svc.DispatchEvent(context.Background(), storageEvent(eventing.TypeStorageDelete, "b", "o"))
+	svc.waitDeliveries()
 	if got := sink.requests(); len(got) != 0 {
-		t.Fatalf("sink received %d requests, want 0 for a storage source", len(got))
+		t.Fatalf("sink received %d requests, want 0", len(got))
+	}
+}
+
+func TestStorageCloudEventIDIsUniquePerEvent(t *testing.T) {
+	// The producer's EventID (bucket/object/generation) is identical for a
+	// finalize and a delete of the same generation, but the CloudEvent id must
+	// be unique per event (CloudEvents requires source+id uniqueness).
+	_, hFin := buildStorageCloudEvent(storageEvent(eventing.TypeStorageFinalize, "b", "o"))
+	if hFin["ce-id"] == "" {
+		t.Fatal("finalize ce-id is empty")
+	}
+	_, hDel := buildStorageCloudEvent(storageEvent(eventing.TypeStorageDelete, "b", "o"))
+	if hDel["ce-id"] == hFin["ce-id"] {
+		t.Fatalf("finalize and delete share ce-id %q", hFin["ce-id"])
+	}
+}
+
+func TestEventarcStorageNoFiltersNeverMatches(t *testing.T) {
+	body := map[string]any{
+		"destination": map[string]any{"httpEndpoint": map[string]any{"uri": "http://x"}},
+	}
+	if eventarcEventMatches(body, storageEvent(eventing.TypeStorageFinalize, "b", "o")) {
+		t.Fatal("a storage trigger with no eventFilters must never match")
+	}
+}
+
+func TestDispatchEventStorageDoesNotMatchPubSubTrigger(t *testing.T) {
+	sink := newRequestSink(t)
+	svc := newDispatchService(t, sink)
+	createHTTPTrigger(t, svc, "trig1", sink.URL,
+		`[{"attribute":"type","value":"google.cloud.pubsub.topic.v1.messagePublished"}]`)
+
+	svc.DispatchEvent(context.Background(), storageEvent(eventing.TypeStorageFinalize, "b", "o"))
+	svc.waitDeliveries()
+	if got := sink.requests(); len(got) != 0 {
+		t.Fatalf("sink received %d requests, want 0 for a storage event on a Pub/Sub trigger", len(got))
 	}
 }
 
