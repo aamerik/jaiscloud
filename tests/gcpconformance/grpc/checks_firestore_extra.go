@@ -248,6 +248,15 @@ func checkFirestoreListCollectionIds(ctx context.Context, cfg Config) error {
 	}
 	defer conn.Close()
 
+	contains := func(ids []string, want string) bool {
+		for _, id := range ids {
+			if id == want {
+				return true
+			}
+		}
+		return false
+	}
+
 	coll := fsCollection(cfg)
 	if _, err := fsCreate(ctx, client, cfg, coll, "create-doc"); err != nil {
 		return fmt.Errorf("fixture CreateDocument: %w", err)
@@ -256,12 +265,46 @@ func checkFirestoreListCollectionIds(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("ListCollectionIds: %w", err)
 	}
-	for _, id := range resp.GetCollectionIds() {
-		if id == coll {
-			return nil
-		}
+	if !contains(resp.GetCollectionIds(), coll) {
+		return fmt.Errorf("ListCollectionIds did not include %q (got %v)", coll, resp.GetCollectionIds())
 	}
-	return fmt.Errorf("ListCollectionIds did not include %q (got %v)", coll, resp.GetCollectionIds())
+
+	// Only the leaf document exists: every document above it is a "missing"
+	// parent that lives purely as a path prefix. Firestore still lists the
+	// ancestor collections (a collection is listed whenever its path is a
+	// prefix of any document at any depth), including a top-level collection
+	// with no direct document of its own. Validated against the official
+	// Cloud Firestore emulator v1.22.0.
+	deepColl := cfg.ResourceName("gcpc_grpc_fs_deep")
+	deepLeaf := fsDocuments(cfg) + "/" + deepColl + "/p1/c1/p2/c2/leaf"
+	if _, err := client.CreateDocument(ctx, &firestorepb.CreateDocumentRequest{
+		Parent:       fsDocuments(cfg) + "/" + deepColl + "/p1/c1/p2",
+		CollectionId: "c2",
+		DocumentId:   "leaf",
+		Document:     &firestorepb.Document{Fields: map[string]*firestorepb.Value{"name": fsString(firestoreExtraVal)}},
+	}); err != nil {
+		return fmt.Errorf("deep fixture CreateDocument: %w", err)
+	}
+	defer fsDelete(ctx, client, deepLeaf)
+
+	resp, err = client.ListCollectionIds(ctx, &firestorepb.ListCollectionIdsRequest{Parent: fsDocuments(cfg)})
+	if err != nil {
+		return fmt.Errorf("ListCollectionIds (root): %w", err)
+	}
+	if !contains(resp.GetCollectionIds(), deepColl) {
+		return fmt.Errorf("ListCollectionIds root omitted ancestor-only %q (got %v)", deepColl, resp.GetCollectionIds())
+	}
+
+	resp, err = client.ListCollectionIds(ctx, &firestorepb.ListCollectionIdsRequest{
+		Parent: fsDocuments(cfg) + "/" + deepColl + "/p1",
+	})
+	if err != nil {
+		return fmt.Errorf("ListCollectionIds (missing parent): %w", err)
+	}
+	if !contains(resp.GetCollectionIds(), "c1") {
+		return fmt.Errorf("ListCollectionIds under missing parent omitted %q (got %v)", "c1", resp.GetCollectionIds())
+	}
+	return nil
 }
 
 // ─── queries ─────────────────────────────────────────────────────────────────

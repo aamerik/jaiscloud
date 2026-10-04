@@ -83,14 +83,43 @@ func docName(project, database, path string) string {
 	return "projects/" + project + "/databases/" + database + "/documents/" + path
 }
 
-// parentDocOfCollection returns the document path that owns a collection path
-// (strip the trailing collection-id segment).
-func parentDocOfCollection(collPath string) string {
-	i := strings.LastIndex(collPath, "/")
-	if i < 0 {
-		return ""
+// subcollectionIDUnder reports whether a document at relative path relDocPath
+// contributes a subcollection to the document parent (also a relative path;
+// empty for the database's documents root). Firestore's listCollectionIds
+// returns a collection id whenever parent/<id> is a prefix of a document path
+// at any depth, so an intermediate document need not exist. Both paths are
+// alternately collection/document segments and end on a document (or are
+// empty), so the segment immediately after parent names a collection.
+func subcollectionIDUnder(relDocPath, parent string) (string, bool) {
+	segs := splitRelativePath(relDocPath)
+	par := splitRelativePath(parent)
+	if len(segs) <= len(par) {
+		return "", false
 	}
-	return collPath[:i]
+	for i := range par {
+		if segs[i] != par[i] {
+			return "", false
+		}
+	}
+	return segs[len(par)], true
+}
+
+// splitRelativePath splits a relative Firestore path into segments; the empty
+// path (the documents root) has no segments.
+func splitRelativePath(path string) []string {
+	if path == "" {
+		return nil
+	}
+	return strings.Split(path, "/")
+}
+
+// validDocumentParent reports whether a relative path is a Firestore document
+// path (an even number of alternating collection/document segments) or the
+// documents root (empty). listCollectionIds requires a document parent; a
+// collection path is rejected instead of being silently misread as one, which
+// is what real Firestore does.
+func validDocumentParent(path string) bool {
+	return len(splitRelativePath(path))%2 == 0
 }
 
 // nextUpdateTime returns the update timestamp to stamp on a write, guaranteed
@@ -432,13 +461,13 @@ func docID(name string) string {
 }
 
 // ListCollectionIds returns the distinct subcollection IDs of a document,
-// paginated.
+// paginated. A collection is included whenever its path is a prefix of any
+// document at any depth, even when the document that owns it does not itself
+// exist as a stored document (a "missing" parent Firestore allows).
 func (s *Service) ListCollectionIds(ctx context.Context, project, database, path string, page pageParams) ([]string, string, error) {
-	// parentDocOfCollection returns the parent without a trailing slash, so
-	// trim the "/" that docName appends for an empty (top-level) path before
-	// comparing.
-	parent := strings.TrimSuffix(docName(project, database, path), "/")
-
+	if !validDocumentParent(path) {
+		return nil, "", model.NewProviderError("InvalidArgument", "invalid parent document path", 400)
+	}
 	docs, err := s.store.ListDocuments(ctx, project, database)
 	if err != nil {
 		return nil, "", err
@@ -446,14 +475,16 @@ func (s *Service) ListCollectionIds(ctx context.Context, project, database, path
 	seen := map[string]bool{}
 	var ids []string
 	for _, d := range docs {
-		if parentDocOfCollection(d.ParentPath) != parent {
+		_, _, rel, ok := firestorestore.ParseDocumentName(d.Name)
+		if !ok {
 			continue
 		}
-		if d.CollectionID == "" || seen[d.CollectionID] {
+		id, ok := subcollectionIDUnder(rel, path)
+		if !ok || seen[id] {
 			continue
 		}
-		seen[d.CollectionID] = true
-		ids = append(ids, d.CollectionID)
+		seen[id] = true
+		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 

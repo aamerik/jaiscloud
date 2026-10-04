@@ -590,3 +590,114 @@ func TestListDocumentsShowMissing(t *testing.T) {
 		t.Fatalf("real document lost createTime: %#v", real)
 	}
 }
+
+// TestListCollectionIdsAncestorsOnly checks Firestore's listCollectionIds
+// prefix rule: a collection is listed whenever its path is a prefix of any
+// document at any depth, even when the document that owns it is missing (only
+// exists as a path prefix). Validated against the official Cloud Firestore
+// emulator v1.22.0 (UI61).
+func TestListCollectionIdsAncestorsOnly(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	seed := func(name string) {
+		t.Helper()
+		if err := p.store.CreateDocument(ctx, firestorestore.Document{
+			Name: name, Fields: map[string]*firestorestore.Value{"a": intField(1)},
+			CreateTime: now, UpdateTime: now,
+		}); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	// One deep document; d1, d2 and d3 are "missing" parents that only exist
+	// as path prefixes.
+	seed("projects/proj/databases/(default)/documents/l1/d1/l2/d2/l3/leaf")
+	// A second document in the same collection, so the ancestor listing under
+	// l1/d1 must dedup l2.
+	seed("projects/proj/databases/(default)/documents/l1/d1/l2/d4")
+	// A plain root collection, to prove direct children still list alongside
+	// ancestor-only ones.
+	seed("projects/proj/databases/(default)/documents/cities/SF")
+
+	idsAt := func(path string) []string {
+		t.Helper()
+		nr := testNR()
+		name := "databases/(default)/documents"
+		if path != "" {
+			name += "/" + path
+		}
+		nr.Params["name"] = name
+		resp, err := p.ListCollectionIds(ctx, nr)
+		if err != nil {
+			t.Fatalf("listCollectionIds(%q): %v", path, err)
+		}
+		ids, _ := resp.Data["collectionIds"].([]string)
+		return ids
+	}
+
+	cases := []struct {
+		parent string
+		want   []string
+	}{
+		{"", []string{"cities", "l1"}},
+		{"l1/d1", []string{"l2"}},
+		{"l1/d1/l2/d2", []string{"l3"}},
+		{"l1/d1/l2/d4", nil},
+		{"l1/d1/l2/d2/l3/leaf", nil},
+		{"cities/SF", nil},
+	}
+	for _, tc := range cases {
+		got := idsAt(tc.parent)
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("listCollectionIds(parent=%q) = %v, want %v", tc.parent, got, tc.want)
+		}
+	}
+
+	// A collection path is not a document parent; it must be rejected rather
+	// than misread (the segment after it is a document, not a collection).
+	for _, bad := range []string{"l1", "l1/d1/l2"} {
+		nr := testNR()
+		nr.Params["name"] = "databases/(default)/documents/" + bad
+		if _, err := p.ListCollectionIds(ctx, nr); err == nil {
+			t.Errorf("listCollectionIds(collection parent %q) succeeded, want INVALID_ARGUMENT", bad)
+		} else {
+			assertInvalidArgumentErr(t, err)
+		}
+	}
+}
+
+// TestSubcollectionIDUnder unit-tests the prefix rule directly, including the
+// database root (empty parent).
+func TestSubcollectionIDUnder(t *testing.T) {
+	cases := []struct {
+		rel, parent string
+		want        string
+		ok          bool
+	}{
+		{"cities/SF", "", "cities", true},
+		{"l1/d1/l2/d2/l3/leaf", "", "l1", true},
+		{"l1/d1/l2/d2/l3/leaf", "l1/d1", "l2", true},
+		{"l1/d1/l2/d2/l3/leaf", "l1/d1/l2/d2", "l3", true},
+		{"l1/d1/l2/d2/l3/leaf", "l1/d1/l2/d2/l3/leaf", "", false},
+		{"l1/d1/l2/d2/l3/leaf", "l1/x1", "", false},
+		{"cities/SF", "cities/SF", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := subcollectionIDUnder(tc.rel, tc.parent)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("subcollectionIDUnder(%q, %q) = (%q, %v), want (%q, %v)",
+				tc.rel, tc.parent, got, ok, tc.want, tc.ok)
+		}
+	}
+
+	for _, p := range []string{"", "l1/d1", "l1/d1/l2/d2"} {
+		if !validDocumentParent(p) {
+			t.Errorf("validDocumentParent(%q) = false, want true", p)
+		}
+	}
+	for _, p := range []string{"l1", "l1/d1/l2", "l1/d1/"} {
+		if validDocumentParent(p) {
+			t.Errorf("validDocumentParent(%q) = true, want false", p)
+		}
+	}
+}
