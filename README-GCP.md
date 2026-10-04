@@ -35,7 +35,7 @@
 | BigQuery | REST | Datasets/tables/jobs/rows + a documented Standard SQL subset (`SELECT`, DDL/DML) on an in-process SQLite engine, see [Known Limitations](#known-limitations) |
 | Cloud Monitoring | REST + gRPC | Metrics, alert policies (evaluated), notification channels + incidents — see [Known Limitations](#known-limitations) |
 | Cloud Logging | REST + gRPC | Log entries, filtering, tailing, monitored-resource descriptors, sinks + exclusions (routing evaluated, not delivered), logs-based metrics |
-| Eventarc | REST + gRPC | Triggers/channels + provider discovery; Pub/Sub- and Cloud Storage-sourced triggers deliver to a `cloudFunction` destination, a `cloudRun` service, or POST a CloudEvents request to an `httpEndpoint` — see [Known Limitations](#known-limitations) |
+| Eventarc | REST + gRPC | Triggers/channels + provider discovery; Pub/Sub- and Cloud Storage-sourced triggers deliver to a `cloudFunction` destination, a `cloudRun` service, or POST a CloudEvents request to an `httpEndpoint` (delivery verified end-to-end on k3d by `make test-e2e-eventarc-k8s`) — see [Known Limitations](#known-limitations) |
 | Cloud DNS | REST | Metadata-only managed zones + record sets/changes — no authoritative DNS server, see [Known Limitations](#known-limitations) |
 | Memorystore for Redis | REST | Metadata-only instances + location discovery — no Redis data plane, see [Known Limitations](#known-limitations) |
 | Cloud SQL Admin | REST | Metadata-only instances/databases/users — no SQL engine or data plane, see [Known Limitations](#known-limitations) |
