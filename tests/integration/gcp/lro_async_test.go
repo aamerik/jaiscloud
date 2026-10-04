@@ -163,6 +163,55 @@ func TestLROAsyncServiceUsage(t *testing.T) {
 	}
 }
 
+// TestLROAsyncResourceManager proves the top-level operations/{id} namespace is
+// also pollable for Cloud Resource Manager: a projects.create returns an
+// in-flight operation named operations/{id}, and GET /v1/operations/{id}
+// resolves it through the Resource Manager fallback wired into the Functions v1
+// REST route until it settles with the typed v1 Project response.
+func TestLROAsyncResourceManager(t *testing.T) {
+	if os.Getenv("JAISCLOUD_LRO_ASYNC") != "1" {
+		t.Skip("set JAISCLOUD_LRO_ASYNC=1 and start jaiscloud-gcp with JAISCLOUD_LRO_MODE=async")
+	}
+	resetState(t)
+
+	const projectID = "async-proj-1234"
+	resp, body := do(t, "POST", "/v1/projects",
+		[]byte(`{"projectId":"`+projectID+`","name":"Async Project"}`), lroJSONHeaders())
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create: %s", body)
+
+	op := jsonMap(t, body)
+	done, ok := op["done"].(bool)
+	require.True(t, ok, "create operation has no boolean done: %s", body)
+	require.False(t, done, "async create must return done:false: %s", body)
+
+	name, _ := op["name"].(string)
+	require.Regexp(t, regexp.MustCompile(`^operations/[^/]+$`), name,
+		"resourcemanager operation name must be top-level: %s", body)
+	_, hasResponse := op["response"]
+	require.False(t, hasResponse, "in-flight operation must not carry response: %s", body)
+
+	pollPath := "/v1/" + name
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		presp, pbody := do(t, "GET", pollPath, nil, nil)
+		require.Equal(t, http.StatusOK, presp.StatusCode, "poll: %s", pbody)
+		settled := jsonMap(t, pbody)
+		if isDone, _ := settled["done"].(bool); isDone {
+			response, ok := settled["response"].(map[string]any)
+			require.True(t, ok, "settled operation must carry response: %s", pbody)
+			require.Equal(t, "type.googleapis.com/google.cloudresourcemanager.v1.Project", response["@type"],
+				"settled response @type: %s", pbody)
+			require.Equal(t, projectID, response["projectId"], "settled projectId: %s", pbody)
+			require.Equal(t, "ACTIVE", response["lifecycleState"], "settled state: %s", pbody)
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("operation %s did not settle within 20s; last: %s", name, pbody)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 // TestLROAsyncOperationsRegistry proves the generic google.longrunning.Operations
 // gRPC service is registry-backed in the opt-in async mode: a Service Usage
 // enable's top-level operations/{id} is Get- and List-able through the official

@@ -27,6 +27,10 @@ func NewProvider(c *core.Service, defaultProj string) *Provider {
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		"ResourceManager.ProjectGet":                p.GetProject,
+		"ResourceManager.ProjectList":               p.ListProjects,
+		"ResourceManager.ProjectCreate":             p.CreateProject,
+		"ResourceManager.ProjectDelete":             p.DeleteProject,
+		"ResourceManager.ProjectUndelete":           p.UndeleteProject,
 		"ResourceManager.ProjectGetIamPolicy":       p.GetIamPolicy,
 		"ResourceManager.ProjectSetIamPolicy":       p.SetIamPolicy,
 		"ResourceManager.ProjectTestIamPermissions": p.TestIamPermissions,
@@ -52,16 +56,92 @@ func (p *Provider) GetProject(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]any{
-		"projectId":      proj.ProjectID,
-		"projectNumber":  proj.ProjectNumber,
-		"name":           proj.DisplayName,
-		"lifecycleState": proj.State,
+	return provider.OK(projectToV1JSON(proj)), nil
+}
+
+// ListProjects returns a page of the v1 Project shape. The v1 contract keeps
+// DELETE_REQUESTED projects visible to list until deletion completes (which the
+// emulator never does), so showDeleted is always set; the request filter is not
+// evaluated (recorded as a deferral).
+func (p *Provider) ListProjects(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	page, next, err := p.core.ListProjects(ctx, intOf(nr.Params["pageSize"]), strParam(nr, "pageToken"), true)
+	if err != nil {
+		return nil, err
 	}
-	if len(proj.Labels) > 0 {
-		out["labels"] = proj.Labels
+	items := make([]any, 0, len(page))
+	for _, proj := range page {
+		items = append(items, projectToV1JSON(proj))
 	}
-	return provider.OK(out), nil
+	resp := map[string]any{"projects": items}
+	if next != "" {
+		resp["nextPageToken"] = next
+	}
+	return provider.OK(resp), nil
+}
+
+// CreateProject registers a project and returns the google.longrunning
+// Operation the v1 API specifies (the created Project is the operation
+// response; in the opt-in async mode it is in flight and polled through the
+// shared /v1/operations/{id} route).
+func (p *Provider) CreateProject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	body := bodyOf(nr)
+	proj, op, err := p.core.CreateProject(ctx, core.CreateProjectInput{
+		ProjectID:   mapStr(body, "projectId"),
+		DisplayName: mapStr(body, "name"),
+		Parent:      parentString(body["parent"]),
+		Labels:      labelMap(body["labels"]),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]any
+	if op.Done {
+		response = projectToV1JSON(proj)
+	}
+	return provider.OK(operationToJSON(op, response)), nil
+}
+
+// DeleteProject marks a project for deletion. The v1 method returns Empty, not
+// an operation.
+func (p *Provider) DeleteProject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if _, _, err := p.core.DeleteProject(ctx, p.project(nr)); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+// UndeleteProject restores a DELETE_REQUESTED project. The v1 method returns
+// Empty, not an operation.
+func (p *Provider) UndeleteProject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if _, _, err := p.core.UndeleteProject(ctx, p.project(nr)); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
+}
+
+// ResolveOperation resolves a top-level google.longrunning operation name
+// (operations/{id}) owned by Cloud Resource Manager. It is consulted by the
+// Functions REST provider, which owns the /v1/operations/{id} route the two
+// services share (project create operations are top-level). It returns
+// handled=false for names outside the top-level shape and for ids that are not
+// Resource Manager operations, so a genuine Functions unknown id still 404s
+// through that provider.
+func (p *Provider) ResolveOperation(ctx context.Context, project, name string) (map[string]any, bool, error) {
+	if !isTopLevelOperationName(name) {
+		return nil, false, nil
+	}
+	op, err := p.core.GetOperation(ctx, project, name)
+	if err != nil {
+		if isNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, true, err
+	}
+	var response map[string]any
+	if op.Done {
+		response = projectToV1JSON(op.Project)
+	}
+	return operationToJSON(op, response), true, nil
 }
 
 // GetIamPolicy returns the stored project policy (or an empty default policy).

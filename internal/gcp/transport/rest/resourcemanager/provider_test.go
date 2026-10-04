@@ -23,7 +23,8 @@ func newNR(params map[string]any) *model.NormalizedRequest {
 }
 
 func newProvider() *Provider {
-	return NewProvider(core.NewService(store.NewMemoryResourceStore()), "proj")
+	coreSvc := core.NewService(store.NewMemoryResourceStore(), core.WithKnownProjects("proj", nil))
+	return NewProvider(coreSvc, "proj")
 }
 
 func TestGetProjectV1Shape(t *testing.T) {
@@ -112,4 +113,219 @@ func TestTestIamPermissions(t *testing.T) {
 	if len(perms) != 2 {
 		t.Fatalf("permissions = %v, want 2", resp.Data["permissions"])
 	}
+}
+
+// createNR builds a projects.create NormalizedRequest for projectID.
+func createNR(projectID, displayName string) *model.NormalizedRequest {
+	body := map[string]any{"projectId": projectID}
+	if displayName != "" {
+		body["name"] = displayName
+	}
+	return newNR(map[string]any{"body": body})
+}
+
+func TestCreateProjectReturnsOperation(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	resp, err := p.CreateProject(ctx, createNR("create-me-123", "Create Me"))
+	if err != nil {
+		t.Fatalf("createProject: %v", err)
+	}
+	if done, _ := resp.Data["done"].(bool); !done {
+		t.Errorf("done = %v, want true (sync mode)", resp.Data["done"])
+	}
+	if name, _ := resp.Data["name"].(string); name == "" {
+		t.Errorf("operation name = %v, want operations/{id}", resp.Data["name"])
+	}
+	meta, _ := resp.Data["metadata"].(map[string]any)
+	if got := meta["@type"]; got != v1CreationStatusType {
+		t.Errorf("metadata @type = %v, want %v", got, v1CreationStatusType)
+	}
+	project, _ := resp.Data["response"].(map[string]any)
+	if got := project["@type"]; got != v1ProjectType {
+		t.Errorf("response @type = %v, want %v", got, v1ProjectType)
+	}
+	if project["projectId"] != "create-me-123" || project["name"] != "Create Me" {
+		t.Errorf("response project = %v, want projectId/name round-trip", project)
+	}
+}
+
+// TestCreateProjectParentAndLabels covers the v1 create body conversion of the
+// ResourceId parent and the labels object.
+func TestCreateProjectParentAndLabels(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	nr := createNR("parent-proj-1", "Parent Project")
+	body := nr.Params["body"].(map[string]any)
+	body["parent"] = map[string]any{"type": "organization", "id": "123"}
+	body["labels"] = map[string]any{"env": "test"}
+	resp, err := p.CreateProject(ctx, nr)
+	if err != nil {
+		t.Fatalf("createProject: %v", err)
+	}
+	project, _ := resp.Data["response"].(map[string]any)
+	labels, _ := project["labels"].(map[string]string)
+	if labels["env"] != "test" {
+		t.Errorf("labels = %v, want env=test", project["labels"])
+	}
+
+	// The parent is stored on the canonical project (v1 does not render it).
+	got, err := p.core.GetProject(ctx, "parent-proj-1")
+	if err != nil {
+		t.Fatalf("getProject: %v", err)
+	}
+	if got.Parent != "organizations/123" {
+		t.Errorf("parent = %q, want organizations/123", got.Parent)
+	}
+}
+
+// TestListProjectsPageSizeString covers a pageSize arriving as a string from
+// the codec's query parsing (the form the HTTP surface actually produces).
+func TestListProjectsPageSizeString(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	for _, id := range []string{"page-one-1234", "page-two-1234", "page-three-123"} {
+		if _, err := p.CreateProject(ctx, createNR(id, "")); err != nil {
+			t.Fatalf("create(%s): %v", id, err)
+		}
+	}
+	resp, err := p.ListProjects(ctx, newNR(map[string]any{"pageSize": "2"}))
+	if err != nil {
+		t.Fatalf("listProjects: %v", err)
+	}
+	projects, _ := resp.Data["projects"].([]any)
+	if len(projects) != 2 {
+		t.Fatalf("page 1 size = %d, want 2", len(projects))
+	}
+	if resp.Data["nextPageToken"] == "" || resp.Data["nextPageToken"] == nil {
+		t.Error("page 1 must carry a nextPageToken")
+	}
+}
+
+func TestListProjectsIncludesCreated(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	if _, err := p.CreateProject(ctx, createNR("list-me-123", "")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	resp, err := p.ListProjects(ctx, newNR(map[string]any{"pageSize": float64(10)}))
+	if err != nil {
+		t.Fatalf("listProjects: %v", err)
+	}
+	projects, _ := resp.Data["projects"].([]any)
+	ids := map[string]bool{}
+	for _, raw := range projects {
+		m, _ := raw.(map[string]any)
+		id, _ := m["projectId"].(string)
+		ids[id] = true
+	}
+	if !ids["list-me-123"] || !ids["proj"] {
+		t.Errorf("list = %v, want created + configured default", ids)
+	}
+}
+
+func TestCreateProjectDuplicateConflict(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	if _, err := p.CreateProject(ctx, createNR("dup-proj-1234", "")); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	_, err := p.CreateProject(ctx, createNR("dup-proj-1234", ""))
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) || pe.HTTPStatus != 409 {
+		t.Errorf("duplicate err = %v, want 409 AlreadyExists", err)
+	}
+}
+
+func TestDeleteAndUndeleteProjects(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	if _, err := p.CreateProject(ctx, createNR("del-me-123", "")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	resp, err := p.DeleteProject(ctx, newNR(map[string]any{"project": "del-me-123"}))
+	if err != nil {
+		t.Fatalf("deleteProject: %v", err)
+	}
+	if len(resp.Data) != 0 {
+		t.Errorf("delete response = %v, want Empty", resp.Data)
+	}
+
+	resp, err = p.ListProjects(ctx, newNR(nil))
+	if err != nil {
+		t.Fatalf("list after delete: %v", err)
+	}
+	// v1 keeps DELETE_REQUESTED projects visible to list until deletion
+	// completes, which the emulator never does.
+	if got := projectState(resp, "del-me-123"); got != "DELETE_REQUESTED" {
+		t.Errorf("deleted project state in list = %q, want DELETE_REQUESTED", got)
+	}
+
+	if _, err := p.UndeleteProject(ctx, newNR(map[string]any{"project": "del-me-123"})); err != nil {
+		t.Fatalf("undeleteProject: %v", err)
+	}
+	resp, err = p.ListProjects(ctx, newNR(nil))
+	if err != nil {
+		t.Fatalf("list after undelete: %v", err)
+	}
+	if got := projectState(resp, "del-me-123"); got != "ACTIVE" {
+		t.Errorf("undeleted project state in list = %q, want ACTIVE", got)
+	}
+}
+
+func TestDeleteUnknownProjectNotFound(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	_, err := p.DeleteProject(ctx, newNR(map[string]any{"project": "never-created"}))
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) || pe.HTTPStatus != 404 {
+		t.Errorf("delete unknown err = %v, want 404 NotFound", err)
+	}
+}
+
+func TestResolveOperation(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	resp, err := p.CreateProject(ctx, createNR("op-proj-12345", ""))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	name, _ := resp.Data["name"].(string)
+
+	got, handled, err := p.ResolveOperation(ctx, "proj", name)
+	if err != nil || !handled {
+		t.Fatalf("resolve(%s) handled=%v err=%v", name, handled, err)
+	}
+	if done, _ := got["done"].(bool); !done {
+		t.Errorf("resolved operation = %v, want done", got)
+	}
+	if _, ok := got["response"].(map[string]any); !ok {
+		t.Errorf("resolved operation = %v, want a response", got)
+	}
+
+	// A name outside the top-level shape, or an unknown id, is not handled.
+	if _, handled, _ := p.ResolveOperation(ctx, "proj", "projects/p/locations/l/operations/x"); handled {
+		t.Error("location-scoped name must not be handled")
+	}
+	if _, handled, err := p.ResolveOperation(ctx, "proj", "operations/missing"); handled || err != nil {
+		t.Errorf("unknown id handled=%v err=%v, want false/nil", handled, err)
+	}
+}
+
+func containsProject(resp *model.ProviderResponse, id string) bool {
+	return projectState(resp, id) != ""
+}
+
+// projectState returns the lifecycleState of id in a list response, or "".
+func projectState(resp *model.ProviderResponse, id string) string {
+	projects, _ := resp.Data["projects"].([]any)
+	for _, raw := range projects {
+		m, ok := raw.(map[string]any)
+		if !ok || m["projectId"] != id {
+			continue
+		}
+		s, _ := m["lifecycleState"].(string)
+		return s
+	}
+	return ""
 }
