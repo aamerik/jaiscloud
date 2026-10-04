@@ -366,6 +366,12 @@ var formatters = map[string]func(project, name string) string{
 	"project": func(p, _ string) string {
 		return "projects/" + p
 	},
+	// Cloud Resource Manager v3 project lifecycle mutations return a
+	// google.longrunning Operation with the top-level name "operations/{id}"
+	// (callers pass the bare operation id).
+	"resourcemanager-operation": func(_, n string) string {
+		return "operations/" + n
+	},
 	// Cloud Logging v2 (gRPC and REST).
 	"log": func(p, n string) string { return fmt.Sprintf("projects/%s/logs/%s", p, n) },
 	// Cloud Monitoring v3 (gRPC and REST).
