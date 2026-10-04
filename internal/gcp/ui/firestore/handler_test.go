@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/model"
@@ -283,6 +285,153 @@ func TestDeleteDocument_PassesName(t *testing.T) {
 	}
 	if mock.lastNR.Params["name"] != "databases/(default)/documents/users/u1" {
 		t.Fatalf("name = %v", mock.lastNR.Params["name"])
+	}
+}
+
+func TestListDocuments_NestedCollectionPath(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	// encodeURIComponent escapes the nested collection path's '/' as %2F, which
+	// chi routes as a single {collection} segment.
+	w := do(t, mock, http.MethodGet, "/collections/users%2Falice%2Forders/documents", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := mock.lastNR.Params["name"]; got != "databases/(default)/documents/users/alice/orders" {
+		t.Fatalf("name = %v, want nested collection path", got)
+	}
+}
+
+func TestGetDocument_NestedCollectionPath(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data:       map[string]any{"name": "projects/test-project/databases/(default)/documents/users/alice/orders/o1"},
+	}}
+	w := do(t, mock, http.MethodGet, "/collections/users%2Falice%2Forders/documents/o1", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := mock.lastNR.Params["name"]; got != "databases/(default)/documents/users/alice/orders/o1" {
+		t.Fatalf("name = %v", got)
+	}
+}
+
+func TestListSubcollections_MapsIDs(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data: map[string]any{
+			"collectionIds": []any{"orders", "invoices"},
+			"nextPageToken": "tok",
+		},
+	}}
+	w := do(t, mock, http.MethodGet, "/collections/users/documents/alice/collections?pageSize=5", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp ListCollectionsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 2 || len(resp.Collections) != 2 {
+		t.Fatalf("got %+v, want 2 subcollections", resp)
+	}
+	if resp.Collections[0].ID != "orders" || resp.Collections[1].ID != "invoices" {
+		t.Fatalf("unexpected subcollections: %+v", resp.Collections)
+	}
+	if resp.NextPageToken != "tok" {
+		t.Fatalf("nextPageToken = %q", resp.NextPageToken)
+	}
+	if got := mock.lastNR.Params["name"]; got != "databases/(default)/documents/users/alice" {
+		t.Fatalf("name = %v, want parent document path", got)
+	}
+	if mock.lastNR.Params["pageSize"] != "5" {
+		t.Fatalf("pageSize = %v", mock.lastNR.Params["pageSize"])
+	}
+}
+
+func TestListSubcollections_NestedParentDocument(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodGet, "/collections/users%2Falice%2Forders/documents/o1/collections", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := mock.lastNR.Params["name"]; got != "databases/(default)/documents/users/alice/orders/o1" {
+		t.Fatalf("name = %v", got)
+	}
+}
+
+// TestBuildRouter_MountedUnderParentPreservesEncodedSlash exercises the
+// production chi.Mount hop (registrar mounts the package router under the outer
+// mux); that hop is what makes %2F survive as a single {collection} segment.
+func TestBuildRouter_MountedUnderParentPreservesEncodedSlash(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	parent := chi.NewRouter()
+	parent.Mount("/api/ui/v1/gcp/firestore", BuildRouter(mock, testCfg()))
+
+	r := httptest.NewRequest(http.MethodGet,
+		"/api/ui/v1/gcp/firestore/collections/users%2Falice%2Forders/documents", nil)
+	w := httptest.NewRecorder()
+	parent.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := mock.lastNR.Params["name"]; got != "databases/(default)/documents/users/alice/orders" {
+		t.Fatalf("name = %v", got)
+	}
+}
+
+func TestCreateDocument_NestedCollectionPath(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data:       map[string]any{"name": "projects/test-project/databases/(default)/documents/users/alice/orders/o1"},
+	}}
+	w := do(t, mock, http.MethodPost, "/collections/users%2Falice%2Forders/documents",
+		`{"documentId":"o1","fields":{}}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	if got := mock.lastNR.Params["name"]; got != "databases/(default)/documents/users/alice/orders" {
+		t.Fatalf("name = %v", got)
+	}
+}
+
+func TestDeleteDocument_NestedCollectionPath(t *testing.T) {
+	mock := &mockProvider{}
+	w := do(t, mock, http.MethodDelete, "/collections/users%2Falice%2Forders/documents/o1", "")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w.Code)
+	}
+	if got := mock.lastNR.Params["name"]; got != "databases/(default)/documents/users/alice/orders/o1" {
+		t.Fatalf("name = %v", got)
+	}
+}
+
+func TestDocumentParam_RejectsDotSegments(t *testing.T) {
+	for _, path := range []string{
+		"/collections/users/documents/%2E%2E",
+		"/collections/users/documents/%2E",
+	} {
+		w := do(t, &mockProvider{}, http.MethodGet, path, "")
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400", path, w.Code)
+		}
+	}
+}
+
+func TestCollectionParam_RejectsMalformedPaths(t *testing.T) {
+	// Even segment count (a document path, not a collection), dot segments and
+	// empty segments are all rejected before reaching the provider.
+	paths := []string{
+		"/collections/users%2Falice/documents",     // document path
+		"/collections/%2E%2E/documents",            // ".."
+		"/collections/users%2F%2E/documents",       // "users/."
+		"/collections/users%2F%2Forders/documents", // empty segment
+	}
+	for _, path := range paths {
+		w := do(t, &mockProvider{}, http.MethodGet, path, "")
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400", path, w.Code)
+		}
 	}
 }
 

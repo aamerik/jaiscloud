@@ -9,6 +9,7 @@ import (
 
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gcp/ui/uihelper"
+	"jaiscloud/internal/model"
 )
 
 // defaultDatabase is the Firestore default database id.
@@ -50,15 +51,40 @@ func lastSegment(name string) string {
 	return name
 }
 
-// segment returns the decoded, single-segment value of a URL path parameter.
-// A decoded '/' (from a %2F escape) is rejected: collection and document IDs
-// are single path segments.
+// segmentParam returns the decoded, single-segment value of a URL path
+// parameter. A decoded '/' (from a %2F escape) is rejected: document IDs are
+// single path segments, and Firestore forbids "." / ".." as an id.
 func segmentParam(r *http.Request, key string) (string, bool) {
 	v := uihelper.PathParam(r, key)
-	if v == "" || strings.Contains(v, "/") {
+	if v == "" || strings.Contains(v, "/") || v == "." || v == ".." {
 		return "", false
 	}
 	return v, true
+}
+
+// collectionParam returns the decoded collection path of a URL path parameter.
+// A collection path is the alternating collection/document/collection sequence
+// of a nested subcollection, e.g. "users/alice/orders"; a root collection is a
+// single segment. The value is URL-encoded by the caller (%2F for '/'), so chi
+// sees it as one path segment and uihelper.PathParam decodes it back.
+//
+// The path is validated: it must have an odd number of non-empty segments
+// (ending on a collection id) and must not contain "." or "..".
+func collectionParam(r *http.Request, key string) (string, bool) {
+	value := uihelper.PathParam(r, key)
+	if value == "" || strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") {
+		return "", false
+	}
+	segments := strings.Split(value, "/")
+	if len(segments)%2 == 0 {
+		return "", false
+	}
+	for _, s := range segments {
+		if s == "" || s == "." || s == ".." {
+			return "", false
+		}
+	}
+	return value, true
 }
 
 // documentFromMap converts a provider REST document map into the UI shape. The
@@ -116,6 +142,12 @@ func (h *Handler) ListCollections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	uihelper.WriteJSON(w, collectionsFromResponse(resp))
+}
+
+// collectionsFromResponse maps a provider ListCollectionIds response into the UI
+// shape. Shared by the root collections and subcollections listings.
+func collectionsFromResponse(resp *model.ProviderResponse) ListCollectionsResponse {
 	raw := uihelper.AsSlice(resp.Data["collectionIds"])
 	collections := make([]Collection, 0, len(raw))
 	for _, item := range raw {
@@ -124,16 +156,16 @@ func (h *Handler) ListCollections(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	next, _ := resp.Data["nextPageToken"].(string)
-	uihelper.WriteJSON(w, ListCollectionsResponse{Collections: collections, Total: len(collections), NextPageToken: next})
+	return ListCollectionsResponse{Collections: collections, Total: len(collections), NextPageToken: next}
 }
 
 // ─── Documents ───────────────────────────────────────────────────────────────
 
 // GET /collections/{collection}/documents
 func (h *Handler) ListDocuments(w http.ResponseWriter, r *http.Request) {
-	collection, ok := segmentParam(r, "collection")
+	collection, ok := collectionParam(r, "collection")
 	if !ok {
-		uihelper.UIError(w, "BadRequest", "invalid collection id", http.StatusBadRequest)
+		uihelper.UIError(w, "BadRequest", "invalid collection path", http.StatusBadRequest)
 		return
 	}
 	account := h.account(r)
@@ -158,6 +190,34 @@ func (h *Handler) ListDocuments(w http.ResponseWriter, r *http.Request) {
 	uihelper.WriteJSON(w, ListDocumentsResponse{Documents: docs, Total: len(docs), NextPageToken: next})
 }
 
+// ─── Subcollections ──────────────────────────────────────────────────────────
+
+// GET /collections/{collection}/documents/{document}/collections
+// Lists the subcollection IDs of a document. {collection} may itself be nested.
+func (h *Handler) ListSubcollections(w http.ResponseWriter, r *http.Request) {
+	collection, ok := collectionParam(r, "collection")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid collection path", http.StatusBadRequest)
+		return
+	}
+	document, ok := segmentParam(r, "document")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid document id", http.StatusBadRequest)
+		return
+	}
+	account := h.account(r)
+	nr := uihelper.NR(r.Context(), h.cfg, "firestore", "Firestore.ListCollectionIds", "global", account)
+	nr.Params["name"] = h.documentPath(collection, document)
+	pageParams(r, nr.Params)
+
+	resp, err := h.provider.ListCollectionIds(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, collectionsFromResponse(resp))
+}
+
 // POST /collections/{collection}/documents  body: { documentId?, fields }
 func (h *Handler) CreateDocument(w http.ResponseWriter, r *http.Request) {
 	var req CreateDocumentRequest
@@ -165,9 +225,9 @@ func (h *Handler) CreateDocument(w http.ResponseWriter, r *http.Request) {
 		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
 		return
 	}
-	collection, ok := segmentParam(r, "collection")
+	collection, ok := collectionParam(r, "collection")
 	if !ok {
-		uihelper.UIError(w, "BadRequest", "invalid collection id", http.StatusBadRequest)
+		uihelper.UIError(w, "BadRequest", "invalid collection path", http.StatusBadRequest)
 		return
 	}
 
@@ -193,9 +253,9 @@ func (h *Handler) CreateDocument(w http.ResponseWriter, r *http.Request) {
 
 // GET /collections/{collection}/documents/{document}
 func (h *Handler) GetDocument(w http.ResponseWriter, r *http.Request) {
-	collection, ok := segmentParam(r, "collection")
+	collection, ok := collectionParam(r, "collection")
 	if !ok {
-		uihelper.UIError(w, "BadRequest", "invalid collection id", http.StatusBadRequest)
+		uihelper.UIError(w, "BadRequest", "invalid collection path", http.StatusBadRequest)
 		return
 	}
 	document, ok := segmentParam(r, "document")
@@ -226,9 +286,9 @@ func (h *Handler) UpdateDocument(w http.ResponseWriter, r *http.Request) {
 		uihelper.UIError(w, "BadRequest", "fields is required", http.StatusBadRequest)
 		return
 	}
-	collection, ok := segmentParam(r, "collection")
+	collection, ok := collectionParam(r, "collection")
 	if !ok {
-		uihelper.UIError(w, "BadRequest", "invalid collection id", http.StatusBadRequest)
+		uihelper.UIError(w, "BadRequest", "invalid collection path", http.StatusBadRequest)
 		return
 	}
 	document, ok := segmentParam(r, "document")
@@ -259,9 +319,9 @@ func (h *Handler) UpdateDocument(w http.ResponseWriter, r *http.Request) {
 
 // DELETE /collections/{collection}/documents/{document}
 func (h *Handler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
-	collection, ok := segmentParam(r, "collection")
+	collection, ok := collectionParam(r, "collection")
 	if !ok {
-		uihelper.UIError(w, "BadRequest", "invalid collection id", http.StatusBadRequest)
+		uihelper.UIError(w, "BadRequest", "invalid collection path", http.StatusBadRequest)
 		return
 	}
 	document, ok := segmentParam(r, "document")

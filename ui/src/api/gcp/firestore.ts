@@ -48,6 +48,15 @@ export interface UpdateDocumentRequest {
 
 export const listCollections = () => api.get<ListCollectionsResponse>(`${BASE}/collections`)
 
+/** Subcollection IDs of a document. `collection` may itself be a nested
+ * collection path (e.g. `users/alice/orders`). */
+export const listSubcollections = (collection: string, document: string) =>
+  api.get<ListCollectionsResponse>(
+    `${BASE}/collections/${encodeURIComponent(collection)}/documents/${encodeURIComponent(document)}/collections`,
+  )
+
+/** `collection` is a collection path: a root id (`users`) or a nested
+ * collection path (`users/alice/orders`); the '/' is escaped on the wire. */
 export const listDocuments = (collection: string) =>
   api.get<ListDocumentsResponse>(
     `${BASE}/collections/${encodeURIComponent(collection)}/documents`,

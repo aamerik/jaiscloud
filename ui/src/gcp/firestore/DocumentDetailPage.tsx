@@ -7,18 +7,28 @@ import {
   CircularProgress,
   Divider,
   IconButton,
+  Link,
   Stack,
   Typography,
 } from '@mui/material'
+import AddIcon from '@mui/icons-material/Add'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined'
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
 import { APIError } from '../../api/client'
-import { deleteDocument, getDocument, updateDocument } from '../../api/gcp/firestore'
+import {
+  deleteDocument,
+  getDocument,
+  listSubcollections,
+  updateDocument,
+  type Collection,
+} from '../../api/gcp/firestore'
 import { useAccount } from '../../context/AccountContext'
 import { JsonEditor } from './JsonEditor'
 import { parseJsonObject } from './util'
+import { CreateDocumentDialog } from './CreateDocumentDialog'
+import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageTitle } from '../common/PageTitle'
 
 function shortDate(value?: string): string {
@@ -36,11 +46,20 @@ export function DocumentDetailPage() {
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+  const [startCollectionOpen, setStartCollectionOpen] = useState(false)
 
   const query = useQuery({
     queryKey: ['gcp', 'firestore', 'document', collection, documentId, accountId],
     queryFn: () => getDocument(collection, documentId),
     enabled: Boolean(collection && documentId),
+  })
+
+  const subcollections = useQuery({
+    queryKey: ['gcp', 'firestore', 'subcollections', collection, documentId, accountId],
+    queryFn: () => listSubcollections(collection, documentId),
+    // Only load once the parent document itself resolved, so a missing document
+    // surfaces a single error rather than a duplicate doomed request.
+    enabled: Boolean(collection && documentId && query.data),
   })
 
   // Seed the editor whenever a fresh document snapshot arrives.
@@ -79,6 +98,25 @@ export function DocumentDetailPage() {
   const conflicted =
     save.error instanceof APIError &&
     (save.error.code === 'FailedPrecondition' || save.error.status === 409 || save.error.status === 412)
+
+  const subcollectionColumns: GcpColumn<Collection>[] = [
+    {
+      key: 'id',
+      header: 'Subcollection',
+      sortable: true,
+      sortValue: (sub) => sub.id,
+      render: (sub) => (
+        <Link
+          component={RouterLink}
+          to={`/gcp/firestore/collections/${encodeURIComponent(
+            `${collection}/${documentId}/${sub.id}`,
+          )}`}
+        >
+          {sub.id}
+        </Link>
+      ),
+    },
+  ]
 
   return (
     <Box>
@@ -177,6 +215,38 @@ export function DocumentDetailPage() {
           </Typography>
         </Box>
       )}
+
+      {query.data && (
+        <Box sx={{ mt: 4 }}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+            <Typography variant="h6" sx={{ flexGrow: 1 }}>
+              Subcollections
+            </Typography>
+            <Button startIcon={<AddIcon />} onClick={() => setStartCollectionOpen(true)}>
+              Start collection
+            </Button>
+          </Stack>
+          <GcpDataTable
+            aria-label="Subcollections"
+            columns={subcollectionColumns}
+            rows={subcollections.data?.collections ?? []}
+            getRowKey={(sub) => sub.id}
+            loading={subcollections.isLoading}
+            error={subcollections.isError ? 'Failed to load subcollections.' : null}
+            emptyMessage="No subcollections in this document."
+          />
+        </Box>
+      )}
+
+      <CreateDocumentDialog
+        open={startCollectionOpen}
+        onClose={() => setStartCollectionOpen(false)}
+        collectionPrefix={`${collection}/${documentId}`}
+        onCreated={(createdCollection) => {
+          // The dialog already invalidates the firestore queries on success.
+          navigate(`/gcp/firestore/collections/${encodeURIComponent(createdCollection)}`)
+        }}
+      />
     </Box>
   )
 }
