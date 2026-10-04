@@ -1,9 +1,11 @@
 package eventarc
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -199,21 +201,164 @@ func TestDispatchEventSkipsCloudFunctionDestination(t *testing.T) {
 	}
 }
 
-func TestDispatchEventDropsCloudRunDestination(t *testing.T) {
-	sink := newRequestSink(t)
-	svc := newDispatchService(t, sink)
+// cloudRunCall is one delivery forwarded through the CloudRunInvoker seam.
+type cloudRunCall struct {
+	project, region, service, path string
+	headers                        map[string]string
+	body                           []byte
+}
+
+// recordingCloudRunInvoker captures forwarded deliveries and can be told to
+// fail, so the dispatcher's fire-and-forget error path is exercised.
+type recordingCloudRunInvoker struct {
+	mu     sync.Mutex
+	calls  []cloudRunCall
+	status int
+	err    error
+}
+
+func (r *recordingCloudRunInvoker) Invoke(_ context.Context, project, region, service, path string, headers map[string]string, body []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, cloudRunCall{project, region, service, path, headers, body})
+	if r.err != nil {
+		return r.status, r.err
+	}
+	if r.status == 0 {
+		return http.StatusOK, nil
+	}
+	return r.status, nil
+}
+
+func (r *recordingCloudRunInvoker) deliveries() []cloudRunCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]cloudRunCall(nil), r.calls...)
+}
+
+func createCloudRunTrigger(t *testing.T, svc *Service, id, dest string) {
+	t.Helper()
 	body := json.RawMessage(`{
-		"destination":{"cloudRun":{"service":"projects/proj/locations/us-central1/services/s"}},
+		"destination":{"cloudRun":` + dest + `},
 		"transport":{"pubsub":{"topic":"projects/proj/topics/t"}},
 		"eventFilters":[{"attribute":"type","value":"google.cloud.pubsub.topic.v1.messagePublished"}]}`)
-	if _, _, err := svc.CreateTrigger(context.Background(), "proj", "us-central1", "run", body, false); err != nil {
-		t.Fatalf("create cloudRun trigger: %v", err)
+	if _, _, err := svc.CreateTrigger(context.Background(), "proj", "us-central1", id, body, false); err != nil {
+		t.Fatalf("create cloudRun trigger %s: %v", id, err)
 	}
+}
+
+func TestDispatchEventDeliversCloudRunDestination(t *testing.T) {
+	svc := newDispatchService(t, nil)
+	inv := &recordingCloudRunInvoker{}
+	svc.SetCloudRunInvoker(inv)
+	// Full resource name + relative path: id/location are derived and the path
+	// is made absolute.
+	createCloudRunTrigger(t, svc, "run", `{"service":"projects/proj/locations/us-central1/services/s","path":"hook"}`)
+
+	svc.DispatchEvent(context.Background(), pubsubEvent())
+	svc.waitDeliveries()
+
+	calls := inv.deliveries()
+	if len(calls) != 1 {
+		t.Fatalf("invoker got %d calls, want 1", len(calls))
+	}
+	c := calls[0]
+	if c.project != "proj" || c.region != "us-central1" || c.service != "s" || c.path != "/hook" {
+		t.Fatalf("call = %+v, want proj/us-central1/s//hook", c)
+	}
+	for k, want := range map[string]string{
+		"ce-id":          "msg-123",
+		"ce-type":        eventing.TypePubSubPublishCloudEvent,
+		"ce-source":      "//pubsub.googleapis.com/projects/proj/topics/t",
+		"ce-specversion": "1.0",
+		"ce-time":        "2026-06-25T12:00:00Z",
+		"Content-Type":   "application/json",
+	} {
+		if got := c.headers[k]; got != want {
+			t.Errorf("header %s = %q, want %q", k, got, want)
+		}
+	}
+	if !bytes.Contains(c.body, []byte(base64.StdEncoding.EncodeToString([]byte("hello world")))) {
+		t.Errorf("body does not carry the base64 message data: %s", c.body)
+	}
+}
+
+func TestDispatchEventCloudRunShortServiceAndDefaultPath(t *testing.T) {
+	svc := newDispatchService(t, nil)
+	inv := &recordingCloudRunInvoker{}
+	svc.SetCloudRunInvoker(inv)
+	// floci's doc shape: short service id + explicit region, no path.
+	createCloudRunTrigger(t, svc, "run", `{"service":"hello-run","region":"us-central1"}`)
+
+	svc.DispatchEvent(context.Background(), pubsubEvent())
+	svc.waitDeliveries()
+
+	calls := inv.deliveries()
+	if len(calls) != 1 {
+		t.Fatalf("invoker got %d calls, want 1", len(calls))
+	}
+	if c := calls[0]; c.service != "hello-run" || c.region != "us-central1" || c.path != "/" {
+		t.Fatalf("call = %+v", c)
+	}
+}
+
+func TestDispatchEventDropsCloudRunWithoutInvoker(t *testing.T) {
+	sink := newRequestSink(t)
+	svc := newDispatchService(t, sink)
+	createCloudRunTrigger(t, svc, "run", `{"service":"s","region":"us-central1"}`)
 
 	svc.DispatchEvent(context.Background(), pubsubEvent())
 	svc.waitDeliveries()
 	if got := sink.requests(); len(got) != 0 {
-		t.Fatalf("sink received %d requests, want 0 (cloudRun is a later phase)", len(got))
+		t.Fatalf("sink received %d requests, want 0 (no CloudRun invoker wired)", len(got))
+	}
+}
+
+func TestDispatchEventCloudRunFailureIsLoggedNotPanicked(t *testing.T) {
+	svc := newDispatchService(t, nil)
+	inv := &recordingCloudRunInvoker{status: http.StatusServiceUnavailable, err: errors.New("no ready runtime")}
+	svc.SetCloudRunInvoker(inv)
+	createCloudRunTrigger(t, svc, "run", `{"service":"s","region":"us-central1"}`)
+
+	svc.DispatchEvent(context.Background(), pubsubEvent())
+	svc.waitDeliveries() // must return without panicking
+	if got := len(inv.deliveries()); got != 1 {
+		t.Fatalf("invoker got %d calls, want 1", got)
+	}
+}
+
+func TestCloudRunDestinationResolution(t *testing.T) {
+	tests := []struct {
+		name string
+		dest string
+		want cloudRunTarget
+		ok   bool
+	}{
+		{"full name", `{"cloudRun":{"service":"projects/proj/locations/us-central1/services/svc"}}`,
+			cloudRunTarget{region: "us-central1", service: "svc", path: "/"}, true},
+		{"full name with explicit region", `{"cloudRun":{"service":"projects/p/locations/europe-west1/services/svc","region":"us-central1"}}`,
+			cloudRunTarget{region: "us-central1", service: "svc", path: "/"}, true},
+		{"short id and region", `{"cloudRun":{"service":"svc","region":"us-central1"}}`,
+			cloudRunTarget{region: "us-central1", service: "svc", path: "/"}, true},
+		{"absolute path", `{"cloudRun":{"service":"svc","region":"r","path":"/hook"}}`,
+			cloudRunTarget{region: "r", service: "svc", path: "/hook"}, true},
+		{"relative path", `{"cloudRun":{"service":"svc","region":"r","path":"hook"}}`,
+			cloudRunTarget{region: "r", service: "svc", path: "/hook"}, true},
+		{"missing service", `{"cloudRun":{"region":"r"}}`, cloudRunTarget{}, false},
+		{"missing region", `{"cloudRun":{"service":"svc"}}`, cloudRunTarget{}, false},
+		{"no cloudRun", `{"httpEndpoint":{"uri":"http://x"}}`, cloudRunTarget{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var dest map[string]any
+			if err := json.Unmarshal([]byte(tt.dest), &dest); err != nil {
+				t.Fatalf("unmarshal dest: %v", err)
+			}
+			got, ok := cloudRunDestination(dest)
+			if ok != tt.ok || got != tt.want {
+				t.Fatalf("cloudRunDestination = (%+v, %v), want (%+v, %v)", got, ok, tt.want, tt.ok)
+			}
+		})
 	}
 }
 

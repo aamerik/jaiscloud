@@ -42,18 +42,30 @@ func eventarcHTTPClient() httpDoer {
 	}
 }
 
+// CloudRunInvoker delivers one CloudEvents request to a Cloud Run service's
+// latest ready revision. It is implemented outside this package (over the run
+// core's runtime seam) so the Eventarc core never imports Cloud Run: the
+// invoker resolves the stored service and forwards the request through the
+// runtime manager, so delivery needs no DNS and works in k8s executor mode.
+// A nil invoker (the default) means a cloudRun destination is logged and
+// dropped, matching floci's logs-and-drops for unreachable destinations.
+type CloudRunInvoker interface {
+	Invoke(ctx context.Context, project, region, service, path string, headers map[string]string, body []byte) (int, error)
+}
+
 // DispatchEvent is the eventing.Dispatcher entry point. It delivers a produced
 // Pub/Sub event to every matching Eventarc trigger whose destination is not a
 // Cloud Function — the functions delivery engine owns those, so skipping them
 // here is what keeps a single event from being delivered twice.
 //
-// Delivery mirrors floci: a binary-mode CloudEvents POST to
-// destination.httpEndpoint.uri, fire-and-forget on its own goroutine, failures
-// logged and never retried. cloudRun (a later phase), gke and workflow
-// destinations are logged and dropped. A non-Pub/Sub event is ignored until the
-// Cloud Storage source phase lands.
+// Delivery mirrors floci: a binary-mode CloudEvents POST, fire-and-forget on
+// its own goroutine, failures logged and never retried. An httpEndpoint
+// destination is POSTed directly; a cloudRun destination is forwarded through
+// the CloudRunInvoker seam, honoring its path. gke and workflow destinations
+// are logged and dropped. A non-Pub/Sub event is ignored until the Cloud
+// Storage source phase lands.
 func (s *Service) DispatchEvent(ctx context.Context, ev eventing.Event) {
-	if s == nil || s.httpClient == nil {
+	if s == nil {
 		return
 	}
 	if ev.Source != eventing.SourcePubSub {
@@ -76,9 +88,13 @@ func (s *Service) DispatchEvent(ctx context.Context, ev eventing.Event) {
 			continue // the Cloud Functions delivery engine owns this destination
 		}
 		uri := httpEndpointURI(dest)
-		if uri == "" {
-			// cloudRun is delivered by a later phase; floci logs-and-drops the
-			// destinations it cannot reach (gke, workflow, and for now cloudRun).
+		if uri != "" && s.httpClient == nil {
+			uri = "" // no outbound HTTP client configured
+		}
+		runTarget, isCloudRun := cloudRunDestination(dest)
+		if uri == "" && !isCloudRun {
+			// floci logs-and-drops the destinations it cannot reach (gke and
+			// workflow); a malformed cloudRun is not deliverable either.
 			slog.Warn("eventarc: destination not deliverable; dropping event",
 				"trigger", t.Name, "destination", dest)
 			continue
@@ -91,7 +107,15 @@ func (s *Service) DispatchEvent(ctx context.Context, ev eventing.Event) {
 			continue
 		}
 		payload, headers := buildPubSubCloudEvent(ev.Project, t.Location, t.Name, ev)
-		s.deliver(uri, headers, payload)
+		switch {
+		case uri != "":
+			s.deliver(uri, headers, payload)
+		case s.cloudRun != nil:
+			s.deliverCloudRun(ev.Project, runTarget, headers, payload)
+		default:
+			slog.Warn("eventarc: cloudRun destination but no run service available; dropping event",
+				"trigger", t.Name, "service", runTarget.service, "region", runTarget.region)
+		}
 	}
 }
 
@@ -118,6 +142,99 @@ func httpEndpointURI(dest map[string]any) string {
 	}
 	uri, _ := ep["uri"].(string)
 	return strings.TrimSpace(uri)
+}
+
+// cloudRunTarget is a resolved destination.cloudRun invocation target.
+type cloudRunTarget struct {
+	region  string
+	service string
+	path    string
+}
+
+// cloudRunDestination resolves destination.cloudRun into its invocation target,
+// mirroring floci's EventarcService.deliverEvent:
+//
+//   - service may be the short id (with region set — floci's own doc example is
+//     {"service":"hello-run","region":"us-central1"}) or the full resource name
+//     projects/{p}/locations/{l}/services/{s}, in which case the id is the last
+//     segment and the location is the fallback region.
+//   - path defaults to "/"; a non-empty relative path is made absolute (floci
+//     prefixes "/" when the configured path lacks one).
+//
+// It returns false when there is no cloudRun destination or it names no service
+// or region — there is nothing to invoke.
+func cloudRunDestination(dest map[string]any) (cloudRunTarget, bool) {
+	m, _ := dest["cloudRun"].(map[string]any)
+	if m == nil {
+		return cloudRunTarget{}, false
+	}
+	service := strings.TrimSpace(stringField(m, "service"))
+	region := strings.TrimSpace(stringField(m, "region"))
+	path := stringField(m, "path")
+	if service == "" {
+		return cloudRunTarget{}, false
+	}
+	if parts := strings.Split(strings.Trim(service, "/"), "/"); len(parts) > 1 {
+		service = parts[len(parts)-1]
+		if region == "" {
+			region = segmentAfter(parts, "locations")
+		}
+	}
+	if service == "" || region == "" {
+		return cloudRunTarget{}, false
+	}
+	if path == "" {
+		path = "/"
+	} else if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return cloudRunTarget{region: region, service: service, path: path}, true
+}
+
+// stringField reads a string field from a decoded JSON map, returning "" for an
+// absent or non-string value.
+func stringField(m map[string]any, key string) string {
+	v, _ := m[key].(string)
+	return v
+}
+
+// segmentAfter returns the path segment following the first occurrence of name
+// in parts (e.g. segmentAfter([... locations us-central1 ...], "locations") ==
+// "us-central1"), or "" when absent.
+func segmentAfter(parts []string, name string) string {
+	for i, p := range parts {
+		if p == name && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+// deliverCloudRun invokes a Cloud Run service on its own goroutine, mirroring
+// deliver's fire-and-forget contract. The invoker maps a missing service to 404
+// and an unreachable runtime to 502/503/504; a failure is logged and never
+// retried or dead-lettered.
+func (s *Service) deliverCloudRun(project string, target cloudRunTarget, headers map[string]string, body []byte) {
+	invoker := s.cloudRun
+	if invoker == nil {
+		return
+	}
+	s.deliveryWG.Add(1)
+	go func() {
+		defer s.deliveryWG.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), eventarcDeliveryTimeout)
+		defer cancel()
+		status, err := invoker.Invoke(ctx, project, target.region, target.service, target.path, headers, body)
+		if err != nil {
+			slog.Warn("eventarc: deliver event to cloudRun",
+				"service", target.service, "region", target.region, "status", status, "err", err)
+			return
+		}
+		if status >= 300 {
+			slog.Warn("eventarc: cloudRun delivery non-2xx",
+				"service", target.service, "region", target.region, "status", status)
+		}
+	}()
 }
 
 // buildPubSubCloudEvent builds the binary-mode CloudEvents request floci sends
