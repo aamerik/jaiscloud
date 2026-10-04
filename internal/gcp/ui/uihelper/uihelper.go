@@ -26,8 +26,18 @@ import (
 // '+', '&', ':'), so a client-encoded segment would otherwise reach handlers
 // still escaped. Document/collection ids must not contain '/'; callers that
 // build resource names from a param should reject a decoded slash.
+//
+// chi routes against r.URL.RawPath when it is non-empty and against the
+// already-decoded r.URL.Path otherwise (see chi's Mux.routeHTTP). Decoding the
+// latter a second time would turn a literal "%2F" in a name into "/" — e.g. a
+// Firestore id of "a%2Fb" arrives as RawPath "'a%252Fb'"/Path "'a%2Fb'" and
+// must stay "a%2Fb". So only unescape when chi matched the raw (still-encoded)
+// path.
 func PathParam(r *http.Request, key string) string {
 	v := chi.URLParam(r, key)
+	if r.URL.RawPath == "" {
+		return v
+	}
 	if decoded, err := url.PathUnescape(v); err == nil {
 		return decoded
 	}
