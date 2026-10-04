@@ -17,6 +17,15 @@ cluster and a remote Docker context, so cluster-/image-based gates (`*-k3d`,
 k8s executor modes) are runnable — the contexts and commands are in the
 `gcp-phase-workflow` skill's Environment section.
 
+**Starting a session (`/gcp:new`):** the command first runs
+`make gcp-session-start`, which aborts if the current checkout has uncommitted
+changes (commit or stash a previous or concurrent session's work first),
+otherwise `git fetch upstream --prune` and fast-forwards the local `gcp` base
+from `upstream/gcp` (`--ff-only`, so a diverged base fails loudly rather than
+resetting), then rebuilds the ledger. Branch the item's `Branch` off the
+refreshed `gcp`. Always refresh from `upstream` — `origin` is a fork and its
+`gcp` is stale.
+
 The GCP backlog spans many plan docs and PRs. Do not rely on memory or chat
 history to decide what is implemented.
 
