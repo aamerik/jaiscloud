@@ -235,7 +235,8 @@ var gcpServices = []ServiceDescriptor{
 		// detection (detectV2Service) on the services/revisions resource family
 		// and on run-prefixed operation ids. Terraform/gcloud use the "/run/"
 		// path prefix. The codec lives with the REST transport package that
-		// adapts it to the shared core. REST only — gRPC is deferred (CR4).
+		// adapts it to the shared core; the gRPC Services/Revisions adapters
+		// share the same core.
 		ServiceName:    "run",
 		PathPrefixes:   []string{"/run/"},
 		ProviderPrefix: "Run",

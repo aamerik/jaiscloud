@@ -47,6 +47,20 @@ func strParam(nr *model.NormalizedRequest, key string) string {
 	return s
 }
 
+// boolParam reads a boolean query parameter ("true"/"1"); anything else is
+// false.
+func boolParam(nr *model.NormalizedRequest, key string) bool {
+	switch v := nr.Params[key].(type) {
+	case bool:
+		return v
+	case string:
+		b, _ := strconv.ParseBool(v)
+		return b
+	default:
+		return false
+	}
+}
+
 func bodyOf(nr *model.NormalizedRequest) map[string]any {
 	if m, ok := nr.Params["body"].(map[string]any); ok && m != nil {
 		return m

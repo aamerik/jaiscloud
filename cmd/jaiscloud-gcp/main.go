@@ -104,6 +104,7 @@ import (
 	grpcmetastore "jaiscloud/internal/gcp/transport/grpc/metastore"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 	grpcresourcemanager "jaiscloud/internal/gcp/transport/grpc/resourcemanager"
+	grpcrun "jaiscloud/internal/gcp/transport/grpc/run"
 	grpcscheduler "jaiscloud/internal/gcp/transport/grpc/scheduler"
 	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
 	grpctasks "jaiscloud/internal/gcp/transport/grpc/tasks"
@@ -162,6 +163,7 @@ import (
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
+	runpb "cloud.google.com/go/run/apiv2/runpb"
 	schedulerpb "cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	serviceusagepb "cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
@@ -607,10 +609,10 @@ func startCmd() *cobra.Command {
 			containerCore := containercore.NewService(stores.container)
 			containerP := restcontainer.NewProvider(containerCore)
 
-			// Cloud Run Admin v2's behavioural control plane. REST-first (gRPC
-			// deferred, CR4): the default mock runtime makes a service a stored
-			// record; k8s executor mode additionally launches the template image
-			// as a Pod + ClusterIP Service and reverse-proxies to it. The seam is
+			// Cloud Run Admin v2's behavioural control plane, served over REST and
+			// gRPC: the default mock runtime makes a service a stored record;
+			// k8s executor mode additionally launches the template image as a
+			// Pod + ClusterIP Service and reverse-proxies to it. The seam is
 			// resolved once at startup.
 			runExecutorMode, runExecutorSource := config.ExecutorMode("cloudrun", "mock")
 			// The invocation host is process-wide: the router's host detection
@@ -807,6 +809,7 @@ func startCmd() *cobra.Command {
 			functionsGRPC := grpcfunctions.NewService(functionsCore, cfg.ProjectID, functionsUploadBase)
 			functionsV2GRPC := grpcfunctions.NewServiceV2(functionsCore, cfg.ProjectID, functionsUploadBase)
 			containerGRPC := grpccontainer.NewService(containerCore, cfg.ProjectID)
+			runGRPC := grpcrun.NewService(runCore, cfg.ProjectID)
 			// The gRPC listener is built and bound only when the gRPC transport
 			// is selected for at least one service; otherwise no :grpc-port
 			// socket is opened.
@@ -859,6 +862,10 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("container") {
 					containerpb.RegisterClusterManagerServer(gserv.GRPC(), containerGRPC)
+				}
+				if transports.GRPCFor("run") {
+					runpb.RegisterServicesServer(gserv.GRPC(), runGRPC)
+					runpb.RegisterRevisionsServer(gserv.GRPC(), runGRPC)
 				}
 				if transports.GRPCFor("functions") {
 					functionspb.RegisterCloudFunctionsServiceServer(gserv.GRPC(), functionsGRPC)
@@ -954,6 +961,13 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("managedkafka") && managedKafkaCore != nil {
 					opsResolvers = append(opsResolvers, managedKafkaGRPC)
+				}
+				// Cloud Run publishes location-scoped operations whose ids carry
+				// the run-owned "operation-run-" prefix, so it claims only its
+				// own names and leaves Cloud Functions v2's location-scoped
+				// operations (and every other service's) untouched.
+				if transports.GRPCFor("run") && runCore != nil {
+					opsResolvers = append(opsResolvers, runGRPC)
 				}
 				opsService := grpcoperations.New(opsResolvers...)
 				// The opt-in async mode reports a name no resolver or registry

@@ -1,13 +1,12 @@
 // Package run is the transport-neutral core for Cloud Run Admin v2
 // (run.googleapis.com). It implements the behavioural control plane the emulator
 // exposes — services CRUD, revisions, service IAM, and google.longrunning
-// operations — over a Store. Both the REST adapter and any future transport
-// share one instance, so they cannot drift.
+// operations — over a Store. The REST adapter and the gRPC adapter
+// (internal/gcp/transport/grpc/run) share one instance, so they cannot drift.
 //
-// The runtime is behind a RuntimeManager seam whose W1.1 implementation is the
-// MockRuntime: a service is a stored record, not a running container. W1.2 adds
-// a k8s runtime that actually launches the template image. REST-first (gRPC is
-// deferred; see the wave plan CR4).
+// The runtime is behind a RuntimeManager seam whose default implementation is
+// the MockRuntime: a service is a stored record, not a running container; the
+// k8s executor (internal/gcp/runexec) launches the template image instead.
 package run
 
 import (
@@ -321,6 +320,65 @@ func (s *Service) ListRevisions(ctx context.Context, project, location, service 
 		return nil, mapStoreErr(err)
 	}
 	return revs, nil
+}
+
+// DeleteRevision removes a retired revision and returns the delete operation
+// (its response/metadata is the removed Revision). Cloud Run only permits
+// deleting retired revisions — the revision currently serving the service (the
+// latest ready/created one) is a FailedPrecondition. validateOnly validates the
+// request without deleting or recording an operation.
+func (s *Service) DeleteRevision(ctx context.Context, project, location, service, id string, validateOnly bool) (runstore.Operation, error) {
+	svc, err := s.store.GetService(ctx, project, location, service)
+	if err != nil {
+		return runstore.Operation{}, mapStoreErr(err)
+	}
+	rev, err := s.store.GetRevision(ctx, project, location, service, id)
+	if err != nil {
+		return runstore.Operation{}, mapStoreErr(err)
+	}
+	revName := RevisionName(project, location, service, id)
+	if revName == svc.LatestReadyRevision || revName == svc.LatestCreatedRevision {
+		return runstore.Operation{}, model.NewProviderError("FailedPrecondition",
+			"only retired revisions can be deleted: "+revName, 400)
+	}
+	if !validateOnly {
+		// A retired revision has no live runtime, so teardown is best-effort.
+		_ = s.runtime.RemoveRevision(ctx, rev)
+		if err := s.store.DeleteRevision(ctx, project, location, service, id); err != nil {
+			return runstore.Operation{}, mapStoreErr(err)
+		}
+	}
+	return s.recordRevisionOperation(ctx, project, location, svc.ID, rev, validateOnly)
+}
+
+// recordRevisionOperation builds (and, unless the request was validate-only,
+// persists) the operation for a revision mutation. The response snapshot is the
+// Revision, matching the proto's operation_info response_type.
+func (s *Service) recordRevisionOperation(ctx context.Context, project, location, service string, rev runstore.Revision, validateOnly bool) (runstore.Operation, error) {
+	now := clock.Now()
+	if !validateOnly {
+		rev.DeleteTime = now
+	}
+	op := runstore.Operation{
+		ProjectID:  project,
+		Location:   location,
+		ID:         "operation-run-" + newUUID(),
+		Verb:       "delete",
+		Target:     RevisionName(project, location, service, rev.ID),
+		CreateTime: now,
+		Revision:   &rev,
+	}
+	if !s.lro.Async() {
+		op.Done = true
+		op.EndTime = now
+	}
+	if validateOnly {
+		return op, nil
+	}
+	if err := s.store.CreateOperation(ctx, project, location, op); err != nil {
+		return runstore.Operation{}, mapStoreErr(err)
+	}
+	return op, nil
 }
 
 // --- IAM ---

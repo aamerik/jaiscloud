@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 348,
-  "passed": 348,
+  "total": 360,
+  "passed": 360,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
-    "services": 24,
-    "checks": 348,
-    "passed": 348,
+    "services": 25,
+    "checks": 360,
+    "passed": 360,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -130,6 +130,13 @@
       "service": "resourcemanager",
       "total": 8,
       "passed": 8,
+      "failed": 0,
+      "unimplemented": 0
+    },
+    {
+      "service": "run",
+      "total": 12,
+      "passed": 12,
       "failed": 0,
       "unimplemented": 0
     },
@@ -2430,6 +2437,90 @@
       "method": "DeleteCluster",
       "status": "pass",
       "key_field": "DELETE_CLUSTER DONE + NotFound after"
+    },
+    {
+      "service": "run",
+      "rpc": "CreateService",
+      "method": "CreateService",
+      "status": "pass",
+      "key_field": "done operation response = Service (Ready/uri/latestReadyRevision)"
+    },
+    {
+      "service": "run",
+      "rpc": "GetService",
+      "method": "GetService",
+      "status": "pass",
+      "key_field": "name/uri round-trip"
+    },
+    {
+      "service": "run",
+      "rpc": "ListServices",
+      "method": "ListServices",
+      "status": "pass",
+      "key_field": "created service present"
+    },
+    {
+      "service": "run",
+      "rpc": "UpdateService",
+      "method": "UpdateService",
+      "status": "pass",
+      "key_field": "template change mints the next revision"
+    },
+    {
+      "service": "run",
+      "rpc": "GetRevision",
+      "method": "GetRevision",
+      "status": "pass",
+      "key_field": "service + containers[0].image round-trip"
+    },
+    {
+      "service": "run",
+      "rpc": "ListRevisions",
+      "method": "ListRevisions",
+      "status": "pass",
+      "key_field": "first revision present"
+    },
+    {
+      "service": "run",
+      "rpc": "SetIamPolicy",
+      "method": "SetIamPolicy",
+      "status": "pass",
+      "key_field": "binding round-trip"
+    },
+    {
+      "service": "run",
+      "rpc": "GetIamPolicy",
+      "method": "GetIamPolicy",
+      "status": "pass",
+      "key_field": "policy round-trip"
+    },
+    {
+      "service": "run",
+      "rpc": "TestIamPermissions",
+      "method": "TestIamPermissions",
+      "status": "pass",
+      "key_field": "requested permissions echoed"
+    },
+    {
+      "service": "run",
+      "rpc": "DeleteRevision (retired)",
+      "method": "DeleteRevision",
+      "status": "pass",
+      "key_field": "retired revision deleted; NotFound after"
+    },
+    {
+      "service": "run",
+      "rpc": "DeleteRevision (serving)",
+      "method": "DeleteRevision",
+      "status": "pass",
+      "key_field": "serving revision rejected FailedPrecondition"
+    },
+    {
+      "service": "run",
+      "rpc": "DeleteService",
+      "method": "DeleteService",
+      "status": "pass",
+      "key_field": "done operation; NotFound after"
     },
     {
       "service": "functions",

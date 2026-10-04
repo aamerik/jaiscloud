@@ -27,6 +27,7 @@ import (
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
+	runpb "cloud.google.com/go/run/apiv2/runpb"
 	schedulerpb "cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	serviceusagepb "cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
@@ -53,6 +54,7 @@ import (
 	grpcmetastore "jaiscloud/internal/gcp/transport/grpc/metastore"
 	grpcmonitoring "jaiscloud/internal/gcp/transport/grpc/monitoring"
 	grpcresourcemanager "jaiscloud/internal/gcp/transport/grpc/resourcemanager"
+	grpcrun "jaiscloud/internal/gcp/transport/grpc/run"
 	grpcscheduler "jaiscloud/internal/gcp/transport/grpc/scheduler"
 	grpcserviceusage "jaiscloud/internal/gcp/transport/grpc/serviceusage"
 	grpctasks "jaiscloud/internal/gcp/transport/grpc/tasks"
@@ -108,6 +110,8 @@ var grpcWireService = map[string]string{
 	"google.cloud.eventarc.v1.Eventarc":                  "eventarc",
 	"google.api.serviceusage.v1.ServiceUsage":            "serviceusage",
 	"google.cloud.resourcemanager.v3.Projects":           "resourcemanager",
+	"google.cloud.run.v2.Services":                       "run",
+	"google.cloud.run.v2.Revisions":                      "run",
 	"google.cloud.scheduler.v1.CloudScheduler":           "scheduler",
 	"google.cloud.tasks.v2.CloudTasks":                   "tasks",
 	"google.iam.v1.IAMPolicy":                            "iam",
@@ -161,6 +165,9 @@ func EnumerateGRPC() []GRPCService {
 	dataprocpb.RegisterJobControllerServer(reg, &grpcdataproc.Service{})
 	dataprocpb.RegisterWorkflowTemplateServiceServer(reg, &grpcdataproc.Service{})
 	containerpb.RegisterClusterManagerServer(reg, &grpccontainer.Service{})
+	runSvc := &grpcrun.Service{}
+	runpb.RegisterServicesServer(reg, runSvc)
+	runpb.RegisterRevisionsServer(reg, runSvc)
 	functionspb.RegisterCloudFunctionsServiceServer(reg, &grpcfunctions.Service{})
 	apiv2functionspb.RegisterFunctionServiceServer(reg, &grpcfunctions.ServiceV2{})
 	credentialspb.RegisterIAMCredentialsServer(reg, &grpciamcredentials.Service{})

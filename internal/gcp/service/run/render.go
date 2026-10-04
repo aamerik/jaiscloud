@@ -11,7 +11,8 @@ import (
 
 // google.protobuf.Any type URLs used on Cloud Run operation responses.
 const (
-	serviceTypeURL = "type.googleapis.com/google.cloud.run.v2.Service"
+	serviceTypeURL  = "type.googleapis.com/google.cloud.run.v2.Service"
+	revisionTypeURL = "type.googleapis.com/google.cloud.run.v2.Revision"
 )
 
 // conditionLastTransition returns the RFC3339 timestamp used on a Ready
@@ -109,6 +110,9 @@ func RevisionJSON(r runstore.Revision) map[string]any {
 	out["etag"] = r.Etag
 	out["createTime"] = formatTime(r.CreateTime)
 	out["updateTime"] = formatTime(r.UpdateTime)
+	if !r.DeleteTime.IsZero() {
+		out["deleteTime"] = formatTime(r.DeleteTime)
+	}
 	out["conditions"] = []any{readyCondition(r.UpdateTime)}
 	out["reconciling"] = false
 	return out
@@ -123,19 +127,25 @@ func OperationJSON(op runstore.Operation) map[string]any {
 		"name": OperationName(op.ProjectID, op.Location, op.ID),
 		"done": op.Done,
 	}
-	if op.Done && op.Service != nil {
-		out["metadata"] = serviceAny(*op.Service)
-		out["response"] = serviceAny(*op.Service)
+	if op.Done {
+		switch {
+		case op.Service != nil:
+			out["metadata"] = typedAny(serviceTypeURL, ServiceJSON(*op.Service))
+			out["response"] = typedAny(serviceTypeURL, ServiceJSON(*op.Service))
+		case op.Revision != nil:
+			out["metadata"] = typedAny(revisionTypeURL, RevisionJSON(*op.Revision))
+			out["response"] = typedAny(revisionTypeURL, RevisionJSON(*op.Revision))
+		}
 	}
 	return out
 }
 
-// serviceAny wraps a rendered service body as the Any-shaped JSON a
-// google.longrunning.Operation response carries.
-func serviceAny(s runstore.Service) map[string]any {
-	body := ServiceJSON(s)
+// typedAny wraps a rendered body as the Any-shaped JSON a
+// google.longrunning.Operation response carries (the @type discriminator gax
+// clients require to unpack it).
+func typedAny(typeURL string, body map[string]any) map[string]any {
 	out := make(map[string]any, len(body)+1)
-	out["@type"] = serviceTypeURL
+	out["@type"] = typeURL
 	for k, v := range body {
 		out[k] = v
 	}

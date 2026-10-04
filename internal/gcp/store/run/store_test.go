@@ -33,12 +33,34 @@ func TestMemoryStoreCRUDAndCascade(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreDeleteRevision(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	_ = s.CreateService(ctx, "p", "l", Service{ID: "svc"})
+	_ = s.CreateRevision(ctx, "p", "l", "svc", Revision{ID: "svc-00001"})
+	_ = s.CreateRevision(ctx, "p", "l", "svc", Revision{ID: "svc-00002"})
+
+	if err := s.DeleteRevision(ctx, "p", "l", "svc", "svc-00001"); err != nil {
+		t.Fatalf("DeleteRevision: %v", err)
+	}
+	if _, err := s.GetRevision(ctx, "p", "l", "svc", "svc-00001"); !errors.Is(err, ErrNoSuchRevision) {
+		t.Errorf("deleted revision still present: %v", err)
+	}
+	if _, err := s.GetRevision(ctx, "p", "l", "svc", "svc-00002"); err != nil {
+		t.Errorf("sibling revision removed: %v", err)
+	}
+	if err := s.DeleteRevision(ctx, "p", "l", "svc", "svc-00001"); !errors.Is(err, ErrNoSuchRevision) {
+		t.Errorf("delete missing err = %v", err)
+	}
+}
+
 func TestMemoryStoreSnapshotRestore(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()
 	_ = s.CreateService(ctx, "p", "l", Service{ID: "svc", Uri: "https://x"})
 	_ = s.CreateRevision(ctx, "p", "l", "svc", Revision{ID: "svc-00001", Data: map[string]any{"containers": []any{}}})
 	_ = s.CreateOperation(ctx, "p", "l", Operation{ID: "operation-run-1", Done: true, Service: &Service{ID: "svc"}})
+	_ = s.CreateOperation(ctx, "p", "l", Operation{ID: "operation-run-2", Done: true, Revision: &Revision{ID: "svc-00001"}})
 
 	var buf bytes.Buffer
 	if err := s.Snapshot(ctx, &buf); err != nil {
@@ -56,6 +78,9 @@ func TestMemoryStoreSnapshotRestore(t *testing.T) {
 	}
 	if op, err := dst.GetOperation(ctx, "p", "l", "operation-run-1"); err != nil || op.Service == nil || op.Service.ID != "svc" {
 		t.Errorf("restored operation = %+v, %v", op, err)
+	}
+	if op, err := dst.GetOperation(ctx, "p", "l", "operation-run-2"); err != nil || op.Revision == nil || op.Revision.ID != "svc-00001" {
+		t.Errorf("restored revision operation = %+v, %v", op, err)
 	}
 }
 

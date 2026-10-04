@@ -11,6 +11,7 @@
 //	POST   /v2/projects/{p}/locations/{l}/services/{id}:testIamPermissions
 //	GET    /v2/projects/{p}/locations/{l}/services/{id}/revisions
 //	GET    /v2/projects/{p}/locations/{l}/services/{id}/revisions/{rev}
+//	DELETE /v2/projects/{p}/locations/{l}/services/{id}/revisions/{rev}
 //	GET    /v2/projects/{p}/locations/{l}/operations/{operation-run-*}
 //
 // Cloud Run shares the canonical /v2/projects/{p}/locations/{l}/... path with
@@ -19,7 +20,7 @@
 // run-prefixed operation ids. Terraform/gcloud use a "/run" path prefix, which
 // the codec also accepts. The Codec is a NormalizedRequest adapter and the
 // Provider holds the routes; both delegate to the transport-neutral core
-// (internal/gcp/service/run). REST-first: no gRPC server is registered (CR4).
+// (internal/gcp/service/run), which the gRPC adapter also serves.
 package run
 
 import (
@@ -146,8 +147,11 @@ func serviceAction(rest []string, method string, params map[string]any, prefixed
 			params["service"] = rest[1]
 			id, _ := splitVerb(rest[3])
 			params["revision"] = id
-			if method == http.MethodGet {
+			switch method {
+			case http.MethodGet:
 				return "GetRevision"
+			case http.MethodDelete:
+				return "DeleteRevision"
 			}
 		}
 	}

@@ -36,6 +36,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Run.TestIamPermissions": p.TestIamPermissions,
 		"Run.ListRevisions":      p.ListRevisions,
 		"Run.GetRevision":        p.GetRevision,
+		"Run.DeleteRevision":     p.DeleteRevision,
 		"Run.GetOperation":       p.GetOperation,
 		"Run.ListOperations":     p.ListOperations,
 		"Run.WaitOperation":      p.WaitOperation,
@@ -148,6 +149,15 @@ func (p *Provider) GetRevision(ctx context.Context, nr *model.NormalizedRequest)
 		return nil, err
 	}
 	return provider.OK(core.RevisionJSON(rev)), nil
+}
+
+func (p *Provider) DeleteRevision(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	op, err := p.core.DeleteRevision(ctx, strParam(nr, "project"), strParam(nr, "location"),
+		strParam(nr, "service"), strParam(nr, "revision"), boolParam(nr, "validateOnly"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.OperationJSON(op)), nil
 }
 
 func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
