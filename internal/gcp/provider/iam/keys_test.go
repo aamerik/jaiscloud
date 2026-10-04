@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -35,12 +36,14 @@ func TestServiceAccountKeysAndSign(t *testing.T) {
 	if !strings.Contains(keyName, "/keys/") {
 		t.Fatalf("expected key name with /keys/, got %q", keyName)
 	}
-	keyIDField, _ := kr.Data["keyId"].(string)
-	if keyIDField == "" {
-		t.Error("expected a non-blank keyId on key create")
+	// The key id is the trailing segment of name — real GCP's ServiceAccountKey
+	// has no separate keyId field, so the response must not invent one.
+	if _, present := kr.Data["keyId"]; present {
+		t.Errorf("key create must not emit a non-schema keyId field: %v", kr.Data["keyId"])
 	}
-	if !strings.HasSuffix(keyName, "/keys/"+keyIDField) {
-		t.Errorf("keyId %q does not match trailing segment of name %q", keyIDField, keyName)
+	keyIDField := keyName[strings.LastIndex(keyName, "/")+1:]
+	if keyIDField == "" {
+		t.Fatalf("expected a key id in the name %q", keyName)
 	}
 	if kr.Data["keyOrigin"] != "USER_PROVIDED" {
 		t.Errorf("keyOrigin = %v, want USER_PROVIDED", kr.Data["keyOrigin"])
@@ -109,8 +112,11 @@ func TestServiceAccountKeysAndSign(t *testing.T) {
 		t.Fatalf("expected 1 key, got %v", lr.Data["keys"])
 	}
 	listed, _ := keys[0].(map[string]any)
-	if listed["keyId"] != keyIDField {
-		t.Errorf("listed key keyId = %v, want %q (stable across list)", listed["keyId"], keyIDField)
+	if listedName, _ := listed["name"].(string); !strings.HasSuffix(listedName, "/keys/"+keyIDField) {
+		t.Errorf("listed key name = %v, want suffix /keys/%s (stable across list)", listedName, keyIDField)
+	}
+	if _, present := listed["keyId"]; present {
+		t.Errorf("keys.list must not emit a non-schema keyId field: %v", listed["keyId"])
 	}
 
 	// Delete the key.
@@ -119,6 +125,51 @@ func TestServiceAccountKeysAndSign(t *testing.T) {
 	}
 	if _, err := p.ServiceAccountKeyGet(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email + "/keys/" + keyID})); err == nil {
 		t.Fatal("expected 404 on deleted key")
+	}
+}
+
+// TestServiceAccountSignBlobResponseFieldByHost covers J64: the IAM and IAM
+// Credentials APIs share one path on the emulator origin but return different
+// signature field names. The request Host selects exactly one — never both.
+func TestServiceAccountSignBlobResponseFieldByHost(t *testing.T) {
+	ctx := context.Background()
+	p := New(store.NewMemoryResourceStore())
+	if _, err := p.Create(ctx, newNR(map[string]any{"body": map[string]any{"accountId": "sa"}})); err != nil {
+		t.Fatalf("create SA: %v", err)
+	}
+	email := "sa@proj.iam.gserviceaccount.com"
+	payload := base64.StdEncoding.EncodeToString([]byte("hello"))
+
+	sign := func(host string) map[string]any {
+		t.Helper()
+		nr := newNR(map[string]any{"name": "serviceAccounts/" + email, "body": map[string]any{"payload": payload}})
+		nr.Raw = &http.Request{Host: host}
+		resp, err := p.ServiceAccountSignBlob(ctx, nr)
+		if err != nil {
+			t.Fatalf("signBlob(host=%q): %v", host, err)
+		}
+		return resp.Data
+	}
+
+	iam := sign("iam.googleapis.com")
+	if _, ok := iam["signature"]; !ok {
+		t.Errorf("IAM signBlob must return signature: %v", iam)
+	}
+	if _, ok := iam["signedBlob"]; ok {
+		t.Errorf("IAM signBlob must not return the IAM Credentials field signedBlob: %v", iam)
+	}
+
+	creds := sign("iamcredentials.googleapis.com")
+	if _, ok := creds["signedBlob"]; !ok {
+		t.Errorf("IAM Credentials signBlob must return signedBlob: %v", creds)
+	}
+	if _, ok := creds["signature"]; ok {
+		t.Errorf("IAM Credentials signBlob must not return the IAM field signature: %v", creds)
+	}
+
+	// An unqualified host (a bare emulator endpoint) defaults to the IAM spelling.
+	if local := sign("localhost:8080"); local["signature"] == nil || local["signedBlob"] != nil {
+		t.Errorf("default-host signBlob must return signature only: %v", local)
 	}
 }
 

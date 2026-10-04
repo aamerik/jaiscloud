@@ -201,8 +201,10 @@ func TestSetIamPolicy_WrapsPolicy(t *testing.T) {
 }
 
 func TestCreateKey_ReturnsPrivateKeyData(t *testing.T) {
+	// The provider returns no top-level keyId (real GCP exposes the id only in
+	// name); the UI derives it from the name's trailing segment.
 	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
-		"name": "projects/p/serviceAccounts/a@p.iam.gserviceaccount.com/keys/k1", "keyId": "k1", "privateKeyData": "cHJpdg==",
+		"name": "projects/p/serviceAccounts/a@p.iam.gserviceaccount.com/keys/k1", "privateKeyData": "cHJpdg==",
 	}}}
 	w := do(t, mock, http.MethodPost, "/serviceAccounts/a@p.iam.gserviceaccount.com/keys", "")
 	if w.Code != http.StatusCreated {
@@ -222,7 +224,7 @@ func TestCreateKey_ReturnsPrivateKeyData(t *testing.T) {
 
 func TestListKeys_UsesCollectionName(t *testing.T) {
 	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
-		"keys": []any{map[string]any{"keyId": "k1", "name": "projects/p/serviceAccounts/a@p.iam.gserviceaccount.com/keys/k1"}},
+		"keys": []any{map[string]any{"name": "projects/p/serviceAccounts/a@p.iam.gserviceaccount.com/keys/k1"}},
 	}}}
 	w := do(t, mock, http.MethodGet, "/serviceAccounts/a@p.iam.gserviceaccount.com/keys", "")
 	if w.Code != http.StatusOK {
@@ -234,7 +236,9 @@ func TestListKeys_UsesCollectionName(t *testing.T) {
 }
 
 func TestDisableKey_UsesKeyName(t *testing.T) {
-	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{"keyId": "k1"}}}
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
+		"name": "projects/p/serviceAccounts/a@p.iam.gserviceaccount.com/keys/k1",
+	}}}
 	w := do(t, mock, http.MethodPost, "/serviceAccounts/a@p.iam.gserviceaccount.com/keys/k1/disable", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)

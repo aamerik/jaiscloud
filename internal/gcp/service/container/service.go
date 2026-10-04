@@ -24,7 +24,7 @@ import (
 )
 
 // DefaultMasterVersion is the currentMasterVersion the mock reports when the
-// caller supplies no initialClusterVersion. It mirrors floci-gcp's mock.
+// caller supplies no initialClusterVersion. It mirrors the emulator's mock.
 const DefaultMasterVersion = "1.30.5-gke.1014001"
 
 // validClusterName is GKE's cluster-id grammar.

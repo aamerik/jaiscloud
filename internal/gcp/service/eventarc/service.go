@@ -373,7 +373,7 @@ func validateDestination(project string, dest map[string]any) error {
 // A full service resource name (projects/{p}/locations/{l}/services/{s}) is
 // accepted leniently: when region is omitted it is derived from the name's
 // location, but any other slash-containing value is rejected and an explicit
-// region that disagrees with the name's location is rejected. floci's short-id
+// region that disagrees with the name's location is rejected. The short-id
 // form ({"service":"svc","region":"us-central1"}) is accepted as-is.
 //
 // This is intentionally stricter than cloudRunDestination (delivery.go), which
@@ -1096,7 +1096,7 @@ func filtersMatch(filters []any, attrs map[string]string, eventType string) bool
 // attributeValueMatches compares a filter value to an actual event attribute.
 // topic and bucket values fall back to a last-segment comparison so a short
 // value ("my-topic") and a fully-qualified one ("projects/p/topics/my-topic")
-// both match, mirroring floci's matchAttributeValue.
+// both match.
 func attributeValueMatches(name, filterVal, actualVal string) bool {
 	if filterVal == actualVal {
 		return true

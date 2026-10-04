@@ -25,7 +25,7 @@ type httpDoer interface {
 // eventarcConnectTimeout bounds the connect phase of an Eventarc delivery, and
 // eventarcDeliveryTimeout bounds the whole request (a sink that accepts and then
 // stalls would otherwise leak a goroutine). Delivery is fire-and-forget (the
-// floci contract): the emulator never retries or dead-letters a non-function
+// the emulator contract): the emulator never retries or dead-letters a non-function
 // delivery, so a slow or unreachable sink is logged, never surfaced to the
 // producer.
 const (
@@ -50,7 +50,7 @@ func eventarcHTTPClient() httpDoer {
 // invoker resolves the stored service and forwards the request through the
 // runtime manager, so delivery needs no DNS and works in k8s executor mode.
 // A nil invoker (the default) means a cloudRun destination is logged and
-// dropped, matching floci's logs-and-drops for unreachable destinations.
+// dropped — the emulator logs and drops unreachable destinations.
 type CloudRunInvoker interface {
 	Invoke(ctx context.Context, project, region, service, path string, headers map[string]string, body []byte) (int, error)
 }
@@ -61,7 +61,7 @@ type CloudRunInvoker interface {
 // those, so skipping them here is what keeps a single event from being
 // delivered twice.
 //
-// Delivery mirrors floci: a binary-mode CloudEvents POST, fire-and-forget on
+// Delivery is a binary-mode CloudEvents POST, fire-and-forget on
 // its own goroutine, failures logged and never retried. An httpEndpoint
 // destination is POSTed directly; a cloudRun destination is forwarded through
 // the CloudRunInvoker seam, honoring its path. gke and workflow destinations
@@ -96,7 +96,7 @@ func (s *Service) DispatchEvent(ctx context.Context, ev eventing.Event) {
 			continue
 		}
 		if uri == "" && !isCloudRun {
-			// Only a matched event reaches this: floci logs-and-drops the
+			// Only a matched event reaches this: the emulator logs-and-drops the
 			// destinations it cannot reach (gke and workflow), and a malformed
 			// cloudRun is not deliverable either.
 			slog.Warn("eventarc: destination not deliverable; dropping event",
@@ -116,7 +116,7 @@ func (s *Service) DispatchEvent(ctx context.Context, ev eventing.Event) {
 	}
 }
 
-// pubsubEventAttributes synthesizes the attribute map floci matches a Pub/Sub
+// pubsubEventAttributes synthesizes the attribute map matched for a Pub/Sub
 // event on: the message's own attributes plus the reserved type and topic
 // attributes (topic carries the fully-qualified resource so a filter may use
 // either the short id or the full name — see attributeValueMatches).
@@ -134,7 +134,7 @@ func pubsubEventAttributes(ev eventing.Event) map[string]string {
 // produced event. A Pub/Sub trigger is selected by a matching
 // transport.pubsub.topic AND its eventFilters (the transport is the trigger's
 // source); a Cloud Storage trigger has no Pub/Sub transport, so only its
-// eventFilters can select it — and, mirroring floci's GCS handler, a trigger
+// eventFilters can select it — and, mirroring the GCS event handler, a trigger
 // with no eventFilters never matches. Shared by the Cloud Functions target
 // index (TargetsForEvent) and this dispatcher so the two engines cannot drift.
 func eventarcEventMatches(body map[string]any, ev eventing.Event) bool {
@@ -152,7 +152,7 @@ func eventarcEventMatches(body map[string]any, ev eventing.Event) bool {
 }
 
 // storageEventAttributes synthesizes the attribute map a Cloud Storage event is
-// matched on, mirroring floci's onGcsEvent: the reserved "bucket" and — when the
+// matched on, mirroring the GCS event handler: the reserved "bucket" and — when the
 // event carries one — "object". The producer's own attributes (bucketId/
 // objectId/...) are carried through so a trigger may filter on them too. The
 // "type" filter is handled separately by filtersMatch against the event type, so
@@ -192,7 +192,7 @@ func buildCloudEvent(project, location, triggerID string, ev eventing.Event) ([]
 // //storage.googleapis.com/projects/_/buckets/{bucket}, the CloudEvent type
 // (google.cloud.storage.object.v1.finalized|deleted) and the object metadata
 // (StorageObjectData) as the JSON body. ev.Data already carries the producer's
-// object-metadata JSON. ce-id is minted fresh per event (real GCP and floci both
+// object-metadata JSON. ce-id is minted fresh per event (real GCP and the emulator both
 // use a unique id): the producer's EventID is derived from bucket/object/
 // generation, which would collide between a finalize and a delete of the same
 // generation.
@@ -238,13 +238,13 @@ type cloudRunTarget struct {
 }
 
 // cloudRunDestination resolves destination.cloudRun into its invocation target,
-// mirroring floci's EventarcService.deliverEvent:
+// The delivery flow:
 //
-//   - service may be the short id (with region set — floci's own doc example is
+//   - service may be the short id (with region set — the documented example is
 //     {"service":"hello-run","region":"us-central1"}) or the full resource name
 //     projects/{p}/locations/{l}/services/{s}, in which case the id is the last
 //     segment and the location is the fallback region.
-//   - path defaults to "/"; a non-empty relative path is made absolute (floci
+//   - path defaults to "/"; a non-empty relative path is made absolute (the emulator
 //     prefixes "/" when the configured path lacks one).
 //
 // It returns false when there is no cloudRun destination or it names no service
@@ -306,7 +306,7 @@ func (s *Service) deliverCloudRun(project string, target cloudRunTarget, headers
 	}()
 }
 
-// buildPubSubCloudEvent builds the binary-mode CloudEvents request floci sends
+// buildPubSubCloudEvent builds the binary-mode CloudEvents request the emulator sends
 // for a Pub/Sub message: the ce-* headers and the Pub/Sub push-delivery JSON
 // body ({message:{data,attributes,messageId,publishTime},subscription}). The
 // subscription is the emulator's own provisioned id

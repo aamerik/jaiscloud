@@ -370,6 +370,21 @@ proposed change (exit 2 = already done, 3 = in flight),
 `Pri`, then impact), and `make gcp-status-coverage` fails if any doc has status
 markers but produced no ledger rows. See [AGENTS.md](AGENTS.md).
 
+### GCP source of truth: real GCP, never a sibling emulator
+
+For GCP wire behavior the authority order is: the service's Discovery document
+/ proto and official Google docs → real client-SDK wire behavior → the AWS
+reference implementation (repo conventions only) → jaiscloud's own code →
+jaiscloud's own tests. **floci-gcp and localgcp are optional smoke/interop
+harnesses, never the spec.** When a floci/localgcp expectation disagrees with
+the Discovery document — an emulator-only response field (`keyId` on
+`ServiceAccountKey`), a recognizable token prefix, a response shape — real GCP
+wins. Do not add emulator-only fields or values to make a floci assertion pass:
+classify the assertion TEST-NON-COMPLIANT and record it. The compliance gate is
+the offline conformance harness (`tests/gcpconformance`: vendored Discovery +
+committed transcripts, the official gRPC clients, and the `gcloud`/Python client
+suites), not a sibling emulator's suite.
+
 ### Resource IDs: use nr.ResourceID, never hardcode ARN formats
 
 Providers must use `nr.ResourceID("type", name)` — never `fmt.Sprintf("arn:aws:...")`.

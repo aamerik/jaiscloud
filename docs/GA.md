@@ -394,8 +394,8 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   probes and IAM invocation enforcement are not modelled. The k8s executor shares the Pod/ClusterIP-Service lifecycle helper
   in `internal/k8shelpers` with Managed Kafka; Docker execution mode is not scheduled. The execution
   path is verified end to end on k3d — `tests/persistent_mode/gcp/cloudrun/`
-  (`make test-e2e-cloudrun-k8s`), and the floci-gcp Java suite's `CloudRunTest` passes 7/7 with
-  execution enabled (`make test-e2e-cloudrun-java`).
+  (`make test-e2e-cloudrun-k8s`). The optional floci-gcp Java interop smoke suite
+  (`make test-e2e-cloudrun-java`) is corroborating evidence only, not a compliance gate.
 - **Not implemented at all (out of scope for v1.x)** — Artifact Registry, Cloud
   Endpoints, Deployment Manager, and Firebase Auth (Identity Toolkit): no emulator surface
   (requests are unhandled). Artifact Registry is engine-bearing (registry proxy) and is deliberately
@@ -529,9 +529,10 @@ generated.
   v1 surface — `generateAccessToken`/`generateIdToken` over REST and all four methods
   (`generateAccessToken`, `generateIdToken`, `signBlob`, `signJwt`) over
   `google.iam.credentials.v1.IAMCredentials` gRPC — minted from the shared service-account key
-  material. REST `signBlob`/`signJwt` share their path with `iam` on a single origin and stay
-  served by `iam`, whose response carries both `signature` and `signedBlob`. Access tokens use the
-  emulator's `floci-gcp-impersonated-` convention (real GCP returns an opaque token). This adds
+  material. REST `signBlob`/`signJwt` share their path with `iam` on a single origin; the request
+  Host selects the surface, so `iam` returns the IAM `signature` field and IAM Credentials returns
+  `signedBlob` — never both. Access tokens are opaque (a minted JWT with no recognizable prefix),
+  matching real GCP's opaque tokens. This adds
   6 `ga` cells (`iamcredentials`); the matrix now totals **808 cells** with gRPC conformance
   **303/303** (the "716 cells / 262" figures above are the dual-parity effort's point-in-time
   snapshot).

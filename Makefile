@@ -69,11 +69,13 @@ GCP_SAMPLES_MODULES  := pubsub:spring-cloud-gcp-pubsub-sample \
                         firestore:spring-cloud-gcp-data-firestore-sample \
                         datastore:spring-cloud-gcp-data-datastore-basic-sample
 
-# floci-gcp compatibility suite (scratch checkout; the Java gate runs its suite
-# against the deployed k3d emulator through the in-cluster portmux). CloudRunTest
-# asserts the synthesized authority is ".<location>.run.floci-gcp:4588" when
-# execution is enabled, so the Java target overrides the emulator's URL suffix
-# and port to those values for the duration of the run.
+# Optional floci-gcp interoperability smoke suite (scratch checkout; runs its
+# suite against the deployed k3d emulator through the in-cluster portmux). This
+# is corroborating evidence, not a compliance gate — real GCP (Discovery +
+# official SDKs) is the authority (see CLAUDE.md). CloudRunTest asserts the
+# synthesized authority is ".<location>.run.floci-gcp:4588" when execution is
+# enabled, so the Java target overrides the emulator's URL suffix and port to
+# those values for the duration of the run.
 FLOCI_COMPAT_DIR     ?= $(HOME)/code/floci-gcp/compatibility-tests
 CLOUDRUN_URL_SUFFIX  ?= run.floci-gcp
 CLOUDRUN_URL_PORT    ?= 4588
@@ -953,7 +955,7 @@ test-e2e-eventarc-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Eventarc 
 	K8S_NAMESPACE=$(K8S_NAMESPACE) EVENTARC_E2E_K8S=1 \
 	  go test -v -tags eventarc_e2e -timeout 20m ./tests/persistent_mode/gcp/eventarc/
 
-test-e2e-cloudrun-java: _check-gcp-samples-prereq _refresh-gcp-image ## floci-gcp Java suite against the k3d emulator with Cloud Run k8s execution, through the in-cluster portmux (asserts CloudRunTest 7/7; JAVA_HOME/mvn on PATH — see AGENTS.md)
+test-e2e-cloudrun-java: _check-gcp-samples-prereq _refresh-gcp-image ## OPTIONAL floci-gcp Java interop smoke (not a compliance gate) against the k3d emulator with Cloud Run k8s execution, through the in-cluster portmux (asserts CloudRunTest 7/7; JAVA_HOME/mvn on PATH — see AGENTS.md)
 	@test -d $(FLOCI_COMPAT_DIR)/sdk-test-java || (echo "ERROR: $(FLOCI_COMPAT_DIR)/sdk-test-java not found — set FLOCI_COMPAT_DIR"; exit 1)
 	@command -v mvn >/dev/null 2>&1 || (echo "ERROR: mvn not on PATH — export JAVA_HOME and /tmp/opencode/toolchain/maven/bin (see AGENTS.md)"; exit 1)
 	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp \

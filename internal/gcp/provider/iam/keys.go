@@ -52,15 +52,13 @@ func parseKeyName(name string) (email, keyID string) {
 // keyToMap renders a service-account key as its GCP response object (no
 // privateKeyData — that is returned only on create).
 //
-// keyId is not a field of the Discovery ServiceAccountKey schema (the id is
-// implicit in `name`), but the Java gax client and the floci-gcp reference
-// surface the key id as a top-level string, so callers can address a key
-// without parsing `name`. Emitting it keeps the SDK compatibility suite green;
-// the value is stable for the key's lifetime.
+// The key id is not a top-level field of the Discovery ServiceAccountKey schema
+// — it is the trailing segment of `name`, and that is the only place real GCP
+// exposes it. The emulator must not invent a separate `keyId` field to match a
+// sibling emulator's internal model.
 func keyToMap(nr *model.NormalizedRequest, m serviceAccountKeyMeta) map[string]any {
 	out := map[string]any{
 		"name":           nr.ResourceID("service-account", m.Email) + "/keys/" + m.KeyID,
-		"keyId":          m.KeyID,
 		"privateKeyType": "TYPE_GOOGLE_CREDENTIALS_FILE",
 		"keyAlgorithm":   m.Algorithm,
 		"keyOrigin":      keyOrigin,
@@ -219,10 +217,11 @@ func (p *Provider) ServiceAccountKeyEnable(ctx context.Context, nr *model.Normal
 }
 
 // ServiceAccountSignBlob serves iam.projects.serviceAccounts.signBlob. The
-// shared path also carries iamcredentials signBlob calls (the two services are
-// indistinguishable on one origin), so the response emits both the IAM
-// spelling (signature) and the IAM Credentials spelling (signedBlob), and the
-// request accepts both bytesToSign and payload.
+// IAM and IAM Credentials APIs share this path on the emulator's single origin
+// but use different response field names: IAM returns `signature`, IAM
+// Credentials returns `signedBlob`. Real GCP never returns both, so the request
+// Host discriminates which surface was called and exactly one field is emitted.
+// The request accepts both bytesToSign (IAM) and payload (IAM Credentials).
 func (p *Provider) ServiceAccountSignBlob(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
@@ -262,11 +261,25 @@ func (p *Provider) ServiceAccountSignBlob(ctx context.Context, nr *model.Normali
 		return nil, model.NewProviderError("Internal", "sign failed", 500)
 	}
 	encoded := base64.StdEncoding.EncodeToString(sig)
-	return provider.OK(map[string]any{
-		"keyId":      m.KeyID,
-		"signature":  encoded,
-		"signedBlob": encoded,
-	}), nil
+	resp := map[string]any{"keyId": m.KeyID}
+	if isCredentialsHost(nr) {
+		resp["signedBlob"] = encoded
+	} else {
+		resp["signature"] = encoded
+	}
+	return provider.OK(resp), nil
+}
+
+// isCredentialsHost reports whether the request was addressed to the IAM
+// Credentials API (iamcredentials.googleapis.com) rather than IAM. The two
+// surfaces share a path on one origin, so the Host is the only discriminator;
+// an unqualified or absent host is treated as IAM, the surface that owns the
+// path.
+func isCredentialsHost(nr *model.NormalizedRequest) bool {
+	if nr == nil || nr.Raw == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(nr.Raw.Host), "iamcredentials.")
 }
 
 func (p *Provider) ServiceAccountSignJwt(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

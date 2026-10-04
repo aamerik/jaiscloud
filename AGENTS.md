@@ -8,9 +8,21 @@
 **Toolchain:** OpenCode sessions do not have `go` on `PATH`. Before any `go`,
 `gofmt`, or `make gcp-status*` command, run
 `export PATH=/tmp/opencode/go/bin:$HOME/.local/bin:$PATH` (`go` is
-`/tmp/opencode/go/bin/go`). For the Java/SDK compat gate also export
-`JAVA_HOME=/tmp/opencode/toolchain/jdk-21.0.12.1+1` and
+`/tmp/opencode/go/bin/go`). For the **optional** floci Java interop suite also
+export `JAVA_HOME=/tmp/opencode/toolchain/jdk-21.0.12.1+1` and
 `/tmp/opencode/toolchain/maven/bin`.
+
+**GCP source of truth — real GCP, not a sibling emulator.** The authority order
+for GCP wire behavior is: the service's Discovery document / proto and official
+Google docs → real client-SDK wire behavior → the AWS reference implementation
+(repo conventions only) → jaiscloud's own code → jaiscloud's own tests.
+**floci-gcp and localgcp are optional smoke/interop harnesses, never the spec.**
+When a floci/localgcp expectation disagrees with the Discovery document (an
+emulator-only response field, a token prefix, a response shape), real GCP wins:
+do not add emulator-only fields/values to make a floci assertion pass — classify
+it TEST-NON-COMPLIANT and record it. The compliance gate is the offline
+conformance harness (`tests/gcpconformance`: vendored Discovery + committed
+transcripts, the official gRPC clients, and the `gcloud`/Python client suites).
 
 **e2e environment:** the provided dev environment also has a working k3d
 cluster and a remote Docker context, so cluster-/image-based gates (`*-k3d`,

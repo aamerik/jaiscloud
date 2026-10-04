@@ -290,7 +290,7 @@ func TestDispatchEventCloudRunShortServiceAndDefaultPath(t *testing.T) {
 	svc := newDispatchService(t, nil)
 	inv := &recordingCloudRunInvoker{}
 	svc.SetCloudRunInvoker(inv)
-	// floci's doc shape: short service id + explicit region, no path.
+	// Documented Eventarc shape: short service id + explicit region, no path.
 	createCloudRunTrigger(t, svc, "run", `{"service":"hello-run","region":"us-central1"}`)
 
 	svc.DispatchEvent(context.Background(), pubsubEvent())
@@ -453,7 +453,7 @@ func TestDispatchEventStorageBucketLastSegmentFallback(t *testing.T) {
 	sink := newRequestSink(t)
 	svc := newDispatchService(t, sink)
 	// The filter names the fully-qualified bucket while the event carries the
-	// short id; both must match (floci's last-segment comparison).
+	// short id; both must match (last-segment comparison).
 	createStorageHTTPTrigger(t, svc, "gcs", sink.URL,
 		`[{"attribute":"type","value":"google.cloud.storage.object.v1.finalized"},{"attribute":"bucket","value":"projects/_/buckets/b"}]`)
 
