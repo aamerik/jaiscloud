@@ -48,8 +48,12 @@ SPARK_E2E_ICEBERG_GCP_IMAGE ?= spark-iceberg-gcp-test
 # is never validated against a stale emulator binary.
 GCP_REGISTRY   ?= 10.0.100.21:5050
 GCP_IMAGE      ?= $(GCP_REGISTRY)/jaiscloud-gcp:compat
-# k3d's registry is plain HTTP; buildah defaults to HTTPS, so disable verify.
-GCP_PUSH_FLAGS ?= --tls-verify=false
+# k3d's registry is plain HTTP. Real Docker reaches it when the daemon lists it
+# under insecure-registries (see deploy/k8s/README or the workflow notes) and
+# then needs no push flag; a podman/buildah client instead needs
+# --tls-verify=false. Override on the command line for such a client:
+#   make <target> GCP_PUSH_FLAGS=--tls-verify=false
+GCP_PUSH_FLAGS ?=
 # Seed size for the k3d Lakehouse pipeline e2e. Rendered into the pipeline Job's
 # RECORDS env and asserted by the test, so override on the command line:
 #   make test-e2e-lakehouse-k3d LAKEHOUSE_RECORDS=1000000
