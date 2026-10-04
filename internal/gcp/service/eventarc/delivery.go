@@ -92,18 +92,19 @@ func (s *Service) DispatchEvent(ctx context.Context, ev eventing.Event) {
 			uri = "" // no outbound HTTP client configured
 		}
 		runTarget, isCloudRun := cloudRunDestination(dest)
-		if uri == "" && !isCloudRun {
-			// floci logs-and-drops the destinations it cannot reach (gke and
-			// workflow); a malformed cloudRun is not deliverable either.
-			slog.Warn("eventarc: destination not deliverable; dropping event",
-				"trigger", t.Name, "destination", dest)
-			continue
-		}
 		if !eventarcSourceMatches(body, topic) {
 			continue
 		}
 		filters, _ := body["eventFilters"].([]any)
 		if !filtersMatch(filters, attrs, ev.EventType) {
+			continue
+		}
+		if uri == "" && !isCloudRun {
+			// Only a matched event reaches this: floci logs-and-drops the
+			// destinations it cannot reach (gke and workflow), and a malformed
+			// cloudRun is not deliverable either.
+			slog.Warn("eventarc: destination not deliverable; dropping event",
+				"trigger", t.Name, "destination", dest)
 			continue
 		}
 		payload, headers := buildPubSubCloudEvent(ev.Project, t.Location, t.Name, ev)
@@ -168,17 +169,19 @@ func cloudRunDestination(dest map[string]any) (cloudRunTarget, bool) {
 	if m == nil {
 		return cloudRunTarget{}, false
 	}
-	service := strings.TrimSpace(stringField(m, "service"))
-	region := strings.TrimSpace(stringField(m, "region"))
-	path := stringField(m, "path")
+	service := strings.TrimSpace(bodyString(m, "service"))
+	region := strings.TrimSpace(bodyString(m, "region"))
+	path := bodyString(m, "path")
 	if service == "" {
 		return cloudRunTarget{}, false
 	}
-	if parts := strings.Split(strings.Trim(service, "/"), "/"); len(parts) > 1 {
-		service = parts[len(parts)-1]
+	if strings.Contains(service, "/") {
+		// A full resource name: derive the region from its location segment when
+		// the explicit region field is absent, then keep only the service id.
 		if region == "" {
-			region = segmentAfter(parts, "locations")
+			region = locationOf(service)
 		}
+		service = lastSegment(service)
 	}
 	if service == "" || region == "" {
 		return cloudRunTarget{}, false
@@ -189,25 +192,6 @@ func cloudRunDestination(dest map[string]any) (cloudRunTarget, bool) {
 		path = "/" + path
 	}
 	return cloudRunTarget{region: region, service: service, path: path}, true
-}
-
-// stringField reads a string field from a decoded JSON map, returning "" for an
-// absent or non-string value.
-func stringField(m map[string]any, key string) string {
-	v, _ := m[key].(string)
-	return v
-}
-
-// segmentAfter returns the path segment following the first occurrence of name
-// in parts (e.g. segmentAfter([... locations us-central1 ...], "locations") ==
-// "us-central1"), or "" when absent.
-func segmentAfter(parts []string, name string) string {
-	for i, p := range parts {
-		if p == name && i+1 < len(parts) {
-			return parts[i+1]
-		}
-	}
-	return ""
 }
 
 // deliverCloudRun invokes a Cloud Run service on its own goroutine, mirroring
