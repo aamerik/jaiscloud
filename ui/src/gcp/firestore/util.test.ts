@@ -5,6 +5,7 @@ import {
   parentDocument,
   parseJsonObject,
   pathSegments,
+  validateCollectionPath,
 } from './util'
 
 describe('parseJsonObject', () => {
@@ -46,6 +47,17 @@ describe('firestore path helpers', () => {
     // Even-segment (document) paths are not collections.
     expect(isNestedCollection('users/alice')).toBe(false)
     expect(isNestedCollection('users/alice/orders/o1')).toBe(false)
+  })
+
+  it('validates collection paths', () => {
+    expect(validateCollectionPath('users')).toBeNull()
+    expect(validateCollectionPath('users/alice/orders')).toBeNull()
+    expect(validateCollectionPath('')).toBe('Collection ID is required')
+    expect(validateCollectionPath('users/alice')).toBeTruthy() // even: a document path
+    expect(validateCollectionPath('users//orders')).toBe('Collection path has an empty segment')
+    expect(validateCollectionPath('users/../orders')).toBe(
+      'Collection path must not contain "." or ".."',
+    )
   })
 
   it('locates the parent document of a nested collection', () => {

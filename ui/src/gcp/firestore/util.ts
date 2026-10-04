@@ -29,6 +29,26 @@ export function collectionId(collectionPath: string): string {
   return segments[segments.length - 1] ?? collectionPath
 }
 
+/** validateCollectionPath returns an error message for an invalid collection
+ * path, or null when it is valid. A collection path is a root id (`users`) or
+ * an alternating nested path (`users/alice/orders`): non-empty segments, no
+ * "." / "..", ending on a collection id (odd segment count). Mirrors the
+ * backend `collectionParam` validation. */
+export function validateCollectionPath(path: string): string | null {
+  if (!path) return 'Collection ID is required'
+  const segments = path.split('/')
+  for (const segment of segments) {
+    if (!segment) return 'Collection path has an empty segment'
+    if (segment === '.' || segment === '..') {
+      return 'Collection path must not contain "." or ".."'
+    }
+  }
+  if (segments.length % 2 === 0) {
+    return 'Collection path must end with a collection ID, e.g. users/alice/orders'
+  }
+  return null
+}
+
 /** isNestedCollection reports whether a collection path is itself under a
  * document (i.e. a subcollection) rather than a root collection. Mirrors the
  * backend rule: a collection path has an odd number of segments and a nested
