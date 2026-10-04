@@ -77,6 +77,45 @@ func TestCreateTriggerCloudFunctionDestination(t *testing.T) {
 	}
 }
 
+func TestTargetsForEventStorageCloudFunction(t *testing.T) {
+	ctx := context.Background()
+	resources := store.NewMemoryResourceStore()
+	svc := NewService(eventarcstore.NewMemoryStore(), resources, workflowsstore.NewMemoryStore())
+	svc.SetFunctionExister(fakeFunctions{exists: map[string]bool{"us-central1/fn": true}})
+
+	// A Cloud Storage trigger has no Pub/Sub transport: its eventFilters
+	// (type + bucket) select the object event.
+	body := json.RawMessage(`{
+		"destination":{"cloudFunction":"projects/proj/locations/us-central1/functions/fn"},
+		"eventFilters":[
+			{"attribute":"type","value":"google.cloud.storage.object.v1.finalized"},
+			{"attribute":"bucket","value":"b"}]}`)
+	if _, _, err := svc.CreateTrigger(ctx, "proj", "us-central1", "gcsfn", body, false); err != nil {
+		t.Fatalf("create storage cloudFunction trigger: %v", err)
+	}
+
+	targets := svc.TargetsForEvent(ctx, eventing.Event{
+		Project: "proj", EventType: eventing.TypeStorageFinalize,
+		Resource: "projects/_/buckets/b", Source: eventing.SourceStorage,
+	})
+	if len(targets) != 1 || targets[0].FunctionID != "fn" || targets[0].Location != "us-central1" {
+		t.Fatalf("targets = %+v", targets)
+	}
+	// A directly-created storage trigger has no transport, so SyncTriggerSubscription
+	// provisions no backing subscription; do not advertise one.
+	if targets[0].Subscription != "" {
+		t.Fatalf("subscription = %q, want empty for a transport-less storage trigger", targets[0].Subscription)
+	}
+
+	// A different bucket does not route.
+	if got := svc.TargetsForEvent(ctx, eventing.Event{
+		Project: "proj", EventType: eventing.TypeStorageFinalize,
+		Resource: "projects/_/buckets/other", Source: eventing.SourceStorage,
+	}); len(got) != 0 {
+		t.Fatalf("unexpected targets for another bucket: %+v", got)
+	}
+}
+
 func TestCreateTriggerCloudFunctionAndCloudRunRejected(t *testing.T) {
 	ctx := context.Background()
 	resources := store.NewMemoryResourceStore()

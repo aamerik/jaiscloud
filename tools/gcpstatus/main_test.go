@@ -117,6 +117,8 @@ func TestDispositionFrom(t *testing.T) {
 	}{
 		{"fix", "", "fix"},
 		{"fix (follow-up)", "", "follow-up"},
+		{"revisit", "", "revisit"},
+		{"revisit (official SDK)", "", "revisit"},
 		{"**no fix** — accept + document", "", "no-fix"},
 		{"optional", "", "optional"},
 		{"", "TEST-NON-COMPLIANT (real GCP wins)", "no-fix"},

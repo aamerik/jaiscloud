@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"jaiscloud/internal/gcp/eventing"
+
+	"github.com/google/uuid"
 )
 
 // httpDoer is the subset of *http.Client the dispatcher needs. Tests inject a
@@ -54,21 +56,21 @@ type CloudRunInvoker interface {
 }
 
 // DispatchEvent is the eventing.Dispatcher entry point. It delivers a produced
-// Pub/Sub event to every matching Eventarc trigger whose destination is not a
-// Cloud Function — the functions delivery engine owns those, so skipping them
-// here is what keeps a single event from being delivered twice.
+// Pub/Sub or Cloud Storage event to every matching Eventarc trigger whose
+// destination is not a Cloud Function — the functions delivery engine owns
+// those, so skipping them here is what keeps a single event from being
+// delivered twice.
 //
 // Delivery mirrors floci: a binary-mode CloudEvents POST, fire-and-forget on
 // its own goroutine, failures logged and never retried. An httpEndpoint
 // destination is POSTed directly; a cloudRun destination is forwarded through
 // the CloudRunInvoker seam, honoring its path. gke and workflow destinations
-// are logged and dropped. A non-Pub/Sub event is ignored until the Cloud
-// Storage source phase lands.
+// are logged and dropped. Other event sources are ignored.
 func (s *Service) DispatchEvent(ctx context.Context, ev eventing.Event) {
 	if s == nil {
 		return
 	}
-	if ev.Source != eventing.SourcePubSub {
+	if ev.Source != eventing.SourcePubSub && ev.Source != eventing.SourceStorage {
 		return
 	}
 	triggers, err := s.store.ListTriggersAllLocations(ctx, ev.Project)
@@ -76,8 +78,6 @@ func (s *Service) DispatchEvent(ctx context.Context, ev eventing.Event) {
 		slog.Warn("eventarc: list triggers for event", "project", ev.Project, "err", err)
 		return
 	}
-	attrs := pubsubEventAttributes(ev)
-	topic := eventing.ResourceID(ev.Resource)
 	for _, t := range triggers {
 		body := decodeBody(t.Config)
 		dest := bodyMap(body, "destination")
@@ -92,11 +92,7 @@ func (s *Service) DispatchEvent(ctx context.Context, ev eventing.Event) {
 			uri = "" // no outbound HTTP client configured
 		}
 		runTarget, isCloudRun := cloudRunDestination(dest)
-		if !eventarcSourceMatches(body, topic) {
-			continue
-		}
-		filters, _ := body["eventFilters"].([]any)
-		if !filtersMatch(filters, attrs, ev.EventType) {
+		if !eventarcEventMatches(body, ev) {
 			continue
 		}
 		if uri == "" && !isCloudRun {
@@ -107,7 +103,7 @@ func (s *Service) DispatchEvent(ctx context.Context, ev eventing.Event) {
 				"trigger", t.Name, "destination", dest)
 			continue
 		}
-		payload, headers := buildPubSubCloudEvent(ev.Project, t.Location, t.Name, ev)
+		payload, headers := buildCloudEvent(ev.Project, t.Location, t.Name, ev)
 		switch {
 		case uri != "":
 			s.deliver(uri, headers, payload)
@@ -132,6 +128,95 @@ func pubsubEventAttributes(ev eventing.Event) map[string]string {
 	attrs["type"] = eventing.TypePubSubPublishCloudEvent
 	attrs["topic"] = ev.Resource
 	return attrs
+}
+
+// eventarcEventMatches reports whether a trigger's stored config selects a
+// produced event. A Pub/Sub trigger is selected by a matching
+// transport.pubsub.topic AND its eventFilters (the transport is the trigger's
+// source); a Cloud Storage trigger has no Pub/Sub transport, so only its
+// eventFilters can select it — and, mirroring floci's GCS handler, a trigger
+// with no eventFilters never matches. Shared by the Cloud Functions target
+// index (TargetsForEvent) and this dispatcher so the two engines cannot drift.
+func eventarcEventMatches(body map[string]any, ev eventing.Event) bool {
+	filters, _ := body["eventFilters"].([]any)
+	if ev.Source == eventing.SourceStorage {
+		if len(filters) == 0 {
+			return false
+		}
+		return filtersMatch(filters, storageEventAttributes(ev), ev.EventType)
+	}
+	if !eventarcSourceMatches(body, eventing.ResourceID(ev.Resource)) {
+		return false
+	}
+	return filtersMatch(filters, pubsubEventAttributes(ev), ev.EventType)
+}
+
+// storageEventAttributes synthesizes the attribute map a Cloud Storage event is
+// matched on, mirroring floci's onGcsEvent: the reserved "bucket" and — when the
+// event carries one — "object". The producer's own attributes (bucketId/
+// objectId/...) are carried through so a trigger may filter on them too. The
+// "type" filter is handled separately by filtersMatch against the event type, so
+// it is not added here. bucket resolves from the event attributes or, failing
+// that, the event resource ("projects/_/buckets/{bucket}").
+func storageEventAttributes(ev eventing.Event) map[string]string {
+	attrs := make(map[string]string, len(ev.Attributes)+2)
+	for k, v := range ev.Attributes {
+		attrs[k] = v
+	}
+	bucket := ev.Attributes["bucketId"]
+	if bucket == "" {
+		bucket = eventing.ResourceID(ev.Resource)
+	}
+	if bucket != "" {
+		attrs["bucket"] = bucket
+	}
+	if object := ev.Attributes["objectId"]; object != "" {
+		attrs["object"] = object
+	}
+	return attrs
+}
+
+// buildCloudEvent builds the binary-mode CloudEvents request for a produced
+// event: the Pub/Sub push-delivery JSON for a Pub/Sub source, or the
+// StorageObjectData JSON for a Cloud Storage source (matching the
+// google-cloudevents schema and real Eventarc's storage delivery).
+func buildCloudEvent(project, location, triggerID string, ev eventing.Event) ([]byte, map[string]string) {
+	if ev.Source == eventing.SourceStorage {
+		return buildStorageCloudEvent(ev)
+	}
+	return buildPubSubCloudEvent(project, location, triggerID, ev)
+}
+
+// buildStorageCloudEvent builds the CloudEvents POST real Eventarc sends for a
+// Cloud Storage object event: source
+// //storage.googleapis.com/projects/_/buckets/{bucket}, the CloudEvent type
+// (google.cloud.storage.object.v1.finalized|deleted) and the object metadata
+// (StorageObjectData) as the JSON body. ev.Data already carries the producer's
+// object-metadata JSON. ce-id is minted fresh per event (real GCP and floci both
+// use a unique id): the producer's EventID is derived from bucket/object/
+// generation, which would collide between a finalize and a delete of the same
+// generation.
+func buildStorageCloudEvent(ev eventing.Event) ([]byte, map[string]string) {
+	body := ev.Data
+	if len(body) == 0 {
+		body = []byte("{}")
+	}
+	headers := map[string]string{
+		"Content-Type":   "application/json",
+		"ce-id":          uuid.NewString(),
+		"ce-source":      "//storage.googleapis.com/" + ev.Resource,
+		"ce-specversion": "1.0",
+		"ce-type":        storageCloudEventType(ev.EventType),
+		"ce-time":        ev.OccurredAt.UTC().Format(time.RFC3339Nano),
+	}
+	return body, headers
+}
+
+// storageCloudEventType maps a storage event type onto the Eventarc CloudEvent
+// spelling a receiver sees (google.cloud.storage.object.v1.finalized|deleted),
+// normalizing the producer's v1/v2 spelling first.
+func storageCloudEventType(eventType string) string {
+	return storageFilterType(eventing.NormalizeEventType(eventType))
 }
 
 // httpEndpointURI returns the destination's httpEndpoint.uri, or "" when the

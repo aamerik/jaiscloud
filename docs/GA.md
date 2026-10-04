@@ -277,11 +277,13 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   execute lazily on read (a due key rotates on its next `GetCryptoKey`/`ListCryptoKeys`/`Encrypt`,
   creating a new primary and advancing the schedule — there is no background scheduler); Logging
   `TailLogEntries` is a bounded, at-most-once poll;
-  Eventarc delivers Pub/Sub-sourced events to `cloudFunction`, `cloudRun` and `httpEndpoint`
-  destinations (fire-and-forget binary-mode CloudEvents POST, no retries; a `cloudRun` destination is
-  forwarded through the Cloud Run runtime to the service's latest ready revision, honoring `path`,
-  so it needs a ready revision and works without DNS; GKE/Workflows destinations and Cloud Storage
-  sources are not delivered); Managed Kafka is metadata-only by default
+  Eventarc delivers Pub/Sub- and Cloud Storage-sourced events to `cloudFunction`, `cloudRun` and
+  `httpEndpoint` destinations (fire-and-forget binary-mode CloudEvents POST, no retries; a `cloudRun`
+  destination is forwarded through the Cloud Run runtime to the service's latest ready revision,
+  honoring `path`, so it needs a ready revision and works without DNS; a Pub/Sub publish carries the
+  push-delivery JSON, a GCS object finalize/delete the object-metadata body with source
+  `//storage.googleapis.com/projects/_/buckets/{bucket}`; GKE/Workflows destinations are not
+  delivered); Managed Kafka is metadata-only by default
   (an opt-in k8s/native broker mode stands up a real Redpanda endpoint behind `bootstrapAddress`,
   over which topic create/update/delete and ACL mutations are mirrored and consumer groups are read
   from its group coordinator — with no broker the list is empty and get/update/delete return
@@ -434,11 +436,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `jobStateMatcher` and a bounded `filter` subset (`status.state`, `labels.<key>`, `insertTime`),
   and
   `ListOperations` is not exposed (pollable `operations.get` is served);
-  Eventarc delivers a Pub/Sub-sourced event to a trigger's `cloudFunction`, `cloudRun` or
-  `httpEndpoint` destination with a fire-and-forget binary-mode CloudEvents POST (no retries; a
-  `cloudRun` destination is resolved to the service's latest ready revision through the run runtime
-  and honors `path`; GKE/Workflows destinations and Cloud Storage-sourced events are not
-  delivered). The
+  Eventarc delivers a Pub/Sub- or Cloud Storage-sourced event to a trigger's `cloudFunction`,
+  `cloudRun` or `httpEndpoint` destination with a fire-and-forget binary-mode CloudEvents POST (no
+  retries; a `cloudRun` destination is resolved to the service's latest ready revision through the
+  run runtime and honors `path`; a GCS object finalize/delete is matched by its `type`/`bucket`
+  eventFilters and carries the object-metadata body; GKE/Workflows destinations are not delivered). The
   Eventarc gRPC proto defines no IAM RPCs, so Trigger/Channel IAM is served through the shared
   `google.iam.v1.IAMPolicy` router. The REST Channel render carries an emulator-internal `etag`
   used for optimistic concurrency; real Eventarc's `Channel` has no `etag` field, so the gRPC
