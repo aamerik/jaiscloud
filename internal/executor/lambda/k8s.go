@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,12 +11,16 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/k8stypes"
 	"jaiscloud/internal/platform"
 )
@@ -27,6 +29,8 @@ const (
 	riePort  = 8080
 	riePath  = "/2015-03-31/functions/function/invocations"
 	labelApp = "jaiscloud-lambda"
+	// k8sReadyTimeout bounds EnsureWorkload's wait for a warm pod's endpoint.
+	k8sReadyTimeout = 90 * time.Second
 )
 
 // instancePrefix returns the instance-scoped pod/service prefix.
@@ -42,34 +46,43 @@ func instancePrefix(instanceID string) string {
 	return "jc-lambda-"
 }
 
-// encodeLabelSelector builds a K8s label selector query param value by
-// escaping "=" as %3D and "/" as %2F. Commas are preserved (K8s uses them
-// to separate requirements). Never pass the result through url.QueryEscape.
-func encodeLabelSelector(raw string) string {
-	s := strings.ReplaceAll(raw, "=", "%3D")
-	return strings.ReplaceAll(s, "/", "%2F")
-}
-
 type warmPod struct {
-	podName  string
-	svcName  string
-	endpoint string // http://<svc>.<ns>:8080; empty = sentinel (being created)
+	name     string // shared Pod + ClusterIP Service name
+	endpoint string // http://<name>.<ns>.svc.cluster.local:8080; empty = sentinel (being created)
 	lastUsed time.Time
 }
 
-// K8sExecutor manages warm Pods per Lambda function using the Lambda RIE HTTP protocol.
+// K8sExecutor manages warm Pods per Lambda function using the Lambda RIE HTTP
+// protocol. The Kubernetes control plane (Pod + ClusterIP Service create,
+// readiness, delete, sweep) goes through internal/k8shelpers; only the
+// invocation path (the RIE HTTP call to the pod) uses a plain HTTP client.
 type K8sExecutor struct {
 	cfg        LambdaConfig
 	platform   *platform.PlatformConfig
-	k8s        *http.Client // talks to K8s API server (30s timeout, custom TLS)
-	invoke     *http.Client // talks to Lambda RIE pods (5min timeout)
-	token      string
+	client     kubernetes.Interface // talks to the K8s API server (client-go)
+	invoke     *http.Client         // talks to Lambda RIE pods (16min timeout)
+	probe      func(string) bool    // endpoint readiness probe; nil = TCP dial (tests inject)
 	mu         sync.Mutex
 	pods       map[string]*warmPod // functionName -> warm pod
 	done       chan struct{}
 	wg         sync.WaitGroup
 	codeLoader CodeLoader   // optional; nil in tests
 	logsAPI    LogsIngestor // optional; nil in tests
+}
+
+// K8sExecutorOption customizes a K8sExecutor at construction.
+type K8sExecutorOption func(*K8sExecutor)
+
+// WithK8sClient injects the Kubernetes client. Without it, NewK8sExecutor
+// builds one from the in-cluster config / JAISCLOUD_K8S_* environment.
+func WithK8sClient(client kubernetes.Interface) K8sExecutorOption {
+	return func(e *K8sExecutor) { e.client = client }
+}
+
+// WithWorkloadProbe overrides the endpoint readiness probe. It exists for
+// kubernetes/fake-backed tests, which have no live endpoints to dial.
+func WithWorkloadProbe(probe func(string) bool) K8sExecutorOption {
+	return func(e *K8sExecutor) { e.probe = probe }
 }
 
 // SetCodeLoader injects the code loader for /var/task init-container mounting.
@@ -79,62 +92,30 @@ func (e *K8sExecutor) SetCodeLoader(l CodeLoader) { e.codeLoader = l }
 func (e *K8sExecutor) SetLogsAPI(l LogsIngestor) { e.logsAPI = l }
 
 // NewK8sExecutor creates a K8sExecutor with warm-pod-per-function architecture.
-// plat may be nil.
-func NewK8sExecutor(cfg LambdaConfig, plat *platform.PlatformConfig) *K8sExecutor {
-	// Read bearer token.
-	token := os.Getenv("JAISCLOUD_K8S_TOKEN")
-	if token == "" {
-		if f := os.Getenv("JAISCLOUD_K8S_TOKEN_FILE"); f != "" {
-			b, _ := os.ReadFile(f)
-			token = strings.TrimSpace(string(b))
-		}
-	}
-	if token == "" {
-		b, _ := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
-		token = strings.TrimSpace(string(b))
-	}
-
-	if cfg.APIServer == "" {
-		cfg.APIServer = "https://kubernetes.default.svc"
-	}
+// plat may be nil. A Kubernetes client is built from the in-cluster config /
+// JAISCLOUD_K8S_* environment unless WithK8sClient injects one.
+func NewK8sExecutor(cfg LambdaConfig, plat *platform.PlatformConfig, opts ...K8sExecutorOption) *K8sExecutor {
 	if cfg.Namespace == "" {
 		cfg.Namespace = "jaiscloud"
 	}
 
-	// Build TLS config.
-	tlsCfg := &tls.Config{}
-	caFile := os.Getenv("JAISCLOUD_K8S_CA_FILE")
-	if caFile == "" {
-		caFile = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-	}
-	if caBytes, err := os.ReadFile(caFile); err == nil {
-		pool := x509.NewCertPool()
-		pool.AppendCertsFromPEM(caBytes)
-		tlsCfg.RootCAs = pool
-	} else {
-		tlsCfg.InsecureSkipVerify = true //nolint:gosec // dev fallback when no CA
-	}
-	if certFile := os.Getenv("JAISCLOUD_K8S_CLIENT_CERT_FILE"); certFile != "" {
-		keyFile := os.Getenv("JAISCLOUD_K8S_CLIENT_KEY_FILE")
-		if cert, err := tls.LoadX509KeyPair(certFile, keyFile); err == nil {
-			tlsCfg.Certificates = []tls.Certificate{cert}
-		}
-	}
-
-	k8sClient := &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsCfg},
-	}
-	invokeClient := &http.Client{Timeout: 16 * time.Minute}
-
 	e := &K8sExecutor{
 		cfg:      cfg,
 		platform: plat,
-		k8s:      k8sClient,
-		invoke:   invokeClient,
-		token:    token,
+		invoke:   &http.Client{Timeout: 16 * time.Minute},
 		pods:     make(map[string]*warmPod),
 		done:     make(chan struct{}),
+	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	if e.client == nil {
+		client, err := k8shelpers.NewClient()
+		if err != nil {
+			slog.Warn("lambda k8s: cannot build Kubernetes client; k8s execution disabled", "err", err)
+		} else {
+			e.client = client
+		}
 	}
 	e.cleanupOrphans()
 	e.wg.Add(1)
@@ -213,6 +194,7 @@ func (e *K8sExecutor) DeleteFunction(ctx context.Context, name string) {
 func (e *K8sExecutor) Reset(_ context.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
 	e.mu.Lock()
 	names := make([]string, 0, len(e.pods))
 	for name := range e.pods {
@@ -223,14 +205,10 @@ func (e *K8sExecutor) Reset(_ context.Context) {
 		e.removePod(ctx, name)
 	}
 
-	if e.k8s == nil || e.cfg.InstanceID == "" {
+	if e.client == nil || e.cfg.InstanceID == "" {
 		return
 	}
-	ns := e.cfg.Namespace
-	rawSel := fmt.Sprintf("app=%s,jaiscloud.io/instance-id=%s", labelApp, e.cfg.InstanceID)
-	sel := encodeLabelSelector(rawSel)
-	e.sweepResources(ns, "pods", sel)
-	e.sweepResources(ns, "services", sel)
+	e.sweepOrphans(ctx)
 }
 
 // Close stops the GC goroutine and destroys all warm pods.
@@ -322,12 +300,23 @@ func applyCodeMount(spec *k8stypes.PodSpec, cfg LambdaConfig, req InvokeRequest,
 }
 
 func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPod, error) {
+	if e.client == nil {
+		return nil, fmt.Errorf("lambda k8s: no Kubernetes client configured")
+	}
 	ns := e.cfg.Namespace
 	image := ImageForRuntime(req, e.cfg)
 	sanitized := sanitizePodName(req.FunctionName)
 	pfx := instancePrefix(e.cfg.InstanceID)
-	podName := pfx + sanitized + "-" + shortID()
-	svcName := pfx + sanitized
+	// k8shelpers uses one name for the Pod and its ClusterIP Service, and a
+	// Service name is a DNS-1123 label (<=63 chars). Bound the function segment
+	// so the unique "-<id>" suffix always fits; the function label keeps the
+	// full sanitized name.
+	idSuffix := shortID()
+	base := sanitized
+	if max := 63 - len(pfx) - len(idSuffix) - 1; len(base) > max {
+		base = strings.TrimRight(base[:max], "-")
+	}
+	name := pfx + base + "-" + idSuffix
 
 	env := k8sRuntimeEnv(e.cfg, req)
 
@@ -342,7 +331,8 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 	}
 
 	podSpec := k8stypes.PodSpec{
-		RestartPolicy: "Never",
+		RestartPolicy:      "Never",
+		ServiceAccountName: e.cfg.ServiceAccount,
 		Containers: []k8stypes.Container{{
 			Name:            "lambda",
 			Image:           image,
@@ -374,111 +364,57 @@ func (e *K8sExecutor) createPod(ctx context.Context, req InvokeRequest) (*warmPo
 	// into /var/task via a shared emptyDir when a code URL base is configured.
 	applyCodeMount(&podSpec, e.cfg, req, e.codeLoader)
 
+	coreSpec, err := coreV1PodSpec(podSpec)
+	if err != nil {
+		return nil, fmt.Errorf("convert pod spec: %w", err)
+	}
+
 	podLabels := map[string]string{
 		"app":                      labelApp,
 		"function":                 sanitized,
 		"jaiscloud.io/instance-id": e.cfg.InstanceID,
 	}
-	podManifest := map[string]any{
-		"apiVersion": "v1",
-		"kind":       "Pod",
-		"metadata": map[string]any{
-			"name":      podName,
-			"namespace": ns,
-			"labels":    podLabels,
+	endpoint, err := k8shelpers.EnsureWorkload(ctx, e.client, k8shelpers.WorkloadSpec{
+		Namespace: ns,
+		Pod: corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: podLabels},
+			Spec:       coreSpec,
 		},
-		"spec": podSpec,
-	}
-
-	podBody, _ := json.Marshal(podManifest)
-	podURL := fmt.Sprintf("%s/api/v1/namespaces/%s/pods", e.cfg.APIServer, ns)
-	if err := e.k8sPost(ctx, podURL, podBody); err != nil {
-		return nil, fmt.Errorf("create pod: %w", err)
-	}
-	slog.Info("lambda k8s: pod created", "pod", podName, "function", req.FunctionName)
-
-	// Create ClusterIP service (idempotent — ignore errors if already exists).
-	type svcPort struct {
-		Port       int `json:"port"`
-		TargetPort int `json:"targetPort"`
-	}
-	svcLabels := map[string]string{
-		"app":                      labelApp,
-		"function":                 sanitized,
-		"jaiscloud.io/instance-id": e.cfg.InstanceID,
-	}
-	svcManifest := map[string]any{
-		"apiVersion": "v1",
-		"kind":       "Service",
-		"metadata": map[string]any{
-			"name":      svcName,
-			"namespace": ns,
-			"labels":    svcLabels,
+		ServiceLabels: podLabels,
+		Selector: map[string]string{
+			"function":                 sanitized,
+			"jaiscloud.io/instance-id": e.cfg.InstanceID,
 		},
-		"spec": map[string]any{
-			"type": "ClusterIP",
-			"selector": map[string]string{
-				"function":                 sanitized,
-				"jaiscloud.io/instance-id": e.cfg.InstanceID,
-			},
-			"ports": []svcPort{{Port: riePort, TargetPort: riePort}},
-		},
+		Ports:        []k8shelpers.ServicePort{{Name: "http", Port: riePort, TargetPort: riePort}},
+		ReadyTimeout: k8sReadyTimeout,
+		Probe:        e.probe,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ensure workload: %w", err)
 	}
-	svcBody, _ := json.Marshal(svcManifest)
-	svcURL := fmt.Sprintf("%s/api/v1/namespaces/%s/services", e.cfg.APIServer, ns)
-	e.k8sPost(ctx, svcURL, svcBody) //nolint:errcheck // may already exist
+	slog.Info("lambda k8s: pod created", "pod", name, "function", req.FunctionName)
 
-	if err := e.waitReady(ctx, ns, podName); err != nil {
-		return nil, fmt.Errorf("pod not ready: %w", err)
-	}
-
-	endpoint := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", svcName, ns, riePort)
 	return &warmPod{
-		podName:  podName,
-		svcName:  svcName,
-		endpoint: endpoint,
+		name:     name,
+		endpoint: "http://" + endpoint,
 		lastUsed: clock.RealNow(),
 	}, nil
 }
 
-func (e *K8sExecutor) waitReady(ctx context.Context, ns, podName string) error {
-	deadline := clock.RealNow().Add(90 * time.Second)
-	for {
-		if clock.RealNow().After(deadline) {
-			return fmt.Errorf("timed out waiting for pod %s to be ready", podName)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-
-		url := fmt.Sprintf("%s/api/v1/namespaces/%s/pods/%s", e.cfg.APIServer, ns, podName)
-		body, status, err := e.k8sGet(ctx, url)
-		if err != nil || status != 200 {
-			continue
-		}
-		var pod struct {
-			Status struct {
-				Phase      string `json:"phase"`
-				Conditions []struct {
-					Type   string `json:"type"`
-					Status string `json:"status"`
-				} `json:"conditions"`
-			} `json:"status"`
-		}
-		if json.Unmarshal(body, &pod) != nil {
-			continue
-		}
-		if pod.Status.Phase != "Running" {
-			continue
-		}
-		for _, c := range pod.Status.Conditions {
-			if c.Type == "Ready" && c.Status == "True" {
-				return nil
-			}
-		}
+// coreV1PodSpec converts a k8stypes.PodSpec (built by the platform layer and
+// the code-mount helper) into a client-go corev1.PodSpec. k8stypes mirrors the
+// core/v1 wire format exactly (see the package doc), so a JSON round-trip is an
+// exact conversion and avoids a second, drift-prone field-by-field mapping.
+func coreV1PodSpec(spec k8stypes.PodSpec) (corev1.PodSpec, error) {
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		return corev1.PodSpec{}, err
 	}
+	var out corev1.PodSpec
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return corev1.PodSpec{}, err
+	}
+	return out, nil
 }
 
 func (e *K8sExecutor) removePod(ctx context.Context, functionName string) {
@@ -488,15 +424,13 @@ func (e *K8sExecutor) removePod(ctx context.Context, functionName string) {
 		delete(e.pods, functionName)
 	}
 	e.mu.Unlock()
-	if !ok || pod.podName == "" {
+	if !ok || pod.name == "" || e.client == nil {
 		return
 	}
-
-	podURL := fmt.Sprintf("%s/api/v1/namespaces/%s/pods/%s", e.cfg.APIServer, e.cfg.Namespace, pod.podName)
-	e.k8sDelete(ctx, podURL)
-
-	svcURL := fmt.Sprintf("%s/api/v1/namespaces/%s/services/%s", e.cfg.APIServer, e.cfg.Namespace, pod.svcName)
-	e.k8sDelete(ctx, svcURL)
+	if err := k8shelpers.DeleteWorkload(ctx, e.client, e.cfg.Namespace, pod.name); err != nil {
+		slog.Warn("lambda k8s: remove pod/service failed", "function", functionName, "err", err)
+		return
+	}
 	slog.Info("lambda k8s: removed pod and service", "function", functionName)
 }
 
@@ -537,121 +471,34 @@ func (e *K8sExecutor) gcOnce() {
 	}
 }
 
+// orphanSelector matches every workload this deployment owns, across functions.
+func (e *K8sExecutor) orphanSelector() string {
+	return fmt.Sprintf("app=%s,jaiscloud.io/instance-id=%s", labelApp, e.cfg.InstanceID)
+}
+
 // cleanupOrphans deletes pods and services from previous runs on startup.
 // Only resources labeled with this instance's ID are touched (LG1 / LR2).
 func (e *K8sExecutor) cleanupOrphans() {
-	ns := e.cfg.Namespace
-	rawSel := fmt.Sprintf("app=%s,jaiscloud.io/instance-id=%s", labelApp, e.cfg.InstanceID)
-	sel := encodeLabelSelector(rawSel)
-
-	e.sweepResources(ns, "pods", sel)
-	e.sweepResources(ns, "services", sel)
-}
-
-// sweepResources lists and deletes all K8s resources of the given kind matching
-// the label selector. Paginates via metadata.continue (LG3).
-func (e *K8sExecutor) sweepResources(ns, kind, encodedSelector string) {
-	const maxItems = 10_000
-	continueToken := ""
-	deleted := 0
-	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		baseURL := fmt.Sprintf("%s/api/v1/namespaces/%s/%s?labelSelector=%s&limit=500",
-			e.cfg.APIServer, ns, kind, encodedSelector)
-		if continueToken != "" {
-			baseURL += "&continue=" + continueToken
-		}
-		body, status, err := e.k8sGet(ctx, baseURL)
-		cancel()
-		if err != nil || status != 200 {
-			slog.Warn("lambda k8s: cleanupOrphans list failed", "kind", kind, "status", status, "err", err)
-			return
-		}
-		var list struct {
-			Metadata struct {
-				Continue string `json:"continue"`
-			} `json:"metadata"`
-			Items []struct {
-				Metadata struct {
-					Name string `json:"name"`
-				} `json:"metadata"`
-			} `json:"items"`
-		}
-		if json.Unmarshal(body, &list) != nil {
-			return
-		}
-		for _, item := range list.Items {
-			opCtx, opCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			url := fmt.Sprintf("%s/api/v1/namespaces/%s/%s/%s", e.cfg.APIServer, ns, kind, item.Metadata.Name)
-			e.k8sDelete(opCtx, url)
-			opCancel()
-			slog.Info("lambda k8s: cleaned up orphan", "kind", kind, "name", item.Metadata.Name)
-			deleted++
-		}
-		if deleted >= maxItems {
-			slog.Warn("lambda k8s: cleanupOrphans safety cap reached", "kind", kind, "count", deleted)
-			return
-		}
-		if list.Metadata.Continue == "" {
-			return
-		}
-		continueToken = list.Metadata.Continue
-	}
-}
-
-// ─── K8s API helpers ─────────────────────────────────────────────────────────
-
-func (e *K8sExecutor) k8sPost(ctx context.Context, url string, body []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if e.token != "" {
-		req.Header.Set("Authorization", "Bearer "+e.token)
-	}
-	resp, err := e.k8s.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		rb, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, rb)
-	}
-	return nil
-}
-
-func (e *K8sExecutor) k8sGet(ctx context.Context, url string) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	if e.token != "" {
-		req.Header.Set("Authorization", "Bearer "+e.token)
-	}
-	resp, err := e.k8s.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	return b, resp.StatusCode, nil
-}
-
-func (e *K8sExecutor) k8sDelete(ctx context.Context, url string) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
-	if err != nil {
+	if e.client == nil {
 		return
 	}
-	if e.token != "" {
-		req.Header.Set("Authorization", "Bearer "+e.token)
-	}
-	resp, err := e.k8s.Do(req)
+	n, err := k8shelpers.SweepWorkloads(context.Background(), e.client, e.cfg.Namespace, e.orphanSelector())
 	if err != nil {
+		slog.Warn("lambda k8s: cleanupOrphans sweep failed", "err", err)
+	}
+	if n > 0 {
+		slog.Info("lambda k8s: cleaned up orphans", "count", n)
+	}
+}
+
+// sweepOrphans is best-effort cleanup of this instance's untracked workloads.
+func (e *K8sExecutor) sweepOrphans(ctx context.Context) {
+	if e.client == nil {
 		return
 	}
-	resp.Body.Close()
+	if _, err := k8shelpers.SweepWorkloads(ctx, e.client, e.cfg.Namespace, e.orphanSelector()); err != nil {
+		slog.Warn("lambda k8s: reset sweep failed", "err", err)
+	}
 }
 
 // sanitizePodName converts a function name to a valid K8s name segment.

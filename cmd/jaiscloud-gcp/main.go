@@ -135,6 +135,7 @@ import (
 	managedkafkaui "jaiscloud/internal/gcp/ui/managedkafka"
 	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	workflowengine "jaiscloud/internal/gcp/workflows/engine"
+	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/persistence/snapshot"
 	snapversion "jaiscloud/internal/persistence/version"
@@ -174,7 +175,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
 
 const version = "1.1.0"
@@ -1683,26 +1683,11 @@ func buildManagedKafkaBroker(cfg *config.Config) kafkabroker.Broker {
 	return kafkabroker.New(bcfg)
 }
 
-// buildK8sClient constructs a kubernetes.Interface using in-cluster config if
-// available, falling back to JAISCLOUD_K8S_APISERVER + JAISCLOUD_K8S_TOKEN env
-// vars (mirrors cmd/jaiscloud-aws/main.go).
+// buildK8sClient builds the shared Kubernetes client (in-cluster config first,
+// then the JAISCLOUD_K8S_* environment). It delegates so AWS and GCP use one
+// bootstrap.
 func buildK8sClient() (kubernetes.Interface, error) {
-	if cfg, err := rest.InClusterConfig(); err == nil {
-		return kubernetes.NewForConfig(cfg)
-	}
-	apiServer := os.Getenv("JAISCLOUD_K8S_APISERVER")
-	if apiServer == "" {
-		apiServer = "https://kubernetes.default.svc"
-	}
-	token := os.Getenv("JAISCLOUD_K8S_TOKEN")
-	cfg := &rest.Config{
-		Host:        apiServer,
-		BearerToken: token,
-		TLSClientConfig: rest.TLSClientConfig{
-			Insecure: true,
-		},
-	}
-	return kubernetes.NewForConfig(cfg)
+	return k8shelpers.NewClient()
 }
 
 func envCmd() *cobra.Command {

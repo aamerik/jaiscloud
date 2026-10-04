@@ -69,6 +69,15 @@ type CleanupConfig struct {
 
 ## Key functions
 
+### NewClient
+Builds the shared `kubernetes.Interface` used by every executor: in-cluster
+config first (service-account token + CA), then the `JAISCLOUD_K8S_*`
+environment (`APISERVER`, `TOKEN`, `TOKEN_FILE`, `CA_FILE`, `CLIENT_CERT_FILE`).
+This is the single client bootstrap for `cmd/jaiscloud-aws`, `cmd/jaiscloud-gcp`
+and the Lambda/Cloud Functions executor. It sets no HTTP timeout so long-lived
+watches (ownership patchers, terminal waiters) are not severed; callers bound
+individual calls with contexts.
+
 ### BuildPodSpec
 Assembles a `corev1.PodTemplateSpec` in four layers:
 1. `PodSpecInput` — caller's main container, labels, annotations
@@ -113,6 +122,19 @@ Startup sweep over every configured namespace (`Namespace` plus `Namespaces`):
    by `jaiscloud.io/instance-id`): terminal Jobs invoke `OnTerminalJob` and are deleted;
    suspended Jobs are unsuspended (re-adopted).
 2. Each `OrphanSelectors` entry: pods with no `OwnerReferences` invoke `OnUnownedPod`.
+
+### Workload lifecycle (Pod + ClusterIP Service)
+`EnsureWorkload` creates a single-replica Pod plus a ClusterIP Service that fronts it
+(idempotently), then waits for the Service's in-cluster TCP endpoint to accept a
+connection, returning `<pod>.<ns>.svc.cluster.local:<port>`. On any failure after
+creation begins it reaps the Pod/Service so a failed start cannot leak.
+`DeleteWorkload` removes both (NotFound-tolerant); `SweepWorkloads` deletes every
+Pod/Service matching a label selector (capped, paginated, best-effort). The Pod is a
+`corev1.Pod` the caller builds — cloud-specific policy (image, env, labels, ports,
+restart policy, readiness) stays with the caller. Consumers: Managed Kafka
+(`k8sBroker`), Cloud Run revisions (`internal/gcp/runexec`), and the shared Lambda /
+Cloud Functions executor (`internal/executor/lambda`). All are unit-tested with
+`kubernetes/fake` by injecting the readiness `Probe`.
 
 ### Namespace lifecycle (per-resource isolation)
 Engine-bearing, cluster-shaped resources can own one namespace each instead of sharing the

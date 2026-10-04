@@ -21,8 +21,6 @@ type LambdaConfig struct {
 	Namespace string
 	// ServiceAccount is the K8s service account for Lambda Jobs.
 	ServiceAccount string
-	// APIServer is the K8s API server URL (k8s mode only).
-	APIServer string
 	// JaisCloudEndpoint is passed to containers so they can call back (optional).
 	JaisCloudEndpoint string
 	// Region is injected as AWS_DEFAULT_REGION into containers.
@@ -70,9 +68,6 @@ func DefaultLambdaConfig() LambdaConfig {
 		KeepaliveSecs: 300,
 		Namespace:     "jaiscloud",
 		InitImage:     "alpine:latest",
-	}
-	if v := os.Getenv("JAISCLOUD_K8S_APISERVER"); v != "" {
-		cfg.APIServer = v
 	}
 	if v := os.Getenv("JAISCLOUD_K8S_NAMESPACE"); v != "" {
 		cfg.Namespace = v
