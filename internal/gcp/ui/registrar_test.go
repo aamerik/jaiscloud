@@ -2,9 +2,14 @@ package ui
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"slices"
 	"sort"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 
 	"jaiscloud/internal/config"
 	resourcemanagercore "jaiscloud/internal/gcp/service/resourcemanager"
@@ -397,5 +402,55 @@ func TestRegistrar_Accounts(t *testing.T) {
 	want := []string{"configured-proj", "created-proj", "extra-proj"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Accounts() = %v, want %v", got, want)
+	}
+}
+
+func TestRegistrar_ResourceManagerAdvertisedAndMounted(t *testing.T) {
+	core := resourcemanagercore.NewService(store.NewMemoryResourceStore())
+	reg := NewRegistrar(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, core, &config.Config{})
+
+	services := reg.Services()
+	if len(services) != 1 {
+		t.Fatalf("Services() = %d entries, want 1", len(services))
+	}
+	got := services[0]
+	if got.ID != "resourcemanager" || got.Label != "Resource Manager" || got.Category != "Management" ||
+		got.RootPath != "/gcp/resourcemanager/projects" || got.Tier != "full" {
+		t.Fatalf("unexpected descriptor: %+v", got)
+	}
+	if len(got.Children) != 1 || got.Children[0].Path != "/gcp/resourcemanager/projects" {
+		t.Fatalf("children = %+v, want projects", got.Children)
+	}
+
+	// The router is mounted under the shared UI API prefix and serves the list.
+	router := chi.NewRouter()
+	reg.MountRoutes(router)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ui/v1/gcp/resourcemanager/projects", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mounted list status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRegistrar_AccountsExcludesDeleteRequested(t *testing.T) {
+	ctx := context.Background()
+	core := resourcemanagercore.NewService(store.NewMemoryResourceStore(),
+		resourcemanagercore.WithKnownProjects("configured-proj", nil))
+	if _, _, err := core.CreateProject(ctx, resourcemanagercore.CreateProjectInput{ProjectID: "doomed-proj"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	reg := NewRegistrar(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, core, &config.Config{})
+	if got := reg.Accounts(ctx); !slices.Contains(got, "doomed-proj") {
+		t.Fatalf("Accounts() before delete = %v, want doomed-proj", got)
+	}
+
+	if _, _, err := core.DeleteProject(ctx, "doomed-proj"); err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	// The picker must not offer a DELETE_REQUESTED project (it is restorable
+	// from the manager, not selectable).
+	if got := reg.Accounts(ctx); slices.Contains(got, "doomed-proj") {
+		t.Fatalf("Accounts() after delete = %v, want doomed-proj excluded", got)
 	}
 }

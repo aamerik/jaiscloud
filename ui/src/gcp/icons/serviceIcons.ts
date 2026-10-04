@@ -8,6 +8,7 @@ import BoltOutlinedIcon from '@mui/icons-material/BoltOutlined'
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined'
 import ChecklistOutlinedIcon from '@mui/icons-material/ChecklistOutlined'
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined'
+import ApartmentOutlinedIcon from '@mui/icons-material/ApartmentOutlined'
 import DeviceHubOutlinedIcon from '@mui/icons-material/DeviceHubOutlined'
 import AnalyticsOutlinedIcon from '@mui/icons-material/AnalyticsOutlined'
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined'
@@ -48,6 +49,7 @@ export const SERVICE_ICONS: Record<string, GcpIconComponent> = {
   secretmanager: LockOutlinedIcon,
   logging: ReceiptLongOutlinedIcon,
   monitoring: MonitorHeartOutlinedIcon,
+  resourcemanager: ApartmentOutlinedIcon,
   admin: SettingsOutlinedIcon,
 }
 
@@ -71,6 +73,7 @@ export const SERVICE_ACCENTS: Record<string, string> = {
   secretmanager: '#ea4335',
   logging: '#34a853',
   monitoring: '#4285f4',
+  resourcemanager: '#4285f4',
   admin: '#5f6368',
 }
 

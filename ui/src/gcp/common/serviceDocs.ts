@@ -21,6 +21,7 @@ export const SERVICE_DOCS: Record<string, string> = {
   secretmanager: 'https://cloud.google.com/secret-manager/docs',
   logging: 'https://cloud.google.com/logging/docs',
   monitoring: 'https://cloud.google.com/monitoring/docs',
+  resourcemanager: 'https://cloud.google.com/resource-manager/docs',
 }
 
 const FALLBACK_DOCS = 'https://cloud.google.com/docs'
