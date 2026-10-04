@@ -12,6 +12,7 @@ import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
 import { GcpToolbar } from '../common/GcpToolbar'
 import { filterRows } from '../common/pagination'
+import { collectionId, isNestedCollection, parentDocument } from './util'
 
 function shortDate(value?: string): string {
   if (!value) return '—'
@@ -42,6 +43,17 @@ export function DocumentsPage() {
   const rows = filterRows(documents.data?.documents ?? [], filter, (document) =>
     `${document.id} ${document.updateTime ?? ''}`,
   )
+
+  // A nested collection (e.g. `users/alice/orders`) backs onto its parent
+  // document; a root collection backs onto the collections list.
+  const parent = parentDocument(collection)
+  const backTo = parent
+    ? `/gcp/firestore/collections/${encodeURIComponent(parent.collection)}/documents/${encodeURIComponent(parent.document)}`
+    : '/gcp/firestore/collections'
+  const backAriaLabel = parent ? `Back to document ${parent.document}` : 'Back to collections'
+  const subtitle = isNestedCollection(collection)
+    ? `Firestore subcollection · ${collection} · project ${accountId || '—'}`
+    : `Firestore collection · project ${accountId || '—'}`
 
   const columns: GcpColumn<FirestoreDocument>[] = [
     {
@@ -90,10 +102,10 @@ export function DocumentsPage() {
     <Stack>
       <GcpPageHeader
         id="firestore"
-        title={collection}
-        subtitle={`Firestore collection · project ${accountId || '—'}`}
-        backTo="/gcp/firestore/collections"
-        backAriaLabel="Back to collections"
+        title={collectionId(collection)}
+        subtitle={subtitle}
+        backTo={backTo}
+        backAriaLabel={backAriaLabel}
         actions={
           <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
             Create document

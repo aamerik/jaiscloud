@@ -20,17 +20,23 @@ const EMPTY = '{\n  \n}'
 export interface CreateDocumentDialogProps {
   open: boolean
   onClose: () => void
-  /** When set, the collection is fixed and cannot be edited. */
+  /** When set, the collection is a fixed full collection path and cannot be
+   * edited (may be nested, e.g. `users/alice/orders`). */
   collection?: string
+  /** Parent document path used to create a new subcollection; the id typed in
+   * the dialog is appended to it. Mutually exclusive with `collection`. */
+  collectionPrefix?: string
   onCreated?: (collection: string, documentId: string) => void
 }
 
 /** Create a document. Firestore collections are implicit, so a collection id
- * supplied here is created on the first write. */
+ * supplied here is created on the first write. With `collectionPrefix` the
+ * dialog creates a subcollection of a document. */
 export function CreateDocumentDialog({
   open,
   onClose,
   collection,
+  collectionPrefix,
   onCreated,
 }: CreateDocumentDialogProps) {
   const queryClient = useQueryClient()
@@ -46,13 +52,19 @@ export function CreateDocumentDialog({
       setText(EMPTY)
       setError(null)
     }
-  }, [open, collection])
+  }, [open, collection, collectionPrefix])
+
+  // When creating a subcollection, the typed id is appended to the parent
+  // document path; otherwise the field already holds the (fixed or root) path.
+  const collectionPath =
+    collection ?? (collectionPrefix ? `${collectionPrefix}/${collectionId}` : collectionId)
+  const canCreate = Boolean(collection) || collectionId.length > 0
 
   const create = useMutation({
     mutationFn: () => {
       const parsed = parseJsonObject(text)
       if (parsed.error || !parsed.value) throw new Error(parsed.error ?? 'invalid document')
-      return createDocument(collectionId, {
+      return createDocument(collectionPath, {
         documentId: documentId || undefined,
         fields: parsed.value,
       })
@@ -68,9 +80,19 @@ export function CreateDocumentDialog({
     const parsed = parseJsonObject(text)
     setError(parsed.error ?? null)
     if (parsed.error) return
-    if (!collectionId) {
-      setError('Collection ID is required')
-      return
+    if (!collection) {
+      if (!collectionId) {
+        setError(collectionPrefix ? 'Subcollection ID is required' : 'Collection ID is required')
+        return
+      }
+      if (collectionId.includes('/')) {
+        setError(
+          collectionPrefix
+            ? 'Subcollection ID must not contain "/"'
+            : 'Collection ID must not contain "/"',
+        )
+        return
+      }
     }
     create.mutate()
   }
@@ -88,11 +110,11 @@ export function CreateDocumentDialog({
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
             <TextField
               autoFocus
-              label="Collection ID"
+              label={collectionPrefix ? 'Subcollection ID' : 'Collection ID'}
               value={collectionId}
               onChange={(e) => setCollectionId(e.target.value)}
               disabled={Boolean(collection)}
-              placeholder="users"
+              placeholder={collectionPrefix ? 'orders' : 'users'}
               fullWidth
             />
             <TextField
@@ -114,7 +136,7 @@ export function CreateDocumentDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" disabled={!collectionId || create.isPending} onClick={submit}>
+        <Button variant="contained" disabled={!canCreate || create.isPending} onClick={submit}>
           Create
         </Button>
       </DialogActions>

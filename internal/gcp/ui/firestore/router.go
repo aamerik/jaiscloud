@@ -18,6 +18,7 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Get("/collections/{collection}/documents/{document}", h.GetDocument)
 	r.Patch("/collections/{collection}/documents/{document}", h.UpdateDocument)
 	r.Delete("/collections/{collection}/documents/{document}", h.DeleteDocument)
+	r.Get("/collections/{collection}/documents/{document}/collections", h.ListSubcollections)
 
 	return r
 }
