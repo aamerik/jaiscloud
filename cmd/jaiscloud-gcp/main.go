@@ -968,7 +968,13 @@ func startCmd() *cobra.Command {
 				adminHandler.RegisterResetter(functionsCore)
 			}
 			adminHandler.RegisterResetter(stores.workflows)
-			adminHandler.RegisterResetter(stores.dataproc)
+			// The dataproc core owns per-cluster Kubernetes namespaces; register
+			// it (rather than the bare store) so /_jaiscloud/reset reaps
+			// emulator-owned namespaces in addition to wiping the store (its
+			// Reset calls store.Reset). Mirrors the managedkafka core below.
+			if dataprocCore != nil {
+				adminHandler.RegisterResetter(dataprocCore)
+			}
 			// The managedkafka core owns the optional real broker; register it
 			// (rather than the bare store) so /_jaiscloud/reset reaps broker
 			// Pods/Services/subprocesses in addition to wiping the store.
