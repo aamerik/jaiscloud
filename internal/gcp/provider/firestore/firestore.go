@@ -137,6 +137,18 @@ func pageFromNR(nr *model.NormalizedRequest) pageParams {
 	return pageParams{size: paging.PageSize(nr.Params), token: token}
 }
 
+// boolParam reads a boolean request parameter, accepting the string forms the
+// REST query decoder produces ("true"/"1") and a native bool.
+func boolParam(nr *model.NormalizedRequest, key string) bool {
+	switch v := nr.Params[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true" || v == "1"
+	}
+	return false
+}
+
 // extractFields extracts the document fields from a decoded request body.
 func extractFields(body map[string]any) (map[string]*firestorestore.Value, error) {
 	if body == nil {
@@ -158,10 +170,25 @@ func extractFields(body map[string]any) (map[string]*firestorestore.Value, error
 }
 
 // documentMap serialises a store Document to its REST wire form.
+// documentMap encodes a document for the wire. createTime/updateTime are omitted
+// when unset so a showMissing placeholder (name only, no underlying document)
+// matches real Firestore: it has a name but no fields or timestamps.
 func documentMap(d firestorestore.Document) map[string]any {
-	b, _ := json.Marshal(d)
-	var m map[string]any
-	json.Unmarshal(b, &m)
+	m := map[string]any{"name": d.Name}
+	if len(d.Fields) > 0 {
+		// Round-trip through JSON so fields are generic map[string]any (the wire
+		// shape every caller expects), not the typed *Value form.
+		b, _ := json.Marshal(d.Fields)
+		var fields map[string]any
+		json.Unmarshal(b, &fields)
+		m["fields"] = fields
+	}
+	if !d.CreateTime.IsZero() {
+		m["createTime"] = d.CreateTime.UTC().Format(time.RFC3339Nano)
+	}
+	if !d.UpdateTime.IsZero() {
+		m["updateTime"] = d.UpdateTime.UTC().Format(time.RFC3339Nano)
+	}
 	return m
 }
 
@@ -625,7 +652,7 @@ func (p *Provider) ListDocuments(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
-	docs, nextToken, err := p.Service.ListDocuments(ctx, nr.AccountID, database, path, txn, maskFieldPaths(nr), pageFromNR(nr))
+	docs, nextToken, err := p.Service.ListDocuments(ctx, nr.AccountID, database, path, txn, maskFieldPaths(nr), boolParam(nr, "showMissing"), pageFromNR(nr))
 	if err != nil {
 		return nil, err
 	}

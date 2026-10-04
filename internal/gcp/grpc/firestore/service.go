@@ -192,7 +192,7 @@ func (s *Service) ListDocuments(ctx context.Context, req *firestorepb.ListDocume
 		mask = req.GetMask().GetFieldPaths()
 	}
 	page := firestoreprovider.NewPageParams(int(req.GetPageSize()), req.GetPageToken())
-	docs, nextToken, err := s.svc.ListDocuments(ctx, project, database, path, req.GetTransaction(), mask, page)
+	docs, nextToken, err := s.svc.ListDocuments(ctx, project, database, path, req.GetTransaction(), mask, req.GetShowMissing(), page)
 	if err != nil {
 		return nil, mapError(err)
 	}

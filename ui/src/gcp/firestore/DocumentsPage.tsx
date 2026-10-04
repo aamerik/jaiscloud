@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, IconButton, Link, Stack, Tooltip } from '@mui/material'
+import { Alert, Button, Chip, IconButton, Link, Stack, Tooltip } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import { Link as RouterLink, useParams } from 'react-router-dom'
@@ -62,12 +62,19 @@ export function DocumentsPage() {
       sortable: true,
       sortValue: (document) => document.id,
       render: (document) => (
-        <Link
-          component={RouterLink}
-          to={`/gcp/firestore/collections/${encodeURIComponent(collection)}/documents/${encodeURIComponent(document.id)}`}
-        >
-          {document.id}
-        </Link>
+        <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+          <Link
+            component={RouterLink}
+            to={`/gcp/firestore/collections/${encodeURIComponent(collection)}/documents/${encodeURIComponent(document.id)}`}
+          >
+            {document.id}
+          </Link>
+          {document.missing && (
+            <Tooltip title="No document exists here; it only has subcollections below it.">
+              <Chip label="missing" size="small" variant="outlined" />
+            </Tooltip>
+          )}
+        </Stack>
       ),
     },
     {
