@@ -6,16 +6,25 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"jaiscloud/internal/gcp/ui/uihelper"
 	"jaiscloud/internal/k8shelpers"
 )
 
+// dockerSocket is the socket the emulator's Docker executors use. They hardcode
+// the local socket (internal/executor/lambda/docker.go, internal/executor/ecs/
+// docker.go) and ignore DOCKER_HOST, so the health probe deliberately matches
+// them rather than the developer's `docker` CLI context (which may be a remote
+// SSH/tcp context the emulator cannot reach).
+const dockerSocket = "/var/run/docker.sock"
+
+// k8sSATokenPath is where an in-cluster service account token is mounted.
+const k8sSATokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
 // RuntimeEngineHealth is the liveness of one host engine the emulator can use.
 // It is deliberately a probe, not a configured value: Available=true means the
-// daemon/cluster answered just now.
+// engine answered just now.
 type RuntimeEngineHealth struct {
 	Available bool   `json:"available"`
 	Detail    string `json:"detail,omitempty"`
@@ -42,20 +51,21 @@ func buildRuntimeHealthHandler() http.HandlerFunc {
 	}
 }
 
-// dockerSocketPath resolves the Docker daemon socket, honouring a unix://
-// DOCKER_HOST override and defaulting to the standard path.
-func dockerSocketPath() string {
-	if h := os.Getenv("DOCKER_HOST"); strings.HasPrefix(h, "unix://") {
-		return strings.TrimPrefix(h, "unix://")
-	}
-	return "/var/run/docker.sock"
+// dockerHealth pings the Docker daemon over the same local socket the
+// executors use. It reports (rather than follows) a DOCKER_HOST override, so
+// the health can never claim the emulator will use a daemon it cannot.
+func dockerHealth(ctx context.Context) RuntimeEngineHealth {
+	return dockerHealthAt(ctx, dockerSocket)
 }
 
-// dockerHealth pings the Docker daemon over its unix socket.
-func dockerHealth(ctx context.Context) RuntimeEngineHealth {
-	socket := dockerSocketPath()
+// dockerHealthAt probes a specific socket, so the behaviour is testable.
+func dockerHealthAt(ctx context.Context, socket string) RuntimeEngineHealth {
+	ignored := ""
+	if h := os.Getenv("DOCKER_HOST"); h != "" {
+		ignored = fmt.Sprintf(" (emulator uses a local unix socket; DOCKER_HOST=%s is ignored)", h)
+	}
 	if _, err := os.Stat(socket); err != nil {
-		return RuntimeEngineHealth{Available: false, Detail: "socket not found: " + socket}
+		return RuntimeEngineHealth{Available: false, Detail: "socket not found: " + socket + ignored}
 	}
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -67,30 +77,53 @@ func dockerHealth(ctx context.Context) RuntimeEngineHealth {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/_ping", nil)
 	if err != nil {
-		return RuntimeEngineHealth{Available: false, Detail: err.Error()}
+		return RuntimeEngineHealth{Available: false, Detail: err.Error() + ignored}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return RuntimeEngineHealth{Available: false, Detail: err.Error()}
+		return RuntimeEngineHealth{Available: false, Detail: err.Error() + ignored}
 	}
 	defer resp.Body.Close() //nolint:errcheck
 	if resp.StatusCode != http.StatusOK {
-		return RuntimeEngineHealth{Available: false, Detail: fmt.Sprintf("docker /_ping = %d", resp.StatusCode)}
+		return RuntimeEngineHealth{Available: false, Detail: fmt.Sprintf("docker /_ping = %d%s", resp.StatusCode, ignored)}
 	}
-	return RuntimeEngineHealth{Available: true, Detail: "docker daemon reachable"}
+	return RuntimeEngineHealth{Available: true, Detail: "docker daemon reachable on " + socket + ignored}
 }
 
 // kubernetesHealth reports whether the same client the executors use can reach
-// the API server. It reflects the emulator's configuration (in-cluster or the
-// JAISCLOUD_K8S_* env), not a developer's local kubeconfig.
+// the API server, and names how that client resolved its config so the operator
+// knows where to point a fix. It reflects the emulator's configuration
+// (in-cluster or the JAISCLOUD_K8S_* env), never a developer's kubeconfig.
 func kubernetesHealth(ctx context.Context) RuntimeEngineHealth {
+	source := kubernetesConfigSource()
 	client, err := k8shelpers.NewClient()
 	if err != nil {
-		return RuntimeEngineHealth{Available: false, Detail: "client: " + err.Error()}
+		return RuntimeEngineHealth{Available: false, Detail: source + ": client: " + err.Error()}
 	}
 	version, err := client.Discovery().ServerVersion()
 	if err != nil {
-		return RuntimeEngineHealth{Available: false, Detail: err.Error()}
+		return RuntimeEngineHealth{
+			Available: false,
+			Detail:    source + ": " + err.Error() + "; set JAISCLOUD_K8S_APISERVER / JAISCLOUD_K8S_TOKEN to point the emulator at a cluster",
+		}
 	}
-	return RuntimeEngineHealth{Available: true, Detail: "server " + version.GitVersion}
+	return RuntimeEngineHealth{Available: true, Detail: source + ", server " + version.GitVersion}
+}
+
+// kubernetesConfigSource names the config k8shelpers.NewClient resolves, in the
+// same precedence order: in-cluster service account, then JAISCLOUD_K8S_* env,
+// then the bare in-cluster default host (nothing configured).
+func kubernetesConfigSource() string {
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		return "in-cluster service account"
+	}
+	if _, err := os.Stat(k8sSATokenPath); err == nil {
+		return "in-cluster service account"
+	}
+	if os.Getenv("JAISCLOUD_K8S_APISERVER") != "" ||
+		os.Getenv("JAISCLOUD_K8S_TOKEN") != "" ||
+		os.Getenv("JAISCLOUD_K8S_TOKEN_FILE") != "" {
+		return "JAISCLOUD_K8S_* env"
+	}
+	return "no k8s config (using default host)"
 }

@@ -1,20 +1,47 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
-func TestDockerSocketPath(t *testing.T) {
-	t.Setenv("DOCKER_HOST", "unix:///tmp/custom.sock")
-	if got := dockerSocketPath(); got != "/tmp/custom.sock" {
-		t.Errorf("dockerSocketPath = %q, want /tmp/custom.sock", got)
+func TestKubernetesConfigSource(t *testing.T) {
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("JAISCLOUD_K8S_APISERVER", "")
+	t.Setenv("JAISCLOUD_K8S_TOKEN", "")
+	t.Setenv("JAISCLOUD_K8S_TOKEN_FILE", "")
+
+	if got := kubernetesConfigSource(); got != "no k8s config (using default host)" {
+		t.Errorf("no config: source = %q", got)
 	}
-	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:2375")
-	if got := dockerSocketPath(); got != "/var/run/docker.sock" {
-		t.Errorf("dockerSocketPath = %q, want default for tcp host", got)
+
+	t.Setenv("JAISCLOUD_K8S_APISERVER", "https://example:6443")
+	if got := kubernetesConfigSource(); got != "JAISCLOUD_K8S_* env" {
+		t.Errorf("env config: source = %q", got)
+	}
+
+	t.Setenv("JAISCLOUD_K8S_APISERVER", "")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+	if got := kubernetesConfigSource(); got != "in-cluster service account" {
+		t.Errorf("in-cluster: source = %q", got)
+	}
+}
+
+// A DOCKER_HOST override must be surfaced, never silently followed: the
+// emulator's executors only use the local socket. Probing a nonexistent socket
+// keeps the assertion independent of the host's daemon.
+func TestDockerHealthNotesIgnoredDockerHost(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "ssh://user@remote")
+	health := dockerHealthAt(context.Background(), "/nonexistent/docker.sock")
+	if health.Available {
+		t.Fatalf("docker health = available, want unavailable without a socket")
+	}
+	if !strings.Contains(health.Detail, "DOCKER_HOST=ssh://user@remote is ignored") {
+		t.Errorf("detail = %q, want it to mention the ignored override", health.Detail)
 	}
 }
 
@@ -33,5 +60,8 @@ func TestBuildRuntimeHealthHandler_Shape(t *testing.T) {
 	}
 	if health.Docker.Detail == "" {
 		t.Errorf("docker probe returned no detail: %+v", health.Docker)
+	}
+	if health.Kubernetes.Detail == "" {
+		t.Errorf("kubernetes probe returned no detail: %+v", health.Kubernetes)
 	}
 }

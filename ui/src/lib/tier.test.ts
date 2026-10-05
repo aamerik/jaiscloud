@@ -30,11 +30,11 @@ describe('tierDescription', () => {
 
   it('explains the tier and appends the note', () => {
     const metadata = tierDescription(service({ tier: 'metadata', note: 'no data plane' }))
-    expect(metadata).toContain('does not provision or run anything')
+    expect(metadata).toContain('nothing ever runs here')
     expect(metadata).toContain('(no data plane)')
 
     const stub = tierDescription(service({ tier: 'stub', note: 'shape only' }))
-    expect(stub).toContain('API shape and control plane')
+    expect(stub).toContain('partial version of the real behaviour')
     expect(stub).toContain('(shape only)')
   })
 })
