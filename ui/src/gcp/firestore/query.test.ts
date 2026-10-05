@@ -3,6 +3,7 @@ import {
   buildStructuredQuery,
   collectionQueryTarget,
   parseQueryValue,
+  scopeDocumentTarget,
   toFirestoreValue,
   type QuerySpec,
 } from './query'
@@ -66,6 +67,22 @@ describe('collectionQueryTarget', () => {
     expect(collectionQueryTarget('users/alice')).toBeNull()
     expect(collectionQueryTarget('users/alice/orders/o1')).toBeNull()
     expect(collectionQueryTarget('')).toBeNull()
+  })
+})
+
+describe('scopeDocumentTarget', () => {
+  it('splits a document scope into collection path + document id', () => {
+    expect(scopeDocumentTarget('cities/SF')).toEqual({ collection: 'cities', document: 'SF' })
+    expect(scopeDocumentTarget('users/alice/orders/o1')).toEqual({
+      collection: 'users/alice/orders',
+      document: 'o1',
+    })
+  })
+
+  it('rejects empty, collection and too-short scopes', () => {
+    expect(scopeDocumentTarget('')).toBeNull()
+    expect(scopeDocumentTarget('users')).toBeNull()
+    expect(scopeDocumentTarget('users/alice/orders')).toBeNull()
   })
 })
 

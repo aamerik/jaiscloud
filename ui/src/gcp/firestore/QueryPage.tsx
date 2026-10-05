@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   Alert,
+  Autocomplete,
   Button,
   Checkbox,
   FormControl,
@@ -23,7 +24,13 @@ import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import { Link as RouterLink, useSearchParams } from 'react-router-dom'
-import { runQuery, type FirestoreDocument, type RunQueryRequest } from '../../api/gcp/firestore'
+import {
+  listCollections,
+  listSubcollections,
+  runQuery,
+  type FirestoreDocument,
+  type RunQueryRequest,
+} from '../../api/gcp/firestore'
 import { useAccount } from '../../context/AccountContext'
 import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
@@ -33,6 +40,7 @@ import {
   buildStructuredQuery,
   collectionQueryTarget,
   FILTER_OPERATORS,
+  scopeDocumentTarget,
   type FilterOperator,
   type QueryFilter,
   type QueryOrder,
@@ -80,6 +88,32 @@ export function QueryPage() {
   const execute = useMutation({
     mutationFn: (body: RunQueryRequest) => runQuery(body),
   })
+
+  // Collection-id suggestions: the root collections, or the parent scope's
+  // subcollections once a document scope is set. `freeSolo` keeps the field
+  // typable so a not-yet-created id (and a collection group) still works.
+  const scopeTarget = scopeDocumentTarget(scope.trim())
+  const rootCollections = useQuery({
+    queryKey: ['gcp', 'firestore', 'collections', accountId],
+    queryFn: listCollections,
+    enabled: !scopeTarget,
+  })
+  const subcollections = useQuery({
+    queryKey: [
+      'gcp',
+      'firestore',
+      'subcollections',
+      scopeTarget?.collection,
+      scopeTarget?.document,
+      accountId,
+    ],
+    queryFn: () => listSubcollections(scopeTarget!.collection, scopeTarget!.document),
+    enabled: Boolean(scopeTarget),
+  })
+  const collectionOptions =
+    (scopeTarget ? subcollections.data?.collections : rootCollections.data?.collections)?.map(
+      (collection) => collection.id,
+    ) ?? []
 
   const run = () => {
     setFormError(null)
@@ -205,13 +239,26 @@ export function QueryPage() {
           {mode === 'builder' ? (
             <>
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                <TextField
-                  size="small"
-                  label="Collection ID"
-                  value={collectionId}
-                  onChange={(event) => setCollectionId(event.target.value)}
-                  placeholder="users"
-                  fullWidth
+                <Autocomplete
+                  freeSolo
+                  autoHighlight
+                  options={collectionOptions}
+                  inputValue={collectionId}
+                  onInputChange={(_event, value) => setCollectionId(value)}
+                  sx={{ flex: 1 }}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      size="small"
+                      label="Collection ID"
+                      placeholder="users"
+                      helperText={
+                        scopeTarget
+                          ? 'Subcollections of the parent scope'
+                          : 'Existing root collections (or type a new id)'
+                      }
+                    />
+                  )}
                 />
                 <FormControlLabel
                   control={

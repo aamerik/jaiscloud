@@ -134,6 +134,24 @@ export function collectionQueryTarget(
   }
 }
 
+/**
+ * scopeDocumentTarget splits a parent scope (`cities/SF`) into the collection
+ * path + document id that `listSubcollections` needs, so the query builder can
+ * suggest the subcollection ids available under the scope. Returns null for an
+ * empty scope, a collection path (odd segments) or a path too short to be a
+ * document.
+ */
+export function scopeDocumentTarget(
+  scope: string,
+): { collection: string; document: string } | null {
+  const segments = pathSegments(scope)
+  if (segments.length < 2 || segments.length % 2 !== 0) return null
+  return {
+    collection: segments.slice(0, -1).join('/'),
+    document: segments[segments.length - 1] as string,
+  }
+}
+
 /** buildStructuredQuery converts the builder state into a Firestore
  * StructuredQuery, or returns a human-readable error. */
 export function buildStructuredQuery(spec: QuerySpec): {
