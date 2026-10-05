@@ -8,8 +8,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gcp/ui/uihelper"
 )
@@ -32,6 +30,29 @@ func (h *Handler) account(r *http.Request) string {
 		return a
 	}
 	return h.cfg.AccountID
+}
+
+// topicParam returns the decoded single-segment topic id, or writes 400 and
+// reports false. A decoded '/' is rejected: topic ids are one path segment and
+// handlers build the resource name as "topics/"+id.
+func topicParam(w http.ResponseWriter, r *http.Request) (string, bool) {
+	id, ok := uihelper.Segment(r, "topic")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid topic name", http.StatusBadRequest)
+		return "", false
+	}
+	return id, true
+}
+
+// subscriptionParam returns the decoded single-segment subscription id, or
+// writes 400 and reports false (see topicParam).
+func subscriptionParam(w http.ResponseWriter, r *http.Request) (string, bool) {
+	id, ok := uihelper.Segment(r, "subscription")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid subscription name", http.StatusBadRequest)
+		return "", false
+	}
+	return id, true
 }
 
 // ─── mapping helpers ─────────────────────────────────────────────────────────
@@ -203,7 +224,10 @@ func (h *Handler) CreateTopic(w http.ResponseWriter, r *http.Request) {
 
 // GET /topics/{topic}
 func (h *Handler) GetTopic(w http.ResponseWriter, r *http.Request) {
-	topic := chi.URLParam(r, "topic")
+	topic, ok := topicParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "pubsub", "PubSub.TopicGet", "global", account)
 	nr.Params["name"] = "topics/" + topic
@@ -218,7 +242,10 @@ func (h *Handler) GetTopic(w http.ResponseWriter, r *http.Request) {
 
 // DELETE /topics/{topic}
 func (h *Handler) DeleteTopic(w http.ResponseWriter, r *http.Request) {
-	topic := chi.URLParam(r, "topic")
+	topic, ok := topicParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "pubsub", "PubSub.TopicDelete", "global", account)
 	nr.Params["name"] = "topics/" + topic
@@ -242,7 +269,10 @@ func (h *Handler) PublishTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	topic := chi.URLParam(r, "topic")
+	topic, ok := topicParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "pubsub", "PubSub.TopicPublish", "global", account)
 	nr.Params["name"] = "topics/" + topic
@@ -274,7 +304,10 @@ func (h *Handler) PublishTopic(w http.ResponseWriter, r *http.Request) {
 
 // GET /topics/{topic}/iam
 func (h *Handler) GetTopicIam(w http.ResponseWriter, r *http.Request) {
-	topic := chi.URLParam(r, "topic")
+	topic, ok := topicParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "pubsub", "PubSub.TopicGetIamPolicy", "global", account)
 	nr.Params["name"] = "topics/" + topic
@@ -293,7 +326,10 @@ func (h *Handler) PutTopicIam(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	topic := chi.URLParam(r, "topic")
+	topic, ok := topicParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "pubsub", "PubSub.TopicSetIamPolicy", "global", account)
 	nr.Params["name"] = "topics/" + topic
@@ -395,7 +431,10 @@ func (h *Handler) CreateSubscription(w http.ResponseWriter, r *http.Request) {
 
 // GET /subscriptions/{subscription}
 func (h *Handler) GetSubscription(w http.ResponseWriter, r *http.Request) {
-	sub := chi.URLParam(r, "subscription")
+	sub, ok := subscriptionParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "pubsub", "PubSub.SubscriptionGet", "global", account)
 	nr.Params["name"] = "subscriptions/" + sub
@@ -424,7 +463,10 @@ func (h *Handler) UpdateSubscription(w http.ResponseWriter, r *http.Request) {
 		mask = deriveUpdateMask(req.Subscription)
 	}
 
-	sub := chi.URLParam(r, "subscription")
+	sub, ok := subscriptionParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "pubsub", "PubSub.SubscriptionUpdate", "global", account)
 	nr.Params["name"] = "subscriptions/" + sub
@@ -440,7 +482,10 @@ func (h *Handler) UpdateSubscription(w http.ResponseWriter, r *http.Request) {
 
 // DELETE /subscriptions/{subscription}
 func (h *Handler) DeleteSubscription(w http.ResponseWriter, r *http.Request) {
-	sub := chi.URLParam(r, "subscription")
+	sub, ok := subscriptionParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "pubsub", "PubSub.SubscriptionDelete", "global", account)
 	nr.Params["name"] = "subscriptions/" + sub
@@ -454,7 +499,10 @@ func (h *Handler) DeleteSubscription(w http.ResponseWriter, r *http.Request) {
 
 // GET /subscriptions/{subscription}/iam
 func (h *Handler) GetSubscriptionIam(w http.ResponseWriter, r *http.Request) {
-	sub := chi.URLParam(r, "subscription")
+	sub, ok := subscriptionParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "pubsub", "PubSub.SubscriptionGetIamPolicy", "global", account)
 	nr.Params["name"] = "subscriptions/" + sub
@@ -473,7 +521,10 @@ func (h *Handler) PutSubscriptionIam(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sub := chi.URLParam(r, "subscription")
+	sub, ok := subscriptionParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "pubsub", "PubSub.SubscriptionSetIamPolicy", "global", account)
 	nr.Params["name"] = "subscriptions/" + sub

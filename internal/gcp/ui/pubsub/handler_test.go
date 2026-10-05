@@ -363,3 +363,57 @@ func TestGetSubscriptionIam_PassesName(t *testing.T) {
 		t.Fatalf("name = %v", mock.lastNR.Params["name"])
 	}
 }
+
+// TestPathParams_DecodePercentEncoding covers UI17: the console client
+// percent-encodes resource ids (encodeURIComponent), and chi leaves characters
+// Go treats as path-safe ('+', '&', ':') escaped unless the handler decodes via
+// uihelper.Segment. Routes taking a topic/subscription id must see the decoded
+// value, not the raw escape.
+func TestPathParams_DecodePercentEncoding(t *testing.T) {
+	cases := []struct {
+		name string
+		verb string
+		path string
+		want string
+	}{
+		{"topic +", http.MethodGet, "/topics/a%2Bb", "topics/a+b"},
+		{"topic &", http.MethodDelete, "/topics/a%26b", "topics/a&b"},
+		{"topic :", http.MethodGet, "/topics/a%3Ab/iam", "topics/a:b"},
+		{"topic publish", http.MethodPost, "/topics/a%2Bb/publish", "topics/a+b"},
+		{"subscription +", http.MethodGet, "/subscriptions/a%2Bb", "subscriptions/a+b"},
+		{"subscription &", http.MethodDelete, "/subscriptions/a%26b", "subscriptions/a&b"},
+		{"subscription :", http.MethodGet, "/subscriptions/a%3Ab/iam", "subscriptions/a:b"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+			body := ""
+			if tc.verb == http.MethodPost {
+				body = `{"messages":[{"data":"aGk="}]}`
+			}
+			w := do(t, mock, tc.verb, tc.path, body)
+			if w.Code != http.StatusOK && w.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 200/204: %s", w.Code, w.Body.String())
+			}
+			if got := mock.lastNR.Params["name"]; got != tc.want {
+				t.Fatalf("name = %v, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPathParams_RejectsDecodedSlash: a decoded '/' would smuggle a second path
+// segment into the resource name, so the handler rejects it with 400 before
+// calling the provider.
+func TestPathParams_RejectsDecodedSlash(t *testing.T) {
+	for _, path := range []string{"/topics/a%2Fb", "/topics/a%2Fb/iam", "/subscriptions/a%2Fb"} {
+		mock := &mockProvider{}
+		w := do(t, mock, http.MethodGet, path, "")
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400", path, w.Code)
+		}
+		if mock.lastNR != nil {
+			t.Fatalf("%s: provider called with %+v", path, mock.lastNR)
+		}
+	}
+}
