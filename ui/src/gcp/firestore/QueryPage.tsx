@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   Alert,
   Autocomplete,
+  Box,
   Button,
   Checkbox,
   FormControl,
@@ -40,6 +41,7 @@ import {
   buildStructuredQuery,
   collectionQueryTarget,
   FILTER_OPERATORS,
+  firestoreValueToText,
   scopeDocumentTarget,
   type FilterOperator,
   type QueryFilter,
@@ -67,6 +69,7 @@ export function QueryPage() {
   const [limit, setLimit] = useState('')
   const [offset, setOffset] = useState('')
   const [raw, setRaw] = useState(DEFAULT_RAW)
+  const [fieldsView, setFieldsView] = useState<'formatted' | 'raw'>('formatted')
   const [formError, setFormError] = useState<string | null>(null)
 
   // Deep link from a collection (`?collection=users`, or a nested
@@ -183,21 +186,54 @@ export function QueryPage() {
     {
       key: 'fields',
       header: 'Fields',
-      render: (document) => (
-        <Typography
-          variant="body2"
-          sx={{
-            fontFamily: 'monospace',
-            fontSize: 12,
-            maxWidth: 480,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {JSON.stringify(document.fields)}
-        </Typography>
-      ),
+      render: (document) =>
+        fieldsView === 'raw' ? (
+          <Typography
+            variant="body2"
+            sx={{
+              fontFamily: 'monospace',
+              fontSize: 12,
+              maxWidth: 560,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {JSON.stringify(document.fields)}
+          </Typography>
+        ) : (
+          <Stack spacing={0.25}>
+            {Object.entries(document.fields)
+              .slice(0, 6)
+              .map(([key, value]) => (
+                <Typography
+                  key={key}
+                  variant="body2"
+                  sx={{
+                    maxWidth: 560,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <Box component="span" sx={{ color: 'text.secondary' }}>
+                    {key}:
+                  </Box>{' '}
+                  {firestoreValueToText(value)}
+                </Typography>
+              ))}
+            {Object.keys(document.fields).length === 0 && (
+              <Typography variant="body2" color="text.secondary">
+                (no fields)
+              </Typography>
+            )}
+            {Object.keys(document.fields).length > 6 && (
+              <Typography variant="caption" color="text.secondary">
+                +{Object.keys(document.fields).length - 6} more
+              </Typography>
+            )}
+          </Stack>
+        ),
     },
   ]
 
@@ -414,6 +450,24 @@ export function QueryPage() {
         </Stack>
       </Paper>
 
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+        <Typography variant="body2" color="text.secondary">
+          Fields:
+        </Typography>
+        <ToggleButtonGroup
+          exclusive
+          size="small"
+          value={fieldsView}
+          onChange={(_event, next: 'formatted' | 'raw' | null) => {
+            if (next) setFieldsView(next)
+          }}
+          aria-label="Fields display"
+        >
+          <ToggleButton value="formatted">Formatted</ToggleButton>
+          <ToggleButton value="raw">Raw JSON</ToggleButton>
+        </ToggleButtonGroup>
+      </Stack>
+
       <GcpDataTable
         aria-label="Query results"
         columns={columns}
@@ -423,6 +477,40 @@ export function QueryPage() {
           execute.isSuccess ? 'No documents matched the query.' : 'Run a query to see results.'
         }
         rowsPerPage={0}
+        renderDetail={(document) => (
+          <Stack spacing={1}>
+            {Object.entries(document.fields).map(([key, value]) => (
+              <Typography key={key} variant="body2" sx={{ overflowWrap: 'anywhere' }}>
+                <Box component="span" sx={{ color: 'text.secondary' }}>
+                  {key}:
+                </Box>{' '}
+                {firestoreValueToText(value)}
+              </Typography>
+            ))}
+            {Object.keys(document.fields).length === 0 && (
+              <Typography variant="body2" color="text.secondary">
+                (no fields)
+              </Typography>
+            )}
+            <Typography variant="caption" color="text.secondary" sx={{ pt: 1 }}>
+              Raw
+            </Typography>
+            <Box
+              component="pre"
+              sx={{
+                m: 0,
+                p: 1,
+                bgcolor: 'action.hover',
+                borderRadius: 1,
+                fontSize: 12,
+                overflow: 'auto',
+              }}
+            >
+              {JSON.stringify(document.fields, null, 2)}
+            </Box>
+          </Stack>
+        )}
+        detailTitle={(document) => document.id}
       />
     </Stack>
   )

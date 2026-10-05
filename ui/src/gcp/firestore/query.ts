@@ -135,6 +135,41 @@ export function collectionQueryTarget(
 }
 
 /**
+ * firestoreValueToText decodes one field's Firestore typed value into a
+ * human-readable string for the results view. `integerValue` stays the exact
+ * decimal string (no JS number coercion, which would lose int64 precision);
+ * unknown shapes fall back to raw JSON.
+ */
+export function firestoreValueToText(value: unknown): string {
+  if (value === null || typeof value !== 'object') return String(value)
+  const v = value as Record<string, unknown>
+  if ('stringValue' in v) return String(v.stringValue)
+  if ('integerValue' in v) return String(v.integerValue)
+  if ('doubleValue' in v) return String(v.doubleValue)
+  if ('booleanValue' in v) return String(v.booleanValue)
+  if ('nullValue' in v) return 'null'
+  if ('timestampValue' in v) return String(v.timestampValue)
+  if ('bytesValue' in v) return `${String(v.bytesValue)} (bytes)`
+  if ('referenceValue' in v) return String(v.referenceValue)
+  if ('geoPointValue' in v) {
+    const g = v.geoPointValue as Record<string, unknown> | undefined
+    return g ? `${g.latitude}, ${g.longitude}` : ''
+  }
+  if ('arrayValue' in v) {
+    const a = v.arrayValue as { values?: unknown[] } | undefined
+    return `[${(a?.values ?? []).map(firestoreValueToText).join(', ')}]`
+  }
+  if ('mapValue' in v) {
+    const m = v.mapValue as { fields?: Record<string, unknown> } | undefined
+    const fields = m?.fields ?? {}
+    return `{${Object.entries(fields)
+      .map(([key, val]) => `${key}: ${firestoreValueToText(val)}`)
+      .join(', ')}}`
+  }
+  return JSON.stringify(value)
+}
+
+/**
  * scopeDocumentTarget splits a parent scope (`cities/SF`) into the collection
  * path + document id that `listSubcollections` needs, so the query builder can
  * suggest the subcollection ids available under the scope. Returns null for an

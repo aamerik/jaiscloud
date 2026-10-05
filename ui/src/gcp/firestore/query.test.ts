@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildStructuredQuery,
   collectionQueryTarget,
+  firestoreValueToText,
   parseQueryValue,
   scopeDocumentTarget,
   toFirestoreValue,
@@ -67,6 +68,44 @@ describe('collectionQueryTarget', () => {
     expect(collectionQueryTarget('users/alice')).toBeNull()
     expect(collectionQueryTarget('users/alice/orders/o1')).toBeNull()
     expect(collectionQueryTarget('')).toBeNull()
+  })
+})
+
+describe('firestoreValueToText', () => {
+  it('formats scalar types', () => {
+    expect(firestoreValueToText({ stringValue: 'Ada' })).toBe('Ada')
+    expect(firestoreValueToText({ integerValue: '42' })).toBe('42')
+    expect(firestoreValueToText({ doubleValue: 1.5 })).toBe('1.5')
+    expect(firestoreValueToText({ booleanValue: true })).toBe('true')
+    expect(firestoreValueToText({ nullValue: null })).toBe('null')
+    expect(firestoreValueToText({ timestampValue: '2026-01-01T00:00:00Z' })).toBe(
+      '2026-01-01T00:00:00Z',
+    )
+    expect(firestoreValueToText({ referenceValue: 'projects/p/databases/(default)/documents/users/u1' })).toBe(
+      'projects/p/databases/(default)/documents/users/u1',
+    )
+  })
+
+  it('formats geo points, arrays and maps', () => {
+    expect(firestoreValueToText({ geoPointValue: { latitude: 1.5, longitude: 2.5 } })).toBe('1.5, 2.5')
+    expect(
+      firestoreValueToText({
+        arrayValue: { values: [{ stringValue: 'a' }, { integerValue: '1' }] },
+      }),
+    ).toBe('[a, 1]')
+    expect(
+      firestoreValueToText({
+        mapValue: { fields: { a: { integerValue: '1' }, b: { stringValue: 'x' } } },
+      }),
+    ).toBe('{a: 1, b: x}')
+  })
+
+  it('keeps int64 precision as a string', () => {
+    expect(firestoreValueToText({ integerValue: '9007199254740993' })).toBe('9007199254740993')
+  })
+
+  it('falls back to JSON for an unknown shape', () => {
+    expect(firestoreValueToText({ weird: 1 })).toBe('{"weird":1}')
   })
 })
 
