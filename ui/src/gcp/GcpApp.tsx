@@ -13,6 +13,7 @@ import {
 } from '@mui/material'
 import { useTheme } from '@mui/material/styles'
 import MenuIcon from '@mui/icons-material/Menu'
+import MenuOpenIcon from '@mui/icons-material/MenuOpen'
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
 import CloudQueueIcon from '@mui/icons-material/CloudQueue'
 import { Link as RouterLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
@@ -172,7 +173,9 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
             onClick={toggleNav}
             sx={{ color: 'text.primary' }}
           >
-            <MenuIcon />
+            {/* MenuOpen when the nav is showing (desktop expanded rail or open
+                mobile overlay), plain Menu when it is collapsed/closed. */}
+            {navExpanded ? <MenuOpenIcon /> : <MenuIcon />}
           </IconButton>
           <Box
             component={RouterLink}
