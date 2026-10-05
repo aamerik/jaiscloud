@@ -22,7 +22,7 @@ import { useAccount } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
 import { useFavorites } from '../hooks/useFavorites'
-import { TIERS, type Tier } from '../api/services'
+import { type Tier } from '../api/services'
 import { cloudName } from '../lib/cloudNames'
 import { TIER_NAMES, TIER_SUMMARY, tierLabel } from '../lib/tier'
 import { GcpServiceIcon } from './icons/GcpServiceIcon'
@@ -31,6 +31,9 @@ import { ProjectPickerDialog } from './chrome/ProjectPicker'
 import { buildNavGroups, type NavEntry } from './chrome/navModel'
 import { rememberRecentService, useRecentServices } from './chrome/recentServices'
 import { resourceCount, summarySourcesFor } from './home/resourceSummary'
+
+/** Depth order (full > shape > metadata) for the coverage legend. */
+const TIER_ORDER: Tier[] = ['full', 'shape', 'metadata']
 
 const TILE_GRID = {
   display: 'grid',
@@ -221,14 +224,15 @@ export function GcpHome() {
           <Typography variant="overline" color="text.secondary">
             Service coverage
           </Typography>
-          <Stack direction="row" spacing={1} sx={{ mt: 0.5, flexWrap: 'wrap', rowGap: 0.5 }}>
-            {TIERS.map((tier) => (
+          <Stack direction="row" spacing={1.5} sx={{ mt: 0.5, flexWrap: 'wrap', rowGap: 0.5 }}>
+            {TIER_ORDER.map((tier) => (
               <Tooltip key={tier} title={TIER_SUMMARY[tier]}>
-                <Chip
-                  size="small"
-                  variant="outlined"
-                  label={`${TIER_NAMES[tier]} (${coverage[tier]})`}
-                />
+                <Typography variant="body2" color="text.secondary" sx={{ cursor: 'help' }}>
+                  {TIER_NAMES[tier]}{' '}
+                  <Box component="span" sx={{ fontWeight: 600, color: 'text.primary' }}>
+                    {coverage[tier]}
+                  </Box>
+                </Typography>
               </Tooltip>
             ))}
           </Stack>
