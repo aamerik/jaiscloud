@@ -2,6 +2,7 @@ import type { ElementType } from 'react'
 import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined'
 import CampaignOutlinedIcon from '@mui/icons-material/CampaignOutlined'
 import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined'
+import DatasetOutlinedIcon from '@mui/icons-material/DatasetOutlined'
 import ComputerOutlinedIcon from '@mui/icons-material/ComputerOutlined'
 import RocketLaunchOutlinedIcon from '@mui/icons-material/RocketLaunchOutlined'
 import BoltOutlinedIcon from '@mui/icons-material/BoltOutlined'
@@ -34,6 +35,7 @@ export const SERVICE_ICONS: Record<string, GcpIconComponent> = {
   storage: StorageOutlinedIcon,
   pubsub: CampaignOutlinedIcon,
   firestore: LocalFireDepartmentOutlinedIcon,
+  datastore: DatasetOutlinedIcon,
   compute: ComputerOutlinedIcon,
   run: RocketLaunchOutlinedIcon,
   functions: BoltOutlinedIcon,
@@ -58,6 +60,7 @@ export const SERVICE_ACCENTS: Record<string, string> = {
   storage: '#1a73e8',
   pubsub: '#1a73e8',
   firestore: '#f9ab00',
+  datastore: '#1a73e8',
   compute: '#1a73e8',
   run: '#1a73e8',
   functions: '#1a73e8',
