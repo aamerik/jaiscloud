@@ -43,7 +43,8 @@ describe('entity route', () => {
     const key: KeyRef = { path: [{ kind: 'Task', name: 'a' }], namespace: 'ns' }
     const href = entityHref(key)
     expect(href.startsWith('/gcp/datastore/entity?key=')).toBe(true)
-    const parsed = parseKeyParam(decodeURIComponent(href.split('key=')[1]))
+    const raw = new URL(href, 'http://localhost').searchParams.get('key')
+    const parsed = parseKeyParam(raw)
     expect(parsed).toEqual(key)
   })
 
