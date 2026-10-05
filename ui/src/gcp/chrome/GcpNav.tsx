@@ -4,7 +4,6 @@ import {
   Box,
   Collapse,
   Divider,
-  Drawer,
   IconButton,
   InputAdornment,
   List,
@@ -30,21 +29,43 @@ import { useFavorites } from '../../hooks/useFavorites'
 import { buildNavGroups, type NavEntry } from './navModel'
 import { rememberRecentService, useRecentServices } from './recentServices'
 
-const NAV_MENU_WIDTH = 360
-
 /** Children that add a real sub-nav (a lone child equal to the root is noise). */
 function subNav(entry: NavEntry) {
   return entry.children.filter((child) => child.path !== entry.path)
 }
 
-interface NavMenuProps {
-  open: boolean
-  onClose: () => void
+export interface GcpNavProps {
   services: ServiceDescriptor[]
+  /**
+   * Whether the surface is currently visible. Used only to refocus the search
+   * box when the mobile overlay reopens (the rail never shows search).
+   */
+  open?: boolean
+  /** Render the service search field. The mobile overlay sets this; the rail does not. */
+  showSearch?: boolean
+  /**
+   * Render a close button and call after every navigation. The mobile overlay
+   * sets this so a tap closes it; the permanent rail leaves it unset.
+   */
+  onClose?: () => void
+  /** Header subtitle ("Console" on the rail, "Navigation menu" in the overlay). */
+  title?: string
 }
 
-/** Searchable, pinnable navigation-menu overlay mirroring the GCP console. */
-export function NavMenu({ open, onClose, services }: NavMenuProps) {
+/**
+ * The single GCP console navigation. The exact same list renders inside the
+ * desktop permanent rail and the mobile navigation overlay — one source of
+ * truth for the service list, favorites, recents, sub-nav, selection and the
+ * Admin link. It is deliberately navigational only: it carries no tier or
+ * status text.
+ */
+export function GcpNav({
+  services,
+  open = false,
+  showSearch = false,
+  onClose,
+  title = 'Navigation menu',
+}: GcpNavProps) {
   const location = useLocation()
   const { favorites, isFavorite, toggle } = useFavorites()
   const recent = useRecentServices()
@@ -58,87 +79,86 @@ export function NavMenu({ open, onClose, services }: NavMenuProps) {
   )
 
   useEffect(() => {
-    if (open) searchRef.current?.focus()
-  }, [open])
+    if (open && showSearch) searchRef.current?.focus()
+  }, [open, showSearch])
 
   const isSelected = (path: string) =>
     location.pathname === path || location.pathname.startsWith(`${path}/`)
 
-  const select = (id: string) => {
-    rememberRecentService(id)
-    onClose()
+  const select = (serviceId: string) => {
+    rememberRecentService(serviceId)
+    onClose?.()
   }
 
-  const toggleExpanded = (id: string) => {
+  const toggleExpanded = (entryId: string) => {
     setExpanded((current) => {
       const next = new Set(current)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (next.has(entryId)) next.delete(entryId)
+      else next.add(entryId)
       return next
     })
   }
 
   return (
-    <Drawer
-      anchor="left"
-      open={open}
-      onClose={onClose}
-      ModalProps={{ keepMounted: true }}
-      sx={{
-        '& .MuiDrawer-paper': {
-          width: NAV_MENU_WIDTH,
-          maxWidth: '100vw',
-          boxSizing: 'border-box',
-        },
-      }}
+    <Box
+      role="navigation"
+      sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
     >
-      <Toolbar sx={{ gap: 1 }}>
-        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+      {/* Reserve space for the fixed AppBar that overlays the top of both surfaces. */}
+      <Toolbar />
+      <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box sx={{ minWidth: 0, flexGrow: 1 }}>
           <Typography variant="overline" color="text.secondary">
             JaisCloud
           </Typography>
-          <Typography variant="subtitle1" sx={{ lineHeight: 1.1 }}>
-            Navigation menu
+          <Typography variant="subtitle1" sx={{ lineHeight: 1.1 }} noWrap>
+            {title}
           </Typography>
         </Box>
-        <IconButton edge="end" aria-label="Close navigation menu" onClick={onClose}>
-          <CloseIcon />
-        </IconButton>
-      </Toolbar>
-      <Divider />
-      <Box sx={{ px: 2, py: 1.5 }}>
-        <TextField
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search for products and services"
-          size="small"
-          fullWidth
-          inputRef={searchRef}
-          slotProps={{
-            input: {
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon fontSize="small" sx={{ color: 'text.secondary' }} />
-                </InputAdornment>
-              ),
-            },
-            htmlInput: { 'aria-label': 'Search navigation' },
-          }}
-        />
+        {onClose && (
+          <IconButton edge="end" aria-label="Close navigation menu" onClick={onClose}>
+            <CloseIcon />
+          </IconButton>
+        )}
       </Box>
       <Divider />
-      <List component="nav" sx={{ overflowY: 'auto', pb: 2 }}>
+      {showSearch && (
+        <>
+          <Box sx={{ px: 2, py: 1.5 }}>
+            <TextField
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search for products and services"
+              size="small"
+              fullWidth
+              inputRef={searchRef}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+                    </InputAdornment>
+                  ),
+                },
+                htmlInput: { 'aria-label': 'Search navigation' },
+              }}
+            />
+          </Box>
+          <Divider />
+        </>
+      )}
+      <List component="nav" sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', pb: 2 }}>
         <ListItem disablePadding>
           <ListItemButton
             component={RouterLink}
             to="/gcp"
             selected={location.pathname === '/gcp'}
-            onClick={onClose}
+            onClick={() => onClose?.()}
           >
             <ListItemText primary="Console home" />
           </ListItemButton>
         </ListItem>
-        {groups.length === 0 && (
+        {showSearch && groups.length === 0 && (
           <Box sx={{ px: 2, py: 3 }}>
             <Typography variant="body2" color="text.secondary">
               No matching services
@@ -239,7 +259,7 @@ export function NavMenu({ open, onClose, services }: NavMenuProps) {
             component={RouterLink}
             to="/gcp/admin"
             selected={isSelected('/gcp/admin')}
-            onClick={onClose}
+            onClick={() => onClose?.()}
           >
             <ListItemIcon>
               <SettingsOutlinedIcon fontSize="small" />
@@ -248,6 +268,6 @@ export function NavMenu({ open, onClose, services }: NavMenuProps) {
           </ListItemButton>
         </ListItem>
       </List>
-    </Drawer>
+    </Box>
   )
 }
