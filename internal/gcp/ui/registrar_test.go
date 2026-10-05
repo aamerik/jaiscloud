@@ -521,8 +521,8 @@ func TestRegistrar_TiersPinnedToImplementationMatrix(t *testing.T) {
 
 // Configuring a real engine upgrades an otherwise shape-only service to full
 // with a note naming the engine, mirroring the AWS executorNote behaviour. Each
-// service honours only the modes it actually supports (Dataproc/Cloud Run do
-// not support docker).
+// service honours only the modes it actually supports (Dataproc does not support
+// docker; Cloud Run and Functions support docker and k8s).
 func TestRegistrar_EngineModesUpgradeTier(t *testing.T) {
 	engineReg := func(modes ServiceModes) (tiers, notes map[string]string) {
 		t.Helper()
@@ -551,14 +551,16 @@ func TestRegistrar_EngineModesUpgradeTier(t *testing.T) {
 		}
 	})
 
-	t.Run("docker only upgrades functions", func(t *testing.T) {
-		// Dataproc and Cloud Run do not support docker (they fall back to
-		// mock); only Lambda executes real code under docker.
+	t.Run("docker upgrades functions and run", func(t *testing.T) {
+		// Dataproc does not support docker (it falls back to mock); Functions
+		// and Cloud Run execute real workloads under docker.
 		tiers, _ := engineReg(ServiceModes{KafkaBroker: "docker", Spark: "docker", Lambda: "docker", CloudRun: "docker"})
-		if tiers["functions"] != "full" {
-			t.Errorf("functions: tier = %q, want full under docker", tiers["functions"])
+		for _, id := range []string{"functions", "run"} {
+			if tiers[id] != "full" {
+				t.Errorf("%s: tier = %q, want full under docker", id, tiers[id])
+			}
 		}
-		for id, want := range map[string]string{"dataproc": "shape", "run": "shape", "managedkafka": "metadata"} {
+		for id, want := range map[string]string{"dataproc": "shape", "managedkafka": "metadata"} {
 			if tiers[id] != want {
 				t.Errorf("%s: tier = %q, want %q (docker unsupported)", id, tiers[id], want)
 			}
@@ -613,6 +615,20 @@ func TestRegistrar_EngineDescriptorAndOrchestratorParity(t *testing.T) {
 	k8sTier := descriptor(ServiceModes{Lambda: "k8s"}, "functions").Tier
 	if dockerTier != k8sTier || dockerTier != "full" {
 		t.Errorf("functions tier docker=%q k8s=%q, want identical 'full'", dockerTier, k8sTier)
+	}
+
+	// Cloud Run honours both docker and k8s too; its tier must not depend on the
+	// orchestrator, and docker must report as an active, supported backend.
+	runDocker := descriptor(ServiceModes{CloudRun: "docker"}, "run")
+	runK8s := descriptor(ServiceModes{CloudRun: "k8s"}, "run")
+	if runDocker.Tier != runK8s.Tier || runDocker.Tier != "full" {
+		t.Errorf("run tier docker=%q k8s=%q, want identical 'full'", runDocker.Tier, runK8s.Tier)
+	}
+	if runDocker.Engine == nil || !runDocker.Engine.Active || runDocker.Engine.Mode != "docker" {
+		t.Errorf("run docker engine = %+v, want active docker", runDocker.Engine)
+	}
+	if len(runDocker.Engine.Modes) != 3 || runDocker.Engine.Modes[1].Name != "docker" || !runDocker.Engine.Modes[1].Supported {
+		t.Errorf("run backends = %+v, want docker supported", runDocker.Engine.Modes)
 	}
 }
 

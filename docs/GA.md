@@ -392,9 +392,12 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   transports cannot drift, and the stock `run/apiv2` client is gated by the gRPC conformance suite.
   Jobs, WorkerPools, traffic splitting, autoscaling/scale-to-zero, sidecars, volumes, custom domains,
   probes and IAM invocation enforcement are not modelled. The k8s executor shares the Pod/ClusterIP-Service lifecycle helper
-  in `internal/k8shelpers` with Managed Kafka; Docker execution mode is not scheduled. The execution
-  path is verified end to end on k3d — `tests/persistent_mode/gcp/cloudrun/`
-  (`make test-e2e-cloudrun-k8s`). The optional floci-gcp Java interop smoke suite
+  in `internal/k8shelpers` with Managed Kafka; the docker executor (`JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=docker`)
+  runs each revision as a container on the local Docker daemon with a published loopback port. Both share the
+  routing/proxy code, and neither changes the wire contract. The execution
+  paths are verified end to end by `tests/persistent_mode/gcp/cloudrun/`
+  (`make test-e2e-cloudrun-k8s` on k3d and `make test-e2e-cloudrun-docker` on local Docker). The optional
+  floci-gcp Java interop smoke suite
   (`make test-e2e-cloudrun-java`) is corroborating evidence only, not a compliance gate.
 - **Not implemented at all (out of scope for v1.x)** — Artifact Registry, Cloud
   Endpoints, Deployment Manager, and Firebase Auth (Identity Toolkit): no emulator surface

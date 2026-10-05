@@ -134,7 +134,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-dataproc-streaming-k8s test-dataproc-streaming-kafka \
         test-dataproc-namespace-k8s \
         test-managedkafka-broker-k8s \
-        test-e2e-cloudrun-k8s test-e2e-cloudrun-java \
+        test-e2e-cloudrun-k8s test-e2e-cloudrun-java test-e2e-cloudrun-docker \
         test-e2e-eventarc-k8s \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all test-all-gcp \
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
@@ -949,6 +949,20 @@ test-e2e-cloudrun-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud Run
 	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
 	K8S_NAMESPACE=$(K8S_NAMESPACE) CLOUDRUN_E2E_K8S=1 \
 	  go test -v -tags cloudrun_e2e -timeout 20m ./tests/persistent_mode/gcp/cloudrun/
+
+test-e2e-cloudrun-docker: _check-docker-prereq build-gcp ## Cloud Run container execution under Docker — tests/persistent_mode/gcp/cloudrun/ (tag: cloudrun_e2e; needs the local Docker daemon and the docker group on the invoking shell)
+	@docker --context default pull nginx:latest > /dev/null
+	@set -e; \
+	  JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=docker \
+	    ./jaiscloud-gcp start --port 8080 --ephemeral > /tmp/jaiscloud-gcp-cloudrun-docker.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { kill "$$pid" 2>/dev/null || true; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-cloudrun-docker.log; exit 1; fi; sleep 1; \
+	  done; \
+	  CLOUDRUN_E2E_DOCKER=1 JAISCLOUD_HOST=http://localhost:8080 \
+	    go test -v -tags cloudrun_e2e -run TestCloudRunDockerExecution -timeout 10m ./tests/persistent_mode/gcp/cloudrun/
 
 test-e2e-eventarc-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Eventarc delivery e2e on k3d — tests/persistent_mode/gcp/eventarc/ (tag: eventarc_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	go clean -testcache

@@ -78,7 +78,7 @@ type ServiceModes struct {
 	KafkaBroker string // managedkafka: mock (default) | k8s | native
 	Spark       string // dataproc: mock (default) | docker | k8s
 	Lambda      string // functions: mock (default) | docker | k8s
-	CloudRun    string // run: mock (default) | k8s
+	CloudRun    string // run: mock (default) | docker | k8s
 
 	// Sources name where each mode came from (env var or "default"), shown in
 	// the admin Runtime view.
@@ -209,16 +209,16 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 	// configured, and their documented shape-only/metadata status otherwise.
 	// Each service honours a specific set of engine modes: Kafka k8s/native,
 	// Spark k8s only (docker falls back to mock), Lambda docker/k8s, Cloud Run
-	// k8s only.
+	// docker/k8s.
 	kafkaOn := engineBacked(r.modes.KafkaBroker, "k8s", "native")
 	sparkOn := engineBacked(r.modes.Spark, "k8s")
 	lambdaOn := engineBacked(r.modes.Lambda, "docker", "k8s")
-	cloudRunOn := engineBacked(r.modes.CloudRun, "k8s")
+	cloudRunOn := engineBacked(r.modes.CloudRun, "k8s", "docker")
 
 	// Structured backend availability, shown as the console's mode tag + matrix.
-	runEngine := engineInfo(r.modes.CloudRun, r.modes.CloudRunSource, []string{"k8s"}, []coreui.EngineMode{
+	runEngine := engineInfo(r.modes.CloudRun, r.modes.CloudRunSource, []string{"k8s", "docker"}, []coreui.EngineMode{
 		{Name: "mock", Supported: true, Note: "stored record; no runtime"},
-		{Name: "docker", Supported: false, Note: "not scheduled"},
+		{Name: "docker", Supported: true, Note: "container + published port, reverse-proxied"},
 		{Name: "k8s", Supported: true, Note: "Pod + ClusterIP Service, reverse-proxied"},
 	})
 	functionsEngine := engineInfo(r.modes.Lambda, r.modes.LambdaSource, []string{"docker", "k8s"}, []coreui.EngineMode{

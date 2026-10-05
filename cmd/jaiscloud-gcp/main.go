@@ -621,7 +621,7 @@ func startCmd() *cobra.Command {
 			// the externally reachable emulator port so a client can send the
 			// generated authority back as a Host header.
 			runScheme := "https"
-			if runExecutorMode == "k8s" {
+			if runExecutorMode == "k8s" || runExecutorMode == "docker" {
 				runScheme = "http"
 			}
 			runHost := runcore.HostConfig{
@@ -652,6 +652,18 @@ func startCmd() *cobra.Command {
 					})))
 					slog.Info("cloudrun executor", "mode", runExecutorMode, "source", runExecutorSource, "namespace", k8sNS)
 				}
+			case "docker":
+				// The docker runtime manager needs the local Docker socket; a
+				// platform load failure (bad TLS/volume config) is not fatal, the
+				// manager runs without the platform layer.
+				dockerCfg := runexec.DockerConfig{Logger: slog.Default(), InstanceID: instanceID}
+				if platformCfg, err := platform.LoadFromEnv(); err != nil {
+					slog.Warn("cloudrun: platform config failed; continuing without it", "err", err)
+				} else {
+					dockerCfg.Platform = platformCfg
+				}
+				runOpts = append(runOpts, runcore.WithRuntimeManager(runexec.NewDocker(dockerCfg)))
+				slog.Info("cloudrun executor", "mode", runExecutorMode, "source", runExecutorSource)
 			case "mock":
 			default:
 				slog.Warn("cloudrun: unknown executor mode; using mock",
