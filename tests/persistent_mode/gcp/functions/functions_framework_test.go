@@ -207,13 +207,31 @@ func functionDeliveries(t *testing.T) []deliveryRecord {
 		}
 	}
 	var snap struct {
-		Deliveries map[string]map[string]deliveryRecord `json:"deliveries"`
+		Deliveries json.RawMessage `json:"deliveries"`
 	}
 	if err := json.Unmarshal(env.Stores["functions"], &snap); err != nil {
 		t.Fatalf("functions snapshot: %v", err)
 	}
+	if len(snap.Deliveries) == 0 {
+		return nil
+	}
+	// The memory store snapshots deliveries as map[scope]map[id]Delivery; the
+	// Postgres store snapshots them as a []{projectId, delivery} array.
 	var out []deliveryRecord
-	for _, byID := range snap.Deliveries {
+	var arr []struct {
+		Delivery deliveryRecord `json:"delivery"`
+	}
+	if err := json.Unmarshal(snap.Deliveries, &arr); err == nil {
+		for _, r := range arr {
+			out = append(out, r.Delivery)
+		}
+		return out
+	}
+	var byScope map[string]map[string]deliveryRecord
+	if err := json.Unmarshal(snap.Deliveries, &byScope); err != nil {
+		t.Fatalf("functions deliveries snapshot: %v", err)
+	}
+	for _, byID := range byScope {
 		for _, d := range byID {
 			out = append(out, d)
 		}
