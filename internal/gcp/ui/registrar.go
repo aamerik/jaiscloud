@@ -16,6 +16,7 @@ import (
 	bigqueryui "jaiscloud/internal/gcp/ui/bigquery"
 	computeui "jaiscloud/internal/gcp/ui/compute"
 	dataprocui "jaiscloud/internal/gcp/ui/dataproc"
+	datastoreui "jaiscloud/internal/gcp/ui/datastore"
 	eventarcui "jaiscloud/internal/gcp/ui/eventarc"
 	firestoreui "jaiscloud/internal/gcp/ui/firestore"
 	functionsui "jaiscloud/internal/gcp/ui/functions"
@@ -41,6 +42,7 @@ type Registrar struct {
 	storage       storageui.ProviderInterface
 	pubsub        pubsubui.ProviderInterface
 	firestore     firestoreui.ProviderInterface
+	datastore     datastoreui.ProviderInterface
 	compute       computeui.ProviderInterface
 	dataproc      dataprocui.ProviderInterface
 	bigquery      bigqueryui.ProviderInterface
@@ -65,11 +67,12 @@ type Registrar struct {
 
 // NewRegistrar returns the GCP UI registrar. A nil provider leaves that
 // service's pages out of the catalog.
-func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, computeProvider computeui.ProviderInterface, dataprocProvider dataprocui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, schedulerProvider schedulerui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, tasksProvider tasksui.ProviderInterface, workflowsProvider workflowsui.ProviderInterface, eventarcProvider eventarcui.ProviderInterface, functionsProvider functionsui.ProviderInterface, managedkafkaProvider managedkafkaui.ProviderInterface, resourceManager *resourcemanagercore.Service, cfg *config.Config) *Registrar {
+func NewRegistrar(storageProvider storageui.ProviderInterface, pubsubProvider pubsubui.ProviderInterface, firestoreProvider firestoreui.ProviderInterface, datastoreProvider datastoreui.ProviderInterface, computeProvider computeui.ProviderInterface, dataprocProvider dataprocui.ProviderInterface, bigqueryProvider bigqueryui.ProviderInterface, runProvider runui.ProviderInterface, schedulerProvider schedulerui.ProviderInterface, iamProvider iamui.ProviderInterface, kmsProvider kmsui.ProviderInterface, secretProvider secretmanagerui.ProviderInterface, loggingProvider loggingui.ProviderInterface, monitoringProvider monitoringui.ProviderInterface, tasksProvider tasksui.ProviderInterface, workflowsProvider workflowsui.ProviderInterface, eventarcProvider eventarcui.ProviderInterface, functionsProvider functionsui.ProviderInterface, managedkafkaProvider managedkafkaui.ProviderInterface, resourceManager *resourcemanagercore.Service, cfg *config.Config) *Registrar {
 	return &Registrar{
 		storage:         storageProvider,
 		pubsub:          pubsubProvider,
 		firestore:       firestoreProvider,
+		datastore:       datastoreProvider,
 		compute:         computeProvider,
 		dataproc:        dataprocProvider,
 		bigquery:        bigqueryProvider,
@@ -159,6 +162,19 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 				{Label: "Collections", Path: "/gcp/firestore/collections"},
 				{Label: "Query", Path: "/gcp/firestore/query"},
 				{Label: "Indexes", Path: "/gcp/firestore/indexes"},
+			},
+		})
+	}
+	if r.datastore != nil {
+		services = append(services, coreui.ServiceDescriptor{
+			ID:       "datastore",
+			Label:    "Datastore",
+			Category: "Databases",
+			RootPath: "/gcp/datastore/kinds",
+			Tier:     coreui.TierFull,
+			Children: []coreui.ServiceChild{
+				{Label: "Kinds", Path: "/gcp/datastore/kinds"},
+				{Label: "Query", Path: "/gcp/datastore/query"},
 			},
 		})
 	}
@@ -358,6 +374,9 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 	}
 	if r.firestore != nil {
 		router.Mount("/api/ui/v1/gcp/firestore", firestoreui.BuildRouter(r.firestore, r.cfg))
+	}
+	if r.datastore != nil {
+		router.Mount("/api/ui/v1/gcp/datastore", datastoreui.BuildRouter(r.datastore, r.cfg))
 	}
 	if r.compute != nil {
 		router.Mount("/api/ui/v1/gcp/compute", computeui.BuildRouter(r.compute, r.cfg))

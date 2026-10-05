@@ -48,6 +48,10 @@ import { DocumentsPage } from './firestore/DocumentsPage'
 import { DocumentDetailPage } from './firestore/DocumentDetailPage'
 import { QueryPage as FirestoreQueryPage } from './firestore/QueryPage'
 import { IndexesPage as FirestoreIndexesPage } from './firestore/IndexesPage'
+import { KindsPage as DatastoreKindsPage } from './datastore/KindsPage'
+import { EntitiesPage as DatastoreEntitiesPage } from './datastore/EntitiesPage'
+import { EntityDetailPage as DatastoreEntityDetailPage } from './datastore/EntityDetailPage'
+import { QueryPage as DatastoreQueryPage } from './datastore/QueryPage'
 import { InstancesPage } from './compute/InstancesPage'
 import { InstanceDetailPage } from './compute/InstanceDetailPage'
 import { ServicesPage as RunServicesPage } from './run/ServicesPage'
@@ -275,6 +279,10 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
             path="/gcp/firestore/collections/:collection/documents/:document"
             element={<DocumentDetailPage />}
           />
+          <Route path="/gcp/datastore/kinds" element={<DatastoreKindsPage />} />
+          <Route path="/gcp/datastore/kinds/:kind" element={<DatastoreEntitiesPage />} />
+          <Route path="/gcp/datastore/entity" element={<DatastoreEntityDetailPage />} />
+          <Route path="/gcp/datastore/query" element={<DatastoreQueryPage />} />
           <Route path="/gcp/compute/instances" element={<InstancesPage />} />
           <Route path="/gcp/compute/instances/:zone/:instance" element={<InstanceDetailPage />} />
           <Route path="/gcp/run/services" element={<RunServicesPage />} />

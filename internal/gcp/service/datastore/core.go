@@ -204,6 +204,9 @@ func (s *Service) Rollback(_ context.Context, transaction []byte) {
 // re-validates the read-set and applies atomically; otherwise each mutation is
 // applied independently, reporting per-mutation conflicts in the result.
 func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest) (*CommitResponse, error) {
+	if err := validateReservedMutations(req.Mutations); err != nil {
+		return nil, err
+	}
 	txn := req.Transaction
 
 	// MODE_UNSPECIFIED (the zero value) is treated as non-transactional unless
@@ -416,9 +419,9 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 	if err != nil {
 		return nil, err
 	}
-	entities, err := s.store.ListKind(ctx, project, q.Kind)
+	entities, err := s.queryCandidates(ctx, project, q.Kind, q.Namespace, q.Database)
 	if err != nil {
-		return nil, mapStoreError(err)
+		return nil, err
 	}
 	out := &QueryResult{MoreResults: MoreResultsNoMoreResults}
 	skipped := 0
@@ -504,9 +507,9 @@ func (s *Service) RunAggregationQuery(ctx context.Context, project string, aq *A
 		return nil, invalidArgument("aggregation query supports at most five aggregations")
 	}
 
-	entities, err := s.store.ListKind(ctx, project, aq.Nested.Kind)
+	entities, err := s.queryCandidates(ctx, project, aq.Nested.Kind, aq.Nested.Namespace, aq.Nested.Database)
 	if err != nil {
-		return nil, mapStoreError(err)
+		return nil, err
 	}
 
 	// Reduce the nested query once, recording every matching entity in the
