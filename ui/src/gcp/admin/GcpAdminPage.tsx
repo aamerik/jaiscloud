@@ -36,7 +36,7 @@ import {
 import { getRuntimeHealth, type EngineHealth } from '../../api/gcp/runtime'
 import { useServices } from '../../hooks/useServices'
 import { engineModes, engineStatus } from '../../lib/engine'
-import { tierLabel } from '../../lib/tier'
+import { tierDescription, tierLabel } from '../../lib/tier'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
@@ -394,12 +394,14 @@ function RuntimeCard() {
               <Typography variant="body2" sx={{ fontWeight: 500 }}>
                 {service.label}
               </Typography>
-              <Chip
-                size="small"
-                variant="outlined"
-                label={tierLabel(service) ?? 'Full'}
-                title="Depth: what the emulator can be trusted to prove"
-              />
+              <Tooltip
+                title={
+                  tierDescription(service) ??
+                  'Full fidelity — real data plane and semantics, gated against the real cloud.'
+                }
+              >
+                <Chip size="small" variant="outlined" label={tierLabel(service) ?? 'Full'} />
+              </Tooltip>
               <Chip
                 size="small"
                 label={engineStatus(service, reach).label}
