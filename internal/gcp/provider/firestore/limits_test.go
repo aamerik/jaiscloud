@@ -2,11 +2,13 @@ package firestore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	"jaiscloud/internal/model"
 )
 
 // paddedID returns s padded with 'a' to exactly n bytes (a longer s is returned
@@ -161,6 +163,71 @@ func TestWriteLimitsRejected(t *testing.T) {
 	st, _ := statuses[0].(map[string]any)
 	if code, _ := st["code"].(int64); code != 3 {
 		t.Fatalf("expected INVALID_ARGUMENT (3) per-write status, got %+v", st)
+	}
+}
+
+// assertElementCapMessage asserts err is an InvalidArgument@400 whose message
+// is exactly want (the emulator's element-cap wording).
+func assertElementCapMessage(t *testing.T, err error, want string) {
+	t.Helper()
+	assertInvalidArgumentErr(t, err)
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *model.ProviderError, got %T: %v", err, err)
+	}
+	if pe.Message != want {
+		t.Fatalf("message = %q, want %q", pe.Message, want)
+	}
+}
+
+// TestValidateDocumentNameElementCap covers the 1,500-byte per-key-path-element
+// cap (Firestore quotas: collection IDs and document IDs). Each element is
+// bounded independently of the 6 KiB whole-name cap, and the emulator names the
+// offending element type: "name" for a document id, "kind" for a collection id.
+func TestValidateDocumentNameElementCap(t *testing.T) {
+	const prefix = "projects/proj/databases/(default)/documents/"
+
+	// Document id (a "name" element) at the boundary: 1500 accepted, 1501
+	// rejected. The collection id stays short so only the name can trip.
+	if err := validateDocumentName(prefix + "cities/" + paddedID("d", maxPathElementBytes)); err != nil {
+		t.Errorf("1500-byte document id rejected: %v", err)
+	}
+	assertElementCapMessage(t,
+		validateDocumentName(prefix+"cities/"+paddedID("d", maxPathElementBytes+1)),
+		"The key path element name is longer than 1500 bytes.")
+
+	// Collection id (a "kind" element) at the boundary: 1500 accepted, 1501
+	// rejected. The document id stays short so only the kind can trip.
+	if err := validateDocumentName(prefix + paddedID("c", maxPathElementBytes) + "/doc"); err != nil {
+		t.Errorf("1500-byte collection id rejected: %v", err)
+	}
+	assertElementCapMessage(t,
+		validateDocumentName(prefix+paddedID("c", maxPathElementBytes+1)+"/doc"),
+		"The key path element kind is longer than 1500 bytes.")
+}
+
+// TestWriteElementCapRejected confirms the element cap is enforced on the write
+// path (the shared Service validator), not only when called directly: a
+// document id just over the 1,500-byte element cap, while still under the 6 KiB
+// whole-name cap, is rejected with the emulator's element-name message.
+func TestWriteElementCapRejected(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	longDoc := paddedID("d", maxPathElementBytes+1)
+	if _, err := p.Service.PatchDocument(ctx, "proj", "(default)", "cities/"+longDoc, nil, nil, nil); err == nil {
+		t.Error("PatchDocument accepted a 1501-byte document id")
+	} else {
+		assertElementCapMessage(t, err, "The key path element name is longer than 1500 bytes.")
+	}
+
+	// REST plumbing: the same rejection reaches the wire through the
+	// documents.patch handler, which surfaces the validator's error.
+	nr := patchNR()
+	nr.Params["name"] = "databases/(default)/documents/cities/" + longDoc
+	if _, err := p.DocumentsPatch(ctx, nr); err == nil {
+		t.Error("DocumentsPatch accepted a 1501-byte document id")
+	} else {
+		assertElementCapMessage(t, err, "The key path element name is longer than 1500 bytes.")
 	}
 }
 
