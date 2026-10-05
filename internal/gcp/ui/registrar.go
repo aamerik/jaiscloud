@@ -89,14 +89,18 @@ func (r *Registrar) WithServiceModes(modes ServiceModes) *Registrar {
 	return r
 }
 
-// engineBacked reports whether a configured mode starts a real engine.
-func engineBacked(mode string) bool {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "k8s", "native", "docker":
-		return true
-	default:
-		return false
+// engineBacked reports whether mode selects a real engine. allowed is the set
+// of modes the service actually honours; every other value (including a mode
+// that silently falls back to mock, e.g. Dataproc's unsupported docker mode)
+// reports no engine.
+func engineBacked(mode string, allowed ...string) bool {
+	m := strings.ToLower(strings.TrimSpace(mode))
+	for _, a := range allowed {
+		if m == a {
+			return true
+		}
 	}
+	return false
 }
 
 // statusTier returns the full tier when an engine is configured, else fallback.
@@ -182,10 +186,13 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 
 	// Engine-capable services report full fidelity when a real engine is
 	// configured, and their documented shape-only/metadata status otherwise.
-	kafkaOn := engineBacked(r.modes.KafkaBroker)
-	sparkOn := engineBacked(r.modes.Spark)
-	lambdaOn := engineBacked(r.modes.Lambda)
-	cloudRunOn := engineBacked(r.modes.CloudRun)
+	// Each service honours a specific set of engine modes: Kafka k8s/native,
+	// Spark k8s only (docker falls back to mock), Lambda docker/k8s, Cloud Run
+	// k8s only.
+	kafkaOn := engineBacked(r.modes.KafkaBroker, "k8s", "native")
+	sparkOn := engineBacked(r.modes.Spark, "k8s")
+	lambdaOn := engineBacked(r.modes.Lambda, "docker", "k8s")
+	cloudRunOn := engineBacked(r.modes.CloudRun, "k8s")
 	if r.storage != nil {
 		services = append(services, coreui.ServiceDescriptor{
 			ID:       "storage",

@@ -519,33 +519,50 @@ func TestRegistrar_TiersPinnedToImplementationMatrix(t *testing.T) {
 }
 
 // Configuring a real engine upgrades an otherwise shape-only service to full
-// with a note naming the engine, mirroring the AWS executorNote behaviour.
+// with a note naming the engine, mirroring the AWS executorNote behaviour. Each
+// service honours only the modes it actually supports (Dataproc/Cloud Run do
+// not support docker).
 func TestRegistrar_EngineModesUpgradeTier(t *testing.T) {
-	reg := NewRegistrar(
-		nil, nil, nil, nil, nil, fakeDataproc{}, nil, fakeRun{}, nil, nil,
-		nil, nil, nil, nil, nil, nil, nil, fakeFunctions{}, fakeManagedKafka{},
-		nil, &config.Config{},
-	).WithServiceModes(ServiceModes{
-		KafkaBroker: "k8s",
-		Spark:       "k8s",
-		Lambda:      "docker",
-		CloudRun:    "k8s",
+	engineReg := func(modes ServiceModes) (tiers, notes map[string]string) {
+		t.Helper()
+		reg := NewRegistrar(
+			nil, nil, nil, nil, nil, fakeDataproc{}, nil, fakeRun{}, nil, nil,
+			nil, nil, nil, nil, nil, nil, nil, fakeFunctions{}, fakeManagedKafka{},
+			nil, &config.Config{},
+		).WithServiceModes(modes)
+		tiers, notes = map[string]string{}, map[string]string{}
+		for _, service := range reg.Services() {
+			tiers[service.ID] = service.Tier
+			notes[service.ID] = service.Note
+		}
+		return tiers, notes
+	}
+
+	t.Run("k8s upgrades every engine service", func(t *testing.T) {
+		tiers, notes := engineReg(ServiceModes{KafkaBroker: "k8s", Spark: "k8s", Lambda: "k8s", CloudRun: "k8s"})
+		for _, id := range []string{"managedkafka", "dataproc", "functions", "run"} {
+			if tiers[id] != "full" {
+				t.Errorf("%s: tier = %q, want full with an engine configured", id, tiers[id])
+			}
+			if !strings.Contains(notes[id], "Engine-backed") {
+				t.Errorf("%s: note = %q, want an engine-backed note", id, notes[id])
+			}
+		}
 	})
 
-	tiers := map[string]string{}
-	notes := map[string]string{}
-	for _, service := range reg.Services() {
-		tiers[service.ID] = service.Tier
-		notes[service.ID] = service.Note
-	}
-	for _, id := range []string{"managedkafka", "functions", "run", "dataproc"} {
-		if tiers[id] != "full" {
-			t.Errorf("%s: tier = %q, want full with an engine configured", id, tiers[id])
+	t.Run("docker only upgrades functions", func(t *testing.T) {
+		// Dataproc and Cloud Run do not support docker (they fall back to
+		// mock); only Lambda executes real code under docker.
+		tiers, _ := engineReg(ServiceModes{KafkaBroker: "docker", Spark: "docker", Lambda: "docker", CloudRun: "docker"})
+		if tiers["functions"] != "full" {
+			t.Errorf("functions: tier = %q, want full under docker", tiers["functions"])
 		}
-		if !strings.Contains(notes[id], "Engine-backed") {
-			t.Errorf("%s: note = %q, want an engine-backed note", id, notes[id])
+		for id, want := range map[string]string{"dataproc": "stub", "run": "stub", "managedkafka": "metadata"} {
+			if tiers[id] != want {
+				t.Errorf("%s: tier = %q, want %q (docker unsupported)", id, tiers[id], want)
+			}
 		}
-	}
+	})
 }
 
 func TestRegistrar_AccountsExcludesDeleteRequested(t *testing.T) {
