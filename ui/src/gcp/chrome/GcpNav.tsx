@@ -323,7 +323,9 @@ export function GcpNav({
                               to={child.path}
                               selected={isSelected(child.path)}
                               onClick={() => select(entry.id)}
-                              sx={{ pl: 5 }}
+                              // Align the child label under the parent's label
+                              // (past the 36px icon column), not the icon.
+                              sx={{ pl: 6.5 }}
                             >
                               <ListItemText primary={child.label} />
                             </ListItemButton>
