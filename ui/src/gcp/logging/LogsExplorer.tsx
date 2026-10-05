@@ -34,7 +34,7 @@ export function LogsExplorer() {
 
   const logs = useQuery({
     queryKey: ['gcp', 'logging', 'logs', accountId],
-    queryFn: listLogs,
+    queryFn: () => listLogs(),
   })
 
   const entries = useQuery({

@@ -42,7 +42,7 @@ export function AlertingPage() {
 
   const policies = useQuery({
     queryKey: ['gcp', 'monitoring', 'policies', accountId],
-    queryFn: listAlertPolicies,
+    queryFn: () => listAlertPolicies(),
   })
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'monitoring', 'policies'] })

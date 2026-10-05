@@ -98,7 +98,7 @@ export function QueryPage() {
   const scopeTarget = scopeDocumentTarget(scope.trim())
   const rootCollections = useQuery({
     queryKey: ['gcp', 'firestore', 'collections', accountId],
-    queryFn: listCollections,
+    queryFn: () => listCollections(),
     enabled: !scopeTarget,
   })
   const subcollections = useQuery({

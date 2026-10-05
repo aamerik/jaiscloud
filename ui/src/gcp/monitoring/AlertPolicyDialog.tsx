@@ -41,7 +41,7 @@ export function AlertPolicyDialog({ open, onClose, initial }: AlertPolicyDialogP
 
   const channelList = useQuery({
     queryKey: ['gcp', 'monitoring', 'channels'],
-    queryFn: listNotificationChannels,
+    queryFn: () => listNotificationChannels(),
     enabled: open,
   })
 

@@ -1,4 +1,5 @@
 import { api } from '../client'
+import { fetchAllPages } from '../paging'
 
 const BASE = '/api/ui/v1/gcp/monitoring'
 
@@ -126,8 +127,27 @@ export interface ListNotificationChannelDescriptorsResponse {
 
 // ─── metrics ──────────────────────────────────────────────────────────────────
 
-export const listMetricDescriptors = (filter = '') =>
-  api.get<ListMetricDescriptorsResponse>(`${BASE}/metricDescriptors`, { filter })
+/** List every metric descriptor; pass `pageToken` for a single raw page. */
+export async function listMetricDescriptors(
+  filter = '',
+  params?: { pageToken?: string },
+): Promise<ListMetricDescriptorsResponse> {
+  if (params?.pageToken) {
+    return api.get<ListMetricDescriptorsResponse>(`${BASE}/metricDescriptors`, {
+      filter,
+      pageToken: params.pageToken,
+    })
+  }
+  const metricDescriptors = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListMetricDescriptorsResponse>(`${BASE}/metricDescriptors`, {
+        filter,
+        ...(pageToken ? { pageToken } : {}),
+      }),
+    (page) => page.metricDescriptors ?? [],
+  )
+  return { metricDescriptors }
+}
 
 export const listTimeSeries = (params: ListTimeSeriesParams = {}) =>
   api.get<ListTimeSeriesResponse>(`${BASE}/timeSeries`, {
@@ -142,8 +162,25 @@ export const listTimeSeries = (params: ListTimeSeriesParams = {}) =>
 
 const policyPath = (id: string) => `${BASE}/alertPolicies/${encodeURIComponent(id)}`
 
-export const listAlertPolicies = () =>
-  api.get<ListAlertPoliciesResponse>(`${BASE}/alertPolicies`)
+/** List every alerting policy; pass `pageToken` for a single raw page. */
+export async function listAlertPolicies(params?: {
+  pageToken?: string
+}): Promise<ListAlertPoliciesResponse> {
+  if (params?.pageToken) {
+    return api.get<ListAlertPoliciesResponse>(`${BASE}/alertPolicies`, {
+      pageToken: params.pageToken,
+    })
+  }
+  const alertPolicies = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListAlertPoliciesResponse>(
+        `${BASE}/alertPolicies`,
+        pageToken ? { pageToken } : undefined,
+      ),
+    (page) => page.alertPolicies ?? [],
+  )
+  return { alertPolicies, totalSize: alertPolicies.length }
+}
 
 export const createAlertPolicy = (body: AlertPolicyRequest) =>
   api.post<AlertPolicy>(`${BASE}/alertPolicies`, body)
@@ -157,8 +194,25 @@ export const deleteAlertPolicy = (id: string) => api.delete<void>(policyPath(id)
 
 const channelPath = (id: string) => `${BASE}/notificationChannels/${encodeURIComponent(id)}`
 
-export const listNotificationChannels = () =>
-  api.get<ListNotificationChannelsResponse>(`${BASE}/notificationChannels`)
+/** List every notification channel; pass `pageToken` for a single raw page. */
+export async function listNotificationChannels(params?: {
+  pageToken?: string
+}): Promise<ListNotificationChannelsResponse> {
+  if (params?.pageToken) {
+    return api.get<ListNotificationChannelsResponse>(`${BASE}/notificationChannels`, {
+      pageToken: params.pageToken,
+    })
+  }
+  const notificationChannels = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListNotificationChannelsResponse>(
+        `${BASE}/notificationChannels`,
+        pageToken ? { pageToken } : undefined,
+      ),
+    (page) => page.notificationChannels ?? [],
+  )
+  return { notificationChannels, totalSize: notificationChannels.length }
+}
 
 export const createNotificationChannel = (body: NotificationChannelRequest) =>
   api.post<NotificationChannel>(`${BASE}/notificationChannels`, body)
@@ -169,7 +223,23 @@ export const updateNotificationChannel = (id: string, body: NotificationChannelR
 export const deleteNotificationChannel = (id: string) =>
   api.delete<void>(channelPath(id))
 
-export const listNotificationChannelDescriptors = () =>
-  api.get<ListNotificationChannelDescriptorsResponse>(
-    `${BASE}/notificationChannelDescriptors`,
+/** List every notification channel descriptor; pass `pageToken` for one page. */
+export async function listNotificationChannelDescriptors(params?: {
+  pageToken?: string
+}): Promise<ListNotificationChannelDescriptorsResponse> {
+  const path = `${BASE}/notificationChannelDescriptors`
+  if (params?.pageToken) {
+    return api.get<ListNotificationChannelDescriptorsResponse>(path, {
+      pageToken: params.pageToken,
+    })
+  }
+  const channelDescriptors = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListNotificationChannelDescriptorsResponse>(
+        path,
+        pageToken ? { pageToken } : undefined,
+      ),
+    (page) => page.channelDescriptors ?? [],
   )
+  return { channelDescriptors }
+}

@@ -47,7 +47,7 @@ export function TopicsPage() {
 
   const topics = useQuery({
     queryKey: ['gcp', 'pubsub', 'topics', accountId],
-    queryFn: listTopics,
+    queryFn: () => listTopics(),
   })
 
   const create = useMutation({

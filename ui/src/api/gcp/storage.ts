@@ -1,4 +1,5 @@
 import { api, putBlob } from '../client'
+import { fetchAllPageResponses } from '../paging'
 
 const BASE = '/api/ui/v1/gcp/storage'
 
@@ -174,14 +175,31 @@ export interface ListObjectsParams {
   pageToken?: string
 }
 
-export const listObjects = (bucket: string, params?: ListObjectsParams) => {
+/**
+ * List a bucket's objects (and pseudo-directory `prefixes`). Drains every
+ * `nextPageToken` page; pass `pageToken` for a single raw page.
+ */
+export async function listObjects(
+  bucket: string,
+  params?: ListObjectsParams,
+): Promise<ListObjectsResponse> {
+  const path = `${BASE}/buckets/${encodeURIComponent(bucket)}/objects`
   const qp: Record<string, string | number> = {}
   if (params?.prefix) qp.prefix = params.prefix
   if (params?.delimiter) qp.delimiter = params.delimiter
   if (params?.versions) qp.versions = 'true'
   if (params?.maxResults) qp.maxResults = params.maxResults
-  if (params?.pageToken) qp.pageToken = params.pageToken
-  return api.get<ListObjectsResponse>(`${BASE}/buckets/${encodeURIComponent(bucket)}/objects`, qp)
+  const pageQuery = (pageToken?: string) => (pageToken ? { ...qp, pageToken } : qp)
+
+  if (params?.pageToken) {
+    return api.get<ListObjectsResponse>(path, pageQuery(params.pageToken))
+  }
+  const pages = await fetchAllPageResponses((pageToken) =>
+    api.get<ListObjectsResponse>(path, pageQuery(pageToken)),
+  )
+  const items = pages.flatMap((page) => page.items)
+  const prefixes = pages.flatMap((page) => page.prefixes ?? [])
+  return prefixes.length > 0 ? { items, prefixes } : { items }
 }
 
 /** List every generation of every object in a bucket. */

@@ -1,4 +1,5 @@
 import { api } from '../client'
+import { fetchAllPages } from '../paging'
 
 const BASE = '/api/ui/v1/gcp/workflows'
 
@@ -108,8 +109,23 @@ export const updateWorkflow = (location: string, workflow: string, input: Workfl
 export const deleteWorkflow = (location: string, workflow: string) =>
   api.delete<void>(workflowPath(location, workflow))
 
-export const listExecutions = (location: string, workflow: string) =>
-  api.get<ListExecutionsResponse>(`${workflowPath(location, workflow)}/executions`)
+/** List every execution of a workflow; pass `pageToken` for a single raw page. */
+export async function listExecutions(
+  location: string,
+  workflow: string,
+  params?: { pageToken?: string },
+): Promise<ListExecutionsResponse> {
+  const path = `${workflowPath(location, workflow)}/executions`
+  if (params?.pageToken) {
+    return api.get<ListExecutionsResponse>(path, { pageToken: params.pageToken })
+  }
+  const executions = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListExecutionsResponse>(path, pageToken ? { pageToken } : undefined),
+    (page) => page.executions,
+  )
+  return { executions, total: executions.length }
+}
 
 export const getExecution = (location: string, workflow: string, execution: string) =>
   api.get<Execution>(executionPath(location, workflow, execution))

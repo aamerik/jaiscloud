@@ -1,4 +1,5 @@
 import { api } from '../client'
+import { fetchAllPages } from '../paging'
 
 const BASE = '/api/ui/v1/gcp/logging'
 
@@ -123,7 +124,18 @@ export const listEntries = (params: ListEntriesParams = {}) =>
     pageToken: params.pageToken ?? '',
   })
 
-export const listLogs = () => api.get<ListLogsResponse>(`${BASE}/logs`)
+/** List every log name; pass `pageToken` for a single raw page. */
+export async function listLogs(params?: { pageToken?: string }): Promise<ListLogsResponse> {
+  if (params?.pageToken) {
+    return api.get<ListLogsResponse>(`${BASE}/logs`, { pageToken: params.pageToken })
+  }
+  const logNames = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListLogsResponse>(`${BASE}/logs`, pageToken ? { pageToken } : undefined),
+    (page) => page.logNames ?? [],
+  )
+  return { logNames }
+}
 
 export const deleteLog = (log: string) =>
   api.delete<void>(`${BASE}/logs/${encodeURIComponent(log)}`)
@@ -132,7 +144,18 @@ export const deleteLog = (log: string) =>
 
 const metricPath = (metric: string) => `${BASE}/metrics/${encodeURIComponent(metric)}`
 
-export const listMetrics = () => api.get<ListMetricsResponse>(`${BASE}/metrics`)
+/** List every logs-based metric; pass `pageToken` for a single raw page. */
+export async function listMetrics(params?: { pageToken?: string }): Promise<ListMetricsResponse> {
+  if (params?.pageToken) {
+    return api.get<ListMetricsResponse>(`${BASE}/metrics`, { pageToken: params.pageToken })
+  }
+  const metrics = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListMetricsResponse>(`${BASE}/metrics`, pageToken ? { pageToken } : undefined),
+    (page) => page.metrics ?? [],
+  )
+  return { metrics }
+}
 
 export const createMetric = (body: MetricRequest) =>
   api.post<LogMetric>(`${BASE}/metrics`, body)
@@ -146,7 +169,18 @@ export const deleteMetric = (metric: string) => api.delete<void>(metricPath(metr
 
 const sinkPath = (sink: string) => `${BASE}/sinks/${encodeURIComponent(sink)}`
 
-export const listSinks = () => api.get<ListSinksResponse>(`${BASE}/sinks`)
+/** List every log router sink; pass `pageToken` for a single raw page. */
+export async function listSinks(params?: { pageToken?: string }): Promise<ListSinksResponse> {
+  if (params?.pageToken) {
+    return api.get<ListSinksResponse>(`${BASE}/sinks`, { pageToken: params.pageToken })
+  }
+  const sinks = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListSinksResponse>(`${BASE}/sinks`, pageToken ? { pageToken } : undefined),
+    (page) => page.sinks ?? [],
+  )
+  return { sinks }
+}
 
 export const createSink = (body: SinkRequest) => api.post<LogSink>(`${BASE}/sinks`, body)
 
@@ -159,8 +193,20 @@ export const deleteSink = (sink: string) => api.delete<void>(sinkPath(sink))
 
 const exclusionPath = (exclusion: string) => `${BASE}/exclusions/${encodeURIComponent(exclusion)}`
 
-export const listExclusions = () =>
-  api.get<ListExclusionsResponse>(`${BASE}/exclusions`)
+/** List every log exclusion; pass `pageToken` for a single raw page. */
+export async function listExclusions(params?: {
+  pageToken?: string
+}): Promise<ListExclusionsResponse> {
+  if (params?.pageToken) {
+    return api.get<ListExclusionsResponse>(`${BASE}/exclusions`, { pageToken: params.pageToken })
+  }
+  const exclusions = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListExclusionsResponse>(`${BASE}/exclusions`, pageToken ? { pageToken } : undefined),
+    (page) => page.exclusions ?? [],
+  )
+  return { exclusions }
+}
 
 export const createExclusion = (body: ExclusionRequest) =>
   api.post<LogExclusion>(`${BASE}/exclusions`, body)

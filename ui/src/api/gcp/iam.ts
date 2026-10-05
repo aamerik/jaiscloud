@@ -1,4 +1,5 @@
 import { api } from '../client'
+import { fetchAllPages } from '../paging'
 
 const BASE = '/api/ui/v1/gcp/iam'
 
@@ -65,8 +66,25 @@ export interface IamPolicy {
 }
 
 // Service accounts.
-export const listServiceAccounts = () =>
-  api.get<ListServiceAccountsResponse>(`${BASE}/serviceAccounts`)
+/** List every service account; pass `pageToken` for a single raw page. */
+export async function listServiceAccounts(params?: {
+  pageToken?: string
+}): Promise<ListServiceAccountsResponse> {
+  if (params?.pageToken) {
+    return api.get<ListServiceAccountsResponse>(`${BASE}/serviceAccounts`, {
+      pageToken: params.pageToken,
+    })
+  }
+  const accounts = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListServiceAccountsResponse>(
+        `${BASE}/serviceAccounts`,
+        pageToken ? { pageToken } : undefined,
+      ),
+    (page) => page.accounts,
+  )
+  return { accounts, total: accounts.length }
+}
 
 export const createServiceAccount = (body: CreateServiceAccountRequest) =>
   api.post<ServiceAccount>(`${BASE}/serviceAccounts`, body)
@@ -94,10 +112,22 @@ export const putServiceAccountIam = (email: string, policy: IamPolicy) =>
   api.put<IamPolicy>(`${BASE}/serviceAccounts/${encodeURIComponent(email)}/iam`, { policy })
 
 // Keys.
-export const listServiceAccountKeys = (email: string) =>
-  api.get<ListServiceAccountKeysResponse>(
-    `${BASE}/serviceAccounts/${encodeURIComponent(email)}/keys`,
+/** List every key of a service account; pass `pageToken` for a single raw page. */
+export async function listServiceAccountKeys(
+  email: string,
+  params?: { pageToken?: string },
+): Promise<ListServiceAccountKeysResponse> {
+  const path = `${BASE}/serviceAccounts/${encodeURIComponent(email)}/keys`
+  if (params?.pageToken) {
+    return api.get<ListServiceAccountKeysResponse>(path, { pageToken: params.pageToken })
+  }
+  const keys = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListServiceAccountKeysResponse>(path, pageToken ? { pageToken } : undefined),
+    (page) => page.keys,
   )
+  return { keys, total: keys.length }
+}
 
 export const createServiceAccountKey = (email: string) =>
   api.post<ServiceAccountKey>(`${BASE}/serviceAccounts/${encodeURIComponent(email)}/keys`)

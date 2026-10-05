@@ -29,7 +29,7 @@ export function ChannelsPage() {
 
   const channels = useQuery({
     queryKey: ['gcp', 'monitoring', 'channels', accountId],
-    queryFn: listNotificationChannels,
+    queryFn: () => listNotificationChannels(),
   })
 
   const remove = useMutation({

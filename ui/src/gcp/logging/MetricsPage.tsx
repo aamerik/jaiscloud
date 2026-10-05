@@ -31,7 +31,7 @@ export function MetricsPage() {
 
   const metrics = useQuery({
     queryKey: ['gcp', 'logging', 'metrics', accountId],
-    queryFn: listMetrics,
+    queryFn: () => listMetrics(),
   })
 
   const remove = useMutation({

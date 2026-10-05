@@ -24,7 +24,7 @@ export function DatasetsPage() {
 
   const datasets = useQuery({
     queryKey: ['gcp', 'bigquery', 'datasets', accountId],
-    queryFn: listDatasets,
+    queryFn: () => listDatasets(),
   })
 
   const remove = useMutation({

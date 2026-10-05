@@ -106,7 +106,7 @@ function TopicSubscriptions({ topic }: { topic: string }) {
   const { accountId } = useAccount()
   const query = useQuery({
     queryKey: ['gcp', 'pubsub', 'subscriptions', accountId],
-    queryFn: listSubscriptions,
+    queryFn: () => listSubscriptions(),
   })
   const subs = (query.data?.subscriptions ?? []).filter((s) => s.topic === topic)
 

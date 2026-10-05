@@ -1,4 +1,5 @@
 import { api } from '../client'
+import { fetchAllPages } from '../paging'
 
 const BASE = '/api/ui/v1/gcp/bigquery'
 
@@ -81,7 +82,20 @@ export interface ListJobsResponse {
 export type BigQueryJobDetail = Record<string, unknown>
 
 // Datasets.
-export const listDatasets = () => api.get<ListDatasetsResponse>(`${BASE}/datasets`)
+/** List every dataset; pass `pageToken` for a single raw page. */
+export async function listDatasets(params?: {
+  pageToken?: string
+}): Promise<ListDatasetsResponse> {
+  if (params?.pageToken) {
+    return api.get<ListDatasetsResponse>(`${BASE}/datasets`, { pageToken: params.pageToken })
+  }
+  const datasets = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListDatasetsResponse>(`${BASE}/datasets`, pageToken ? { pageToken } : undefined),
+    (page) => page.datasets,
+  )
+  return { datasets, total: datasets.length }
+}
 
 export const createDataset = (body: CreateDatasetRequest) =>
   api.post<BigQueryDatasetDetail>(`${BASE}/datasets`, body)
@@ -93,8 +107,21 @@ export const deleteDataset = (dataset: string) =>
   api.delete<void>(`${BASE}/datasets/${encodeURIComponent(dataset)}`)
 
 // Tables.
-export const listTables = (dataset: string) =>
-  api.get<ListTablesResponse>(`${BASE}/datasets/${encodeURIComponent(dataset)}/tables`)
+/** List every table in a dataset; pass `pageToken` for a single raw page. */
+export async function listTables(
+  dataset: string,
+  params?: { pageToken?: string },
+): Promise<ListTablesResponse> {
+  const path = `${BASE}/datasets/${encodeURIComponent(dataset)}/tables`
+  if (params?.pageToken) {
+    return api.get<ListTablesResponse>(path, { pageToken: params.pageToken })
+  }
+  const tables = await fetchAllPages(
+    (pageToken) => api.get<ListTablesResponse>(path, pageToken ? { pageToken } : undefined),
+    (page) => page.tables,
+  )
+  return { tables, total: tables.length }
+}
 
 export const createTable = (dataset: string, body: CreateTableRequest) =>
   api.post<BigQueryTableDetail>(
@@ -118,7 +145,18 @@ export const listRows = (dataset: string, table: string) =>
   )
 
 // Jobs.
-export const listJobs = () => api.get<ListJobsResponse>(`${BASE}/jobs`)
+/** List every job; pass `pageToken` for a single raw page. */
+export async function listJobs(params?: { pageToken?: string }): Promise<ListJobsResponse> {
+  if (params?.pageToken) {
+    return api.get<ListJobsResponse>(`${BASE}/jobs`, { pageToken: params.pageToken })
+  }
+  const jobs = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListJobsResponse>(`${BASE}/jobs`, pageToken ? { pageToken } : undefined),
+    (page) => page.jobs,
+  )
+  return { jobs, total: jobs.length }
+}
 
 export const getJob = (job: string) =>
   api.get<BigQueryJobDetail>(`${BASE}/jobs/${encodeURIComponent(job)}`)

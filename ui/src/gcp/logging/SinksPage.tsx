@@ -31,7 +31,7 @@ export function SinksPage() {
 
   const sinks = useQuery({
     queryKey: ['gcp', 'logging', 'sinks', accountId],
-    queryFn: listSinks,
+    queryFn: () => listSinks(),
   })
 
   const remove = useMutation({
