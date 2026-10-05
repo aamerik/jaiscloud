@@ -144,8 +144,10 @@ func TestRegistrar_FirestoreAdvertised(t *testing.T) {
 	if got.ID != "firestore" || got.RootPath != "/gcp/firestore/collections" || got.Tier != "full" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
-	if len(got.Children) != 1 || got.Children[0].Path != "/gcp/firestore/collections" {
-		t.Fatalf("children = %+v, want collections", got.Children)
+	if len(got.Children) != 2 ||
+		got.Children[0].Path != "/gcp/firestore/collections" ||
+		got.Children[1].Path != "/gcp/firestore/query" {
+		t.Fatalf("children = %+v, want collections + query", got.Children)
 	}
 }
 

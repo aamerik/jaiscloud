@@ -49,7 +49,27 @@ export interface UpdateDocumentRequest {
   updateTime?: string
 }
 
+/** Body for POST /query. `scope` is a parent document path (e.g. `cities/SF`)
+ * for a subcollection or collection-group query; omit it for the whole
+ * database. `structuredQuery` is a Firestore StructuredQuery. */
+export interface RunQueryRequest {
+  scope?: string
+  structuredQuery: Record<string, unknown>
+}
+
+/** Result of a runQuery: the matching documents plus the read timestamp and the
+ * number of documents skipped by the query's offset. */
+export interface RunQueryResponse {
+  documents: FirestoreDocument[]
+  readTime?: string
+  skippedResults?: number
+}
+
 export const listCollections = () => api.get<ListCollectionsResponse>(`${BASE}/collections`)
+
+/** Run a StructuredQuery. `scope` is a parent document path (see RunQueryRequest). */
+export const runQuery = (body: RunQueryRequest) =>
+  api.post<RunQueryResponse>(`${BASE}/query`, body)
 
 /** Subcollection IDs of a document. `collection` may itself be a nested
  * collection path (e.g. `users/alice/orders`). */

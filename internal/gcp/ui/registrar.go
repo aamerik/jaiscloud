@@ -155,7 +155,10 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Category: "Databases",
 			RootPath: "/gcp/firestore/collections",
 			Tier:     coreui.TierFull,
-			Children: []coreui.ServiceChild{{Label: "Collections", Path: "/gcp/firestore/collections"}},
+			Children: []coreui.ServiceChild{
+				{Label: "Collections", Path: "/gcp/firestore/collections"},
+				{Label: "Query", Path: "/gcp/firestore/query"},
+			},
 		})
 	}
 	if r.compute != nil {
