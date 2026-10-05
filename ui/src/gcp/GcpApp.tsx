@@ -110,9 +110,10 @@ const NAV_EXPANDED_KEY = 'jaiscloud-nav-expanded'
 
 function readRailExpanded(): boolean {
   try {
-    return window.localStorage.getItem(NAV_EXPANDED_KEY) === 'true'
+    // Default to expanded so labels are visible; mini is an opt-in collapse.
+    return window.localStorage.getItem(NAV_EXPANDED_KEY) !== 'false'
   } catch {
-    return false
+    return true
   }
 }
 
@@ -131,9 +132,6 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
   // mini (icons) and expanded (labelled, persisted); on mobile it opens the
   // overlay. The rail is always present on desktop, never hidden.
   const [railExpanded, setRailExpandedState] = useState<boolean>(readRailExpanded)
-  // Transient: the mini rail expands to an overlay on hover so its custom
-  // product glyphs are identifiable by label without reflowing the page.
-  const [railHovered, setRailHovered] = useState(false)
   const [overlayOpen, setOverlayOpen] = useState(false)
   const [projectOpen, setProjectOpen] = useState(false)
 
@@ -227,8 +225,6 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
         component="nav"
         id="gcp-nav-rail"
         aria-label="Service navigation"
-        onMouseEnter={() => setRailHovered(true)}
-        onMouseLeave={() => setRailHovered(false)}
         sx={{
           display: { xs: 'none', md: 'block' },
           width: railExpanded ? DRAWER_WIDTH : MINI_WIDTH,
@@ -264,28 +260,6 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
             variant={railExpanded ? 'full' : 'mini'}
           />
         </Drawer>
-
-        {/* Peek: on hover the mini rail reveals the labelled nav as an overlay,
-            so the (custom) glyphs are identifiable without reflowing content. */}
-        {!railExpanded && railHovered && (
-          <Box
-            data-testid="gcp-nav-peek"
-            sx={{
-              position: 'fixed',
-              top: 0,
-              left: 0,
-              height: '100vh',
-              width: DRAWER_WIDTH,
-              zIndex: theme.zIndex.drawer,
-              bgcolor: 'background.paper',
-              borderRight: 1,
-              borderColor: 'divider',
-              boxShadow: 4,
-            }}
-          >
-            <GcpNav services={services} title="Console" />
-          </Box>
-        )}
       </Box>
 
       <Box
