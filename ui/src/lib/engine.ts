@@ -1,12 +1,21 @@
 import type { EngineMode, ServiceDescriptor } from '../api/services'
 
 /**
- * Backend tag for an engine-capable service with a real engine configured
- * ('docker' / 'k8s' / 'native'), or undefined when no engine runs. This is the
- * implementation axis, never a fidelity tier.
+ * Runtime tag for an engine-capable service: the active backend
+ * ('docker' / 'k8s' / 'native') when one runs, else 'mock'. Undefined only for
+ * services with no executor seam at all. This is the implementation axis, never
+ * a fidelity tier — the tag is informational and its popover lists every
+ * backend, so it renders even when no engine is configured.
  */
 export function engineTag(service: ServiceDescriptor): string | undefined {
-  return service.engine?.active ? service.engine.mode : undefined
+  const engine = service.engine
+  if (!engine) return undefined
+  return engine.active && engine.mode ? engine.mode : 'mock'
+}
+
+/** Whether a real (non-mock) backend is configured. */
+export function engineActive(service: ServiceDescriptor): boolean {
+  return service.engine?.active === true
 }
 
 /** All backends and their support state, for the availability matrix. */

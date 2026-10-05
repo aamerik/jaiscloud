@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ServiceDescriptor } from '../api/services'
-import { engineModes, engineTag } from './engine'
+import { engineActive, engineModes, engineTag } from './engine'
 
 const service = (over: Partial<ServiceDescriptor> = {}): ServiceDescriptor => ({
   id: 'dataproc',
@@ -13,14 +13,22 @@ const service = (over: Partial<ServiceDescriptor> = {}): ServiceDescriptor => ({
 })
 
 describe('engineTag', () => {
-  it('is undefined without an engine or when inactive', () => {
+  it('is undefined without an engine and "mock" when inactive', () => {
     expect(engineTag(service())).toBeUndefined()
-    expect(engineTag(service({ engine: { active: false, modes: [] } }))).toBeUndefined()
+    expect(engineTag(service({ engine: { active: false, modes: [] } }))).toBe('mock')
   })
 
   it('returns the active backend mode', () => {
     const tagged = service({ tier: 'full', engine: { active: true, mode: 'k8s', modes: [] } })
     expect(engineTag(tagged)).toBe('k8s')
+  })
+})
+
+describe('engineActive', () => {
+  it('reflects the engine active flag', () => {
+    expect(engineActive(service())).toBe(false)
+    expect(engineActive(service({ engine: { active: false, modes: [] } }))).toBe(false)
+    expect(engineActive(service({ engine: { active: true, mode: 'docker', modes: [] } }))).toBe(true)
   })
 })
 

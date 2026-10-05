@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react'
-import { Box, Chip, IconButton, Stack, Tooltip, Typography } from '@mui/material'
+import { useState, type ReactNode } from 'react'
+import { Box, Chip, IconButton, Popover, Stack, Tooltip, Typography } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined'
 import StarIcon from '@mui/icons-material/Star'
@@ -7,7 +7,7 @@ import StarBorderIcon from '@mui/icons-material/StarBorder'
 import { Link as RouterLink } from 'react-router-dom'
 import { useFavorites } from '../../hooks/useFavorites'
 import { useServices } from '../../hooks/useServices'
-import { engineModes, engineTag } from '../../lib/engine'
+import { engineActive, engineModes, engineTag } from '../../lib/engine'
 import { tierDescription, tierLabel } from '../../lib/tier'
 import { GcpServiceIcon } from '../icons/GcpServiceIcon'
 import { serviceAccent } from '../icons/serviceIcons'
@@ -54,7 +54,9 @@ export function GcpPageHeader({
   const status = service ? tierLabel(service) : undefined
   const statusDetail = service ? tierDescription(service) : undefined
   const engine = service ? engineTag(service) : undefined
+  const engineIsActive = service ? engineActive(service) : false
   const backends = service ? engineModes(service) : []
+  const [engineAnchor, setEngineAnchor] = useState<HTMLElement | null>(null)
 
   return (
     <Box sx={{ mb: 2 }}>
@@ -93,26 +95,16 @@ export function GcpPageHeader({
               </Tooltip>
             )}
             {engine && (
-              <Tooltip
-                title={
-                  <Box component="ul" sx={{ m: 0, pl: 2 }}>
-                    {backends.map((backend) => (
-                      <li key={backend.name}>
-                        {backend.supported ? '✓' : '✗'} {backend.name}
-                        {backend.note ? ` — ${backend.note}` : ''}
-                      </li>
-                    ))}
-                  </Box>
-                }
-              >
-                <Chip
-                  label={engine}
-                  size="small"
-                  variant="outlined"
-                  color="primary"
-                  sx={{ height: 20, fontSize: 11, flexShrink: 0 }}
-                />
-              </Tooltip>
+              <Chip
+                label={engine}
+                size="small"
+                variant="outlined"
+                color={engineIsActive ? 'primary' : 'default'}
+                clickable
+                onClick={(event) => setEngineAnchor(event.currentTarget)}
+                aria-label={`${engine} runtime backends`}
+                sx={{ height: 20, fontSize: 11, flexShrink: 0 }}
+              />
             )}
             <Tooltip title={pinned ? 'Unpin from navigation' : 'Pin to navigation'}>
               <IconButton
@@ -152,6 +144,40 @@ export function GcpPageHeader({
           </Stack>
         )}
       </Stack>
+      <Popover
+        open={Boolean(engineAnchor)}
+        anchorEl={engineAnchor}
+        onClose={() => setEngineAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+      >
+        <Box sx={{ p: 1.5, minWidth: 240 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>
+            {service?.label ?? 'Service'} runtime backends
+          </Typography>
+          <Stack component="ul" spacing={0.75} sx={{ m: 0, p: 0, listStyle: 'none' }}>
+            {backends.map((backend) => (
+              <Box component="li" key={backend.name} sx={{ display: 'flex', gap: 1 }}>
+                <Typography
+                  component="span"
+                  sx={{ width: 14, color: backend.supported ? 'success.main' : 'text.disabled' }}
+                >
+                  {backend.supported ? '✓' : '✗'}
+                </Typography>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                    {backend.name}
+                  </Typography>
+                  {backend.note && (
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                      {backend.note}
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
+            ))}
+          </Stack>
+        </Box>
+      </Popover>
       {children}
     </Box>
   )
