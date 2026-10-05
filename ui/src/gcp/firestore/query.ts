@@ -10,6 +10,8 @@
  * the console uses.
  */
 
+import { pathSegments } from './util'
+
 /** Field-filter operators as they appear in a Firestore StructuredQuery. */
 export type FilterOperator =
   | 'EQUAL'
@@ -111,6 +113,24 @@ export function parseQueryValue(text: string): unknown {
     return JSON.parse(trimmed)
   } catch {
     return text
+  }
+}
+
+/**
+ * collectionQueryTarget turns a collection path into the builder's collection
+ * id + parent scope, so deep-linking from a collection pre-fills the query. A
+ * root collection (`users`) yields scope `''`; a nested collection
+ * (`users/alice/orders`) yields scope `users/alice` and id `orders`. A document
+ * path (even segment count) or an empty path yields null.
+ */
+export function collectionQueryTarget(
+  path: string,
+): { collectionId: string; scope: string } | null {
+  const segments = pathSegments(path)
+  if (segments.length === 0 || segments.length % 2 === 0) return null
+  return {
+    collectionId: segments[segments.length - 1] as string,
+    scope: segments.slice(0, -1).join('/'),
   }
 }
 

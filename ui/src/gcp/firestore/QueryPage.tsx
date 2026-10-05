@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import {
   Alert,
@@ -22,14 +22,16 @@ import {
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
-import { Link as RouterLink } from 'react-router-dom'
+import { Link as RouterLink, useSearchParams } from 'react-router-dom'
 import { runQuery, type FirestoreDocument, type RunQueryRequest } from '../../api/gcp/firestore'
 import { useAccount } from '../../context/AccountContext'
 import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
+import { FirestoreTabs } from './FirestoreTabs'
 import {
   buildStructuredQuery,
+  collectionQueryTarget,
   FILTER_OPERATORS,
   type FilterOperator,
   type QueryFilter,
@@ -47,6 +49,7 @@ const DEFAULT_RAW = `{
  * raw StructuredQuery editor, rendering the matching documents. */
 export function QueryPage() {
   const { accountId } = useAccount()
+  const [searchParams] = useSearchParams()
   const [mode, setMode] = useState<'builder' | 'raw'>('builder')
   const [scope, setScope] = useState('')
   const [collectionId, setCollectionId] = useState('')
@@ -57,6 +60,22 @@ export function QueryPage() {
   const [offset, setOffset] = useState('')
   const [raw, setRaw] = useState(DEFAULT_RAW)
   const [formError, setFormError] = useState<string | null>(null)
+
+  // Deep link from a collection (`?collection=users`, or a nested
+  // `users/alice/orders`): pre-fill the builder's collection id and parent
+  // scope. Re-applies only when the param value changes, so subsequent edits in
+  // the form are not clobbered.
+  const collectionParam = searchParams.get('collection')
+  const appliedTarget = useRef<string | null>(null)
+  useEffect(() => {
+    if (!collectionParam || appliedTarget.current === collectionParam) return
+    appliedTarget.current = collectionParam
+    const target = collectionQueryTarget(collectionParam)
+    if (!target) return
+    setMode('builder')
+    setCollectionId(target.collectionId)
+    setScope(target.scope)
+  }, [collectionParam])
 
   const execute = useMutation({
     mutationFn: (body: RunQueryRequest) => runQuery(body),
@@ -154,7 +173,9 @@ export function QueryPage() {
         id="firestore"
         title="Query"
         subtitle={`Firestore query runner · project ${accountId || '—'}`}
-      />
+      >
+        <FirestoreTabs />
+      </GcpPageHeader>
 
       <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
         <Stack spacing={2}>

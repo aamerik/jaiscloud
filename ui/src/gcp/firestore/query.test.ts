@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { buildStructuredQuery, parseQueryValue, toFirestoreValue, type QuerySpec } from './query'
+import {
+  buildStructuredQuery,
+  collectionQueryTarget,
+  parseQueryValue,
+  toFirestoreValue,
+  type QuerySpec,
+} from './query'
 
 describe('toFirestoreValue', () => {
   it('encodes the primitive scalar types', () => {
@@ -43,6 +49,25 @@ const base: QuerySpec = {
   limit: '',
   offset: '',
 }
+
+describe('collectionQueryTarget', () => {
+  it('splits a root collection', () => {
+    expect(collectionQueryTarget('users')).toEqual({ collectionId: 'users', scope: '' })
+  })
+
+  it('splits a nested collection into scope + id', () => {
+    expect(collectionQueryTarget('users/alice/orders')).toEqual({
+      collectionId: 'orders',
+      scope: 'users/alice',
+    })
+  })
+
+  it('rejects document paths and empty input', () => {
+    expect(collectionQueryTarget('users/alice')).toBeNull()
+    expect(collectionQueryTarget('users/alice/orders/o1')).toBeNull()
+    expect(collectionQueryTarget('')).toBeNull()
+  })
+})
 
 describe('buildStructuredQuery', () => {
   it('builds a minimal from clause', () => {

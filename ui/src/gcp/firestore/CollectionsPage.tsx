@@ -6,6 +6,7 @@ import { Link as RouterLink } from 'react-router-dom'
 import { listCollections, type Collection } from '../../api/gcp/firestore'
 import { useAccount } from '../../context/AccountContext'
 import { CreateDocumentDialog } from './CreateDocumentDialog'
+import { FirestoreTabs } from './FirestoreTabs'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
@@ -42,6 +43,20 @@ export function CollectionsPage() {
         </Link>
       ),
     },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (collection) => (
+        <Link
+          component={RouterLink}
+          to={`/gcp/firestore/query?collection=${encodeURIComponent(collection.id)}`}
+          aria-label={`Query collection ${collection.id}`}
+        >
+          Query
+        </Link>
+      ),
+    },
   ]
 
   return (
@@ -55,7 +70,9 @@ export function CollectionsPage() {
             Create document
           </Button>
         }
-      />
+      >
+        <FirestoreTabs />
+      </GcpPageHeader>
 
       <GcpToolbar
         filter={filter}
