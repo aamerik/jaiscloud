@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react'
-import { Box, IconButton, Stack, Tooltip, Typography } from '@mui/material'
+import { Box, Chip, IconButton, Stack, Tooltip, Typography } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined'
 import StarIcon from '@mui/icons-material/Star'
 import StarBorderIcon from '@mui/icons-material/StarBorder'
 import { Link as RouterLink } from 'react-router-dom'
 import { useFavorites } from '../../hooks/useFavorites'
+import { useServices } from '../../hooks/useServices'
+import { tierDescription, tierLabel } from '../../lib/tier'
 import { GcpServiceIcon } from '../icons/GcpServiceIcon'
 import { serviceAccent } from '../icons/serviceIcons'
 import { serviceDocsHref } from './serviceDocs'
@@ -46,6 +48,10 @@ export function GcpPageHeader({
 }: GcpPageHeaderProps) {
   const { isFavorite, toggle } = useFavorites()
   const pinned = isFavorite(id)
+  const { data: servicesData } = useServices()
+  const service = servicesData?.services.find((candidate) => candidate.id === id)
+  const status = service ? tierLabel(service) : undefined
+  const statusDetail = service ? tierDescription(service) : undefined
 
   return (
     <Box sx={{ mb: 2 }}>
@@ -73,6 +79,16 @@ export function GcpPageHeader({
             <Typography variant="h5" sx={{ overflowWrap: 'anywhere', minWidth: 0 }}>
               {title}
             </Typography>
+            {status && (
+              <Tooltip title={statusDetail ?? status}>
+                <Chip
+                  label={status}
+                  size="small"
+                  variant="outlined"
+                  sx={{ height: 20, fontSize: 11, flexShrink: 0 }}
+                />
+              </Tooltip>
+            )}
             <Tooltip title={pinned ? 'Unpin from navigation' : 'Pin to navigation'}>
               <IconButton
                 size="small"

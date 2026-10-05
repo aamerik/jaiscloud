@@ -29,6 +29,7 @@ import { GcpServiceIcon } from '../icons/GcpServiceIcon'
 import { useFavorites } from '../../hooks/useFavorites'
 import { buildNavGroups, type NavEntry } from './navModel'
 import { rememberRecentService, useRecentServices } from './recentServices'
+import { tierLabel } from '../../lib/tier'
 
 const NAV_MENU_WIDTH = 360
 
@@ -55,6 +56,10 @@ export function NavMenu({ open, onClose, services }: NavMenuProps) {
   const groups = useMemo(
     () => buildNavGroups(services, favorites, recent, query),
     [services, favorites, recent, query],
+  )
+  const statusById = useMemo(
+    () => new Map(services.map((service) => [service.id, tierLabel(service)])),
+    [services],
   )
 
   useEffect(() => {
@@ -204,7 +209,14 @@ export function NavMenu({ open, onClose, services }: NavMenuProps) {
                       <ListItemIcon sx={{ minWidth: 36 }}>
                         <GcpServiceIcon id={entry.id} size={20} />
                       </ListItemIcon>
-                      <ListItemText primary={entry.label} secondary={entry.category} />
+                      <ListItemText
+                        primary={entry.label}
+                        secondary={
+                          statusById.get(entry.id)
+                            ? `${entry.category} · ${statusById.get(entry.id)}`
+                            : entry.category
+                        }
+                      />
                     </ListItemButton>
                   </ListItem>
                   {children.length > 0 && (

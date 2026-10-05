@@ -184,7 +184,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Compute Engine",
 			Category: "Compute",
 			RootPath: "/gcp/compute/instances",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierMetadata,
+			Note:     "Metadata only — no VM/disk/network data plane",
 			Children: []coreui.ServiceChild{{Label: "Instances", Path: "/gcp/compute/instances"}},
 		})
 	}
@@ -194,7 +195,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Cloud Run",
 			Category: "Compute",
 			RootPath: "/gcp/run/services",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierStub,
+			Note:     "Shape only — control plane; K8s executor optional",
 			Children: []coreui.ServiceChild{{Label: "Services", Path: "/gcp/run/services"}},
 		})
 	}
@@ -204,7 +206,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Cloud Functions",
 			Category: "Compute",
 			RootPath: "/gcp/functions",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierStub,
+			Note:     "Shape only — GCS-source execution (Docker/K8s); no container build",
 			Children: []coreui.ServiceChild{{Label: "Functions", Path: "/gcp/functions"}},
 		})
 	}
@@ -234,7 +237,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Workflows",
 			Category: "Integration",
 			RootPath: "/gcp/workflows",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierStub,
+			Note:     "Shape only — executions complete synchronously",
 			Children: []coreui.ServiceChild{{Label: "Workflows", Path: "/gcp/workflows"}},
 		})
 	}
@@ -244,7 +248,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Eventarc",
 			Category: "Integration",
 			RootPath: "/gcp/eventarc/triggers",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierStub,
+			Note:     "Shape only — trigger/channel CRUD; limited delivery",
 			Children: []coreui.ServiceChild{
 				{Label: "Triggers", Path: "/gcp/eventarc/triggers"},
 				{Label: "Channels", Path: "/gcp/eventarc/channels"},
@@ -257,7 +262,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Managed Kafka",
 			Category: "Integration",
 			RootPath: "/gcp/managedkafka/clusters",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierStub,
+			Note:     "Shape only — metadata by default; opt-in broker",
 			Children: []coreui.ServiceChild{
 				{Label: "Clusters", Path: "/gcp/managedkafka/clusters"},
 				{Label: "Topics", Path: "/gcp/managedkafka/topics"},
@@ -270,7 +276,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "BigQuery",
 			Category: "Analytics",
 			RootPath: "/gcp/bigquery/datasets",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierStub,
+			Note:     "Shape only — documented SQL subset on an in-process engine",
 			Children: []coreui.ServiceChild{
 				{Label: "Datasets", Path: "/gcp/bigquery/datasets"},
 				{Label: "Jobs", Path: "/gcp/bigquery/jobs"},
@@ -283,7 +290,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Dataproc",
 			Category: "Analytics",
 			RootPath: "/gcp/dataproc/clusters",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierStub,
+			Note:     "Shape only — Spark family; no real cluster without an executor",
 			Children: []coreui.ServiceChild{
 				{Label: "Clusters", Path: "/gcp/dataproc/clusters"},
 				{Label: "Jobs", Path: "/gcp/dataproc/jobs"},
@@ -297,7 +305,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "IAM",
 			Category: "Security",
 			RootPath: "/gcp/iam/service-accounts",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierStub,
+			Note:     "Shape only — authorization not enforced",
 			Children: []coreui.ServiceChild{{Label: "Service accounts", Path: "/gcp/iam/service-accounts"}},
 		})
 	}
@@ -356,7 +365,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Resource Manager",
 			Category: "Management",
 			RootPath: "/gcp/resourcemanager/projects",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierStub,
+			Note:     "Shape only — project registry; authorization not enforced",
 			Children: []coreui.ServiceChild{{Label: "Projects", Path: "/gcp/resourcemanager/projects"}},
 		})
 	}
