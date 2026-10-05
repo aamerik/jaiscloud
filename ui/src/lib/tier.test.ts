@@ -37,4 +37,12 @@ describe('tierDescription', () => {
     expect(stub).toContain('partial version of the real behaviour')
     expect(stub).toContain('(shape only)')
   })
+
+  // The labels/descriptions are shared by the AWS, Azure and GCP consoles, so
+  // they must not name a specific cloud.
+  it('is cloud-neutral', () => {
+    for (const tier of ['metadata', 'stub'] as const) {
+      expect(tierDescription(service({ tier }))).not.toMatch(/GCP|AWS|Azure/)
+    }
+  })
 })

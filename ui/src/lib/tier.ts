@@ -13,7 +13,7 @@ export function tierDescription(service: ServiceDescriptor): string | undefined 
     return `Serves the ${service.label} API and stores resource records, but nothing ever runs here. Fine for control-plane/IaC round-trips, not for behaviour.${service.note ? ` (${service.note})` : ''}`
   }
   if (service.tier === 'stub') {
-    return `Serves the ${service.label} API and runs a partial version of the real behaviour. Coverage and semantics are incomplete — verify on real GCP.${service.note ? ` (${service.note})` : ''}`
+    return `Serves the ${service.label} API and runs a partial version of the real behaviour. Coverage and semantics are incomplete — verify against the real cloud service.${service.note ? ` (${service.note})` : ''}`
   }
   return undefined
 }
