@@ -17,9 +17,9 @@ describe('tierLabel', () => {
     expect(tierLabel(service({ tier: 'full' }))).toBeUndefined()
   })
 
-  it('labels metadata-only and preview services', () => {
+  it('labels metadata-only and shape-only services', () => {
     expect(tierLabel(service({ tier: 'metadata' }))).toBe('Metadata only')
-    expect(tierLabel(service({ tier: 'stub' }))).toBe('Preview')
+    expect(tierLabel(service({ tier: 'stub' }))).toBe('Shape only')
   })
 })
 
@@ -34,7 +34,7 @@ describe('tierDescription', () => {
     expect(metadata).toContain('(no data plane)')
 
     const stub = tierDescription(service({ tier: 'stub', note: 'shape only' }))
-    expect(stub).toContain('limited operation coverage')
+    expect(stub).toContain('API shape and control plane')
     expect(stub).toContain('(shape only)')
   })
 })
