@@ -19,6 +19,7 @@ import {
   type ChannelInput,
   type EventarcChannel,
 } from '../../api/gcp/eventarc'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 
 export interface ChannelDialogProps {
   open: boolean
@@ -106,7 +107,6 @@ export function ChannelDialog({ open, onClose, channel, onSaved }: ChannelDialog
           {save.isError && (
             <Alert severity="error">Could not save the channel: {(save.error as Error).message}</Alert>
           )}
-          {rawError && <Alert severity="error">{rawError}</Alert>}
           <TextField
             autoFocus={!editing}
             label="Name"
@@ -135,14 +135,13 @@ export function ChannelDialog({ open, onClose, channel, onSaved }: ChannelDialog
               <Typography variant="body2" color="text.secondary">
                 The JSON below is sent verbatim as the channel body; the structured fields are ignored.
               </Typography>
-              <TextField
+              <GcpCodeEditor
                 label="Channel config JSON"
                 value={rawText}
-                onChange={(e) => setRawText(e.target.value)}
-                multiline
+                onChange={setRawText}
+                error={rawError || null}
+                language="json"
                 minRows={8}
-                fullWidth
-                slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: 13 } } }}
               />
             </>
           ) : (

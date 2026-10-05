@@ -12,6 +12,7 @@ import {
   TextField,
 } from '@mui/material'
 import { createTask, type TaskInput } from '../../api/gcp/tasks'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 
 export interface TaskDialogProps {
   open: boolean
@@ -121,13 +122,12 @@ export function TaskDialog({ open, onClose, location, queue, onSaved }: TaskDial
                   </MenuItem>
                 ))}
               </TextField>
-              <TextField
+              <GcpCodeEditor
                 label="Body (optional)"
                 value={input.httpBody}
-                onChange={(e) => set('httpBody', e.target.value)}
-                multiline
+                onChange={(value) => set('httpBody', value)}
+                language="json"
                 minRows={2}
-                fullWidth
               />
             </>
           )}

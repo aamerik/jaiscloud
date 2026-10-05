@@ -26,6 +26,8 @@ export interface GcpCodeEditorImplProps {
   disabled?: boolean
   /** Minimum visible lines; the editor grows with its content up to maxLines. */
   minRows?: number
+  /** Focus the editor when it mounts, mirroring a TextField's autoFocus. */
+  autoFocus?: boolean
   ariaLabel?: string
 }
 
@@ -47,6 +49,7 @@ export function GcpCodeEditorImpl({
   readOnly = false,
   disabled = false,
   minRows = DEFAULT_MIN_LINES,
+  autoFocus = false,
   ariaLabel,
 }: GcpCodeEditorImplProps) {
   const theme = useTheme()
@@ -57,6 +60,8 @@ export function GcpCodeEditorImpl({
   const editorRef = useRef<AceEditor | null>(null)
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
+  const autoFocusRef = useRef(autoFocus)
+  autoFocusRef.current = autoFocus
   const suppressRef = useRef(false)
 
   // Mount ace once per container. React StrictMode double-invokes effects in
@@ -71,6 +76,7 @@ export function GcpCodeEditorImpl({
       if (suppressRef.current) return
       onChangeRef.current?.(editor.getValue())
     })
+    if (autoFocusRef.current) editor.focus()
     return () => {
       editor.destroy()
       editorRef.current = null

@@ -4,6 +4,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
 import { cancelJob, deleteJob, getJob } from '../../api/gcp/bigquery'
 import { useAccount } from '../../context/AccountContext'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { GcpPageTitle } from '../common/PageTitle'
 
 /** One BigQuery job: the full wire object, with cancel and delete. */
@@ -70,21 +71,13 @@ export function JobDetailPage() {
 
       {detail.isLoading && <CircularProgress size={24} />}
       {detail.data && (
-        <Box
-          component="pre"
-          sx={{
-            border: '1px solid',
-            borderColor: 'divider',
-            borderRadius: 2,
-            p: 2,
-            m: 0,
-            overflow: 'auto',
-            fontFamily: 'monospace',
-            fontSize: 13,
-          }}
-        >
-          {JSON.stringify(detail.data, null, 2)}
-        </Box>
+        <GcpCodeEditor
+          value={JSON.stringify(detail.data, null, 2)}
+          readOnly
+          language="json"
+          minRows={20}
+          ariaLabel="Job JSON"
+        />
       )}
     </Box>
   )

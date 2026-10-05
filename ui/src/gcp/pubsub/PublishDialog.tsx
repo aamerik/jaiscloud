@@ -11,6 +11,7 @@ import {
   TextField,
 } from '@mui/material'
 import { publishToTopic } from '../../api/gcp/pubsub'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { encodeMessageData, parseAttributes } from './util'
 
 /** Publish one message to a topic: plain-text payload + optional attributes. */
@@ -64,14 +65,13 @@ export function PublishDialog({
             <Alert severity="success">Published message ID: {published.join(', ')}</Alert>
           )}
           {error && <Alert severity="error">{error}</Alert>}
-          <TextField
+          <GcpCodeEditor
             autoFocus
             label="Message"
             value={payload}
-            onChange={(e) => setPayload(e.target.value)}
-            multiline
+            onChange={setPayload}
+            language="text"
             minRows={4}
-            fullWidth
           />
           <TextField
             label='Attributes (JSON, e.g. {"k":"v"})'

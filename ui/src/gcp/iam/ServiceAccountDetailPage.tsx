@@ -18,7 +18,6 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  TextField,
   Tooltip,
   Typography,
 } from '@mui/material'
@@ -42,6 +41,7 @@ import {
   type ServiceAccountKey,
 } from '../../api/gcp/iam'
 import { useAccount } from '../../context/AccountContext'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { IamPolicyPanel } from '../common/IamPolicyPanel'
 import { EditServiceAccountDialog } from './EditServiceAccountDialog'
 import { GcpPageTitle } from '../common/PageTitle'
@@ -290,12 +290,12 @@ function NewKeyDialog({
         <Alert severity="warning" sx={{ mb: 2 }}>
           This is the only time the private key is shown. Copy it now.
         </Alert>
-        <TextField
+        <GcpCodeEditor
           value={credentials}
-          multiline
+          readOnly
+          language="json"
           minRows={8}
-          fullWidth
-          slotProps={{ input: { readOnly: true, sx: { fontFamily: 'monospace', fontSize: 12 } } }}
+          ariaLabel="Service account key JSON"
         />
       </DialogContent>
       <DialogActions>

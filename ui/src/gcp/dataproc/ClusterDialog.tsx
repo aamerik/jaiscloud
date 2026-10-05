@@ -16,6 +16,7 @@ import {
   type DataprocCluster,
   type DataprocClusterInput,
 } from '../../api/gcp/dataproc'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { buildVirtualClusterConfig, parseJsonObject } from './util'
 
 export interface ClusterDialogProps {
@@ -109,7 +110,6 @@ export function ClusterDialog({ open, onClose, onCreated }: ClusterDialogProps) 
               Could not create the cluster: {(save.error as Error).message}
             </Alert>
           )}
-          {parseError && <Alert severity="error">{parseError}</Alert>}
           <TextField
             autoFocus
             label="Name"
@@ -137,14 +137,13 @@ export function ClusterDialog({ open, onClose, onCreated }: ClusterDialogProps) 
           </TextField>
 
           {placement === 'gce' ? (
-            <TextField
+            <GcpCodeEditor
               label="Cluster config (JSON)"
               value={gceText}
-              onChange={(e) => setGceText(e.target.value)}
-              multiline
+              onChange={setGceText}
+              error={parseError || null}
+              language="json"
               minRows={12}
-              fullWidth
-              slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: 13 } } }}
             />
           ) : (
             <>

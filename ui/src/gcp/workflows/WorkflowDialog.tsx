@@ -20,6 +20,7 @@ import {
   type Workflow,
 } from '../../api/gcp/workflows'
 import { callLogLevelOptions, formatKV, parseKV } from './util'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 
 export interface WorkflowDialogProps {
   open: boolean
@@ -168,14 +169,12 @@ export function WorkflowDialog({ open, onClose, workflow, onSaved }: WorkflowDia
               </Select>
             </FormControl>
           </Stack>
-          <TextField
+          <GcpCodeEditor
             label="Source (YAML)"
             value={input.sourceContents}
-            onChange={(e) => set('sourceContents', e.target.value)}
-            multiline
+            onChange={(value) => set('sourceContents', value)}
+            language="yaml"
             minRows={8}
-            slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: 13 } } }}
-            fullWidth
           />
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
             <TextField

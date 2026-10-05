@@ -28,6 +28,7 @@ import {
   type EventarcTrigger,
   type TriggerInput,
 } from '../../api/gcp/eventarc'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 
 const DESTINATION_TYPES = ['cloudFunction', 'cloudRun', 'workflow']
 
@@ -163,7 +164,6 @@ export function TriggerDialog({ open, onClose, trigger, onSaved }: TriggerDialog
           {save.isError && (
             <Alert severity="error">Could not save the trigger: {(save.error as Error).message}</Alert>
           )}
-          {rawError && <Alert severity="error">{rawError}</Alert>}
           <TextField
             autoFocus={!editing}
             label="Name"
@@ -199,14 +199,13 @@ export function TriggerDialog({ open, onClose, trigger, onSaved }: TriggerDialog
                 The JSON below is sent verbatim as the trigger body; the structured fields are ignored.
                 Use this for a GKE or HTTP-endpoint destination.
               </Typography>
-              <TextField
+              <GcpCodeEditor
                 label="Trigger config JSON"
                 value={rawText}
-                onChange={(e) => setRawText(e.target.value)}
-                multiline
+                onChange={setRawText}
+                error={rawError || null}
+                language="json"
                 minRows={12}
-                fullWidth
-                slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: 13 } } }}
               />
             </>
           ) : (

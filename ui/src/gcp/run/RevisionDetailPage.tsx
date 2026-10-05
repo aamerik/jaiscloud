@@ -5,6 +5,7 @@ import { Link as RouterLink, useParams } from 'react-router-dom'
 import { getRevision } from '../../api/gcp/run'
 import { useAccount } from '../../context/AccountContext'
 import { firstImage, shortDate } from './util'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { GcpPageTitle } from '../common/PageTitle'
 
 function asString(value: unknown): string {
@@ -77,21 +78,13 @@ export function RevisionDetailPage() {
           <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, display: 'block' }}>
             Revision (google.cloud.run.v2.Revision)
           </Typography>
-          <Box
-            component="pre"
-            sx={{
-              m: 0,
-              p: 2,
-              borderRadius: 2,
-              border: '1px solid',
-              borderColor: 'divider',
-              bgcolor: 'background.paper',
-              overflow: 'auto',
-              fontSize: 12,
-            }}
-          >
-            {JSON.stringify(query.data, null, 2)}
-          </Box>
+          <GcpCodeEditor
+            value={JSON.stringify(query.data, null, 2)}
+            readOnly
+            language="json"
+            minRows={20}
+            ariaLabel="Revision JSON"
+          />
         </Box>
       )}
     </Box>

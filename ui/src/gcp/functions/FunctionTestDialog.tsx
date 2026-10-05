@@ -9,10 +9,10 @@ import {
   DialogContent,
   DialogTitle,
   Stack,
-  TextField,
   Typography,
 } from '@mui/material'
 import { callFunction } from '../../api/gcp/functions'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 
 export interface FunctionTestDialogProps {
   open: boolean
@@ -34,14 +34,12 @@ export function FunctionTestDialog({ open, onClose, location, fn }: FunctionTest
       <DialogTitle>Test {fn}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
-          <TextField
+          <GcpCodeEditor
             label="Event / payload (JSON)"
             value={data}
-            onChange={(e) => setData(e.target.value)}
-            multiline
+            onChange={setData}
+            language="json"
             minRows={4}
-            fullWidth
-            slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: 13 } } }}
           />
           {invoke.isError && <Alert severity="error">Invocation failed: {(invoke.error as Error).message}</Alert>}
           {invoke.isSuccess && (
