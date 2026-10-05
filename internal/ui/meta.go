@@ -9,7 +9,7 @@ import (
 	"jaiscloud/internal/config"
 )
 
-func buildMetaHandler(adminHandler *admin.Handler, cfg *config.Config, version string, cloud string) http.HandlerFunc {
+func buildMetaHandler(adminHandler *admin.Handler, cfg *config.Config, version string, cloud string, bootID string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		meta := adminHandler.Meta()
 
@@ -28,6 +28,7 @@ func buildMetaHandler(adminHandler *admin.Handler, cfg *config.Config, version s
 			Version:    version,
 			UIVersion:  "dev",
 			InstanceId: meta.InstanceID,
+			BootID:     bootID,
 		})
 	}
 }

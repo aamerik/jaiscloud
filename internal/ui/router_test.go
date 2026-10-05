@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,7 +28,7 @@ func testRouter(t *testing.T, token string) chi.Router {
 	cfg := &config.Config{Region: "us-central1", AccountID: "test-proj"}
 	broker := sse.New(events.NewEventBus())
 	t.Cleanup(broker.Shutdown)
-	return BuildRouter(stubRegistrar{}, admin.NewHandler(), broker, cfg, token, "dev")
+	return BuildRouter(stubRegistrar{}, admin.NewHandler(), broker, cfg, token, "dev", "boot-test")
 }
 
 // The admin panel is mounted by the core (not a Registrar), so it must be
@@ -45,6 +46,27 @@ func TestBuildRouter_MountsAdminPanel(t *testing.T) {
 	}
 	if got := rr.Body.String(); got == "" || got[0] != '{' {
 		t.Fatalf("expected a JSON object, got: %s", got)
+	}
+}
+
+// /meta is unauthenticated and carries the per-process boot ID the client uses
+// to detect a restart.
+func TestBuildRouter_MetaIncludesBootID(t *testing.T) {
+	router := testRouter(t, "tok")
+	req := httptest.NewRequest(http.MethodGet, "/api/ui/v1/meta", nil)
+	rr := httptest.NewRecorder()
+
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /api/ui/v1/meta = %d, want 200", rr.Code)
+	}
+	var meta MetaResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("decode meta: %v", err)
+	}
+	if meta.BootID != "boot-test" {
+		t.Fatalf("bootId = %q, want %q", meta.BootID, "boot-test")
 	}
 }
 

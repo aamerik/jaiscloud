@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { refreshSession } from '../api/client'
 
 const SSE_PATH = '/api/ui/v1/events/stream'
 
@@ -23,15 +24,9 @@ export function useEventStream(): { connected: boolean } {
     function connect() {
       if (cancelled) return
 
-      // Dev mode: append ?token= if available from cookie
-      let url = SSE_PATH
-      const match = document.cookie.split('; ').find((r) => r.startsWith('session='))
-      const token = match?.split('=')[1]
-      if (token && window.location.hostname === 'localhost') {
-        url += `?token=${encodeURIComponent(token)}`
-      }
-
-      const es = new EventSource(url, { withCredentials: true })
+      // The HttpOnly session cookie is sent automatically with withCredentials;
+      // no token query param (which would leak the token into URLs/logs).
+      const es = new EventSource(SSE_PATH, { withCredentials: true })
       esRef.current = es
 
       es.onopen = () => {
@@ -79,7 +74,12 @@ export function useEventStream(): { connected: boolean } {
         if (!cancelled) {
           const delay = BACKOFF[Math.min(attempt.current, BACKOFF.length - 1)] ?? 30_000
           attempt.current++
-          setTimeout(connect, delay)
+          // EventSource hides the HTTP status, so a 401 after a restart is
+          // indistinguishable from a transient drop. Re-acquire the session
+          // cookie before retrying; it is a no-op when the token is still valid.
+          void refreshSession().finally(() => {
+            if (!cancelled) setTimeout(connect, delay)
+          })
         }
       }
     }

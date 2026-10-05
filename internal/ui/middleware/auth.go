@@ -8,8 +8,9 @@ import (
 
 // Auth verifies every /api/ui/v1/* request carries a valid session token.
 // Accepts either:
-//   - Authorization: Bearer <token>  (XHR, fetch)
-//   - Cookie: session=<token>        (EventSource — browser sends automatically)
+//   - Cookie: session=<token>        (browser — sent automatically, including
+//     EventSource which cannot set custom headers)
+//   - Authorization: Bearer <token>  (programmatic clients: curl, tests)
 //
 // Responds 401 { "code":"Unauthorized","message":"..." } on failure.
 func Auth(token string) func(http.Handler) http.Handler {
@@ -37,13 +38,9 @@ func checkToken(r *http.Request, expected string) bool {
 	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
 		return strings.TrimPrefix(auth, "Bearer ") == expected
 	}
-	// Session cookie
+	// Session cookie (browsers, including EventSource with withCredentials).
 	if c, err := r.Cookie("session"); err == nil {
 		return c.Value == expected
-	}
-	// Dev mode: ?token= query param (for EventSource which cannot set headers)
-	if t := r.URL.Query().Get("token"); t != "" {
-		return t == expected
 	}
 	return false
 }

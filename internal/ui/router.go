@@ -16,7 +16,8 @@ import (
 
 // BuildRouter builds the cloud-neutral UI chi router. The registrar supplies
 // the cloud identity, the service catalog and the service API routes.
-// version is the binary version string (injected from main.go via -ldflags or "dev").
+// version is the binary version string (injected from main.go via -ldflags or
+// "dev") and bootID is the per-process restart marker surfaced via /meta.
 func BuildRouter(
 	reg Registrar,
 	adminHandler *admin.Handler,
@@ -24,6 +25,7 @@ func BuildRouter(
 	cfg *config.Config,
 	token string,
 	version string,
+	bootID string,
 ) chi.Router {
 	r := chi.NewRouter()
 
@@ -37,7 +39,7 @@ func BuildRouter(
 	}
 
 	// Not auth-protected — SPA probes these before the session cookie is set.
-	r.Get("/api/ui/v1/meta", buildMetaHandler(adminHandler, cfg, version, string(reg.Cloud())))
+	r.Get("/api/ui/v1/meta", buildMetaHandler(adminHandler, cfg, version, string(reg.Cloud()), bootID))
 	r.Get("/api/ui/v1/meta/accounts", buildAccountsHandler(cfg, reg))
 	r.Get("/api/ui/v1/services", buildServicesHandler(reg))
 
