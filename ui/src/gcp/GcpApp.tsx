@@ -36,7 +36,6 @@ import { GcpBreadcrumbs } from './chrome/GcpBreadcrumbs'
 import { NavMenu } from './chrome/NavMenu'
 import { rememberRecentService } from './chrome/recentServices'
 import { pageTitleFor } from './chrome/navModel'
-import { tierLabel } from '../lib/tier'
 import { BucketsPage } from './storage/BucketsPage'
 import { ObjectsPage } from './storage/ObjectsPage'
 import { BucketSettingsPage } from './storage/BucketSettingsPage'
@@ -146,26 +145,20 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
         >
           <ListItemText primary="Console home" />
         </ListItemButton>
-        {services.map((service) => {
-          const status = tierLabel(service)
-          return (
-            <ListItemButton
-              key={service.id}
-              component={RouterLink}
-              to={service.rootPath}
-              selected={isSelected(service.rootPath)}
-              onClick={() => rememberRecentService(service.id)}
-            >
-              <ListItemIcon sx={{ minWidth: 36 }}>
-                <GcpServiceIcon id={service.id} size={20} />
-              </ListItemIcon>
-              <ListItemText
-                primary={service.label}
-                secondary={status ? `${service.category} · ${status}` : service.category}
-              />
-            </ListItemButton>
-          )
-        })}
+        {services.map((service) => (
+          <ListItemButton
+            key={service.id}
+            component={RouterLink}
+            to={service.rootPath}
+            selected={isSelected(service.rootPath)}
+            onClick={() => rememberRecentService(service.id)}
+          >
+            <ListItemIcon sx={{ minWidth: 36 }}>
+              <GcpServiceIcon id={service.id} size={20} />
+            </ListItemIcon>
+            <ListItemText primary={service.label} secondary={service.category} />
+          </ListItemButton>
+        ))}
       </List>
       <Divider />
       <List sx={{ py: 1 }}>
