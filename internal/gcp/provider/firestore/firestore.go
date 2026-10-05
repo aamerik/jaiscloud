@@ -32,6 +32,13 @@ const (
 	maxDocumentSize = 1 << 20 // 1,048,576 bytes
 	// maxFieldNameBytes is the per-field-name byte limit (document.proto).
 	maxFieldNameBytes = 1500
+	// maxPathElementBytes is the per-key-path-element byte limit: every
+	// collection id (kind) and document id (name) must be no longer than
+	// 1,500 bytes (Firestore quotas: "Constraints on collection IDs" /
+	// "Constraints on document IDs"). The official emulator rejects an
+	// over-long element with 400 INVALID_ARGUMENT. This is a distinct quota
+	// from maxFieldNameBytes (a different constraint that shares the value).
+	maxPathElementBytes = 1500
 	// maxStringBytes is the per-stringValue/bytesValue byte limit (1 MiB − 89).
 	maxStringBytes = (1 << 20) - 89 // 1,048,487 bytes
 	// autoIDLength is the length of a server-generated document ID.
@@ -305,9 +312,12 @@ func validateDocumentID(id string) error {
 // validateDocumentName enforces the Firestore limits that apply to every write
 // target, for both the REST and gRPC transports (the shared Service calls it):
 // the name must be a well-formed database document name, no longer than 6 KiB,
-// and no deeper than 100 collection levels. Real Firestore (and the official
-// emulator, for the depth limit) rejects a violating name with 400
-// INVALID_ARGUMENT.
+// with every collection/document path element no longer than 1,500 bytes, and
+// no deeper than 100 collection levels. Real Firestore (and the official
+// emulator, for the depth and element limits) rejects a violating name with 400
+// INVALID_ARGUMENT. The whole-name 6 KiB pre-check intentionally runs first
+// (before splitting), so a single element over 6 KiB reports the name-size
+// error; every violation is still 400 INVALID_ARGUMENT.
 func validateDocumentName(name string) error {
 	// Reject an over-long name before splitting so a multi-megabyte request body
 	// cannot force a large allocation first.
@@ -326,9 +336,21 @@ func validateDocumentName(name string) error {
 	if len(segs) == 0 || len(segs)%2 != 0 {
 		return model.NewProviderError("InvalidArgument", "invalid document name", 400)
 	}
-	for _, seg := range segs {
+	for i, seg := range segs {
 		if seg == "" {
 			return model.NewProviderError("InvalidArgument", "document name contains an empty path element", 400)
+		}
+		// Elements alternate collection id (kind) and document id (name),
+		// starting with the root collection. Each is capped at 1,500 bytes;
+		// the official emulator names the offending element type in the
+		// message ("element name"/"element kind").
+		if len(seg) > maxPathElementBytes {
+			element := "kind"
+			if i%2 == 1 {
+				element = "name"
+			}
+			return model.NewProviderError("InvalidArgument",
+				"The key path element "+element+" is longer than "+strconv.Itoa(maxPathElementBytes)+" bytes.", 400)
 		}
 	}
 	if levels := len(segs) / 2; levels > maxSubcollectionDepth {
