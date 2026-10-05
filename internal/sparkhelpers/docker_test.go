@@ -16,6 +16,8 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+
+	"jaiscloud/internal/docker"
 )
 
 // fakeDockerAPI is a minimal Docker Engine API stub covering the endpoints the
@@ -44,7 +46,7 @@ func (f *fakeDockerAPI) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		path := strings.TrimPrefix(r.URL.Path, "/"+dockerAPIVersion)
+		path := strings.TrimPrefix(r.URL.Path, "/"+docker.APIVersion)
 		parts := strings.Split(strings.Trim(path, "/"), "/")
 		if len(parts) < 2 || parts[0] != "containers" {
 			http.NotFound(w, r)
@@ -234,7 +236,7 @@ func TestDockerDriverSubmitBuildsContainer(t *testing.T) {
 		t.Errorf("env = %v", envSet)
 	}
 	labels, _ := body["Labels"].(map[string]any)
-	if labels[dockerLabelService] != dockerLabelValue || labels[dockerLabelInstance] != "inst0001" || labels["jaiscloud.io/job-id"] != "j1" {
+	if labels[docker.LabelService] != dockerServiceLabelValue || labels[docker.LabelInstance] != "inst0001" || labels["jaiscloud.io/job-id"] != "j1" {
 		t.Errorf("labels = %v", labels)
 	}
 	hc, _ := body["HostConfig"].(map[string]any)
@@ -340,8 +342,8 @@ func TestDockerDriverReapRemovesContainer(t *testing.T) {
 
 func TestDockerDriverResetSweepsOnlyOwnInstance(t *testing.T) {
 	f := newFakeDockerAPI()
-	mine, _ := newDockerDriverForTest(t, f)
-	other := NewDockerDriver(DockerConfig{Client: mine.client, InstanceID: "other999", PollInterval: 5 * time.Millisecond})
+	mine, srv := newDockerDriverForTest(t, f)
+	other := NewDockerDriver(DockerConfig{Client: dockerDriverTestClient(srv), InstanceID: "other999", PollInterval: 5 * time.Millisecond})
 	if _, err := mine.Submit(context.Background(), pysparkTestJob("mine")); err != nil {
 		t.Fatalf("mine submit: %v", err)
 	}
@@ -439,7 +441,7 @@ func TestPingRejectsUnreachableSocket(t *testing.T) {
 func TestDockerDriverLogsPersistToSink(t *testing.T) {
 	// Ensure the sink receives multiplexed frames in order across stdout/stderr.
 	var b bytes.Buffer
-	if err := demuxDockerLogs(io.MultiReader(
+	if err := docker.DemuxLogs(io.MultiReader(
 		bytes.NewReader(multiplexFrame(1, "out")),
 		bytes.NewReader(multiplexFrame(2, "err")),
 	), &b); err != nil {

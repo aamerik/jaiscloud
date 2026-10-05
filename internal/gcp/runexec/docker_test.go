@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"jaiscloud/internal/docker"
 	runcore "jaiscloud/internal/gcp/service/run"
 	runstore "jaiscloud/internal/gcp/store/run"
 )
@@ -46,7 +47,7 @@ func (f *fakeDocker) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		path := strings.TrimPrefix(r.URL.Path, "/"+dockerAPIVersion)
+		path := strings.TrimPrefix(r.URL.Path, "/"+docker.APIVersion)
 		parts := strings.Split(strings.Trim(path, "/"), "/")
 		if len(parts) < 2 || parts[0] != "containers" {
 			http.NotFound(w, r)
@@ -234,7 +235,7 @@ func TestDockerEnsureRevisionRegistersAndInvokes(t *testing.T) {
 		t.Errorf("HostIp = %q, want 127.0.0.1 (loopback only)", hip)
 	}
 	labels, _ := body["Labels"].(map[string]any)
-	if labels[dockerLabelService] != dockerLabelValue || labels[dockerLabelRunSvc] != "svc" || labels[dockerLabelRevision] != "svc-00001" || labels[dockerLabelInstance] != "inst0001" {
+	if labels[docker.LabelService] != dockerServiceValue || labels[dockerLabelRunSvc] != "svc" || labels[dockerLabelRevision] != "svc-00001" || labels[docker.LabelInstance] != "inst0001" {
 		t.Errorf("labels = %v", labels)
 	}
 
@@ -355,8 +356,8 @@ func TestDockerRemoveServiceScopedToInstance(t *testing.T) {
 	}
 	for id, body := range f.created {
 		labels, _ := body["Labels"].(map[string]any)
-		if labels[dockerLabelInstance] != "instBBBB2" {
-			t.Errorf("surviving container %s belongs to %v, want instBBBB2", id, labels[dockerLabelInstance])
+		if labels[docker.LabelInstance] != "instBBBB2" {
+			t.Errorf("surviving container %s belongs to %v, want instBBBB2", id, labels[docker.LabelInstance])
 		}
 	}
 }
