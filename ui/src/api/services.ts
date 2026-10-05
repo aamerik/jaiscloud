@@ -5,6 +5,25 @@ export interface ServiceChild {
   path: string
 }
 
+export interface EngineMode {
+  /** Backend name: 'mock' | 'docker' | 'k8s' | 'native'. */
+  name: string
+  /** Whether this build can run that backend. */
+  supported: boolean
+  note?: string
+}
+
+/**
+ * Execution backend for an engine-capable service. Separate from `tier` (the
+ * behavioural-depth axis): docker and k8s are interchangeable implementations
+ * of one executor seam, so the tier never depends on the active mode.
+ */
+export interface Engine {
+  active: boolean
+  mode?: string
+  modes: EngineMode[]
+}
+
 export interface ServiceDescriptor {
   id: string
   label: string
@@ -13,6 +32,7 @@ export interface ServiceDescriptor {
   children: ServiceChild[]
   tier: 'full' | 'metadata' | 'stub'
   note?: string
+  engine?: Engine
 }
 
 export interface ServicesResponse {

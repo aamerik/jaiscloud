@@ -35,6 +35,7 @@ import (
 	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
+	coreui "jaiscloud/internal/ui"
 )
 
 // fakeStorage satisfies storage.ProviderInterface via an embedded (nil)
@@ -563,6 +564,56 @@ func TestRegistrar_EngineModesUpgradeTier(t *testing.T) {
 			}
 		}
 	})
+}
+
+// The structured Engine field drives the console's mode tag + availability
+// matrix, and Tier must never depend on the orchestrator: docker and k8s are
+// interchangeable implementations of one executor seam.
+func TestRegistrar_EngineDescriptorAndOrchestratorParity(t *testing.T) {
+	regFor := func(modes ServiceModes) *Registrar {
+		return NewRegistrar(
+			nil, nil, nil, nil, nil, fakeDataproc{}, nil, fakeRun{}, nil, nil,
+			nil, nil, nil, nil, nil, nil, nil, fakeFunctions{}, fakeManagedKafka{},
+			nil, &config.Config{},
+		).WithServiceModes(modes)
+	}
+	descriptor := func(modes ServiceModes, id string) coreui.ServiceDescriptor {
+		t.Helper()
+		for _, service := range regFor(modes).Services() {
+			if service.ID == id {
+				return service
+			}
+		}
+		t.Fatalf("%s not advertised", id)
+		return coreui.ServiceDescriptor{}
+	}
+
+	// Dataproc docker is unwired: it must read as inactive with an unsupported
+	// docker backend (falls back to mock), not as engine-backed.
+	dataproc := descriptor(ServiceModes{Spark: "docker"}, "dataproc")
+	if dataproc.Engine == nil {
+		t.Fatal("dataproc: Engine is nil")
+	}
+	if dataproc.Engine.Active || dataproc.Engine.Mode != "" {
+		t.Errorf("dataproc docker: active=%v mode=%q, want inactive", dataproc.Engine.Active, dataproc.Engine.Mode)
+	}
+	if len(dataproc.Engine.Modes) != 3 || dataproc.Engine.Modes[1].Name != "docker" || dataproc.Engine.Modes[1].Supported {
+		t.Errorf("dataproc backends = %+v, want docker unsupported", dataproc.Engine.Modes)
+	}
+
+	// A k8s engine reads as active with the mode reported.
+	kafka := descriptor(ServiceModes{KafkaBroker: "native"}, "managedkafka")
+	if kafka.Engine == nil || !kafka.Engine.Active || kafka.Engine.Mode != "native" {
+		t.Errorf("managedkafka native engine = %+v, want active native", kafka.Engine)
+	}
+
+	// Same service, two supported orchestrators -> identical tier (no depth by
+	// orchestrator).
+	dockerTier := descriptor(ServiceModes{Lambda: "docker"}, "functions").Tier
+	k8sTier := descriptor(ServiceModes{Lambda: "k8s"}, "functions").Tier
+	if dockerTier != k8sTier || dockerTier != "full" {
+		t.Errorf("functions tier docker=%q k8s=%q, want identical 'full'", dockerTier, k8sTier)
+	}
 }
 
 func TestRegistrar_AccountsExcludesDeleteRequested(t *testing.T) {

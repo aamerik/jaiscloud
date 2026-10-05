@@ -7,6 +7,7 @@ import StarBorderIcon from '@mui/icons-material/StarBorder'
 import { Link as RouterLink } from 'react-router-dom'
 import { useFavorites } from '../../hooks/useFavorites'
 import { useServices } from '../../hooks/useServices'
+import { engineModes, engineTag } from '../../lib/engine'
 import { tierDescription, tierLabel } from '../../lib/tier'
 import { GcpServiceIcon } from '../icons/GcpServiceIcon'
 import { serviceAccent } from '../icons/serviceIcons'
@@ -52,6 +53,8 @@ export function GcpPageHeader({
   const service = servicesData?.services.find((candidate) => candidate.id === id)
   const status = service ? tierLabel(service) : undefined
   const statusDetail = service ? tierDescription(service) : undefined
+  const engine = service ? engineTag(service) : undefined
+  const backends = service ? engineModes(service) : []
 
   return (
     <Box sx={{ mb: 2 }}>
@@ -85,6 +88,28 @@ export function GcpPageHeader({
                   label={status}
                   size="small"
                   variant="outlined"
+                  sx={{ height: 20, fontSize: 11, flexShrink: 0 }}
+                />
+              </Tooltip>
+            )}
+            {engine && (
+              <Tooltip
+                title={
+                  <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                    {backends.map((backend) => (
+                      <li key={backend.name}>
+                        {backend.supported ? '✓' : '✗'} {backend.name}
+                        {backend.note ? ` — ${backend.note}` : ''}
+                      </li>
+                    ))}
+                  </Box>
+                }
+              >
+                <Chip
+                  label={engine}
+                  size="small"
+                  variant="outlined"
+                  color="primary"
                   sx={{ height: 20, fontSize: 11, flexShrink: 0 }}
                 />
               </Tooltip>
