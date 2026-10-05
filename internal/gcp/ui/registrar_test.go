@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -390,7 +391,7 @@ func TestRegistrar_ManagedKafkaAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "managedkafka" || got.RootPath != "/gcp/managedkafka/clusters" || got.Tier != "stub" {
+	if got.ID != "managedkafka" || got.RootPath != "/gcp/managedkafka/clusters" || got.Tier != "metadata" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 2 {
@@ -464,10 +465,9 @@ func TestRegistrar_ResourceManagerAdvertisedAndMounted(t *testing.T) {
 func TestRegistrar_TiersPinnedToImplementationMatrix(t *testing.T) {
 	stub := map[string]bool{
 		"run": true, "functions": true, "workflows": true, "eventarc": true,
-		"managedkafka": true, "bigquery": true, "dataproc": true, "iam": true,
-		"resourcemanager": true,
+		"bigquery": true, "dataproc": true, "iam": true, "resourcemanager": true,
 	}
-	metadata := map[string]bool{"compute": true}
+	metadata := map[string]bool{"compute": true, "managedkafka": true}
 
 	reg := NewRegistrar(
 		fakeStorage{}, fakePubSub{}, fakeFirestore{}, fakeDatastore{}, fakeCompute{},
@@ -514,6 +514,36 @@ func TestRegistrar_TiersPinnedToImplementationMatrix(t *testing.T) {
 	for id := range metadata {
 		if !seen[id] {
 			t.Errorf("metadata service %q missing from descriptors", id)
+		}
+	}
+}
+
+// Configuring a real engine upgrades an otherwise shape-only service to full
+// with a note naming the engine, mirroring the AWS executorNote behaviour.
+func TestRegistrar_EngineModesUpgradeTier(t *testing.T) {
+	reg := NewRegistrar(
+		nil, nil, nil, nil, nil, fakeDataproc{}, nil, fakeRun{}, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, fakeFunctions{}, fakeManagedKafka{},
+		nil, &config.Config{},
+	).WithServiceModes(ServiceModes{
+		KafkaBroker: "k8s",
+		Spark:       "k8s",
+		Lambda:      "docker",
+		CloudRun:    "k8s",
+	})
+
+	tiers := map[string]string{}
+	notes := map[string]string{}
+	for _, service := range reg.Services() {
+		tiers[service.ID] = service.Tier
+		notes[service.ID] = service.Note
+	}
+	for _, id := range []string{"managedkafka", "functions", "run", "dataproc"} {
+		if tiers[id] != "full" {
+			t.Errorf("%s: tier = %q, want full with an engine configured", id, tiers[id])
+		}
+		if !strings.Contains(notes[id], "Engine-backed") {
+			t.Errorf("%s: note = %q, want an engine-backed note", id, notes[id])
 		}
 	}
 }

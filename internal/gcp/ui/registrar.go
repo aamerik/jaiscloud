@@ -8,6 +8,8 @@ package ui
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -63,6 +65,55 @@ type Registrar struct {
 	// enumerates (created + configured projects). It is nil when the service is
 	// disabled, in which case only the configured accounts are reported.
 	resourcemanager *resourcemanagercore.Service
+	// modes reports the configured engine/executor modes so the console status
+	// reflects what is actually running (see ServiceModes).
+	modes ServiceModes
+}
+
+// ServiceModes reports the configured engine/executor modes that upgrade an
+// otherwise shape-only service to an engine-backed one. An empty or "mock"
+// value means no engine. main.go resolves these once from the environment and
+// the executor config.
+type ServiceModes struct {
+	KafkaBroker string // managedkafka: mock (default) | k8s | native
+	Spark       string // dataproc: mock (default) | docker | k8s
+	Lambda      string // functions: mock (default) | docker | k8s
+	CloudRun    string // run: mock (default) | k8s
+}
+
+// WithServiceModes sets the configured engine modes the catalog reports. It is
+// optional; the zero value reports every engine-capable service as if no engine
+// were configured.
+func (r *Registrar) WithServiceModes(modes ServiceModes) *Registrar {
+	r.modes = modes
+	return r
+}
+
+// engineBacked reports whether a configured mode starts a real engine.
+func engineBacked(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "k8s", "native", "docker":
+		return true
+	default:
+		return false
+	}
+}
+
+// statusTier returns the full tier when an engine is configured, else fallback.
+func statusTier(engineOn bool, fallback string) string {
+	if engineOn {
+		return coreui.TierFull
+	}
+	return fallback
+}
+
+// engineNote describes an engine-backed service, or returns the shape-only
+// fallback when no engine is configured.
+func engineNote(engineOn bool, engine, mode, fallback string) string {
+	if engineOn {
+		return fmt.Sprintf("Engine-backed — %s (%s)", engine, mode)
+	}
+	return fallback
 }
 
 // NewRegistrar returns the GCP UI registrar. A nil provider leaves that
@@ -128,6 +179,13 @@ func (r *Registrar) Cloud() model.Cloud { return model.CloudGCP }
 // are advertised.
 func (r *Registrar) Services() []coreui.ServiceDescriptor {
 	services := make([]coreui.ServiceDescriptor, 0, 16)
+
+	// Engine-capable services report full fidelity when a real engine is
+	// configured, and their documented shape-only/metadata status otherwise.
+	kafkaOn := engineBacked(r.modes.KafkaBroker)
+	sparkOn := engineBacked(r.modes.Spark)
+	lambdaOn := engineBacked(r.modes.Lambda)
+	cloudRunOn := engineBacked(r.modes.CloudRun)
 	if r.storage != nil {
 		services = append(services, coreui.ServiceDescriptor{
 			ID:       "storage",
@@ -195,8 +253,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Cloud Run",
 			Category: "Compute",
 			RootPath: "/gcp/run/services",
-			Tier:     coreui.TierStub,
-			Note:     "Shape only — control plane; K8s executor optional",
+			Tier:     statusTier(cloudRunOn, coreui.TierStub),
+			Note:     engineNote(cloudRunOn, "K8s runtime executor", r.modes.CloudRun, "Shape only — control plane; K8s executor optional"),
 			Children: []coreui.ServiceChild{{Label: "Services", Path: "/gcp/run/services"}},
 		})
 	}
@@ -206,8 +264,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Cloud Functions",
 			Category: "Compute",
 			RootPath: "/gcp/functions",
-			Tier:     coreui.TierStub,
-			Note:     "Shape only — GCS-source execution (Docker/K8s); no container build",
+			Tier:     statusTier(lambdaOn, coreui.TierStub),
+			Note:     engineNote(lambdaOn, "code executor", r.modes.Lambda, "Shape only — GCS-source execution (Docker/K8s); no container build"),
 			Children: []coreui.ServiceChild{{Label: "Functions", Path: "/gcp/functions"}},
 		})
 	}
@@ -262,8 +320,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Managed Kafka",
 			Category: "Integration",
 			RootPath: "/gcp/managedkafka/clusters",
-			Tier:     coreui.TierStub,
-			Note:     "Shape only — metadata by default; opt-in broker",
+			Tier:     statusTier(kafkaOn, coreui.TierMetadata),
+			Note:     engineNote(kafkaOn, "live Kafka broker", r.modes.KafkaBroker, "Metadata only — no broker; opt-in JAISCLOUD_KAFKA_BROKER_MODE"),
 			Children: []coreui.ServiceChild{
 				{Label: "Clusters", Path: "/gcp/managedkafka/clusters"},
 				{Label: "Topics", Path: "/gcp/managedkafka/topics"},
@@ -290,8 +348,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Dataproc",
 			Category: "Analytics",
 			RootPath: "/gcp/dataproc/clusters",
-			Tier:     coreui.TierStub,
-			Note:     "Shape only — Spark family; no real cluster without an executor",
+			Tier:     statusTier(sparkOn, coreui.TierStub),
+			Note:     engineNote(sparkOn, "real Spark executor", r.modes.Spark, "Shape only — Spark family; no real cluster without an executor"),
 			Children: []coreui.ServiceChild{
 				{Label: "Clusters", Path: "/gcp/dataproc/clusters"},
 				{Label: "Jobs", Path: "/gcp/dataproc/jobs"},
