@@ -147,7 +147,18 @@ export function GcpNav({
           <Divider />
         </>
       )}
-      <List component="nav" sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', pb: 2 }}>
+      <List
+        component="nav"
+        sx={{
+          flexGrow: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          pb: 2,
+          // Keep the list scrollable but hide the scrollbar on both surfaces.
+          scrollbarWidth: 'none',
+          '&::-webkit-scrollbar': { display: 'none' },
+        }}
+      >
         <ListItem disablePadding>
           <ListItemButton
             component={RouterLink}
