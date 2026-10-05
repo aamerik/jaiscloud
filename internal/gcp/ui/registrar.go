@@ -158,6 +158,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Children: []coreui.ServiceChild{
 				{Label: "Collections", Path: "/gcp/firestore/collections"},
 				{Label: "Query", Path: "/gcp/firestore/query"},
+				{Label: "Indexes", Path: "/gcp/firestore/indexes"},
 			},
 		})
 	}

@@ -935,9 +935,18 @@ func (s *Service) CreateIndex(ctx context.Context, project, database, cg string,
 	}, nil
 }
 
-// ListIndexes returns the composite indexes for a collection group, paginated.
+// ListIndexes returns composite indexes, paginated. A specific collection group
+// (cg) lists only that group's indexes; cg == "-" is the AIP-123 wildcard that
+// lists every collection group's indexes, matching the real API behavior used by
+// `gcloud firestore indexes composite list` and the Firestore console.
 func (s *Service) ListIndexes(ctx context.Context, project, database, cg, filter string, page pageParams) ([]indexDef, string, error) {
+	// The trailing slash is significant: for a concrete group the prefix is
+	// scoped to that group's /indexes/ collection; for the wildcard it spans
+	// every collectionGroups/*/indexes entry under the database.
 	prefix := "databases/" + database + "/collectionGroups/" + cg + "/indexes/"
+	if cg == "-" {
+		prefix = "databases/" + database + "/collectionGroups/"
+	}
 	var idxs []indexDef
 	if s.resources != nil {
 		entries, err := s.resources.List(ctx, project, store.GlobalRegion, rtIndex, prefix)

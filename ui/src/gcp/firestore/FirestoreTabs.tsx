@@ -4,6 +4,7 @@ import { GcpTabs } from '../common/GcpTabs'
 const TABS = [
   { label: 'Collections', value: '/gcp/firestore/collections' },
   { label: 'Query', value: '/gcp/firestore/query' },
+  { label: 'Indexes', value: '/gcp/firestore/indexes' },
 ]
 
 /**
@@ -16,7 +17,9 @@ export function FirestoreTabs() {
   const navigate = useNavigate()
   const value = location.pathname.startsWith('/gcp/firestore/query')
     ? '/gcp/firestore/query'
-    : '/gcp/firestore/collections'
+    : location.pathname.startsWith('/gcp/firestore/indexes')
+      ? '/gcp/firestore/indexes'
+      : '/gcp/firestore/collections'
   return (
     <GcpTabs
       aria-label="Firestore sections"

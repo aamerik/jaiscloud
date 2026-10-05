@@ -460,6 +460,223 @@ func collectionOfDocumentName(full string) string {
 	return rel[:j]
 }
 
+// ─── Indexes ─────────────────────────────────────────────────────────────────
+
+// indexWildcard is the AIP-123 collection-group wildcard: list indexes across
+// every collection group of the database.
+const indexWildcard = "-"
+
+// indexParentPath is the collection-group index collection name (relative to the
+// project) that the provider expects. A concrete group scopes to that group's
+// indexes; "-" lists the whole database.
+func indexParentPath(collectionGroup string) string {
+	return "databases/" + defaultDatabase + "/collectionGroups/" + collectionGroup + "/indexes"
+}
+
+func indexResourceName(collectionGroup, id string) string {
+	return indexParentPath(collectionGroup) + "/" + id
+}
+
+// validIndexGroup reports whether collectionGroup is usable as a single path
+// segment. The "-" wildcard is only valid for the list call.
+func validIndexGroup(collectionGroup string, allowWildcard bool) bool {
+	if collectionGroup == "" || strings.Contains(collectionGroup, "/") ||
+		collectionGroup == "." || collectionGroup == ".." {
+		return false
+	}
+	if collectionGroup == indexWildcard {
+		return allowWildcard
+	}
+	return true
+}
+
+// collectionGroupOfIndexName extracts the collection group from a fully
+// qualified index name
+// (projects/{p}/databases/{db}/collectionGroups/{cg}/indexes/{id}).
+func collectionGroupOfIndexName(full string) string {
+	const marker = "/collectionGroups/"
+	i := strings.Index(full, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := full[i+len(marker):]
+	if j := strings.IndexByte(rest, '/'); j >= 0 {
+		return rest[:j]
+	}
+	return rest
+}
+
+// indexFromMap converts a provider REST index map into the UI shape.
+func indexFromMap(m map[string]any) Index {
+	name := str(m, "name")
+	rawFields := uihelper.AsSlice(m["fields"])
+	fields := make([]IndexField, 0, len(rawFields))
+	for _, item := range rawFields {
+		f, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		fields = append(fields, IndexField{
+			FieldPath:   str(f, "fieldPath"),
+			Order:       str(f, "order"),
+			ArrayConfig: str(f, "arrayConfig"),
+		})
+	}
+	return Index{
+		Name:            name,
+		ID:              lastSegment(name),
+		CollectionGroup: collectionGroupOfIndexName(name),
+		QueryScope:      str(m, "queryScope"),
+		State:           str(m, "state"),
+		Fields:          fields,
+	}
+}
+
+func indexesFromResponse(resp *model.ProviderResponse) ListIndexesResponse {
+	raw := uihelper.AsSlice(resp.Data["indexes"])
+	indexes := make([]Index, 0, len(raw))
+	for _, item := range raw {
+		if m, ok := item.(map[string]any); ok {
+			indexes = append(indexes, indexFromMap(m))
+		}
+	}
+	next, _ := resp.Data["nextPageToken"].(string)
+	return ListIndexesResponse{Indexes: indexes, Total: len(indexes), NextPageToken: next}
+}
+
+// GET /indexes?collectionGroup=&filter=&pageSize=&pageToken=
+func (h *Handler) ListIndexes(w http.ResponseWriter, r *http.Request) {
+	collectionGroup := r.URL.Query().Get("collectionGroup")
+	if collectionGroup == "" {
+		collectionGroup = indexWildcard
+	}
+	if !validIndexGroup(collectionGroup, true) {
+		uihelper.UIError(w, "BadRequest", "invalid collection group", http.StatusBadRequest)
+		return
+	}
+	account := h.account(r)
+	nr := uihelper.NR(r.Context(), h.cfg, "firestore", "Firestore.ListIndexes", "global", account)
+	nr.Params["name"] = indexParentPath(collectionGroup)
+	if filter := r.URL.Query().Get("filter"); filter != "" {
+		nr.Params["filter"] = filter
+	}
+	pageParams(r, nr.Params)
+
+	resp, err := h.provider.ListIndexes(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, indexesFromResponse(resp))
+}
+
+// POST /indexes  body: { collectionGroup, queryScope?, fields }
+func (h *Handler) CreateIndex(w http.ResponseWriter, r *http.Request) {
+	var req CreateIndexRequest
+	if err := decodeBody(r, &req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if !validIndexGroup(req.CollectionGroup, false) {
+		uihelper.UIError(w, "BadRequest", "a concrete collection group is required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Fields) < 2 {
+		uihelper.UIError(w, "BadRequest", "a composite index requires at least 2 fields", http.StatusBadRequest)
+		return
+	}
+	for _, f := range req.Fields {
+		if f.FieldPath == "" {
+			uihelper.UIError(w, "BadRequest", "each index field needs a field path", http.StatusBadRequest)
+			return
+		}
+		if f.Order == "" && f.ArrayConfig == "" {
+			uihelper.UIError(w, "BadRequest", "each index field needs an order or array config", http.StatusBadRequest)
+			return
+		}
+	}
+
+	account := h.account(r)
+	nr := uihelper.NR(r.Context(), h.cfg, "firestore", "Firestore.CreateIndex", "global", account)
+	nr.Params["name"] = indexParentPath(req.CollectionGroup)
+	body := map[string]any{"fields": req.Fields}
+	if req.QueryScope != "" {
+		body["queryScope"] = req.QueryScope
+	}
+	nr.Params["body"] = body
+
+	resp, err := h.provider.CreateIndex(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	// The provider wraps the created index in a done google.longrunning.Operation;
+	// the console shows the settled index, so unwrap the response.
+	created, ok := resp.Data["response"].(map[string]any)
+	if !ok {
+		uihelper.UIError(w, "InternalError", "index creation returned no index", http.StatusInternalServerError)
+		return
+	}
+	uihelper.WriteJSONStatus(w, http.StatusCreated, indexFromMap(created))
+}
+
+// GET /indexes/{collectionGroup}/{indexId}
+func (h *Handler) GetIndex(w http.ResponseWriter, r *http.Request) {
+	collectionGroup, ok := indexedGroupParam(r)
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid collection group", http.StatusBadRequest)
+		return
+	}
+	id, ok := segmentParam(r, "indexId")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid index id", http.StatusBadRequest)
+		return
+	}
+	account := h.account(r)
+	nr := uihelper.NR(r.Context(), h.cfg, "firestore", "Firestore.GetIndex", "global", account)
+	nr.Params["name"] = indexResourceName(collectionGroup, id)
+
+	resp, err := h.provider.GetIndex(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, indexFromMap(resp.Data))
+}
+
+// DELETE /indexes/{collectionGroup}/{indexId}
+func (h *Handler) DeleteIndex(w http.ResponseWriter, r *http.Request) {
+	collectionGroup, ok := indexedGroupParam(r)
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid collection group", http.StatusBadRequest)
+		return
+	}
+	id, ok := segmentParam(r, "indexId")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid index id", http.StatusBadRequest)
+		return
+	}
+	account := h.account(r)
+	nr := uihelper.NR(r.Context(), h.cfg, "firestore", "Firestore.DeleteIndex", "global", account)
+	nr.Params["name"] = indexResourceName(collectionGroup, id)
+
+	if _, err := h.provider.DeleteIndex(r.Context(), nr); err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// indexedGroupParam reads and validates a concrete (non-wildcard) collection
+// group path parameter.
+func indexedGroupParam(r *http.Request) (string, bool) {
+	cg, ok := segmentParam(r, "collectionGroup")
+	if !ok || !validIndexGroup(cg, false) {
+		return "", false
+	}
+	return cg, true
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 // pageParams copies pageSize/pageToken query parameters onto the request params.

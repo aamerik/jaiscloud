@@ -52,6 +52,18 @@ func (m *mockProvider) DocumentsDelete(_ context.Context, nr *model.NormalizedRe
 func (m *mockProvider) RunQuery(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
 }
+func (m *mockProvider) CreateIndex(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) ListIndexes(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) GetIndex(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) DeleteIndex(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
 
 func testCfg() *config.Config {
 	return &config.Config{
@@ -615,6 +627,195 @@ func TestRunQuery_RejectsInvalidScope(t *testing.T) {
 			`{"scope":"`+scope+`","structuredQuery":{"from":[{"collectionId":"users"}]}}`)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("scope %q: status = %d, want 400", scope, w.Code)
+		}
+	}
+}
+
+// ─── indexes ─────────────────────────────────────────────────────────────────
+
+func TestListIndexes_WildcardAndDerivesCollectionGroup(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data: map[string]any{
+			"indexes": []any{
+				map[string]any{
+					"name":       "projects/p/databases/(default)/collectionGroups/cities/indexes/abc",
+					"queryScope": "COLLECTION",
+					"state":      "READY",
+					"fields": []any{
+						map[string]any{"fieldPath": "name", "order": "ASCENDING"},
+						map[string]any{"fieldPath": "__name__", "order": "ASCENDING"},
+					},
+				},
+				map[string]any{
+					"name":       "projects/p/databases/(default)/collectionGroups/states/indexes/def",
+					"queryScope": "COLLECTION_GROUP",
+					"state":      "READY",
+					"fields": []any{
+						map[string]any{"fieldPath": "tags", "arrayConfig": "CONTAINS"},
+						map[string]any{"fieldPath": "__name__", "order": "ASCENDING"},
+					},
+				},
+			},
+			"nextPageToken": "tok",
+		},
+	}}
+
+	w := do(t, mock, http.MethodGet, "/indexes", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp ListIndexesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 2 || len(resp.Indexes) != 2 {
+		t.Fatalf("got %+v, want 2 indexes", resp)
+	}
+	if resp.Indexes[0].ID != "abc" || resp.Indexes[0].CollectionGroup != "cities" {
+		t.Fatalf("first index id/cg = %q/%q, want abc/cities", resp.Indexes[0].ID, resp.Indexes[0].CollectionGroup)
+	}
+	if resp.Indexes[1].CollectionGroup != "states" || resp.Indexes[1].QueryScope != "COLLECTION_GROUP" {
+		t.Fatalf("second index = %+v", resp.Indexes[1])
+	}
+	if resp.Indexes[1].Fields[0].ArrayConfig != "CONTAINS" {
+		t.Fatalf("array field = %+v, want CONTAINS", resp.Indexes[1].Fields[0])
+	}
+	if resp.NextPageToken != "tok" {
+		t.Fatalf("nextPageToken = %q", resp.NextPageToken)
+	}
+	if got := mock.lastNR.Params["name"]; got != "databases/(default)/collectionGroups/-/indexes" {
+		t.Fatalf("name = %v, want wildcard parent", got)
+	}
+}
+
+func TestListIndexes_ConcreteGroupForwardsFilterAndPaging(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodGet, "/indexes?collectionGroup=cities&filter=name&pageSize=5", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := mock.lastNR.Params["name"]; got != "databases/(default)/collectionGroups/cities/indexes" {
+		t.Fatalf("name = %v", got)
+	}
+	if got := mock.lastNR.Params["filter"]; got != "name" {
+		t.Fatalf("filter = %v", got)
+	}
+	if got := mock.lastNR.Params["pageSize"]; got != "5" {
+		t.Fatalf("pageSize = %v", got)
+	}
+}
+
+func TestListIndexes_RejectsMalformedGroup(t *testing.T) {
+	for _, cg := range []string{"a%2Fb", "%2E%2E"} {
+		w := do(t, &mockProvider{}, http.MethodGet, "/indexes?collectionGroup="+cg, "")
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("group %q: status = %d, want 400", cg, w.Code)
+		}
+	}
+}
+
+func TestCreateIndex_BuildsParentAndUnwrapsOperation(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data: map[string]any{
+			"name": "projects/p/databases/(default)/operations/op1",
+			"done": true,
+			"response": map[string]any{
+				"name":       "projects/p/databases/(default)/collectionGroups/cities/indexes/abc",
+				"queryScope": "COLLECTION",
+				"state":      "READY",
+				"fields": []any{
+					map[string]any{"fieldPath": "name", "order": "ASCENDING"},
+					map[string]any{"fieldPath": "__name__", "order": "ASCENDING"},
+				},
+			},
+		},
+	}}
+
+	w := do(t, mock, http.MethodPost, "/indexes",
+		`{"collectionGroup":"cities","queryScope":"COLLECTION","fields":[{"fieldPath":"name","order":"ASCENDING"},{"fieldPath":"__name__","order":"ASCENDING"}]}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	if got := mock.lastNR.Params["name"]; got != "databases/(default)/collectionGroups/cities/indexes" {
+		t.Fatalf("name = %v", got)
+	}
+	body, _ := mock.lastNR.Params["body"].(map[string]any)
+	if body["queryScope"] != "COLLECTION" {
+		t.Fatalf("queryScope = %v", body["queryScope"])
+	}
+	if fields, _ := body["fields"].([]IndexField); len(fields) != 2 {
+		t.Fatalf("fields = %#v, want 2", body["fields"])
+	}
+	var created Index
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.ID != "abc" || created.CollectionGroup != "cities" || created.State != "READY" {
+		t.Fatalf("unexpected created index: %+v", created)
+	}
+}
+
+func TestCreateIndex_RequiresConcreteGroupAndTwoFields(t *testing.T) {
+	// Wildcard collection group is only valid for list, not create.
+	w := do(t, &mockProvider{}, http.MethodPost, "/indexes",
+		`{"collectionGroup":"-","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"ASCENDING"}]}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("wildcard create: status = %d, want 400", w.Code)
+	}
+	// Fewer than two fields is not a composite index.
+	w = do(t, &mockProvider{}, http.MethodPost, "/indexes",
+		`{"collectionGroup":"cities","fields":[{"fieldPath":"a","order":"ASCENDING"}]}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("one-field create: status = %d, want 400", w.Code)
+	}
+	// A field needs an order or array config.
+	w = do(t, &mockProvider{}, http.MethodPost, "/indexes",
+		`{"collectionGroup":"cities","fields":[{"fieldPath":"a"},{"fieldPath":"b","order":"ASCENDING"}]}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("missing order create: status = %d, want 400", w.Code)
+	}
+}
+
+func TestDeleteIndex_PassesName(t *testing.T) {
+	mock := &mockProvider{}
+	w := do(t, mock, http.MethodDelete, "/indexes/cities/abc", "")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w.Code)
+	}
+	if got := mock.lastNR.Params["name"]; got != "databases/(default)/collectionGroups/cities/indexes/abc" {
+		t.Fatalf("name = %v", got)
+	}
+}
+
+func TestGetIndex_PassesName(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data: map[string]any{
+			"name":       "projects/p/databases/(default)/collectionGroups/cities/indexes/abc",
+			"queryScope": "COLLECTION",
+			"state":      "READY",
+			"fields":     []any{},
+		},
+	}}
+	w := do(t, mock, http.MethodGet, "/indexes/cities/abc", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := mock.lastNR.Params["name"]; got != "databases/(default)/collectionGroups/cities/indexes/abc" {
+		t.Fatalf("name = %v", got)
+	}
+}
+
+func TestIndexMutation_RejectsWildcardGroup(t *testing.T) {
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodDelete, "/indexes/-/abc"},
+		{http.MethodGet, "/indexes/-/abc"},
+	} {
+		w := do(t, &mockProvider{}, tc.method, tc.path, "")
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s %s: status = %d, want 400", tc.method, tc.path, w.Code)
 		}
 	}
 }

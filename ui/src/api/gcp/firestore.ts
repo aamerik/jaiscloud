@@ -65,7 +65,59 @@ export interface RunQueryResponse {
   skippedResults?: number
 }
 
+/** A field of a composite index: directional (`order`) or array (`arrayConfig`). */
+export interface FirestoreIndexField {
+  fieldPath: string
+  order?: 'ASCENDING' | 'DESCENDING'
+  arrayConfig?: 'CONTAINS'
+}
+
+export type FirestoreQueryScope = 'COLLECTION' | 'COLLECTION_GROUP'
+
+/** A Firestore composite index. `id`/`collectionGroup` are derived server-side
+ * from the fully-qualified resource `name`. */
+export interface FirestoreIndex {
+  name: string
+  id: string
+  collectionGroup: string
+  queryScope?: FirestoreQueryScope
+  state?: string
+  fields: FirestoreIndexField[]
+}
+
+export interface ListIndexesResponse {
+  indexes: FirestoreIndex[]
+  total: number
+  nextPageToken?: string
+}
+
+export interface CreateIndexRequest {
+  collectionGroup: string
+  queryScope?: FirestoreQueryScope
+  fields: FirestoreIndexField[]
+}
+
 export const listCollections = () => api.get<ListCollectionsResponse>(`${BASE}/collections`)
+
+/** Composite indexes. `collectionGroup` omitted lists the whole database (the
+ * server applies the `-` wildcard). */
+export const listIndexes = (collectionGroup?: string) =>
+  api.get<ListIndexesResponse>(
+    `${BASE}/indexes${collectionGroup ? `?collectionGroup=${encodeURIComponent(collectionGroup)}` : ''}`,
+  )
+
+export const createIndex = (body: CreateIndexRequest) =>
+  api.post<FirestoreIndex>(`${BASE}/indexes`, body)
+
+export const getIndex = (collectionGroup: string, indexId: string) =>
+  api.get<FirestoreIndex>(
+    `${BASE}/indexes/${encodeURIComponent(collectionGroup)}/${encodeURIComponent(indexId)}`,
+  )
+
+export const deleteIndex = (collectionGroup: string, indexId: string) =>
+  api.delete<void>(
+    `${BASE}/indexes/${encodeURIComponent(collectionGroup)}/${encodeURIComponent(indexId)}`,
+  )
 
 /** Run a StructuredQuery. `scope` is a parent document path (see RunQueryRequest). */
 export const runQuery = (body: RunQueryRequest) =>

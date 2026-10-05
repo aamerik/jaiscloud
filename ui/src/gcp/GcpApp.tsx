@@ -47,6 +47,7 @@ import { CollectionsPage } from './firestore/CollectionsPage'
 import { DocumentsPage } from './firestore/DocumentsPage'
 import { DocumentDetailPage } from './firestore/DocumentDetailPage'
 import { QueryPage as FirestoreQueryPage } from './firestore/QueryPage'
+import { IndexesPage as FirestoreIndexesPage } from './firestore/IndexesPage'
 import { InstancesPage } from './compute/InstancesPage'
 import { InstanceDetailPage } from './compute/InstanceDetailPage'
 import { ServicesPage as RunServicesPage } from './run/ServicesPage'
@@ -268,6 +269,7 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
           <Route path="/gcp/pubsub/subscriptions/:subscription" element={<SubscriptionDetailPage />} />
           <Route path="/gcp/firestore/collections" element={<CollectionsPage />} />
           <Route path="/gcp/firestore/query" element={<FirestoreQueryPage />} />
+          <Route path="/gcp/firestore/indexes" element={<FirestoreIndexesPage />} />
           <Route path="/gcp/firestore/collections/:collection" element={<DocumentsPage />} />
           <Route
             path="/gcp/firestore/collections/:collection/documents/:document"
