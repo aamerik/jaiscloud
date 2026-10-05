@@ -638,7 +638,7 @@ test-e2e-functions-framework-docker: _check-docker-prereq build-gcp ## Cloud Fun
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-functions-ff.log; exit 1; fi; sleep 1; \
 	  done; \
 	  FUNCTIONS_E2E_FF_IMAGE=$(FUNCTIONS_FF_IMAGE) JAISCLOUD_HOST=http://localhost:8080 \
-	    go test -v -tags functions_e2e -timeout 5m -run TestFunctionsFrameworkHTTP ./tests/persistent_mode/gcp/functions/
+	    go test -v -tags functions_e2e -timeout 10m -run TestFunctionsFramework ./tests/persistent_mode/gcp/functions/
 
 test-e2e-functions-framework-k8s: _check-gcp-samples-prereq ## Cloud Functions native Functions-Framework execution under K8s — tests/persistent_mode/gcp/functions/ (tag: functions_e2e)
 	@docker build -t $(FUNCTIONS_FF_IMAGE) tests/persistent_mode/gcp/functions/ff-image
@@ -661,7 +661,7 @@ test-e2e-functions-framework-k8s: _check-gcp-samples-prereq ## Cloud Functions n
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: port-forward not ready"; cat /tmp/jaiscloud-gcp-ff-port-forward.log; exit 1; fi; sleep 1; \
 	  done; \
 	  JAISCLOUD_HOST=$(JAISCLOUD_HOST) FUNCTIONS_E2E_FF_IMAGE=$(FUNCTIONS_FF_IMAGE_K8S) \
-	    go test -v -tags functions_e2e -timeout 15m -run TestFunctionsFrameworkHTTP ./tests/persistent_mode/gcp/functions/
+	    go test -v -tags functions_e2e -timeout 15m -run TestFunctionsFramework ./tests/persistent_mode/gcp/functions/
 
 ##@ GCP integration tests
 
