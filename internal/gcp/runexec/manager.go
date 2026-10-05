@@ -65,13 +65,12 @@ type Config struct {
 // Manager implements run.RuntimeManager on a Kubernetes cluster. It is safe for
 // concurrent use.
 type Manager struct {
-	client         kubernetes.Interface
-	namespace      string
-	logger         *slog.Logger
-	proxy          *http.Client
-	requestTimeout time.Duration
-	readyTimeout   time.Duration
-	probe          func(string) bool
+	client       kubernetes.Interface
+	namespace    string
+	logger       *slog.Logger
+	proxy        *http.Client
+	readyTimeout time.Duration
+	probe        func(string) bool
 
 	reg *registry
 
@@ -104,14 +103,13 @@ func New(cfg Config) *Manager {
 		probe = tcpProbe
 	}
 	return &Manager{
-		client:         cfg.Client,
-		namespace:      ns,
-		logger:         logger,
-		proxy:          proxy,
-		requestTimeout: timeout,
-		readyTimeout:   cfg.ReadyTimeout,
-		probe:          probe,
-		reg:            newRegistry(),
+		client:       cfg.Client,
+		namespace:    ns,
+		logger:       logger,
+		proxy:        proxy,
+		readyTimeout: cfg.ReadyTimeout,
+		probe:        probe,
+		reg:          newRegistry(),
 	}
 }
 
@@ -151,7 +149,6 @@ func (m *Manager) EnsureRevision(ctx context.Context, svc runstore.Service, rev 
 	m.reg.put(svcName, host, &target{
 		serviceName: svcName,
 		revision:    rev.ID,
-		host:        host,
 		backend:     "http://" + endpoint,
 	})
 	m.logger.Info("cloudrun: revision ready", "service", svcName, "revision", rev.ID, "endpoint", endpoint)

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"jaiscloud/internal/clock"
 	runcore "jaiscloud/internal/gcp/service/run"
 	runstore "jaiscloud/internal/gcp/store/run"
 	"jaiscloud/internal/model"
@@ -72,19 +73,61 @@ type DockerConfig struct {
 // and a published loopback host port the proxy dials. It is safe for concurrent
 // use.
 type DockerManager struct {
-	client         *http.Client
-	proxy          *http.Client
-	requestTimeout time.Duration
-	readyTimeout   time.Duration
-	probe          func(string) bool
-	platform       *platform.PlatformConfig
-	instanceID     string
-	network        string
-	logger         *slog.Logger
+	client       *http.Client
+	proxy        *http.Client
+	readyTimeout time.Duration
+	probe        func(string) bool
+	platform     *platform.PlatformConfig
+	instanceID   string
+	network      string
+	logger       *slog.Logger
 
 	reg *registry
 
 	sweepOnce sync.Once
+}
+
+// Ping reports whether the Docker daemon at socket answers the Engine API ping.
+// An empty socket uses the default local socket. It lets startup fall back to
+// the mock runtime when no daemon is reachable, rather than failing every
+// service create.
+func Ping(ctx context.Context, socket string) error {
+	if socket == "" {
+		socket = dockerSocketPath
+	}
+	client := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+		},
+	}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/_ping", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("docker: ping %s = HTTP %d", socket, resp.StatusCode)
+	}
+	return nil
+}
+
+// httpProbe considers a revision ready when its published port answers an HTTP
+// request (any status). Cloud Run revisions are HTTP servers, and Docker's proxy
+// binds the published port as soon as the container starts — so a bare TCP dial
+// can succeed before the app serves traffic, while a connection-level failure on
+// the HTTP request means it is not up yet.
+func httpProbe(addr string) bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + addr + "/")
+	if err != nil {
+		return false
+	}
+	_ = resp.Body.Close()
+	return true
 }
 
 // DockerManager is the docker implementation of the Cloud Run runtime seam.
@@ -106,7 +149,7 @@ func NewDocker(cfg DockerConfig) *DockerManager {
 	}
 	probe := cfg.Probe
 	if probe == nil {
-		probe = tcpProbe
+		probe = httpProbe
 	}
 	ready := cfg.ReadyTimeout
 	if ready == 0 {
@@ -128,16 +171,15 @@ func NewDocker(cfg DockerConfig) *DockerManager {
 		}
 	}
 	return &DockerManager{
-		client:         client,
-		proxy:          proxy,
-		requestTimeout: timeout,
-		readyTimeout:   ready,
-		probe:          probe,
-		platform:       cfg.Platform,
-		instanceID:     cfg.InstanceID,
-		network:        cfg.Network,
-		logger:         logger,
-		reg:            newRegistry(),
+		client:       client,
+		proxy:        proxy,
+		readyTimeout: ready,
+		probe:        probe,
+		platform:     cfg.Platform,
+		instanceID:   cfg.InstanceID,
+		network:      cfg.Network,
+		logger:       logger,
+		reg:          newRegistry(),
 	}
 }
 
@@ -183,7 +225,6 @@ func (m *DockerManager) EnsureRevision(ctx context.Context, svc runstore.Service
 	m.reg.put(svcName, host, &target{
 		serviceName: svcName,
 		revision:    rev.ID,
-		host:        host,
 		backend:     fmt.Sprintf("http://127.0.0.1:%d", hostPort),
 	})
 	m.logger.Info("cloudrun: revision ready", "service", svcName, "revision", rev.ID, "container", dockerShortID(id), "port", hostPort)
@@ -207,7 +248,7 @@ func (m *DockerManager) RemoveRevision(ctx context.Context, rev runstore.Revisio
 // RemoveService tears down every container of a service and deregisters it.
 func (m *DockerManager) RemoveService(ctx context.Context, svc runstore.Service) error {
 	svcName := runcore.ServiceName(svc.ProjectID, svc.Location, svc.ID)
-	n, err := m.removeByFilter(ctx, map[string][]string{"label": {dockerLabelService + "=" + dockerLabelValue, dockerLabelRunSvc + "=" + svc.ID}})
+	n, err := m.removeByFilter(ctx, m.serviceFilter(svc.ID))
 	m.reg.dropService(svcName, normalizeHost(serviceHost(svc.ProjectID, svc.Location, svc.ID)))
 	if err != nil {
 		return fmt.Errorf("cloudrun: remove service %s: %w", svc.ID, err)
@@ -248,11 +289,23 @@ func (m *DockerManager) sweepOrphans() {
 
 // instanceFilter selects this instance's Cloud Run containers.
 func (m *DockerManager) instanceFilter() map[string][]string {
-	filter := map[string][]string{"label": {dockerLabelService + "=" + dockerLabelValue}}
+	return m.labelFilter(nil)
+}
+
+// serviceFilter selects this instance's containers for one service.
+func (m *DockerManager) serviceFilter(svcID string) map[string][]string {
+	return m.labelFilter([]string{dockerLabelRunSvc + "=" + svcID})
+}
+
+// labelFilter builds a Docker label filter that always scopes to this emulator
+// instance, so two emulators sharing a daemon never reap each other's containers.
+func (m *DockerManager) labelFilter(extra []string) map[string][]string {
+	labels := []string{dockerLabelService + "=" + dockerLabelValue}
 	if m.instanceID != "" {
-		filter["label"] = append(filter["label"], dockerLabelInstance+"="+m.instanceID)
+		labels = append(labels, dockerLabelInstance+"="+m.instanceID)
 	}
-	return filter
+	labels = append(labels, extra...)
+	return map[string][]string{"label": labels}
 }
 
 // dockerSpec is the resolved input for starting one revision container.
@@ -277,9 +330,10 @@ func (m *DockerManager) startContainer(ctx context.Context, spec dockerSpec) (st
 	}
 	hostCfg := map[string]any{
 		"AutoRemove": false,
-		// An empty HostPort lets Docker assign an ephemeral loopback port, so
-		// revisions never race for a fixed port.
-		"PortBindings": map[string]any{portKey: []map[string]any{{"HostPort": ""}}},
+		// An empty HostPort lets Docker assign an ephemeral port bound to
+		// loopback only, so revisions never race for a fixed port and are not
+		// exposed beyond the host.
+		"PortBindings": map[string]any{portKey: []map[string]any{{"HostIp": "127.0.0.1", "HostPort": ""}}},
 	}
 	if spec.memory > 0 {
 		hostCfg["Memory"] = spec.memory
@@ -321,41 +375,61 @@ func (m *DockerManager) startContainer(ctx context.Context, spec dockerSpec) (st
 		return "", 0, fmt.Errorf("docker create: %w", err)
 	}
 
-	createURL := "/containers/create?name=" + url.QueryEscape(spec.name)
+	id, err := m.createContainer(ctx, spec.name, body)
+	if err != nil {
+		return "", 0, err
+	}
+	// From here the container exists: never leak it on a later failure.
+	fail := func(err error) (string, int, error) {
+		_ = m.removeContainer(context.WithoutCancel(ctx), id)
+		return "", 0, err
+	}
+
+	if _, status, err := m.dockerCall(ctx, http.MethodPost, "/containers/"+id+"/start", nil); err != nil {
+		return fail(fmt.Errorf("docker start: %w", err))
+	} else if status >= 300 {
+		return fail(fmt.Errorf("docker start: HTTP %d", status))
+	}
+
+	hostPort, err := m.waitContainerPort(ctx, id, spec.port)
+	if err != nil {
+		return fail(err)
+	}
+	return id, hostPort, nil
+}
+
+// createContainer creates a container, retrying once after removing a same-named
+// leftover when the daemon reports a name conflict (409).
+func (m *DockerManager) createContainer(ctx context.Context, name string, body []byte) (string, error) {
+	createURL := "/containers/create?name=" + url.QueryEscape(name)
 	respBody, status, err := m.dockerCall(ctx, http.MethodPost, createURL, body)
 	if err != nil {
-		return "", 0, fmt.Errorf("docker create: %w", err)
+		return "", fmt.Errorf("docker create: %w", err)
+	}
+	if status == http.StatusConflict {
+		if rmErr := m.removeContainer(context.WithoutCancel(ctx), name); rmErr == nil {
+			respBody, status, err = m.dockerCall(ctx, http.MethodPost, createURL, body)
+			if err != nil {
+				return "", fmt.Errorf("docker create: %w", err)
+			}
+		}
 	}
 	if status >= 300 {
-		return "", 0, fmt.Errorf("docker create: HTTP %d: %s", status, strings.TrimSpace(string(respBody)))
+		return "", fmt.Errorf("docker create: HTTP %d: %s", status, strings.TrimSpace(string(respBody)))
 	}
 	var createResp struct {
 		ID string `json:"Id"`
 	}
 	if err := json.Unmarshal(respBody, &createResp); err != nil || createResp.ID == "" {
-		return "", 0, fmt.Errorf("docker create: malformed response: %s", strings.TrimSpace(string(respBody)))
+		return "", fmt.Errorf("docker create: malformed response: %s", strings.TrimSpace(string(respBody)))
 	}
-
-	startURL := "/containers/" + createResp.ID + "/start"
-	if _, status, err := m.dockerCall(ctx, http.MethodPost, startURL, nil); err != nil {
-		return "", 0, fmt.Errorf("docker start: %w", err)
-	} else if status >= 300 {
-		return "", 0, fmt.Errorf("docker start: HTTP %d", status)
-	}
-
-	hostPort, err := m.waitContainerPort(ctx, createResp.ID, spec.port)
-	if err != nil {
-		// Do not leak a container that started but never became reachable.
-		_ = m.removeContainer(ctx, createResp.ID)
-		return "", 0, err
-	}
-	return createResp.ID, hostPort, nil
+	return createResp.ID, nil
 }
 
 // waitContainerPort polls the container until Docker has assigned its published
 // host port and the port accepts a TCP connection.
 func (m *DockerManager) waitContainerPort(ctx context.Context, id string, containerPort int32) (int, error) {
-	deadline := time.Now().Add(m.readyTimeout)
+	deadline := clock.RealNow().Add(m.readyTimeout)
 	portKey := fmt.Sprintf("%d/tcp", containerPort)
 	for {
 		if hostPort, err := m.inspectHostPort(ctx, id, portKey); err == nil && hostPort > 0 {
@@ -363,7 +437,7 @@ func (m *DockerManager) waitContainerPort(ctx context.Context, id string, contai
 				return hostPort, nil
 			}
 		}
-		if time.Now().After(deadline) {
+		if clock.RealNow().After(deadline) {
 			return 0, fmt.Errorf("cloudrun: container %s port %d not ready within %s", dockerShortID(id), containerPort, m.readyTimeout)
 		}
 		select {

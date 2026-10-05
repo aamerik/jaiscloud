@@ -114,7 +114,6 @@ func TestManagerInvokeProxyStatusMapping(t *testing.T) {
 	tgt := &target{
 		serviceName: runcore.ServiceName("p", "l", "svc"),
 		revision:    "svc-00001",
-		host:        normalizeHost(host),
 		backend:     upstream.URL,
 	}
 	m.reg.put(tgt.serviceName, normalizeHost(host), tgt)

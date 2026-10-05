@@ -951,6 +951,7 @@ test-e2e-cloudrun-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud Run
 	  go test -v -tags cloudrun_e2e -timeout 20m ./tests/persistent_mode/gcp/cloudrun/
 
 test-e2e-cloudrun-docker: _check-docker-prereq build-gcp ## Cloud Run container execution under Docker — tests/persistent_mode/gcp/cloudrun/ (tag: cloudrun_e2e; needs the local Docker daemon and the docker group on the invoking shell)
+	go clean -testcache
 	@docker --context default pull nginx:latest > /dev/null
 	@set -e; \
 	  JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=docker \

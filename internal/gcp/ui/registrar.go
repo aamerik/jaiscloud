@@ -304,7 +304,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Category: "Compute",
 			RootPath: "/gcp/run/services",
 			Tier:     statusTier(cloudRunOn, coreui.TierShape),
-			Note:     engineNote(cloudRunOn, "K8s runtime executor", r.modes.CloudRun, "Shape only — control plane; K8s executor optional"),
+			Note:     engineNote(cloudRunOn, "container runtime executor", r.modes.CloudRun, "Shape only — control plane; docker/k8s executor optional"),
 			Engine:   runEngine,
 			Children: []coreui.ServiceChild{{Label: "Services", Path: "/gcp/run/services"}},
 		})

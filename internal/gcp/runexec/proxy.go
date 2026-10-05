@@ -28,7 +28,6 @@ import (
 type target struct {
 	serviceName string
 	revision    string
-	host        string
 	backend     string
 }
 
