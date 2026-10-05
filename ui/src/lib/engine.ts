@@ -22,3 +22,46 @@ export function engineActive(service: ServiceDescriptor): boolean {
 export function engineModes(service: ServiceDescriptor): EngineMode[] {
   return service.engine?.modes ?? []
 }
+
+/** Reachability of the host engines, from GET /api/ui/v1/gcp/runtime. */
+export interface EngineReachability {
+  docker?: boolean
+  kubernetes?: boolean
+}
+
+export type EngineStatusColor = 'default' | 'success' | 'warning'
+
+export interface EngineStatus {
+  label: string
+  color: EngineStatusColor
+}
+
+/**
+ * The engine status to show for a service: the configured mode plus whether
+ * that mode's host engine is actually reachable. Green means "will run", not
+ * just "configured" — a configured-but-unreachable backend is a warning, and
+ * mock stays neutral (it is the documented default, not a fault). Backends with
+ * no host probe (native) report "configured".
+ */
+export function engineStatus(
+  service: ServiceDescriptor,
+  reach: EngineReachability,
+): EngineStatus {
+  const mode = engineTag(service)
+  if (!mode || mode === 'mock' || !engineActive(service)) {
+    return { label: 'mock', color: 'default' }
+  }
+  if (mode === 'docker') {
+    if (reach.docker === undefined) return { label: 'docker · checking…', color: 'default' }
+    return reach.docker
+      ? { label: 'docker · reachable', color: 'success' }
+      : { label: 'docker · unreachable', color: 'warning' }
+  }
+  if (mode === 'k8s') {
+    if (reach.kubernetes === undefined) return { label: 'k8s · checking…', color: 'default' }
+    return reach.kubernetes
+      ? { label: 'k8s · reachable', color: 'success' }
+      : { label: 'k8s · unreachable', color: 'warning' }
+  }
+  return { label: `${mode} · configured`, color: 'default' }
+}

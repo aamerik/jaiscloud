@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ServiceDescriptor } from '../api/services'
-import { engineActive, engineModes, engineTag } from './engine'
+import { engineActive, engineModes, engineStatus, engineTag } from './engine'
 
 const service = (over: Partial<ServiceDescriptor> = {}): ServiceDescriptor => ({
   id: 'dataproc',
@@ -29,6 +29,42 @@ describe('engineActive', () => {
     expect(engineActive(service())).toBe(false)
     expect(engineActive(service({ engine: { active: false, modes: [] } }))).toBe(false)
     expect(engineActive(service({ engine: { active: true, mode: 'docker', modes: [] } }))).toBe(true)
+  })
+})
+
+describe('engineStatus', () => {
+  const active = (mode: string) => service({ tier: 'full', engine: { active: true, mode, modes: [] } })
+
+  it('is neutral mock with no engine active', () => {
+    expect(engineStatus(service(), {})).toEqual({ label: 'mock', color: 'default' })
+    expect(engineStatus(service({ engine: { active: false, modes: [] } }), {})).toEqual({
+      label: 'mock',
+      color: 'default',
+    })
+  })
+
+  it('links the mode to host reachability (green only when reachable)', () => {
+    expect(engineStatus(active('k8s'), { kubernetes: true })).toEqual({
+      label: 'k8s · reachable',
+      color: 'success',
+    })
+    expect(engineStatus(active('k8s'), { kubernetes: false })).toEqual({
+      label: 'k8s · unreachable',
+      color: 'warning',
+    })
+    expect(engineStatus(active('docker'), { docker: true })).toEqual({
+      label: 'docker · reachable',
+      color: 'success',
+    })
+    expect(engineStatus(active('k8s'), {})).toEqual({
+      label: 'k8s · checking…',
+      color: 'default',
+    })
+    // native has no host probe.
+    expect(engineStatus(active('native'), {})).toEqual({
+      label: 'native · configured',
+      color: 'default',
+    })
   })
 })
 

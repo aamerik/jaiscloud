@@ -35,7 +35,8 @@ import {
 } from '../../api/admin'
 import { getRuntimeHealth, type EngineHealth } from '../../api/gcp/runtime'
 import { useServices } from '../../hooks/useServices'
-import { engineActive, engineModes, engineTag } from '../../lib/engine'
+import { engineModes, engineStatus } from '../../lib/engine'
+import { tierLabel } from '../../lib/tier'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
@@ -355,6 +356,7 @@ function RuntimeCard() {
     queryFn: getRuntimeHealth,
     refetchInterval: 15000,
   })
+  const reach = { docker: health?.docker.available, kubernetes: health?.kubernetes.available }
   const engineServices = (data?.services ?? []).filter((service) => service.engine)
 
   return (
@@ -394,8 +396,14 @@ function RuntimeCard() {
               </Typography>
               <Chip
                 size="small"
-                label={engineTag(service) ?? 'mock'}
-                color={engineActive(service) ? 'primary' : 'default'}
+                variant="outlined"
+                label={tierLabel(service) ?? 'Full'}
+                title="Depth: what the emulator can be trusted to prove"
+              />
+              <Chip
+                size="small"
+                label={engineStatus(service, reach).label}
+                color={engineStatus(service, reach).color}
               />
               {service.engine?.source && (
                 <Typography variant="caption" color="text.secondary">

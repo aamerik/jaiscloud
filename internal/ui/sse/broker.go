@@ -5,9 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"jaiscloud/internal/events"
 )
+
+// keepAlivePeriod is how often an idle stream sends a comment, so proxies
+// (and the browser) see it as live and the server notices half-open sockets.
+const keepAlivePeriod = 25 * time.Second
 
 // Event is a typed SSE message published to browser clients.
 type Event struct {
@@ -107,6 +112,12 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
+	// Flush a comment immediately. Without a write the response stays buffered,
+	// so EventSource never fires onopen and the client would sit on its
+	// disconnected/polling state despite the stream being fine.
+	fmt.Fprint(w, ": connected\n\n") //nolint:errcheck
+	flusher.Flush()
+
 	ch := make(chan Event, 32)
 	b.mu.Lock()
 	b.subscribers[ch] = struct{}{}
@@ -118,6 +129,9 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		b.mu.Unlock()
 	}()
 
+	ticker := time.NewTicker(keepAlivePeriod)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-r.Context().Done():
@@ -126,6 +140,9 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeSSE(w, Event{Type: "close"})
 			flusher.Flush()
 			return
+		case <-ticker.C:
+			fmt.Fprint(w, ": ping\n\n") //nolint:errcheck
+			flusher.Flush()
 		case evt := <-ch:
 			writeSSE(w, evt)
 			flusher.Flush()
