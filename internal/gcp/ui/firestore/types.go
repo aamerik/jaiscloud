@@ -59,3 +59,23 @@ type UpdateDocumentRequest struct {
 	Fields     map[string]any `json:"fields"`
 	UpdateTime string         `json:"updateTime,omitempty"`
 }
+
+// RunQueryRequest is the body for POST /query. StructuredQuery is a Firestore
+// StructuredQuery passed through verbatim (the console assembles it from its
+// structured builder or edits the raw JSON). Scope is the parent document path
+// relative to the database documents root: empty for the whole database, or a
+// document path (e.g. `cities/SF`) to scope a subcollection/collection-group
+// query.
+type RunQueryRequest struct {
+	Scope           string         `json:"scope,omitempty"`
+	StructuredQuery map[string]any `json:"structuredQuery"`
+}
+
+// RunQueryResponse is the response for POST /query. ReadTime is the server read
+// timestamp shared by the returned documents; SkippedResults is set when the
+// query's offset skipped documents.
+type RunQueryResponse struct {
+	Documents      []Document `json:"documents"`
+	ReadTime       string     `json:"readTime,omitempty"`
+	SkippedResults int        `json:"skippedResults,omitempty"`
+}

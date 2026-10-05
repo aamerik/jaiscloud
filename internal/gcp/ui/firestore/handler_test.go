@@ -12,6 +12,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
+	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 )
 
@@ -46,6 +47,9 @@ func (m *mockProvider) DocumentsPatch(_ context.Context, nr *model.NormalizedReq
 	return m.reply(nr)
 }
 func (m *mockProvider) DocumentsDelete(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) RunQuery(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
 }
 
@@ -490,5 +494,127 @@ func TestWriteError_MapsProviderError(t *testing.T) {
 	}
 	if e["code"] != "NotFound" {
 		t.Fatalf("code = %q, want NotFound", e["code"])
+	}
+}
+
+func TestRunQuery_MapsNDJSON(t *testing.T) {
+	base := "projects/test-project/databases/(default)/documents/users/"
+	ndjson := `{"document":{"name":"` + base + `u1","createTime":"2026-01-01T00:00:00Z","updateTime":"2026-01-02T00:00:00Z","fields":{"name":{"stringValue":"Ada"}}},"readTime":"2026-01-03T00:00:00Z"}
+{"document":{"name":"` + base + `u2","fields":{"name":{"stringValue":"Grace"}}},"readTime":"2026-01-03T00:00:00Z"}
+{"done":true}`
+	mock := &mockProvider{resp: &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data:       map[string]any{wire.RawJSONKey: json.RawMessage(ndjson)},
+	}}
+
+	w := do(t, mock, http.MethodPost, "/query",
+		`{"scope":"","structuredQuery":{"from":[{"collectionId":"users"}]}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp RunQueryResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Documents) != 2 {
+		t.Fatalf("got %d documents, want 2: %+v", len(resp.Documents), resp.Documents)
+	}
+	if resp.Documents[0].ID != "u1" || resp.Documents[0].Collection != "users" {
+		t.Fatalf("unexpected first document: %+v", resp.Documents[0])
+	}
+	if resp.Documents[1].ID != "u2" {
+		t.Fatalf("unexpected second document: %+v", resp.Documents[1])
+	}
+	if resp.ReadTime != "2026-01-03T00:00:00Z" {
+		t.Fatalf("readTime = %q", resp.ReadTime)
+	}
+	if mock.lastNR.Params["name"] != "databases/(default)/documents" {
+		t.Fatalf("name = %v", mock.lastNR.Params["name"])
+	}
+	body, _ := mock.lastNR.Params["body"].(map[string]any)
+	if body["structuredQuery"] == nil {
+		t.Fatalf("structuredQuery not forwarded: %#v", body)
+	}
+}
+
+func TestRunQuery_CollectionGroupDerivesCollectionPerDocument(t *testing.T) {
+	// A collection-group query returns documents from different collections; the
+	// UI must report each document's own collection, not the query scope.
+	ndjson := `{"document":{"name":"projects/p/databases/(default)/documents/cities/SF/landmarks/a","fields":{}},"readTime":"t"}
+{"document":{"name":"projects/p/databases/(default)/documents/states/CA/landmarks/b","fields":{}},"readTime":"t"}
+{"done":true}`
+	mock := &mockProvider{resp: &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data:       map[string]any{wire.RawJSONKey: json.RawMessage(ndjson)},
+	}}
+	w := do(t, mock, http.MethodPost, "/query",
+		`{"structuredQuery":{"from":[{"collectionId":"landmarks","allDescendants":true}]}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp RunQueryResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Documents) != 2 {
+		t.Fatalf("got %d documents, want 2", len(resp.Documents))
+	}
+	if resp.Documents[0].Collection != "cities/SF/landmarks" {
+		t.Fatalf("collection = %q, want cities/SF/landmarks", resp.Documents[0].Collection)
+	}
+	if resp.Documents[1].Collection != "states/CA/landmarks" {
+		t.Fatalf("collection = %q, want states/CA/landmarks", resp.Documents[1].Collection)
+	}
+}
+
+func TestRunQuery_ReportsSkippedResults(t *testing.T) {
+	ndjson := `{"done":true,"skippedResults":5}`
+	mock := &mockProvider{resp: &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data:       map[string]any{wire.RawJSONKey: json.RawMessage(ndjson)},
+	}}
+	w := do(t, mock, http.MethodPost, "/query", `{"structuredQuery":{"from":[{"collectionId":"users"}]}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp RunQueryResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.SkippedResults != 5 {
+		t.Fatalf("skippedResults = %d, want 5", resp.SkippedResults)
+	}
+	if resp.Documents == nil {
+		t.Fatalf("documents should be an empty slice, not nil")
+	}
+}
+
+func TestRunQuery_PassesScope(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodPost, "/query",
+		`{"scope":"cities/SF","structuredQuery":{"from":[{"collectionId":"landmarks"}]}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := mock.lastNR.Params["name"]; got != "databases/(default)/documents/cities/SF" {
+		t.Fatalf("name = %v, want scoped parent", got)
+	}
+}
+
+func TestRunQuery_RequiresStructuredQuery(t *testing.T) {
+	w := do(t, &mockProvider{}, http.MethodPost, "/query", `{}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestRunQuery_RejectsInvalidScope(t *testing.T) {
+	// An odd segment count is a collection path, not a document parent.
+	for _, scope := range []string{"users", "users/alice/orders", "a/../b"} {
+		w := do(t, &mockProvider{}, http.MethodPost, "/query",
+			`{"scope":"`+scope+`","structuredQuery":{"from":[{"collectionId":"users"}]}}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("scope %q: status = %d, want 400", scope, w.Code)
+		}
 	}
 }

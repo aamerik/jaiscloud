@@ -9,6 +9,7 @@ import (
 
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gcp/ui/uihelper"
+	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 )
 
@@ -344,6 +345,119 @@ func (h *Handler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ─── Query ───────────────────────────────────────────────────────────────────
+
+// POST /query  body: { scope?, structuredQuery }
+func (h *Handler) RunQuery(w http.ResponseWriter, r *http.Request) {
+	var req RunQueryRequest
+	if err := decodeBody(r, &req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.StructuredQuery == nil {
+		uihelper.UIError(w, "BadRequest", "structuredQuery is required", http.StatusBadRequest)
+		return
+	}
+	scope, ok := queryScope(req.Scope)
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid scope path", http.StatusBadRequest)
+		return
+	}
+
+	account := h.account(r)
+	nr := uihelper.NR(r.Context(), h.cfg, "firestore", "Firestore.RunQuery", "global", account)
+	name := documentsPrefix
+	if scope != "" {
+		name += "/" + scope
+	}
+	nr.Params["name"] = name
+	nr.Params["body"] = map[string]any{"structuredQuery": req.StructuredQuery}
+
+	resp, err := h.provider.RunQuery(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, queryResponseFromRaw(resp.Data))
+}
+
+// queryScope validates and normalises the RunQuery parent scope. A scope is a
+// document path relative to the database documents root: empty (the whole
+// database) or an even number of non-empty segments (collection/document/…/
+// document). The leading/trailing '/' is tolerated.
+func queryScope(raw string) (string, bool) {
+	scope := strings.Trim(raw, "/")
+	if scope == "" {
+		return "", true
+	}
+	segments := strings.Split(scope, "/")
+	for _, s := range segments {
+		if s == "" || s == "." || s == ".." {
+			return "", false
+		}
+	}
+	if len(segments)%2 != 0 {
+		return "", false
+	}
+	return scope, true
+}
+
+// queryResponseFromRaw maps the provider's newline-delimited runQuery response
+// into the UI shape. The provider returns one `{document, readTime}` JSON line
+// per result followed by a `{done:true, skippedResults?}` line. A malformed
+// line is skipped: the provider is in-process and trusted, and a partial result
+// set is more useful to the console than a hard failure.
+func queryResponseFromRaw(data map[string]any) RunQueryResponse {
+	out := RunQueryResponse{Documents: []Document{}}
+	raw, _ := data[wire.RawJSONKey].(json.RawMessage)
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var item struct {
+			Document       map[string]any `json:"document"`
+			ReadTime       string         `json:"readTime"`
+			Done           bool           `json:"done"`
+			SkippedResults int            `json:"skippedResults"`
+		}
+		if err := json.Unmarshal([]byte(line), &item); err != nil {
+			continue
+		}
+		if item.Done {
+			out.SkippedResults = item.SkippedResults
+			continue
+		}
+		if item.Document == nil {
+			continue
+		}
+		if item.ReadTime != "" {
+			out.ReadTime = item.ReadTime
+		}
+		out.Documents = append(out.Documents,
+			documentFromMap(item.Document, collectionOfDocumentName(str(item.Document, "name"))))
+	}
+	return out
+}
+
+// collectionOfDocumentName derives the collection path of a query result from
+// its full document name. Unlike ListDocuments, a query (especially a
+// collection-group query) can return documents from different collections, so
+// the collection is read per document rather than passed in.
+func collectionOfDocumentName(full string) string {
+	const marker = "/documents/"
+	i := strings.Index(full, marker)
+	if i < 0 {
+		return ""
+	}
+	rel := full[i+len(marker):]
+	j := strings.LastIndexByte(rel, '/')
+	if j < 0 {
+		return ""
+	}
+	return rel[:j]
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

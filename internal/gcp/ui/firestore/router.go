@@ -13,6 +13,9 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 
 	r.Get("/collections", h.ListCollections)
 
+	// StructuredQuery runner (structured builder + raw query console).
+	r.Post("/query", h.RunQuery)
+
 	r.Get("/collections/{collection}/documents", h.ListDocuments)
 	r.Post("/collections/{collection}/documents", h.CreateDocument)
 	r.Get("/collections/{collection}/documents/{document}", h.GetDocument)

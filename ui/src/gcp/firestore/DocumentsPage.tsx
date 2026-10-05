@@ -7,6 +7,7 @@ import { Link as RouterLink, useParams } from 'react-router-dom'
 import { deleteDocument, listDocuments, type FirestoreDocument } from '../../api/gcp/firestore'
 import { useAccount } from '../../context/AccountContext'
 import { CreateDocumentDialog } from './CreateDocumentDialog'
+import { FirestoreTabs } from './FirestoreTabs'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
@@ -122,11 +123,21 @@ export function DocumentsPage() {
         backTo={backTo}
         backAriaLabel={backAriaLabel}
         actions={
-          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
-            Create document
-          </Button>
+          <Stack direction="row" spacing={1}>
+            <Button
+              component={RouterLink}
+              to={`/gcp/firestore/query?collection=${encodeURIComponent(collection)}`}
+            >
+              Query this collection
+            </Button>
+            <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreateOpen(true)}>
+              Create document
+            </Button>
+          </Stack>
         }
-      />
+      >
+        <FirestoreTabs />
+      </GcpPageHeader>
 
       <GcpToolbar
         filter={filter}

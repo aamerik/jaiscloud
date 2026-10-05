@@ -18,4 +18,7 @@ type ProviderInterface interface {
 	CreateDocument(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	DocumentsPatch(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	DocumentsDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+
+	// RunQuery executes a StructuredQuery (newline-delimited JSON response).
+	RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 }
