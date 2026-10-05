@@ -488,6 +488,10 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 // MountRoutes implements coreui.Registrar. Routes are mounted inside the
 // authenticated group in the shared core router.
 func (r *Registrar) MountRoutes(router chi.Router) {
+	// Host engine liveness for the admin Runtime view. Not gated on a service
+	// provider — it reports the host the emulator runs on.
+	router.Get("/api/ui/v1/gcp/runtime", buildRuntimeHealthHandler())
+
 	if r.storage != nil {
 		router.Mount("/api/ui/v1/gcp/storage", storageui.BuildRouter(r.storage, r.cfg))
 	}
