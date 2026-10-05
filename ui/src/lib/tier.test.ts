@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { TIERS, type ServiceDescriptor } from '../api/services'
-import { TIER_NAMES, TIER_SUMMARY, tierDescription, tierLabel } from './tier'
+import { TIER_NAMES, tierDescription, tierLabel } from './tier'
 
 const service = (over: Partial<ServiceDescriptor> = {}): ServiceDescriptor => ({
   id: 'compute',
@@ -31,10 +31,9 @@ describe('tierLabel', () => {
     }
   })
 
-  it('names and summarises every tier', () => {
+  it('names every tier', () => {
     for (const tier of TIERS) {
       expect(TIER_NAMES[tier]).toBeTruthy()
-      expect(TIER_SUMMARY[tier]).toBeTruthy()
     }
   })
 })

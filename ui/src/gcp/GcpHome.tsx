@@ -22,18 +22,14 @@ import { useAccount } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
 import { useFavorites } from '../hooks/useFavorites'
-import { type Tier } from '../api/services'
 import { cloudName } from '../lib/cloudNames'
-import { TIER_NAMES, TIER_SUMMARY, tierLabel } from '../lib/tier'
+import { tierLabel } from '../lib/tier'
 import { GcpServiceIcon } from './icons/GcpServiceIcon'
 import { serviceAccent } from './icons/serviceIcons'
 import { ProjectPickerDialog } from './chrome/ProjectPicker'
 import { buildNavGroups, type NavEntry } from './chrome/navModel'
 import { rememberRecentService, useRecentServices } from './chrome/recentServices'
 import { resourceCount, summarySourcesFor } from './home/resourceSummary'
-
-/** Depth order (full > shape > metadata) for the coverage legend. */
-const TIER_ORDER: Tier[] = ['full', 'shape', 'metadata']
 
 const TILE_GRID = {
   display: 'grid',
@@ -110,12 +106,6 @@ export function GcpHome() {
   const [projectOpen, setProjectOpen] = useState(false)
 
   const project = accountId || meta?.accountId || '—'
-
-  const coverage = useMemo(() => {
-    const counts: Record<Tier, number> = { full: 0, metadata: 0, shape: 0 }
-    for (const service of services) counts[service.tier] += 1
-    return counts
-  }, [services])
 
   const groups = useMemo(
     () => buildNavGroups(services, favorites, recent, ''),
@@ -218,26 +208,6 @@ export function GcpHome() {
           </Stack>
         </CardContent>
       </Card>
-
-      {services.length > 0 && (
-        <Box sx={{ mt: 3 }}>
-          <Typography variant="overline" color="text.secondary">
-            Service coverage
-          </Typography>
-          <Stack direction="row" spacing={1.5} sx={{ mt: 0.5, flexWrap: 'wrap', rowGap: 0.5 }}>
-            {TIER_ORDER.map((tier) => (
-              <Tooltip key={tier} title={TIER_SUMMARY[tier]}>
-                <Typography variant="body2" color="text.secondary" sx={{ cursor: 'help' }}>
-                  {TIER_NAMES[tier]}{' '}
-                  <Box component="span" sx={{ fontWeight: 600, color: 'text.primary' }}>
-                    {coverage[tier]}
-                  </Box>
-                </Typography>
-              </Tooltip>
-            ))}
-          </Stack>
-        </Box>
-      )}
 
       {pinned.length > 0 && (
         <>
