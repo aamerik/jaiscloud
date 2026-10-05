@@ -14,9 +14,11 @@ import {
   Stack,
   TextField,
   Toolbar,
+  Tooltip,
   Typography,
 } from '@mui/material'
 import SearchIcon from '@mui/icons-material/Search'
+import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined'
 import StarIcon from '@mui/icons-material/Star'
 import StarBorderIcon from '@mui/icons-material/StarBorder'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
@@ -50,6 +52,12 @@ export interface GcpNavProps {
   onClose?: () => void
   /** Header subtitle ("Console" on the rail, "Navigation menu" in the overlay). */
   title?: string
+  /**
+   * Presentation of the desktop rail. `mini` is the icons-only rail (product
+   * glyphs with tooltips, no category headers, labels, pin/expand or search);
+   * `full` is the labelled list. Ignored by the mobile overlay.
+   */
+  variant?: 'full' | 'mini'
 }
 
 /**
@@ -65,6 +73,7 @@ export function GcpNav({
   showSearch = false,
   onClose,
   title = 'Navigation menu',
+  variant = 'full',
 }: GcpNavProps) {
   const location = useLocation()
   const { favorites, isFavorite, toggle } = useFavorites()
@@ -97,6 +106,72 @@ export function GcpNav({
       else next.add(entryId)
       return next
     })
+  }
+
+  // Icons-only rail: product glyphs with tooltips, no labels/headers/search.
+  if (variant === 'mini') {
+    return (
+      <Box
+        role="navigation"
+        aria-label="Service navigation"
+        sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
+      >
+        <Toolbar />
+        <List sx={{ py: 1 }}>
+          <Tooltip title="Console home" placement="right">
+            <ListItemButton
+              component={RouterLink}
+              to="/gcp"
+              selected={location.pathname === '/gcp'}
+              onClick={() => onClose?.()}
+              sx={{ justifyContent: 'center', px: 0, minHeight: 44 }}
+            >
+              <HomeOutlinedIcon fontSize="small" />
+            </ListItemButton>
+          </Tooltip>
+        </List>
+        <Divider />
+        <List
+          component="nav"
+          sx={{
+            flexGrow: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            py: 1,
+            scrollbarWidth: 'none',
+            '&::-webkit-scrollbar': { display: 'none' },
+          }}
+        >
+          {services.map((service) => (
+            <Tooltip key={service.id} title={service.label} placement="right">
+              <ListItemButton
+                component={RouterLink}
+                to={service.rootPath}
+                selected={isSelected(service.rootPath)}
+                onClick={() => select(service.id)}
+                sx={{ justifyContent: 'center', px: 0, minHeight: 44 }}
+              >
+                <GcpServiceIcon id={service.id} size={22} />
+              </ListItemButton>
+            </Tooltip>
+          ))}
+        </List>
+        <Divider />
+        <List sx={{ py: 1 }}>
+          <Tooltip title="Admin" placement="right">
+            <ListItemButton
+              component={RouterLink}
+              to="/gcp/admin"
+              selected={isSelected('/gcp/admin')}
+              onClick={() => onClose?.()}
+              sx={{ justifyContent: 'center', px: 0, minHeight: 44 }}
+            >
+              <SettingsOutlinedIcon fontSize="small" />
+            </ListItemButton>
+          </Tooltip>
+        </List>
+      </Box>
+    )
   }
 
   return (

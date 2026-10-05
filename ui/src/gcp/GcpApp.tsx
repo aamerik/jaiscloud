@@ -101,7 +101,20 @@ import { useServices } from '../hooks/useServices'
 import { GcpSnackbarProvider } from './common/SnackbarProvider'
 
 const DRAWER_WIDTH = 256
+/** Icons-only rail width; the desktop default. */
+const MINI_WIDTH = 72
 const OVERLAY_WIDTH = 360
+
+/** Persisted choice: whether the desktop rail is expanded (labelled) or mini. */
+const NAV_EXPANDED_KEY = 'jaiscloud-nav-expanded'
+
+function readRailExpanded(): boolean {
+  try {
+    return window.localStorage.getItem(NAV_EXPANDED_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
 
 /** Material shell approximating the Google Cloud Console chrome. */
 function GcpShell({ appearance }: { appearance: GcpAppearance }) {
@@ -114,17 +127,29 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
   const services = useMemo(() => servicesData?.services ?? [], [servicesData])
   const { connected } = useEventStream()
 
-  // One nav, two surfaces: the hamburger collapses the desktop rail but opens
-  // the mobile overlay. Only one is active at a time.
-  const [railOpen, setRailOpen] = useState(true)
+  // One nav, two surfaces: on desktop the hamburger toggles the rail between
+  // mini (icons) and expanded (labelled, persisted); on mobile it opens the
+  // overlay. The rail is always present on desktop, never hidden.
+  const [railExpanded, setRailExpandedState] = useState<boolean>(readRailExpanded)
   const [overlayOpen, setOverlayOpen] = useState(false)
   const [projectOpen, setProjectOpen] = useState(false)
 
-  const navExpanded = isDesktop ? railOpen : overlayOpen
+  const navExpanded = isDesktop ? railExpanded : overlayOpen
 
   const toggleNav = () => {
-    if (isDesktop) setRailOpen((value) => !value)
-    else setOverlayOpen(true)
+    if (!isDesktop) {
+      setOverlayOpen(true)
+      return
+    }
+    setRailExpandedState((value) => {
+      const next = !value
+      try {
+        window.localStorage.setItem(NAV_EXPANDED_KEY, String(next))
+      } catch {
+        /* ignore storage errors */
+      }
+      return next
+    })
   }
 
   const closeOverlay = () => setOverlayOpen(false)
@@ -201,7 +226,7 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
         aria-label="Service navigation"
         sx={{
           display: { xs: 'none', md: 'block' },
-          width: railOpen ? DRAWER_WIDTH : 0,
+          width: railExpanded ? DRAWER_WIDTH : MINI_WIDTH,
           flexShrink: 0,
           overflow: 'hidden',
           transition: (theme) =>
@@ -216,10 +241,10 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
           open
           sx={{
             '& .MuiDrawer-paper': {
-              width: railOpen ? DRAWER_WIDTH : 0,
+              width: railExpanded ? DRAWER_WIDTH : MINI_WIDTH,
               boxSizing: 'border-box',
               overflowX: 'hidden',
-              borderRightWidth: railOpen ? 1 : 0,
+              borderRightWidth: 1,
               transition: (theme) =>
                 theme.transitions.create('width', {
                   easing: theme.transitions.easing.sharp,
@@ -228,9 +253,11 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
             },
           }}
         >
-          {railOpen && (
-            <GcpNav services={services} title="Console" />
-          )}
+          <GcpNav
+            services={services}
+            title="Console"
+            variant={railExpanded ? 'full' : 'mini'}
+          />
         </Drawer>
       </Box>
 
