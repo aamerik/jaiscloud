@@ -12,6 +12,7 @@ import {
   Typography,
 } from '@mui/material'
 import { createTable } from '../../api/gcp/bigquery'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { parseJsonObject } from './util'
 
 export interface CreateTableDialogProps {
@@ -95,22 +96,14 @@ export function CreateTableDialog({ open, onClose, dataset, onCreated }: CreateT
             Schema is the BigQuery TableSchema object whose <code>fields</code> array lists columns
             (<code>name</code>, <code>type</code>, <code>mode</code>).
           </Typography>
-          <TextField
+          <GcpCodeEditor
             label="Schema"
             value={schemaText}
-            onChange={(e) => setSchemaText(e.target.value)}
-            error={Boolean(error)}
-            helperText={error}
-            fullWidth
-            multiline
+            onChange={setSchemaText}
+            error={error}
+            language="json"
             minRows={10}
-            spellCheck={false}
-            slotProps={{
-              input: {
-                sx: { fontFamily: 'monospace', fontSize: 13, lineHeight: 1.5, alignItems: 'flex-start' },
-              },
-              htmlInput: { 'aria-label': 'Schema' },
-            }}
+            ariaLabel="Schema"
           />
         </Stack>
       </DialogContent>

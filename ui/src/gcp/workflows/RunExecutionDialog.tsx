@@ -15,6 +15,7 @@ import {
   TextField,
 } from '@mui/material'
 import { runWorkflow, type Execution } from '../../api/gcp/workflows'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { callLogLevelOptions, parseKV } from './util'
 
 export interface RunExecutionDialogProps {
@@ -72,16 +73,13 @@ export function RunExecutionDialog({ open, onClose, location, workflow, onRun }:
           {run.isError && (
             <Alert severity="error">Could not run the workflow: {(run.error as Error).message}</Alert>
           )}
-          <TextField
+          <GcpCodeEditor
             label="Argument (JSON, optional)"
             value={argument}
-            onChange={(e) => setArgument(e.target.value)}
-            error={argumentInvalid}
-            helperText={argumentInvalid ? 'Argument must be valid JSON' : ' '}
-            multiline
+            onChange={setArgument}
+            error={argumentInvalid ? 'Argument must be valid JSON' : null}
+            language="json"
             minRows={3}
-            slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: 13 } } }}
-            fullWidth
           />
           <FormControl fullWidth>
             <InputLabel id="execution-call-log-level">Call log level</InputLabel>

@@ -19,6 +19,7 @@ import {
   Typography,
 } from '@mui/material'
 import { createFunction, type CreateFunctionInput } from '../../api/gcp/functions'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { parseKV } from './util'
 
 type SourceMode = 'none' | 'archive' | 'inline'
@@ -235,35 +236,31 @@ export function FunctionDialog({ open, onClose, onSaved }: FunctionDialogProps) 
                   placeholder="index.js"
                   fullWidth
                 />
-                <TextField
+                <GcpCodeEditor
                   label="Source"
                   value={sourceInline}
-                  onChange={(e) => setSourceInline(e.target.value)}
-                  multiline
+                  onChange={setSourceInline}
+                  language="text"
                   minRows={8}
-                  fullWidth
-                  slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: 13 } } }}
                 />
               </Stack>
             )}
           </Box>
 
           <Stack direction="row" spacing={2}>
-            <TextField
+            <GcpCodeEditor
               label="Labels (key=value per line)"
               value={labelsText}
-              onChange={(e) => setLabelsText(e.target.value)}
-              multiline
+              onChange={setLabelsText}
+              language="text"
               minRows={2}
-              fullWidth
             />
-            <TextField
+            <GcpCodeEditor
               label="Environment variables (key=value per line)"
               value={envText}
-              onChange={(e) => setEnvText(e.target.value)}
-              multiline
+              onChange={setEnvText}
+              language="text"
               minRows={2}
-              fullWidth
             />
           </Stack>
           {(labelsText || envText) && (

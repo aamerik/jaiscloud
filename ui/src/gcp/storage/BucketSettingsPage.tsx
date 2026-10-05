@@ -41,6 +41,7 @@ import {
   type IamPolicy,
 } from '../../api/gcp/storage'
 import { useAccount } from '../../context/AccountContext'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpTabs } from '../common/GcpTabs'
 
@@ -170,16 +171,16 @@ function LifecycleTab({ bucket }: { bucket: string }) {
         Lifecycle configuration as JSON. Example: {`{"rule":[{"action":{"type":"Delete"},"condition":{"age":30}}]}`}.
         Save an empty object to clear all rules.
       </Typography>
-      <TextField
+      <GcpCodeEditor
         value={text}
-        onChange={(e) => {
-          setText(e.target.value)
+        onChange={(value) => {
+          setText(value)
           setError('')
         }}
-        multiline
+        error={error || null}
+        language="json"
         minRows={10}
-        fullWidth
-        sx={{ '& textarea': { fontFamily: 'monospace', fontSize: 13 } }}
+        ariaLabel="Lifecycle configuration"
       />
       <Stack direction="row" spacing={1}>
         <Button variant="contained" disabled={save.isPending} onClick={onSave}>

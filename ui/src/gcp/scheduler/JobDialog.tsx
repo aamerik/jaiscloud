@@ -17,6 +17,7 @@ import {
   type JobInput,
   type SchedulerJob,
 } from '../../api/gcp/scheduler'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 
 export interface JobDialogProps {
   open: boolean
@@ -167,13 +168,12 @@ export function JobDialog({ open, onClose, job, onSaved }: JobDialogProps) {
                 placeholder="POST"
                 fullWidth
               />
-              <TextField
+              <GcpCodeEditor
                 label="Body (optional)"
                 value={input.httpBody ?? ''}
-                onChange={(e) => set('httpBody', e.target.value)}
-                multiline
+                onChange={(value) => set('httpBody', value)}
+                language="json"
                 minRows={2}
-                fullWidth
               />
             </>
           )}

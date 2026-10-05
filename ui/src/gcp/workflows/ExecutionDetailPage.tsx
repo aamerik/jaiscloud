@@ -17,6 +17,7 @@ import { Link as RouterLink, useParams } from 'react-router-dom'
 import { cancelExecution, getExecution } from '../../api/gcp/workflows'
 import { useAccount } from '../../context/AccountContext'
 import { executionStateColor, shortDate } from './util'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { GcpPageTitle } from '../common/PageTitle'
 
 /** A small label/value row for the execution overview. */
@@ -33,26 +34,10 @@ function Detail({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-/** A read-only, scrollable code block. */
+/** A read-only code block for JSON argument/result/error payloads. */
 function CodeBlock({ value }: { value?: string }) {
   if (!value) return <Typography variant="body2">—</Typography>
-  return (
-    <Box
-      component="pre"
-      sx={{
-        m: 0,
-        p: 2,
-        bgcolor: 'action.hover',
-        borderRadius: 1,
-        overflow: 'auto',
-        fontSize: 13,
-        fontFamily: 'monospace',
-        maxHeight: 320,
-      }}
-    >
-      {value}
-    </Box>
-  )
+  return <GcpCodeEditor value={value} readOnly language="json" minRows={4} ariaLabel="JSON" />
 }
 
 /** A single workflow execution: state, argument, result and error. */

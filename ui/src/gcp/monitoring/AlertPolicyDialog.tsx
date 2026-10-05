@@ -19,6 +19,7 @@ import {
   updateAlertPolicy,
   type AlertPolicy,
 } from '../../api/gcp/monitoring'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { resourceID } from './util'
 
 export interface AlertPolicyDialogProps {
@@ -101,7 +102,6 @@ export function AlertPolicyDialog({ open, onClose, initial }: AlertPolicyDialogP
           {save.isError && (
             <Alert severity="error">Could not save the policy: {(save.error as Error).message}</Alert>
           )}
-          {jsonError && <Alert severity="error">Invalid conditions JSON: {jsonError}</Alert>}
           <TextField
             autoFocus
             label="Display name"
@@ -131,14 +131,13 @@ export function AlertPolicyDialog({ open, onClose, initial }: AlertPolicyDialogP
               </MenuItem>
             ))}
           </TextField>
-          <TextField
+          <GcpCodeEditor
             label="Conditions (JSON array, optional)"
             value={conditions}
-            onChange={(e) => setConditions(e.target.value)}
-            multiline
+            onChange={setConditions}
+            error={jsonError ? `Invalid conditions JSON: ${jsonError}` : null}
+            language="json"
             minRows={3}
-            fullWidth
-            slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: 12 } } }}
           />
           <TextField
             select
