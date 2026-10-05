@@ -14,6 +14,11 @@ import {
   MenuItem,
   Paper,
   Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
   TextField,
   Tooltip,
   Typography,
@@ -33,6 +38,7 @@ import {
   type ClockState,
   type Snapshot,
 } from '../../api/admin'
+import type { ServiceDescriptor } from '../../api/services'
 import { getRuntimeHealth, type EngineHealth } from '../../api/gcp/runtime'
 import { useServices } from '../../hooks/useServices'
 import { engineModes, engineStatus } from '../../lib/engine'
@@ -344,6 +350,21 @@ function HealthRow({ label, health }: { label: string; health?: EngineHealth }) 
   )
 }
 
+/** Backend-cell tooltip: supported modes + notes + where the mode came from. */
+function backendTooltip(service: ServiceDescriptor) {
+  return (
+    <Box>
+      {engineModes(service).map((mode) => (
+        <Box key={mode.name}>
+          {mode.supported ? '✓' : '✗'} {mode.name}
+          {mode.note ? ` — ${mode.note}` : ''}
+        </Box>
+      ))}
+      {service.engine?.source && <Box sx={{ mt: 0.5 }}>via {service.engine.source}</Box>}
+    </Box>
+  )
+}
+
 /**
  * Read-only view of each engine-capable service's execution backend. The mode
  * is fixed at startup by the emulator's environment, so this reports it rather
@@ -358,6 +379,7 @@ function RuntimeCard() {
   })
   const reach = { docker: health?.docker.available, kubernetes: health?.kubernetes.available }
   const engineServices = (data?.services ?? []).filter((service) => service.engine)
+  const anyActive = engineServices.some((service) => service.engine?.active)
 
   return (
     <Panel title="Runtime">
@@ -383,57 +405,53 @@ function RuntimeCard() {
         </Alert>
       )}
       {isLoading && <CircularProgress size={20} />}
-      <Stack spacing={1.5}>
-        {engineServices.map((service) => (
-          <Box key={service.id}>
-            <Stack
-              direction="row"
-              spacing={1}
-              sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}
-            >
-              <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                {service.label}
-              </Typography>
-              <Tooltip
-                title={
-                  tierDescription(service) ??
-                  'Full fidelity — real data plane and semantics, gated against the real cloud.'
-                }
-              >
-                <Chip size="small" variant="outlined" label={tierLabel(service) ?? 'Full'} />
-              </Tooltip>
-              <Chip
-                size="small"
-                label={engineStatus(service, reach).label}
-                color={engineStatus(service, reach).color}
-              />
-              {service.engine?.source && (
-                <Typography variant="caption" color="text.secondary">
-                  via {service.engine.source}
-                </Typography>
-              )}
-            </Stack>
-            <Stack component="ul" spacing={0.25} sx={{ m: 0, mt: 0.5, pl: 2 }}>
-              {engineModes(service).map((mode) => (
-                <Typography
-                  component="li"
-                  key={mode.name}
-                  variant="caption"
-                  color={mode.supported ? 'text.secondary' : 'text.disabled'}
-                >
-                  {mode.supported ? '✓' : '✗'} {mode.name}
-                  {mode.note ? ` — ${mode.note}` : ''}
-                </Typography>
-              ))}
-            </Stack>
-          </Box>
-        ))}
-        {!isLoading && engineServices.length === 0 && (
-          <Typography variant="body2" color="text.secondary">
-            No engine-capable services are enabled.
-          </Typography>
-        )}
-      </Stack>
+      {!isLoading && engineServices.length === 0 && (
+        <Typography variant="body2" color="text.secondary">
+          No engine-capable services are enabled.
+        </Typography>
+      )}
+      {!isLoading && engineServices.length > 0 && !anyActive && (
+        <Typography variant="body2" color="text.secondary">
+          No engines configured — every service runs its mock path. Set
+          JAISCLOUD_EXECUTOR_MODE / JAISCLOUD_KAFKA_BROKER_MODE to enable one.
+        </Typography>
+      )}
+      {!isLoading && anyActive && (
+        <Table size="small" sx={{ '& th, & td': { borderBottom: 'none', py: 0.5, px: 1 } }}>
+          <TableHead>
+            <TableRow>
+              <TableCell>Service</TableCell>
+              <TableCell>Depth</TableCell>
+              <TableCell>Backend</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {engineServices.map((service) => {
+              const status = engineStatus(service, reach)
+              return (
+                <TableRow key={service.id}>
+                  <TableCell sx={{ fontWeight: 500 }}>{service.label}</TableCell>
+                  <TableCell>
+                    <Tooltip
+                      title={
+                        tierDescription(service) ??
+                        'Full fidelity — real data plane and semantics, gated against the real cloud.'
+                      }
+                    >
+                      <span>{tierLabel(service) ?? 'Full'}</span>
+                    </Tooltip>
+                  </TableCell>
+                  <TableCell>
+                    <Tooltip title={backendTooltip(service)}>
+                      <Chip size="small" label={status.label} color={status.color} />
+                    </Tooltip>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
+      )}
     </Panel>
   )
 }
