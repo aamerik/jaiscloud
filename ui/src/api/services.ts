@@ -21,6 +21,8 @@ export interface EngineMode {
 export interface Engine {
   active: boolean
   mode?: string
+  /** Where the configured mode came from (env var name or 'default'). */
+  source?: string
   modes: EngineMode[]
 }
 

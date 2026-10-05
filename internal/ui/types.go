@@ -56,6 +56,9 @@ type Engine struct {
 	// Mode is the active backend name, empty when none is configured (the
 	// service runs its mock/no-engine path).
 	Mode string `json:"mode,omitempty"`
+	// Source names where the configured mode came from (an environment variable,
+	// or "default"), for the admin Runtime view.
+	Source string `json:"source,omitempty"`
 	// Modes lists every backend with its support state and caveat, driving the
 	// console's availability matrix.
 	Modes []EngineMode `json:"modes"`

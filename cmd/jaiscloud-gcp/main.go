@@ -1346,14 +1346,23 @@ func startCmd() *cobra.Command {
 				// Report the configured engine/executor modes to the catalog so
 				// an engine-capable service is shown as engine-backed rather
 				// than shape-only (see gcpui.ServiceModes).
-				sparkExec, _ := config.ExecutorMode("spark", "mock")
-				lambdaExec, _ := config.ExecutorMode("lambda", "mock")
-				cloudRunExec, _ := config.ExecutorMode("cloudrun", "mock")
+				sparkExec, sparkSrc := config.ExecutorMode("spark", "mock")
+				lambdaExec, lambdaSrc := config.ExecutorMode("lambda", "mock")
+				cloudRunExec, cloudRunSrc := config.ExecutorMode("cloudrun", "mock")
+				kafkaBrokerMode := os.Getenv("JAISCLOUD_KAFKA_BROKER_MODE")
+				kafkaBrokerSrc := "default"
+				if kafkaBrokerMode != "" {
+					kafkaBrokerSrc = "JAISCLOUD_KAFKA_BROKER_MODE"
+				}
 				serviceModes := gcpui.ServiceModes{
-					KafkaBroker: os.Getenv("JAISCLOUD_KAFKA_BROKER_MODE"),
-					Spark:       sparkExec,
-					Lambda:      lambdaExec,
-					CloudRun:    cloudRunExec,
+					KafkaBroker:       kafkaBrokerMode,
+					KafkaBrokerSource: kafkaBrokerSrc,
+					Spark:             sparkExec,
+					SparkSource:       sparkSrc,
+					Lambda:            lambdaExec,
+					LambdaSource:      lambdaSrc,
+					CloudRun:          cloudRunExec,
+					CloudRunSource:    cloudRunSrc,
 				}
 				gcpRegistrar := gcpui.NewRegistrar(storageP, pubsubP, firestoreP, datastoreCore, computeP, dataprocUI, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, managedkafkaUI, resourceManagerCore, cfg).WithServiceModes(serviceModes)
 				uiServer, uiErr = coreui.New(gcpRegistrar, adminHandler, cfg, eventBus, version)

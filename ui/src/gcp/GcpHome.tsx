@@ -23,7 +23,6 @@ import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
 import { useFavorites } from '../hooks/useFavorites'
 import { cloudName } from '../lib/cloudNames'
-import { engineActive, engineTag } from '../lib/engine'
 import { tierLabel } from '../lib/tier'
 import { GcpServiceIcon } from './icons/GcpServiceIcon'
 import { serviceAccent } from './icons/serviceIcons'
@@ -148,8 +147,7 @@ export function GcpHome() {
   const serviceTile = (entry: NavEntry) => {
     const service = byId.get(entry.id)
     const tier = service ? tierLabel(service) : undefined
-    const engine = service ? engineTag(service) : undefined
-    const engineIsActive = service ? engineActive(service) : false
+
     return (
       <HomeTile
         key={entry.id}
@@ -159,19 +157,7 @@ export function GcpHome() {
         to={entry.path}
         onVisit={() => rememberRecentService(entry.id)}
         badge={
-          tier || engine ? (
-            <Stack direction="row" spacing={0.5}>
-              {tier && <Chip size="small" label={tier} variant="outlined" />}
-              {engine && (
-                <Chip
-                  size="small"
-                  label={engine}
-                  variant="outlined"
-                  color={engineIsActive ? 'primary' : 'default'}
-                />
-              )}
-            </Stack>
-          ) : undefined
+          tier ? <Chip size="small" label={tier} variant="outlined" /> : undefined
         }
         action={pinAction(entry.id, entry.label)}
       />

@@ -33,6 +33,8 @@ import {
   type ClockState,
   type Snapshot,
 } from '../../api/admin'
+import { useServices } from '../../hooks/useServices'
+import { engineActive, engineModes, engineTag } from '../../lib/engine'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
@@ -74,6 +76,7 @@ export function GcpAdminPage() {
           <ClockCard />
           <ResetCard />
           <ExportCard />
+          <RuntimeCard />
         </Box>
         <SnapshotsSection />
       </Stack>
@@ -309,6 +312,73 @@ function ExportCard() {
             Download export
           </Button>
         </Box>
+      </Stack>
+    </Panel>
+  )
+}
+
+/**
+ * Read-only view of each engine-capable service's execution backend. The mode
+ * is fixed at startup by the emulator's environment, so this reports it rather
+ * than offering a control.
+ */
+function RuntimeCard() {
+  const { data, isLoading, isError } = useServices()
+  const engineServices = (data?.services ?? []).filter((service) => service.engine)
+
+  return (
+    <Panel title="Runtime">
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+        Execution backends, fixed at startup by the environment. Read-only.
+      </Typography>
+      {isError && (
+        <Alert severity="error" sx={{ mb: 1 }}>
+          Failed to load services.
+        </Alert>
+      )}
+      {isLoading && <CircularProgress size={20} />}
+      <Stack spacing={1.5}>
+        {engineServices.map((service) => (
+          <Box key={service.id}>
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}
+            >
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                {service.label}
+              </Typography>
+              <Chip
+                size="small"
+                label={engineTag(service) ?? 'mock'}
+                color={engineActive(service) ? 'primary' : 'default'}
+              />
+              {service.engine?.source && (
+                <Typography variant="caption" color="text.secondary">
+                  via {service.engine.source}
+                </Typography>
+              )}
+            </Stack>
+            <Stack component="ul" spacing={0.25} sx={{ m: 0, mt: 0.5, pl: 2 }}>
+              {engineModes(service).map((mode) => (
+                <Typography
+                  component="li"
+                  key={mode.name}
+                  variant="caption"
+                  color={mode.supported ? 'text.secondary' : 'text.disabled'}
+                >
+                  {mode.supported ? '✓' : '✗'} {mode.name}
+                  {mode.note ? ` — ${mode.note}` : ''}
+                </Typography>
+              ))}
+            </Stack>
+          </Box>
+        ))}
+        {!isLoading && engineServices.length === 0 && (
+          <Typography variant="body2" color="text.secondary">
+            No engine-capable services are enabled.
+          </Typography>
+        )}
       </Stack>
     </Panel>
   )

@@ -79,6 +79,13 @@ type ServiceModes struct {
 	Spark       string // dataproc: mock (default) | docker | k8s
 	Lambda      string // functions: mock (default) | docker | k8s
 	CloudRun    string // run: mock (default) | k8s
+
+	// Sources name where each mode came from (env var or "default"), shown in
+	// the admin Runtime view.
+	KafkaBrokerSource string
+	SparkSource       string
+	LambdaSource      string
+	CloudRunSource    string
 }
 
 // WithServiceModes sets the configured engine modes the catalog reports. It is
@@ -125,8 +132,8 @@ func engineNote(engineOn bool, engine, mode, fallback string) string {
 // modes lists every backend with its support state and caveat. Mode is only
 // reported when the configured backend is real, so a mode that falls back to
 // mock (e.g. Dataproc docker) reads as "no engine".
-func engineInfo(activeMode string, realModes []string, modes []coreui.EngineMode) *coreui.Engine {
-	info := &coreui.Engine{Modes: modes}
+func engineInfo(activeMode, source string, realModes []string, modes []coreui.EngineMode) *coreui.Engine {
+	info := &coreui.Engine{Source: source, Modes: modes}
 	if engineBacked(activeMode, realModes...) {
 		info.Active = true
 		info.Mode = strings.ToLower(strings.TrimSpace(activeMode))
@@ -209,22 +216,22 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 	cloudRunOn := engineBacked(r.modes.CloudRun, "k8s")
 
 	// Structured backend availability, shown as the console's mode tag + matrix.
-	runEngine := engineInfo(r.modes.CloudRun, []string{"k8s"}, []coreui.EngineMode{
+	runEngine := engineInfo(r.modes.CloudRun, r.modes.CloudRunSource, []string{"k8s"}, []coreui.EngineMode{
 		{Name: "mock", Supported: true, Note: "stored record; no runtime"},
 		{Name: "docker", Supported: false, Note: "not scheduled"},
 		{Name: "k8s", Supported: true, Note: "Pod + ClusterIP Service, reverse-proxied"},
 	})
-	functionsEngine := engineInfo(r.modes.Lambda, []string{"docker", "k8s"}, []coreui.EngineMode{
+	functionsEngine := engineInfo(r.modes.Lambda, r.modes.LambdaSource, []string{"docker", "k8s"}, []coreui.EngineMode{
 		{Name: "mock", Supported: true, Note: "echo handler; no real execution"},
 		{Name: "docker", Supported: true, Note: "warm container pool"},
 		{Name: "k8s", Supported: true, Note: "warm Pod + Service; survives restarts"},
 	})
-	dataprocEngine := engineInfo(r.modes.Spark, []string{"k8s"}, []coreui.EngineMode{
+	dataprocEngine := engineInfo(r.modes.Spark, r.modes.SparkSource, []string{"k8s"}, []coreui.EngineMode{
 		{Name: "mock", Supported: true, Note: "jobs simulated"},
 		{Name: "docker", Supported: false, Note: "not wired; falls back to mock"},
 		{Name: "k8s", Supported: true, Note: "real Spark driver pods"},
 	})
-	kafkaEngine := engineInfo(r.modes.KafkaBroker, []string{"k8s", "native"}, []coreui.EngineMode{
+	kafkaEngine := engineInfo(r.modes.KafkaBroker, r.modes.KafkaBrokerSource, []string{"k8s", "native"}, []coreui.EngineMode{
 		{Name: "mock", Supported: true, Note: "no broker; metadata only"},
 		{Name: "k8s", Supported: true, Note: "Redpanda Pod + Service"},
 		{Name: "native", Supported: true, Note: "local rpk subprocess"},
