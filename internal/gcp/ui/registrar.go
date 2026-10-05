@@ -303,7 +303,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Cloud Run",
 			Category: "Compute",
 			RootPath: "/gcp/run/services",
-			Tier:     statusTier(cloudRunOn, coreui.TierStub),
+			Tier:     statusTier(cloudRunOn, coreui.TierShape),
 			Note:     engineNote(cloudRunOn, "K8s runtime executor", r.modes.CloudRun, "Shape only — control plane; K8s executor optional"),
 			Engine:   runEngine,
 			Children: []coreui.ServiceChild{{Label: "Services", Path: "/gcp/run/services"}},
@@ -315,7 +315,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Cloud Functions",
 			Category: "Compute",
 			RootPath: "/gcp/functions",
-			Tier:     statusTier(lambdaOn, coreui.TierStub),
+			Tier:     statusTier(lambdaOn, coreui.TierShape),
 			Note:     engineNote(lambdaOn, "code executor", r.modes.Lambda, "Shape only — GCS-source execution (Docker/K8s); no container build"),
 			Engine:   functionsEngine,
 			Children: []coreui.ServiceChild{{Label: "Functions", Path: "/gcp/functions"}},
@@ -347,7 +347,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Workflows",
 			Category: "Integration",
 			RootPath: "/gcp/workflows",
-			Tier:     coreui.TierStub,
+			Tier:     coreui.TierShape,
 			Note:     "Shape only — executions complete synchronously",
 			Children: []coreui.ServiceChild{{Label: "Workflows", Path: "/gcp/workflows"}},
 		})
@@ -358,7 +358,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Eventarc",
 			Category: "Integration",
 			RootPath: "/gcp/eventarc/triggers",
-			Tier:     coreui.TierStub,
+			Tier:     coreui.TierShape,
 			Note:     "Shape only — trigger/channel CRUD; limited delivery",
 			Children: []coreui.ServiceChild{
 				{Label: "Triggers", Path: "/gcp/eventarc/triggers"},
@@ -387,7 +387,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "BigQuery",
 			Category: "Analytics",
 			RootPath: "/gcp/bigquery/datasets",
-			Tier:     coreui.TierStub,
+			Tier:     coreui.TierShape,
 			Note:     "Shape only — documented SQL subset on an in-process engine",
 			Children: []coreui.ServiceChild{
 				{Label: "Datasets", Path: "/gcp/bigquery/datasets"},
@@ -401,7 +401,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Dataproc",
 			Category: "Analytics",
 			RootPath: "/gcp/dataproc/clusters",
-			Tier:     statusTier(sparkOn, coreui.TierStub),
+			Tier:     statusTier(sparkOn, coreui.TierShape),
 			Note:     engineNote(sparkOn, "real Spark executor", r.modes.Spark, "Shape only — Spark family; no real cluster without an executor"),
 			Engine:   dataprocEngine,
 			Children: []coreui.ServiceChild{
@@ -417,7 +417,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "IAM",
 			Category: "Security",
 			RootPath: "/gcp/iam/service-accounts",
-			Tier:     coreui.TierStub,
+			Tier:     coreui.TierShape,
 			Note:     "Shape only — authorization not enforced",
 			Children: []coreui.ServiceChild{{Label: "Service accounts", Path: "/gcp/iam/service-accounts"}},
 		})
@@ -477,7 +477,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Resource Manager",
 			Category: "Management",
 			RootPath: "/gcp/resourcemanager/projects",
-			Tier:     coreui.TierStub,
+			Tier:     coreui.TierShape,
 			Note:     "Shape only — project registry; authorization not enforced",
 			Children: []coreui.ServiceChild{{Label: "Projects", Path: "/gcp/resourcemanager/projects"}},
 		})

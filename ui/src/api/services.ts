@@ -26,13 +26,17 @@ export interface Engine {
   modes: EngineMode[]
 }
 
+/** The depth vocabulary, shared by every cloud console. */
+export const TIERS = ['full', 'metadata', 'shape'] as const
+export type Tier = (typeof TIERS)[number]
+
 export interface ServiceDescriptor {
   id: string
   label: string
   category: string
   rootPath: string
   children: ServiceChild[]
-  tier: 'full' | 'metadata' | 'stub'
+  tier: Tier
   note?: string
   engine?: Engine
 }

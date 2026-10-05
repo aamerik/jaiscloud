@@ -10,8 +10,10 @@ const (
 	TierFull = "full"
 	// TierMetadata is wire protocol + resource CRUD, but nothing executes.
 	TierMetadata = "metadata"
-	// TierStub returns plausible responses with limited operation coverage.
-	TierStub = "stub"
+	// TierShape serves the API shape and runs a partial/limited behaviour:
+	// coverage and semantics are incomplete, so real behaviour must be verified
+	// against the real cloud service.
+	TierShape = "shape"
 )
 
 // ServiceChild is a sub-page of a service (e.g. S3 → Buckets).

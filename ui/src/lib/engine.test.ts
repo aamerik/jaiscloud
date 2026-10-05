@@ -8,7 +8,7 @@ const service = (over: Partial<ServiceDescriptor> = {}): ServiceDescriptor => ({
   category: 'Analytics',
   rootPath: '/gcp/dataproc/clusters',
   children: [],
-  tier: 'stub',
+  tier: 'shape',
   ...over,
 })
 

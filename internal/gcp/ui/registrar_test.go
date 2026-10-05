@@ -197,7 +197,7 @@ func TestRegistrar_BigQueryAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "bigquery" || got.RootPath != "/gcp/bigquery/datasets" || got.Tier != "stub" {
+	if got.ID != "bigquery" || got.RootPath != "/gcp/bigquery/datasets" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 2 {
@@ -212,7 +212,7 @@ func TestRegistrar_RunAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "run" || got.RootPath != "/gcp/run/services" || got.Tier != "stub" {
+	if got.ID != "run" || got.RootPath != "/gcp/run/services" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 1 || got.Children[0].Path != "/gcp/run/services" {
@@ -257,7 +257,7 @@ func TestRegistrar_WorkflowsAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "workflows" || got.RootPath != "/gcp/workflows" || got.Tier != "stub" {
+	if got.ID != "workflows" || got.RootPath != "/gcp/workflows" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 1 || got.Children[0].Path != "/gcp/workflows" {
@@ -272,7 +272,7 @@ func TestRegistrar_EventarcAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "eventarc" || got.RootPath != "/gcp/eventarc/triggers" || got.Tier != "stub" {
+	if got.ID != "eventarc" || got.RootPath != "/gcp/eventarc/triggers" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 2 {
@@ -287,7 +287,7 @@ func TestRegistrar_IAMAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "iam" || got.RootPath != "/gcp/iam/service-accounts" || got.Tier != "stub" {
+	if got.ID != "iam" || got.RootPath != "/gcp/iam/service-accounts" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 1 || got.Children[0].Path != "/gcp/iam/service-accounts" {
@@ -362,7 +362,7 @@ func TestRegistrar_FunctionsAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "functions" || got.RootPath != "/gcp/functions" || got.Tier != "stub" {
+	if got.ID != "functions" || got.RootPath != "/gcp/functions" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 1 || got.Children[0].Path != "/gcp/functions" {
@@ -377,7 +377,7 @@ func TestRegistrar_DataprocAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "dataproc" || got.RootPath != "/gcp/dataproc/clusters" || got.Tier != "stub" {
+	if got.ID != "dataproc" || got.RootPath != "/gcp/dataproc/clusters" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 3 {
@@ -441,7 +441,7 @@ func TestRegistrar_ResourceManagerAdvertisedAndMounted(t *testing.T) {
 	}
 	got := services[0]
 	if got.ID != "resourcemanager" || got.Label != "Resource Manager" || got.Category != "Management" ||
-		got.RootPath != "/gcp/resourcemanager/projects" || got.Tier != "stub" {
+		got.RootPath != "/gcp/resourcemanager/projects" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 1 || got.Children[0].Path != "/gcp/resourcemanager/projects" {
@@ -488,8 +488,8 @@ func TestRegistrar_TiersPinnedToImplementationMatrix(t *testing.T) {
 		seen[service.ID] = true
 		switch {
 		case stub[service.ID]:
-			if service.Tier != "stub" {
-				t.Errorf("%s: tier = %q, want %q", service.ID, service.Tier, "stub")
+			if service.Tier != "shape" {
+				t.Errorf("%s: tier = %q, want %q", service.ID, service.Tier, "shape")
 			}
 			if service.Note == "" {
 				t.Errorf("%s: non-full service should carry a note", service.ID)
@@ -558,7 +558,7 @@ func TestRegistrar_EngineModesUpgradeTier(t *testing.T) {
 		if tiers["functions"] != "full" {
 			t.Errorf("functions: tier = %q, want full under docker", tiers["functions"])
 		}
-		for id, want := range map[string]string{"dataproc": "stub", "run": "stub", "managedkafka": "metadata"} {
+		for id, want := range map[string]string{"dataproc": "shape", "run": "shape", "managedkafka": "metadata"} {
 			if tiers[id] != want {
 				t.Errorf("%s: tier = %q, want %q (docker unsupported)", id, tiers[id], want)
 			}

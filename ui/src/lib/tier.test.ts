@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ServiceDescriptor } from '../api/services'
+import { TIERS, type ServiceDescriptor } from '../api/services'
 import { tierDescription, tierLabel } from './tier'
 
 const service = (over: Partial<ServiceDescriptor> = {}): ServiceDescriptor => ({
@@ -19,7 +19,16 @@ describe('tierLabel', () => {
 
   it('labels metadata-only and shape-only services', () => {
     expect(tierLabel(service({ tier: 'metadata' }))).toBe('Metadata only')
-    expect(tierLabel(service({ tier: 'stub' }))).toBe('Shape only')
+    expect(tierLabel(service({ tier: 'shape' }))).toBe('Shape only')
+  })
+
+  // Every tier the API can return is handled: full has no badge, the others do.
+  it('covers the whole tier vocabulary', () => {
+    for (const tier of TIERS) {
+      const label = tierLabel(service({ tier }))
+      if (tier === 'full') expect(label).toBeUndefined()
+      else expect(label).toBeTruthy()
+    }
   })
 })
 
@@ -33,16 +42,16 @@ describe('tierDescription', () => {
     expect(metadata).toContain('nothing ever runs here')
     expect(metadata).toContain('(no data plane)')
 
-    const stub = tierDescription(service({ tier: 'stub', note: 'shape only' }))
-    expect(stub).toContain('partial version of the real behaviour')
-    expect(stub).toContain('(shape only)')
+    const shape = tierDescription(service({ tier: 'shape', note: 'shape only' }))
+    expect(shape).toContain('partial version of the real behaviour')
+    expect(shape).toContain('(shape only)')
   })
 
   // The labels/descriptions are shared by the AWS, Azure and GCP consoles, so
   // they must not name a specific cloud.
   it('is cloud-neutral', () => {
-    for (const tier of ['metadata', 'stub'] as const) {
-      expect(tierDescription(service({ tier }))).not.toMatch(/GCP|AWS|Azure/)
+    for (const tier of TIERS) {
+      expect(tierDescription(service({ tier })) ?? '').not.toMatch(/GCP|AWS|Azure/)
     }
   })
 })
