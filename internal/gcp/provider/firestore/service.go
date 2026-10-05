@@ -285,6 +285,9 @@ func (s *Service) CreateDocument(ctx context.Context, project, database, path, d
 		return firestorestore.Document{}, err
 	}
 	name := docName(project, database, path+"/"+docID)
+	if err := validateDocumentName(name); err != nil {
+		return firestorestore.Document{}, err
+	}
 	if err := validateFields(fields); err != nil {
 		return firestorestore.Document{}, err
 	}
@@ -314,6 +317,9 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 		return firestorestore.Document{}, err
 	}
 	name := docName(project, database, path)
+	if err := validateDocumentName(name); err != nil {
+		return firestorestore.Document{}, err
+	}
 	if err := validateFields(fields); err != nil {
 		return firestorestore.Document{}, err
 	}
@@ -375,6 +381,9 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 // precondition is set (then it is validated first).
 func (s *Service) DeleteDocument(ctx context.Context, project, database, path string, pre *firestorestore.Precondition) error {
 	name := docName(project, database, path)
+	if err := validateDocumentName(name); err != nil {
+		return err
+	}
 	if pre != nil {
 		existing, err := s.store.GetDocument(ctx, name)
 		exists := err == nil
@@ -686,6 +695,9 @@ func (s *Service) buildWrites(ctx context.Context, wire []*writeWire, now time.T
 
 		switch {
 		case w.Delete != "":
+			if err := validateDocumentName(w.Delete); err != nil {
+				return nil, nil, nil, err
+			}
 			writes = append(writes, firestorestore.Write{Name: w.Delete, Precondition: pre})
 			results = append(results, map[string]any{}) // no updateTime after delete
 
@@ -724,6 +736,9 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 	now = now.Truncate(time.Microsecond)
 	if dw.Name == "" {
 		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, model.NewProviderError("InvalidArgument", "update document name is required", 400)
+	}
+	if err := validateDocumentName(dw.Name); err != nil {
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
 	}
 	if err := validateFields(dw.Fields); err != nil {
 		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
@@ -801,6 +816,9 @@ func (s *Service) buildTransform(ctx context.Context, tw *documentTransformWire,
 	now = now.Truncate(time.Microsecond)
 	if tw.Document == "" {
 		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, model.NewProviderError("InvalidArgument", "transform document name is required", 400)
+	}
+	if err := validateDocumentName(tw.Document); err != nil {
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
 	}
 	existing, err := s.store.GetDocument(ctx, tw.Document)
 	exists := err == nil

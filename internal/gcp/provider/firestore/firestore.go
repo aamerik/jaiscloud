@@ -36,6 +36,13 @@ const (
 	maxStringBytes = (1 << 20) - 89 // 1,048,487 bytes
 	// autoIDLength is the length of a server-generated document ID.
 	autoIDLength = 20
+	// maxDocumentNameBytes is the Firestore document-name byte limit (6 KiB).
+	maxDocumentNameBytes = 6 << 10 // 6,144 bytes
+	// maxSubcollectionDepth is the maximum number of collection levels a
+	// document path may have (Firestore "Maximum depth of subcollections").
+	// The official Firestore emulator rejects a 101-collection path with
+	// 400 INVALID_ARGUMENT ("Key path is too long. Cannot exceed 100 elements.").
+	maxSubcollectionDepth = 100
 )
 
 // autoIDAlphabet is the alphabet Firestore uses for auto-generated document IDs.
@@ -291,6 +298,42 @@ func validateDocumentID(id string) error {
 	}
 	if reservedNameRe.MatchString(id) {
 		return model.NewProviderError("InvalidArgument", "document id "+id+" is reserved", 400)
+	}
+	return nil
+}
+
+// validateDocumentName enforces the Firestore limits that apply to every write
+// target, for both the REST and gRPC transports (the shared Service calls it):
+// the name must be a well-formed database document name, no longer than 6 KiB,
+// and no deeper than 100 collection levels. Real Firestore (and the official
+// emulator, for the depth limit) rejects a violating name with 400
+// INVALID_ARGUMENT.
+func validateDocumentName(name string) error {
+	// Reject an over-long name before splitting so a multi-megabyte request body
+	// cannot force a large allocation first.
+	if len(name) > maxDocumentNameBytes {
+		return model.NewProviderError("InvalidArgument", "document name exceeds maximum size of 6 KiB", 400)
+	}
+	_, _, path, ok := firestorestore.ParseDocumentName(name)
+	if !ok {
+		return model.NewProviderError("InvalidArgument", "invalid document name", 400)
+	}
+	// A document path alternates collection/document segments, so the number of
+	// collection levels is half the segment count; the root collection is the
+	// first level. An empty path, an odd segment count, or an empty segment is
+	// not a document.
+	segs := splitRelativePath(path)
+	if len(segs) == 0 || len(segs)%2 != 0 {
+		return model.NewProviderError("InvalidArgument", "invalid document name", 400)
+	}
+	for _, seg := range segs {
+		if seg == "" {
+			return model.NewProviderError("InvalidArgument", "document name contains an empty path element", 400)
+		}
+	}
+	if levels := len(segs) / 2; levels > maxSubcollectionDepth {
+		return model.NewProviderError("InvalidArgument",
+			"document path exceeds maximum depth of "+strconv.Itoa(maxSubcollectionDepth)+" collections", 400)
 	}
 	return nil
 }
