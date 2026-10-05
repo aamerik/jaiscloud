@@ -1,10 +1,22 @@
-import type { ServiceDescriptor } from '../api/services'
+import type { ServiceDescriptor, Tier } from '../api/services'
+
+/** Human name for each tier, shared by every cloud console. */
+export const TIER_NAMES: Record<Tier, string> = {
+  full: 'Full',
+  metadata: 'Metadata only',
+  shape: 'Shape only',
+}
+
+/** One-line meaning of each tier, for legends and tooltips. */
+export const TIER_SUMMARY: Record<Tier, string> = {
+  full: 'Real data plane and semantics, gated against the real cloud.',
+  metadata: 'Resource records only; nothing executes.',
+  shape: 'Serves the API and runs a partial behaviour; verify against the real cloud.',
+}
 
 /** Short label for a non-full service tier, or undefined for full services. */
 export function tierLabel(service: ServiceDescriptor): string | undefined {
-  if (service.tier === 'metadata') return 'Metadata only'
-  if (service.tier === 'shape') return 'Shape only'
-  return undefined
+  return service.tier === 'full' ? undefined : TIER_NAMES[service.tier]
 }
 
 /** Longer explanation for the page-level notice on non-full services. */
