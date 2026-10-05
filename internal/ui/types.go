@@ -4,16 +4,25 @@
 // by a Registrar implementation (see internal/aws/ui for the AWS registrar).
 package ui
 
-// Tiers describe how faithfully a service is emulated.
+// Tiers describe how faithfully a service is emulated, ordered by depth:
+// full > shape > metadata. Every cloud's catalog (internal/aws/ui for AWS/Azure,
+// internal/gcp/ui for GCP) must use exactly these values with this meaning — the
+// rule applies across clouds, not per-cloud taste:
+//
+//   - TierFull — the real data plane and semantics, gated against the real
+//     cloud. The only tier that may claim behaviour, not just shape.
+//   - TierShape — a wire-conformant control plane plus a partial behaviour;
+//     coverage and semantics are incomplete, so behaviour must be verified
+//     against the real cloud service.
+//   - TierMetadata — wire protocol and resource CRUD only; nothing executes.
+//
+// The consoles render full as no badge, and the others as "Shape only" /
+// "Metadata only" (ui/src/lib/tier.ts). Do not add a value or a fourth meaning
+// without updating every catalog and those shared labels.
 const (
-	// TierFull is real business logic (wire protocol + behavior).
-	TierFull = "full"
-	// TierMetadata is wire protocol + resource CRUD, but nothing executes.
+	TierFull     = "full"
 	TierMetadata = "metadata"
-	// TierShape serves the API shape and runs a partial/limited behaviour:
-	// coverage and semantics are incomplete, so real behaviour must be verified
-	// against the real cloud service.
-	TierShape = "shape"
+	TierShape    = "shape"
 )
 
 // ServiceChild is a sub-page of a service (e.g. S3 → Buckets).
