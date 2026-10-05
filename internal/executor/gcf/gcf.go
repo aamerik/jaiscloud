@@ -50,9 +50,11 @@ func (FunctionsFrameworkProfile) InvocationPort() int { return functionsPort }
 
 // Invocation builds the POST to the Functions Framework root. For a CloudEvent
 // invocation the event metadata is carried in the ce-* headers (binary content
-// mode); otherwise the raw payload is the HTTP request body.
+// mode) and the event data is the HTTP request body; otherwise the raw payload
+// is the HTTP request body.
 func (p FunctionsFrameworkProfile) Invocation(req container.Request) container.Invocation {
 	header := map[string]string{"Content-Type": "application/json"}
+	body := req.Payload
 	if req.SignatureType == SignatureCloudEvent && req.Event != nil {
 		ev := req.Event
 		specVersion := ev.SpecVersion
@@ -78,8 +80,14 @@ func (p FunctionsFrameworkProfile) Invocation(req container.Request) container.I
 		if ev.DataContentType != "" {
 			header["Content-Type"] = ev.DataContentType
 		}
+		// In binary content mode the event data is the body. Fall back to the
+		// request payload only when the caller supplied no event data (e.g. an
+		// HTTP body routed through a CloudEvent-signed function).
+		if len(ev.Data) > 0 {
+			body = ev.Data
+		}
 	}
-	return container.Invocation{Method: http.MethodPost, Path: functionsPath, Header: header, Body: req.Payload}
+	return container.Invocation{Method: http.MethodPost, Path: functionsPath, Header: header, Body: body}
 }
 
 // DecodeResponse returns the framework's response body, mapping an HTTP >= 500

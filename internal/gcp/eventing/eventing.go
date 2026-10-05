@@ -14,6 +14,8 @@ package eventing
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -61,6 +63,86 @@ func EventarcSubscriptionID(location, triggerID string) string {
 // pairing is discoverable in topics.list / subscriptions.list (FP2).
 func EventarcTopicID(location, triggerID string) string {
 	return "eventarc-" + location + "-" + triggerID
+}
+
+// FunctionTriggerID is the deterministic Eventarc trigger id the emulator
+// provisions for a Cloud Functions event trigger (real GCP materializes one
+// Eventarc trigger per event-triggered function). Both the Eventarc provisioner
+// and the Cloud Functions delivery engine use it, so the backing trigger name
+// and the CloudEvent's subscription reference cannot drift.
+func FunctionTriggerID(functionID string) string {
+	return "functions-" + functionID
+}
+
+// PubSubSource builds the CloudEvent source of a Pub/Sub message-published
+// event for a source resource ("projects/{project}/topics/{topic}"):
+// //pubsub.googleapis.com/projects/{project}/topics/{topic}. Both the Eventarc
+// dispatcher and the Cloud Functions delivery engine emit it, so the two
+// cannot drift.
+func PubSubSource(resource string) string {
+	return "//pubsub.googleapis.com/" + resource
+}
+
+// StorageSource builds the CloudEvent source of a Cloud Storage object event
+// for a source resource ("projects/_/buckets/{bucket}"):
+// //storage.googleapis.com/projects/_/buckets/{bucket}. Shared by the Eventarc
+// dispatcher and the Cloud Functions delivery engine.
+func StorageSource(resource string) string {
+	return "//storage.googleapis.com/" + resource
+}
+
+// StorageCloudEventType maps a Cloud Storage object event type onto the
+// Eventarc CloudEvents spelling a receiver sees
+// (google.cloud.storage.object.v1.finalized | ...deleted), normalizing the
+// producer's v1/v2 spelling first. A type with no Eventarc spelling is returned
+// normalized. Shared by the Eventarc dispatcher and the Cloud Functions
+// delivery engine.
+func StorageCloudEventType(eventType string) string {
+	switch NormalizeEventType(eventType) {
+	case TypeStorageFinalize:
+		return "google.cloud.storage.object.v1.finalized"
+	case TypeStorageDelete:
+		return "google.cloud.storage.object.v1.deleted"
+	}
+	return NormalizeEventType(eventType)
+}
+
+// StorageObjectSubject returns the CloudEvent `subject` of a Cloud Storage
+// object event ("objects/{object}") from the event's objectId attribute, or ""
+// when the event carries no object name (the attribute may be absent on an
+// aggregated/prefix event). Real Eventarc sets subject to the object's name
+// prefixed with "objects/".
+func StorageObjectSubject(attributes map[string]string) string {
+	if object := attributes["objectId"]; object != "" {
+		return "objects/" + object
+	}
+	return ""
+}
+
+// PubSubMessagePublished builds the MessagePublishedData JSON body real gen2
+// Cloud Functions and Eventarc deliver as the data of a
+// google.cloud.pubsub.topic.v1.messagePublished CloudEvent: the message
+// (messageId, publishTime, base64 data, attributes) wrapped with the full
+// resource name of the subscription it arrived on. data may be empty for an
+// attributes-only message. Shared by the Eventarc dispatcher and the Cloud
+// Functions delivery engine so the envelope cannot drift.
+func PubSubMessagePublished(messageID string, publishTime time.Time, data []byte, attributes map[string]string, subscription string) []byte {
+	message := map[string]any{
+		"messageId":   messageID,
+		"publishTime": publishTime.UTC().Format(time.RFC3339Nano),
+	}
+	if len(data) > 0 {
+		message["data"] = base64.StdEncoding.EncodeToString(data)
+	}
+	if len(attributes) > 0 {
+		message["attributes"] = attributes
+	}
+	payload := map[string]any{
+		"message":      message,
+		"subscription": subscription,
+	}
+	body, _ := json.Marshal(payload)
+	return body
 }
 
 // Source identifies the producer that raised an Event.

@@ -2,7 +2,10 @@ package eventing
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"testing"
+	"time"
 )
 
 // recordingDispatcher counts the events it receives.
@@ -113,5 +116,82 @@ func TestResourceID(t *testing.T) {
 		if got := ResourceID(in); got != want {
 			t.Errorf("ResourceID(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestStorageCloudEventType covers the shared Cloud Storage CloudEvent type
+// mapping (used by both the Eventarc dispatcher and the Cloud Functions
+// delivery engine) across every accepted spelling.
+func TestStorageCloudEventType(t *testing.T) {
+	cases := map[string]string{
+		TypeStorageFinalize:                        "google.cloud.storage.object.v1.finalized",
+		"google.cloud.storage.object.v1.finalized": "google.cloud.storage.object.v1.finalized",
+		TypeStorageDelete:                          "google.cloud.storage.object.v1.deleted",
+		"google.cloud.storage.object.v1.deleted":   "google.cloud.storage.object.v1.deleted",
+		"example.custom.event":                     "example.custom.event",
+	}
+	for in, want := range cases {
+		if got := StorageCloudEventType(in); got != want {
+			t.Errorf("StorageCloudEventType(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCloudEventSources(t *testing.T) {
+	if got := PubSubSource("projects/p/topics/t"); got != "//pubsub.googleapis.com/projects/p/topics/t" {
+		t.Errorf("PubSubSource = %q", got)
+	}
+	if got := StorageSource("projects/_/buckets/b"); got != "//storage.googleapis.com/projects/_/buckets/b" {
+		t.Errorf("StorageSource = %q", got)
+	}
+	if got := FunctionTriggerID("fn"); got != "functions-fn" {
+		t.Errorf("FunctionTriggerID = %q", got)
+	}
+}
+
+func TestStorageObjectSubject(t *testing.T) {
+	if got := StorageObjectSubject(map[string]string{"objectId": "dir/obj.txt"}); got != "objects/dir/obj.txt" {
+		t.Errorf("StorageObjectSubject = %q, want objects/dir/obj.txt", got)
+	}
+	if got := StorageObjectSubject(nil); got != "" {
+		t.Errorf("StorageObjectSubject(nil) = %q, want empty", got)
+	}
+}
+
+// TestPubSubMessagePublished covers the shared MessagePublishedData builder both
+// the Eventarc dispatcher and the Cloud Functions delivery engine use.
+func TestPubSubMessagePublished(t *testing.T) {
+	when := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	body := PubSubMessagePublished("m1", when, []byte("hi"), map[string]string{"k": "v"}, "projects/p/subscriptions/s")
+	var got struct {
+		Message struct {
+			MessageID   string            `json:"messageId"`
+			PublishTime string            `json:"publishTime"`
+			Data        string            `json:"data"`
+			Attributes  map[string]string `json:"attributes"`
+		} `json:"message"`
+		Subscription string `json:"subscription"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("envelope: %v (%s)", err, body)
+	}
+	if got.Message.MessageID != "m1" || got.Message.PublishTime != when.Format(time.RFC3339Nano) {
+		t.Fatalf("message = %+v", got.Message)
+	}
+	if got.Message.Data != base64.StdEncoding.EncodeToString([]byte("hi")) || got.Message.Attributes["k"] != "v" {
+		t.Fatalf("message data/attrs = %+v", got.Message)
+	}
+	if got.Subscription != "projects/p/subscriptions/s" {
+		t.Fatalf("subscription = %q", got.Subscription)
+	}
+	// An attributes-only message omits data.
+	var empty struct {
+		Message map[string]any `json:"message"`
+	}
+	if err := json.Unmarshal(PubSubMessagePublished("m2", when, nil, nil, "s"), &empty); err != nil {
+		t.Fatalf("empty envelope: %v", err)
+	}
+	if _, ok := empty.Message["data"]; ok {
+		t.Fatalf("attributes-only message should omit data: %+v", empty.Message)
 	}
 }
