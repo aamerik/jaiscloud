@@ -242,7 +242,7 @@ export function GcpHome() {
       {pinned.length > 0 && (
         <>
           <Typography variant="h6" sx={{ mt: 4, mb: 1.5 }}>
-            Pinned
+            Pinned services
           </Typography>
           <Box sx={TILE_GRID}>{pinned.map(serviceTile)}</Box>
         </>
@@ -251,7 +251,7 @@ export function GcpHome() {
       {recentEntries.length > 0 && (
         <>
           <Typography variant="h6" sx={{ mt: 4, mb: 1.5 }}>
-            Recent
+            Recent services
           </Typography>
           <Box sx={TILE_GRID}>{recentEntries.map(serviceTile)}</Box>
         </>
@@ -263,8 +263,11 @@ export function GcpHome() {
         </Alert>
       )}
 
-      <Typography variant="h6" sx={{ mt: 4, mb: 1.5 }}>
-        Resources
+      <Typography variant="h6" sx={{ mt: 4, mb: 0.5 }}>
+        Resource types
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+        Resource types the console can summarize, with live counts.
       </Typography>
 
       {services.length === 0 ? (
