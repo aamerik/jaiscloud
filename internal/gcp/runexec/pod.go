@@ -17,6 +17,10 @@ import (
 // defaultContainerPort is injected when a revision template omits a port.
 const defaultContainerPort = 8080
 
+// envVar is a transport-neutral environment variable, consumed by both the k8s
+// Pod builder and the docker container builder.
+type envVar struct{ name, value string }
+
 // workloadName returns the deterministic, DNS-safe name shared by a revision's
 // Pod and ClusterIP Service. The hash keeps it stable and collision-free while
 // the sanitized service id keeps it debuggable.
@@ -53,10 +57,11 @@ func sanitizeDNSLabel(s string) string {
 // buildPod renders a revision's Pod spec from its stored template. It returns
 // the pod and the container port the ClusterIP Service must expose.
 func buildPod(svc runstore.Service, rev runstore.Revision, name, namespace string) (*corev1.Pod, int32, error) {
-	image, command, args, env, resources, port, err := containerSpec(svc, rev)
+	image, command, args, env, port, err := containerTemplate(svc, rev)
 	if err != nil {
 		return nil, 0, err
 	}
+	resources := resourceRequirements(firstContainer(rev)["resources"])
 	labels := map[string]string{
 		labelApp:      labelAppValue,
 		labelInstance: rev.ID,
@@ -72,7 +77,7 @@ func buildPod(svc runstore.Service, rev runstore.Revision, name, namespace strin
 				Image:     image,
 				Command:   command,
 				Args:      args,
-				Env:       env,
+				Env:       corev1Env(env),
 				Ports:     []corev1.ContainerPort{{Name: "http", ContainerPort: port}},
 				Resources: resources,
 			}},
@@ -81,54 +86,81 @@ func buildPod(svc runstore.Service, rev runstore.Revision, name, namespace strin
 	return pod, port, nil
 }
 
-// containerSpec extracts the fields the emulator models from the first
-// container of a revision template. Cloud Run always injects PORT/K_SERVICE/
-// K_REVISION/K_CONFIGURATION; those override any template-supplied value.
-func containerSpec(svc runstore.Service, rev runstore.Revision) (image string, command, args []string, env []corev1.EnvVar, resources corev1.ResourceRequirements, port int32, err error) {
-	containers, _ := rev.Data["containers"].([]any)
-	if len(containers) == 0 {
-		return "", nil, nil, nil, corev1.ResourceRequirements{}, 0, fmt.Errorf("cloudrun: revision %s has no container template", rev.ID)
+// containerTemplate extracts the fields the emulator models from the first
+// container of a revision template, with Cloud Run's injected PORT/K_SERVICE/
+// K_REVISION/K_CONFIGURATION environment applied (those override any
+// template-supplied value of the same name). It is transport-neutral so the k8s
+// and docker managers share one parse and cannot drift.
+func containerTemplate(svc runstore.Service, rev runstore.Revision) (image string, command, args []string, env []envVar, port int32, err error) {
+	c := firstContainer(rev)
+	if c == nil {
+		return "", nil, nil, nil, 0, fmt.Errorf("cloudrun: revision %s has no container template", rev.ID)
 	}
-	c, _ := containers[0].(map[string]any)
 	image, _ = c["image"].(string)
 	if image == "" {
-		return "", nil, nil, nil, corev1.ResourceRequirements{}, 0, fmt.Errorf("cloudrun: revision %s requires a container image", rev.ID)
+		return "", nil, nil, nil, 0, fmt.Errorf("cloudrun: revision %s requires a container image", rev.ID)
 	}
 	command = stringSlice(c["command"])
 	args = stringSlice(c["args"])
 	port = containerPort(c)
-	resources = resourceRequirements(c["resources"])
-	env = mergeEnv(envVars(c["env"]), corev1.EnvVar{Name: envPort, Value: fmt.Sprint(port)},
-		corev1.EnvVar{Name: envService, Value: svc.ID},
-		corev1.EnvVar{Name: envRevision, Value: rev.ID},
-		corev1.EnvVar{Name: envConfiguration, Value: svc.ID},
-	)
-	return image, command, args, env, resources, port, nil
+	env = mergeEnvVars(templateEnvVars(c["env"]), runtimeEnv(svc, rev, port)...)
+	return image, command, args, env, port, nil
 }
 
-// mergeEnv appends platform env after the template's, with the platform value
-// winning a duplicate name so the injected Cloud Run variables are authoritative.
-func mergeEnv(template []corev1.EnvVar, platform ...corev1.EnvVar) []corev1.EnvVar {
-	out := make([]corev1.EnvVar, 0, len(template)+len(platform))
+// firstContainer returns the first container object of a revision template, or
+// nil when the template is missing/empty.
+func firstContainer(rev runstore.Revision) map[string]any {
+	containers, _ := rev.Data["containers"].([]any)
+	if len(containers) == 0 {
+		return nil
+	}
+	c, _ := containers[0].(map[string]any)
+	return c
+}
+
+// runtimeEnv is the Cloud Run environment injected into every revision
+// container; these override any template-supplied value of the same name.
+func runtimeEnv(svc runstore.Service, rev runstore.Revision, port int32) []envVar {
+	return []envVar{
+		{envPort, fmt.Sprint(port)},
+		{envService, svc.ID},
+		{envRevision, rev.ID},
+		{envConfiguration, svc.ID},
+	}
+}
+
+// mergeEnvVars appends platform env after the template's, with the platform
+// value winning a duplicate name so the injected Cloud Run variables are
+// authoritative.
+func mergeEnvVars(template []envVar, platform ...envVar) []envVar {
+	out := make([]envVar, 0, len(template)+len(platform))
 	index := map[string]int{}
 	for _, e := range template {
-		index[e.Name] = len(out)
+		index[e.name] = len(out)
 		out = append(out, e)
 	}
 	for _, e := range platform {
-		if i, ok := index[e.Name]; ok {
+		if i, ok := index[e.name]; ok {
 			out[i] = e
 			continue
 		}
-		index[e.Name] = len(out)
+		index[e.name] = len(out)
 		out = append(out, e)
 	}
 	return out
 }
 
-func envVars(v any) []corev1.EnvVar {
+func corev1Env(env []envVar) []corev1.EnvVar {
+	out := make([]corev1.EnvVar, 0, len(env))
+	for _, e := range env {
+		out = append(out, corev1.EnvVar{Name: e.name, Value: e.value})
+	}
+	return out
+}
+
+func templateEnvVars(v any) []envVar {
 	list, _ := v.([]any)
-	out := make([]corev1.EnvVar, 0, len(list))
+	out := make([]envVar, 0, len(list))
 	for _, item := range list {
 		m, ok := item.(map[string]any)
 		if !ok {
@@ -139,7 +171,7 @@ func envVars(v any) []corev1.EnvVar {
 			continue
 		}
 		value, _ := m["value"].(string)
-		out = append(out, corev1.EnvVar{Name: name, Value: value})
+		out = append(out, envVar{name: name, value: value})
 	}
 	return out
 }
@@ -188,6 +220,23 @@ func resourceList(v any) corev1.ResourceList {
 		return nil
 	}
 	return out
+}
+
+// memoryBytesFromResources returns a container's memory limit (or request) in
+// bytes, or 0 when unset/unparseable. Docker's HostConfig.Memory consumes it.
+func memoryBytesFromResources(v any) int64 {
+	m, _ := v.(map[string]any)
+	for _, key := range []string{"limits", "requests"} {
+		inner, _ := m[key].(map[string]any)
+		s, _ := inner["memory"].(string)
+		if s == "" {
+			continue
+		}
+		if q, err := resource.ParseQuantity(s); err == nil {
+			return q.Value()
+		}
+	}
+	return 0
 }
 
 func stringSlice(v any) []string {

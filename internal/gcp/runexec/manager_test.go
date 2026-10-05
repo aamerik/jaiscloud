@@ -50,11 +50,7 @@ func TestEnsureRevisionRegistersAndRemoveServiceSweeps(t *testing.T) {
 
 	host := normalizeHost(runcore.InvocationAuthority("p", "l", "svc"))
 	svcName := runcore.ServiceName("p", "l", "svc")
-	m.mu.RLock()
-	_, hostOK := m.byHost[host]
-	_, svcOK := m.byService[svcName]
-	m.mu.RUnlock()
-	if !hostOK || !svcOK {
+	if hostOK, svcOK := m.reg.lookup(svcName, host); !hostOK || !svcOK {
 		t.Fatalf("registry missing target: byHost=%v byService=%v", hostOK, svcOK)
 	}
 
@@ -64,10 +60,7 @@ func TestEnsureRevisionRegistersAndRemoveServiceSweeps(t *testing.T) {
 	if _, err := client.CoreV1().Pods("jaiscloud").Get(ctx, name, metav1.GetOptions{}); err == nil {
 		t.Error("revision pod survived RemoveService")
 	}
-	m.mu.RLock()
-	_, svcOK = m.byService[svcName]
-	m.mu.RUnlock()
-	if svcOK {
+	if _, svcOK := m.reg.lookup(svcName, host); svcOK {
 		t.Error("service still registered after RemoveService")
 	}
 }
@@ -93,9 +86,7 @@ func TestRemoveRevisionDeregistersOnlyWhenLatest(t *testing.T) {
 	if _, err := client.CoreV1().Pods("jaiscloud").Get(ctx, workloadName(svc, rev1), metav1.GetOptions{}); err == nil {
 		t.Error("old revision pod survived RemoveRevision")
 	}
-	m.mu.RLock()
-	tgt := m.byService[runcore.ServiceName("p", "l", "svc")]
-	m.mu.RUnlock()
+	tgt := m.reg.serviceTarget(runcore.ServiceName("p", "l", "svc"))
 	if tgt == nil || tgt.revision != rev2.ID {
 		t.Fatalf("latest target = %+v, want revision %s", tgt, rev2.ID)
 	}
@@ -123,11 +114,9 @@ func TestManagerInvokeProxyStatusMapping(t *testing.T) {
 	tgt := &target{
 		serviceName: runcore.ServiceName("p", "l", "svc"),
 		revision:    "svc-00001",
-		host:        normalizeHost(host),
 		backend:     upstream.URL,
 	}
-	m.byHost[normalizeHost(host)] = tgt
-	m.byService[tgt.serviceName] = tgt
+	m.reg.put(tgt.serviceName, normalizeHost(host), tgt)
 
 	ctx := context.Background()
 	inv, err := m.Invoke(ctx, runcore.InvocationRequest{Host: host, Method: http.MethodGet, Path: "/", Query: "a=1"})
@@ -186,11 +175,9 @@ func TestManagerResetClearsAndSweeps(t *testing.T) {
 
 	m.Reset(ctx)
 
-	m.mu.RLock()
-	if len(m.byHost) != 0 || len(m.byService) != 0 {
-		t.Errorf("registry not cleared: %v / %v", m.byHost, m.byService)
+	if hosts, services := m.reg.size(); hosts != 0 || services != 0 {
+		t.Errorf("registry not cleared: %d hosts / %d services", hosts, services)
 	}
-	m.mu.RUnlock()
 	if _, err := client.CoreV1().Pods("jaiscloud").Get(ctx, workloadName(svc, rev), metav1.GetOptions{}); err == nil {
 		t.Error("revision pod survived Reset")
 	}
