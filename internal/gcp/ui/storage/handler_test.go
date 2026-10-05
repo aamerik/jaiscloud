@@ -195,6 +195,56 @@ func TestDeleteBucket_PassesName(t *testing.T) {
 	}
 }
 
+// TestPathParams_DecodePercentEncoding covers UI17: the console client
+// percent-encodes the bucket path segment (encodeURIComponent), and chi leaves
+// characters Go treats as path-safe ('+', '&', ':') escaped unless the handler
+// decodes via uihelper.Segment. Bucket routes must see the decoded name, not
+// the raw escape.
+func TestPathParams_DecodePercentEncoding(t *testing.T) {
+	cases := []struct {
+		name string
+		verb string
+		path string
+		body string
+		want string
+	}{
+		{"get +", http.MethodGet, "/buckets/a%2Bb", "", "a+b"},
+		{"delete &", http.MethodDelete, "/buckets/a%26b", "", "a&b"},
+		{"iam :", http.MethodGet, "/buckets/a%3Ab/iam", "", "a:b"},
+		{"objects +", http.MethodGet, "/buckets/a%2Bb/objects", "", "a+b"},
+		{"versioning :", http.MethodPut, "/buckets/a%3Ab/versioning", `{"enabled":true}`, "a:b"},
+		{"acl &", http.MethodGet, "/buckets/a%26b/acl", "", "a&b"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &mockProvider{}
+			w := do(t, mock, tc.verb, tc.path, tc.body)
+			if w.Code != http.StatusOK && w.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 200/204: %s", w.Code, w.Body.String())
+			}
+			if got := mock.lastNR.Params["bucket"]; got != tc.want {
+				t.Fatalf("bucket param = %v, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPathParams_RejectsDecodedSlash: a decoded '/' would smuggle a second path
+// segment into the bucket name, so the handler rejects it with 400 before
+// calling the provider.
+func TestPathParams_RejectsDecodedSlash(t *testing.T) {
+	for _, path := range []string{"/buckets/a%2Fb", "/buckets/a%2Fb/objects", "/buckets/a%2Fb/iam", "/buckets/a%2Fb/objects/iam"} {
+		mock := &mockProvider{}
+		w := do(t, mock, http.MethodGet, path, "")
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400", path, w.Code)
+		}
+		if mock.lastNR != nil {
+			t.Fatalf("%s: provider called with %+v", path, mock.lastNR)
+		}
+	}
+}
+
 func TestListObjects_ReturnsItemsAndPrefixes(t *testing.T) {
 	mock := &mockProvider{resp: &model.ProviderResponse{
 		HTTPStatus: 200,

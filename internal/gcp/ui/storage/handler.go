@@ -8,8 +8,6 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gcp/ui/uihelper"
 	"jaiscloud/internal/gcp/wire"
@@ -33,6 +31,17 @@ func (h *Handler) account(r *http.Request) string {
 		return a
 	}
 	return h.cfg.AccountID
+}
+
+// bucketParam returns the decoded single-segment bucket name, or writes 400 and
+// reports false. A decoded '/' is rejected: bucket names are one path segment.
+func bucketParam(w http.ResponseWriter, r *http.Request) (string, bool) {
+	name, ok := uihelper.Segment(r, "bucket")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid bucket name", http.StatusBadRequest)
+		return "", false
+	}
+	return name, true
 }
 
 func str(m map[string]any, key string) string {
@@ -134,7 +143,10 @@ func (h *Handler) CreateBucket(w http.ResponseWriter, r *http.Request) {
 
 // GET /buckets/{bucket}
 func (h *Handler) GetBucket(w http.ResponseWriter, r *http.Request) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "storage", "Storage.BucketsGet", "global", account)
 	nr.Params["bucket"] = bucket
@@ -149,7 +161,10 @@ func (h *Handler) GetBucket(w http.ResponseWriter, r *http.Request) {
 
 // DELETE /buckets/{bucket}
 func (h *Handler) DeleteBucket(w http.ResponseWriter, r *http.Request) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "storage", "Storage.BucketsDelete", "global", account)
 	nr.Params["bucket"] = bucket
@@ -212,7 +227,10 @@ func (h *Handler) PutBucketRetention(w http.ResponseWriter, r *http.Request) {
 
 // POST /buckets/{bucket}/retention/lock
 func (h *Handler) LockBucketRetention(w http.ResponseWriter, r *http.Request) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "storage", "Storage.BucketsLockRetentionPolicy", "global", account)
 	nr.Params["bucket"] = bucket
@@ -242,7 +260,10 @@ func (h *Handler) PutDefaultEventBasedHold(w http.ResponseWriter, r *http.Reques
 // writeBucketField fetches the bucket and returns just the named field so the
 // UI can read versioning/lifecycle/retentionPolicy without the full resource.
 func (h *Handler) writeBucketField(w http.ResponseWriter, r *http.Request, field string) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "storage", "Storage.BucketsGet", "global", account)
 	nr.Params["bucket"] = bucket
@@ -257,7 +278,10 @@ func (h *Handler) writeBucketField(w http.ResponseWriter, r *http.Request, field
 
 // updateBucket applies a partial bucket update via Storage.BucketsUpdate.
 func (h *Handler) updateBucket(w http.ResponseWriter, r *http.Request, body map[string]any) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "storage", "Storage.BucketsUpdate", "global", account)
 	nr.Params["bucket"] = bucket
@@ -275,7 +299,10 @@ func (h *Handler) updateBucket(w http.ResponseWriter, r *http.Request, body map[
 
 // GET /buckets/{bucket}/objects[?versions=true&prefix=&delimiter=&pageToken=&maxResults=]
 func (h *Handler) ListObjects(w http.ResponseWriter, r *http.Request) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "storage", "Storage.ObjectsList", "global", account)
 	nr.Params["bucket"] = bucket
@@ -320,7 +347,10 @@ func (h *Handler) ListObjects(w http.ResponseWriter, r *http.Request) {
 
 // PUT /buckets/{bucket}/objects?name=<object>  (raw body = object bytes)
 func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	object := r.URL.Query().Get("name")
 	if object == "" {
 		uihelper.UIError(w, "BadRequest", "name is required", http.StatusBadRequest)
@@ -354,7 +384,10 @@ func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
 
 // GET /buckets/{bucket}/objects/metadata?name=<object>&generation=<g>
 func (h *Handler) GetObject(w http.ResponseWriter, r *http.Request) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	object := r.URL.Query().Get("name")
 	if object == "" {
 		uihelper.UIError(w, "BadRequest", "name is required", http.StatusBadRequest)
@@ -378,7 +411,10 @@ func (h *Handler) GetObject(w http.ResponseWriter, r *http.Request) {
 
 // GET /buckets/{bucket}/objects/download?name=<object>&generation=<g>
 func (h *Handler) DownloadObject(w http.ResponseWriter, r *http.Request) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	object := r.URL.Query().Get("name")
 	if object == "" {
 		uihelper.UIError(w, "BadRequest", "name is required", http.StatusBadRequest)
@@ -415,7 +451,10 @@ func (h *Handler) DownloadObject(w http.ResponseWriter, r *http.Request) {
 
 // PATCH /buckets/{bucket}/objects?name=<object>&generation=<g>
 func (h *Handler) PatchObject(w http.ResponseWriter, r *http.Request) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	object := r.URL.Query().Get("name")
 	if object == "" {
 		uihelper.UIError(w, "BadRequest", "name is required", http.StatusBadRequest)
@@ -433,7 +472,10 @@ func (h *Handler) PatchObject(w http.ResponseWriter, r *http.Request) {
 
 // DELETE /buckets/{bucket}/objects?name=<object>&generation=<g>
 func (h *Handler) DeleteObject(w http.ResponseWriter, r *http.Request) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	object := r.URL.Query().Get("name")
 	if object == "" {
 		uihelper.UIError(w, "BadRequest", "name is required", http.StatusBadRequest)
@@ -456,7 +498,10 @@ func (h *Handler) DeleteObject(w http.ResponseWriter, r *http.Request) {
 
 // POST /buckets/{bucket}/objects/restore?name=<object>&generation=<g>
 func (h *Handler) RestoreObject(w http.ResponseWriter, r *http.Request) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	object := r.URL.Query().Get("name")
 	generation := r.URL.Query().Get("generation")
 	if object == "" || generation == "" {
@@ -500,7 +545,10 @@ func (h *Handler) objectWrite(w http.ResponseWriter, r *http.Request, action, bu
 
 // GET /buckets/{bucket}/iam
 func (h *Handler) GetBucketIam(w http.ResponseWriter, r *http.Request) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "storage", "Storage.BucketsGetIamPolicy", "global", account)
 	nr.Params["bucket"] = bucket
@@ -515,7 +563,10 @@ func (h *Handler) GetBucketIam(w http.ResponseWriter, r *http.Request) {
 
 // PUT /buckets/{bucket}/iam
 func (h *Handler) PutBucketIam(w http.ResponseWriter, r *http.Request) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	body, ok := h.decodeIamBody(w, r)
 	if !ok {
 		return
@@ -580,7 +631,10 @@ func (h *Handler) PutObjectIam(w http.ResponseWriter, r *http.Request) {
 
 // GET /buckets/{bucket}/acl
 func (h *Handler) ListBucketACL(w http.ResponseWriter, r *http.Request) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	account := h.account(r)
 	nr := uihelper.NR(r.Context(), h.cfg, "storage", "Storage.BucketACLList", "global", account)
 	nr.Params["bucket"] = bucket
@@ -595,7 +649,10 @@ func (h *Handler) ListBucketACL(w http.ResponseWriter, r *http.Request) {
 
 // POST /buckets/{bucket}/acl
 func (h *Handler) InsertBucketACL(w http.ResponseWriter, r *http.Request) {
-	bucket := chi.URLParam(r, "bucket")
+	bucket, ok := bucketParam(w, r)
+	if !ok {
+		return
+	}
 	body, ok := h.decodeACLBody(w, r)
 	if !ok {
 		return
@@ -660,7 +717,10 @@ func (h *Handler) InsertObjectACL(w http.ResponseWriter, r *http.Request) {
 
 // bucketObject reads the bucket path param and the object query param.
 func (h *Handler) bucketObject(w http.ResponseWriter, r *http.Request) (bucket, object string, ok bool) {
-	bucket = chi.URLParam(r, "bucket")
+	bucket, ok = bucketParam(w, r)
+	if !ok {
+		return bucket, "", false
+	}
 	object = r.URL.Query().Get("name")
 	if object == "" {
 		uihelper.UIError(w, "BadRequest", "name is required", http.StatusBadRequest)
