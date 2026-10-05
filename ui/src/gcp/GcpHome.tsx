@@ -22,8 +22,9 @@ import { useAccount } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
 import { useFavorites } from '../hooks/useFavorites'
+import { TIERS, type Tier } from '../api/services'
 import { cloudName } from '../lib/cloudNames'
-import { tierLabel } from '../lib/tier'
+import { TIER_NAMES, TIER_SUMMARY, tierLabel } from '../lib/tier'
 import { GcpServiceIcon } from './icons/GcpServiceIcon'
 import { serviceAccent } from './icons/serviceIcons'
 import { ProjectPickerDialog } from './chrome/ProjectPicker'
@@ -107,6 +108,12 @@ export function GcpHome() {
 
   const project = accountId || meta?.accountId || '—'
 
+  const coverage = useMemo(() => {
+    const counts: Record<Tier, number> = { full: 0, metadata: 0, shape: 0 }
+    for (const service of services) counts[service.tier] += 1
+    return counts
+  }, [services])
+
   const groups = useMemo(
     () => buildNavGroups(services, favorites, recent, ''),
     [services, favorites, recent],
@@ -147,6 +154,7 @@ export function GcpHome() {
   const serviceTile = (entry: NavEntry) => {
     const service = byId.get(entry.id)
     const tier = service ? tierLabel(service) : undefined
+
     return (
       <HomeTile
         key={entry.id}
@@ -207,6 +215,25 @@ export function GcpHome() {
           </Stack>
         </CardContent>
       </Card>
+
+      {services.length > 0 && (
+        <Box sx={{ mt: 3 }}>
+          <Typography variant="overline" color="text.secondary">
+            Service coverage
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ mt: 0.5, flexWrap: 'wrap', rowGap: 0.5 }}>
+            {TIERS.map((tier) => (
+              <Tooltip key={tier} title={TIER_SUMMARY[tier]}>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`${TIER_NAMES[tier]} (${coverage[tier]})`}
+                />
+              </Tooltip>
+            ))}
+          </Stack>
+        </Box>
+      )}
 
       {pinned.length > 0 && (
         <>

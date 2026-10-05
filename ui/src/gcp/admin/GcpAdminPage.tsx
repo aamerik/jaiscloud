@@ -33,6 +33,10 @@ import {
   type ClockState,
   type Snapshot,
 } from '../../api/admin'
+import { getRuntimeHealth, type EngineHealth } from '../../api/gcp/runtime'
+import { useServices } from '../../hooks/useServices'
+import { engineModes, engineStatus } from '../../lib/engine'
+import { tierLabel } from '../../lib/tier'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
@@ -74,6 +78,7 @@ export function GcpAdminPage() {
           <ClockCard />
           <ResetCard />
           <ExportCard />
+          <RuntimeCard />
         </Box>
         <SnapshotsSection />
       </Stack>
@@ -309,6 +314,123 @@ function ExportCard() {
             Download export
           </Button>
         </Box>
+      </Stack>
+    </Panel>
+  )
+}
+
+function HealthRow({ label, health }: { label: string; health?: EngineHealth }) {
+  return (
+    <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 0.25 }}>
+      <Typography variant="body2" sx={{ fontWeight: 500, minWidth: 88 }}>
+        {label}
+      </Typography>
+      {health ? (
+        <Chip
+          size="small"
+          color={health.available ? 'success' : 'default'}
+          variant={health.available ? 'filled' : 'outlined'}
+          label={health.available ? 'reachable' : 'unreachable'}
+        />
+      ) : (
+        <Chip size="small" variant="outlined" label="checking…" />
+      )}
+      {health?.detail && (
+        <Typography variant="caption" color="text.secondary">
+          {health.detail}
+        </Typography>
+      )}
+    </Stack>
+  )
+}
+
+/**
+ * Read-only view of each engine-capable service's execution backend. The mode
+ * is fixed at startup by the emulator's environment, so this reports it rather
+ * than offering a control.
+ */
+function RuntimeCard() {
+  const { data, isLoading, isError } = useServices()
+  const { data: health } = useQuery({
+    queryKey: ['gcp', 'runtime', 'health'],
+    queryFn: getRuntimeHealth,
+    refetchInterval: 15000,
+  })
+  const reach = { docker: health?.docker.available, kubernetes: health?.kubernetes.available }
+  const engineServices = (data?.services ?? []).filter((service) => service.engine)
+
+  return (
+    <Panel title="Runtime">
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+        Host engine liveness and per-service execution backends. Read-only — the
+        mode is fixed at startup by the environment.
+      </Typography>
+
+      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+        Host engines
+      </Typography>
+      <Stack spacing={0.5} sx={{ mb: 2 }}>
+        <HealthRow label="Docker" health={health?.docker} />
+        <HealthRow label="Kubernetes" health={health?.kubernetes} />
+      </Stack>
+
+      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+        Service backends
+      </Typography>
+      {isError && (
+        <Alert severity="error" sx={{ mb: 1 }}>
+          Failed to load services.
+        </Alert>
+      )}
+      {isLoading && <CircularProgress size={20} />}
+      <Stack spacing={1.5}>
+        {engineServices.map((service) => (
+          <Box key={service.id}>
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}
+            >
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                {service.label}
+              </Typography>
+              <Chip
+                size="small"
+                variant="outlined"
+                label={tierLabel(service) ?? 'Full'}
+                title="Depth: what the emulator can be trusted to prove"
+              />
+              <Chip
+                size="small"
+                label={engineStatus(service, reach).label}
+                color={engineStatus(service, reach).color}
+              />
+              {service.engine?.source && (
+                <Typography variant="caption" color="text.secondary">
+                  via {service.engine.source}
+                </Typography>
+              )}
+            </Stack>
+            <Stack component="ul" spacing={0.25} sx={{ m: 0, mt: 0.5, pl: 2 }}>
+              {engineModes(service).map((mode) => (
+                <Typography
+                  component="li"
+                  key={mode.name}
+                  variant="caption"
+                  color={mode.supported ? 'text.secondary' : 'text.disabled'}
+                >
+                  {mode.supported ? '✓' : '✗'} {mode.name}
+                  {mode.note ? ` — ${mode.note}` : ''}
+                </Typography>
+              ))}
+            </Stack>
+          </Box>
+        ))}
+        {!isLoading && engineServices.length === 0 && (
+          <Typography variant="body2" color="text.secondary">
+            No engine-capable services are enabled.
+          </Typography>
+        )}
       </Stack>
     </Panel>
   )

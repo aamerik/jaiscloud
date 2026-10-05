@@ -68,7 +68,7 @@ export function GcpGlobalSearch() {
         navigate(option.path)
       }}
       size="small"
-      sx={{ width: '100%', maxWidth: 720 }}
+      sx={{ width: '100%', maxWidth: 600 }}
       renderGroup={(params) => (
         <li key={params.key}>
           <Typography
@@ -95,6 +95,7 @@ export function GcpGlobalSearch() {
       renderInput={(params) => (
         <TextField
           {...params}
+          size="small"
           inputRef={inputRef}
           placeholder="Search JaisCloud"
           slotProps={{
@@ -106,12 +107,23 @@ export function GcpGlobalSearch() {
                   <SearchIcon fontSize="small" sx={{ color: 'text.secondary' }} />
                 </InputAdornment>
               ),
-              sx: {
-                backgroundColor: '#f1f3f4',
+              // The AppBar sets color: inherit, so an explicit theme-aware
+              // background + text colour is required for the pill to be legible
+              // in both appearances (a hardcoded light pill rendered near-white
+              // text on light gray in dark mode).
+              sx: (theme) => ({
+                backgroundColor:
+                  theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.08)' : '#f1f3f4',
                 borderRadius: 1,
+                color: theme.palette.text.primary,
+                '& input': { color: theme.palette.text.primary, fontSize: 14 },
+                '& input::placeholder': { color: theme.palette.text.secondary, opacity: 1 },
                 '& fieldset': { border: 'none' },
-                '&:hover': { backgroundColor: '#e8eaed' },
-              },
+                '&:hover': {
+                  backgroundColor:
+                    theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.14)' : '#e8eaed',
+                },
+              }),
             },
             htmlInput: { ...params.slotProps.htmlInput, 'aria-label': 'Search services' },
           }}

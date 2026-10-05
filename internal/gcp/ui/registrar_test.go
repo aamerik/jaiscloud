@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -34,6 +35,7 @@ import (
 	workflowsui "jaiscloud/internal/gcp/ui/workflows"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
+	coreui "jaiscloud/internal/ui"
 )
 
 // fakeStorage satisfies storage.ProviderInterface via an embedded (nil)
@@ -180,7 +182,7 @@ func TestRegistrar_ComputeAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "compute" || got.RootPath != "/gcp/compute/instances" || got.Tier != "full" {
+	if got.ID != "compute" || got.RootPath != "/gcp/compute/instances" || got.Tier != "metadata" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 1 || got.Children[0].Path != "/gcp/compute/instances" {
@@ -195,7 +197,7 @@ func TestRegistrar_BigQueryAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "bigquery" || got.RootPath != "/gcp/bigquery/datasets" || got.Tier != "full" {
+	if got.ID != "bigquery" || got.RootPath != "/gcp/bigquery/datasets" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 2 {
@@ -210,7 +212,7 @@ func TestRegistrar_RunAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "run" || got.RootPath != "/gcp/run/services" || got.Tier != "full" {
+	if got.ID != "run" || got.RootPath != "/gcp/run/services" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 1 || got.Children[0].Path != "/gcp/run/services" {
@@ -255,7 +257,7 @@ func TestRegistrar_WorkflowsAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "workflows" || got.RootPath != "/gcp/workflows" || got.Tier != "full" {
+	if got.ID != "workflows" || got.RootPath != "/gcp/workflows" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 1 || got.Children[0].Path != "/gcp/workflows" {
@@ -270,7 +272,7 @@ func TestRegistrar_EventarcAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "eventarc" || got.RootPath != "/gcp/eventarc/triggers" || got.Tier != "full" {
+	if got.ID != "eventarc" || got.RootPath != "/gcp/eventarc/triggers" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 2 {
@@ -285,7 +287,7 @@ func TestRegistrar_IAMAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "iam" || got.RootPath != "/gcp/iam/service-accounts" || got.Tier != "full" {
+	if got.ID != "iam" || got.RootPath != "/gcp/iam/service-accounts" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 1 || got.Children[0].Path != "/gcp/iam/service-accounts" {
@@ -360,7 +362,7 @@ func TestRegistrar_FunctionsAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "functions" || got.RootPath != "/gcp/functions" || got.Tier != "full" {
+	if got.ID != "functions" || got.RootPath != "/gcp/functions" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 1 || got.Children[0].Path != "/gcp/functions" {
@@ -375,7 +377,7 @@ func TestRegistrar_DataprocAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "dataproc" || got.RootPath != "/gcp/dataproc/clusters" || got.Tier != "full" {
+	if got.ID != "dataproc" || got.RootPath != "/gcp/dataproc/clusters" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 3 {
@@ -390,7 +392,7 @@ func TestRegistrar_ManagedKafkaAdvertised(t *testing.T) {
 		t.Fatalf("Services() = %d entries, want 1", len(services))
 	}
 	got := services[0]
-	if got.ID != "managedkafka" || got.RootPath != "/gcp/managedkafka/clusters" || got.Tier != "full" {
+	if got.ID != "managedkafka" || got.RootPath != "/gcp/managedkafka/clusters" || got.Tier != "metadata" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 2 {
@@ -439,7 +441,7 @@ func TestRegistrar_ResourceManagerAdvertisedAndMounted(t *testing.T) {
 	}
 	got := services[0]
 	if got.ID != "resourcemanager" || got.Label != "Resource Manager" || got.Category != "Management" ||
-		got.RootPath != "/gcp/resourcemanager/projects" || got.Tier != "full" {
+		got.RootPath != "/gcp/resourcemanager/projects" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
 	if len(got.Children) != 1 || got.Children[0].Path != "/gcp/resourcemanager/projects" {
@@ -453,6 +455,164 @@ func TestRegistrar_ResourceManagerAdvertisedAndMounted(t *testing.T) {
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ui/v1/gcp/resourcemanager/projects", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("mounted list status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRegistrar_TiersPinnedToImplementationMatrix pins every descriptor's tier
+// to the documented behavioural depth (docs/GCP-TESTABILITY.md §5), which the
+// console renders as the per-service emulation-status badge. Shape-only services
+// use the `stub` tier and every non-full service must carry a note. Changing
+// this set is an intentional capability change.
+func TestRegistrar_TiersPinnedToImplementationMatrix(t *testing.T) {
+	stub := map[string]bool{
+		"run": true, "functions": true, "workflows": true, "eventarc": true,
+		"bigquery": true, "dataproc": true, "iam": true, "resourcemanager": true,
+	}
+	metadata := map[string]bool{"compute": true, "managedkafka": true}
+
+	reg := NewRegistrar(
+		fakeStorage{}, fakePubSub{}, fakeFirestore{}, fakeDatastore{}, fakeCompute{},
+		fakeDataproc{}, fakeBigQuery{}, fakeRun{}, fakeScheduler{}, fakeIAM{},
+		fakeKMS{}, fakeSecret{}, fakeLogging{}, fakeMonitoring{}, fakeTasks{},
+		fakeWorkflows{}, fakeEventarc{}, fakeFunctions{}, fakeManagedKafka{},
+		resourcemanagercore.NewService(store.NewMemoryResourceStore()), &config.Config{},
+	)
+
+	services := reg.Services()
+	if len(services) != 20 {
+		t.Fatalf("Services() = %d entries, want 20", len(services))
+	}
+
+	seen := map[string]bool{}
+	for _, service := range services {
+		seen[service.ID] = true
+		switch {
+		case stub[service.ID]:
+			if service.Tier != "shape" {
+				t.Errorf("%s: tier = %q, want %q", service.ID, service.Tier, "shape")
+			}
+			if service.Note == "" {
+				t.Errorf("%s: non-full service should carry a note", service.ID)
+			}
+		case metadata[service.ID]:
+			if service.Tier != "metadata" {
+				t.Errorf("%s: tier = %q, want %q", service.ID, service.Tier, "metadata")
+			}
+			if service.Note == "" {
+				t.Errorf("%s: non-full service should carry a note", service.ID)
+			}
+		default:
+			if service.Tier != "full" {
+				t.Errorf("%s: tier = %q, want %q (add to stub/metadata if intentional)", service.ID, service.Tier, "full")
+			}
+		}
+	}
+	for id := range stub {
+		if !seen[id] {
+			t.Errorf("stub service %q missing from descriptors", id)
+		}
+	}
+	for id := range metadata {
+		if !seen[id] {
+			t.Errorf("metadata service %q missing from descriptors", id)
+		}
+	}
+}
+
+// Configuring a real engine upgrades an otherwise shape-only service to full
+// with a note naming the engine, mirroring the AWS executorNote behaviour. Each
+// service honours only the modes it actually supports (Dataproc/Cloud Run do
+// not support docker).
+func TestRegistrar_EngineModesUpgradeTier(t *testing.T) {
+	engineReg := func(modes ServiceModes) (tiers, notes map[string]string) {
+		t.Helper()
+		reg := NewRegistrar(
+			nil, nil, nil, nil, nil, fakeDataproc{}, nil, fakeRun{}, nil, nil,
+			nil, nil, nil, nil, nil, nil, nil, fakeFunctions{}, fakeManagedKafka{},
+			nil, &config.Config{},
+		).WithServiceModes(modes)
+		tiers, notes = map[string]string{}, map[string]string{}
+		for _, service := range reg.Services() {
+			tiers[service.ID] = service.Tier
+			notes[service.ID] = service.Note
+		}
+		return tiers, notes
+	}
+
+	t.Run("k8s upgrades every engine service", func(t *testing.T) {
+		tiers, notes := engineReg(ServiceModes{KafkaBroker: "k8s", Spark: "k8s", Lambda: "k8s", CloudRun: "k8s"})
+		for _, id := range []string{"managedkafka", "dataproc", "functions", "run"} {
+			if tiers[id] != "full" {
+				t.Errorf("%s: tier = %q, want full with an engine configured", id, tiers[id])
+			}
+			if !strings.Contains(notes[id], "Engine-backed") {
+				t.Errorf("%s: note = %q, want an engine-backed note", id, notes[id])
+			}
+		}
+	})
+
+	t.Run("docker only upgrades functions", func(t *testing.T) {
+		// Dataproc and Cloud Run do not support docker (they fall back to
+		// mock); only Lambda executes real code under docker.
+		tiers, _ := engineReg(ServiceModes{KafkaBroker: "docker", Spark: "docker", Lambda: "docker", CloudRun: "docker"})
+		if tiers["functions"] != "full" {
+			t.Errorf("functions: tier = %q, want full under docker", tiers["functions"])
+		}
+		for id, want := range map[string]string{"dataproc": "shape", "run": "shape", "managedkafka": "metadata"} {
+			if tiers[id] != want {
+				t.Errorf("%s: tier = %q, want %q (docker unsupported)", id, tiers[id], want)
+			}
+		}
+	})
+}
+
+// The structured Engine field drives the console's mode tag + availability
+// matrix, and Tier must never depend on the orchestrator: docker and k8s are
+// interchangeable implementations of one executor seam.
+func TestRegistrar_EngineDescriptorAndOrchestratorParity(t *testing.T) {
+	regFor := func(modes ServiceModes) *Registrar {
+		return NewRegistrar(
+			nil, nil, nil, nil, nil, fakeDataproc{}, nil, fakeRun{}, nil, nil,
+			nil, nil, nil, nil, nil, nil, nil, fakeFunctions{}, fakeManagedKafka{},
+			nil, &config.Config{},
+		).WithServiceModes(modes)
+	}
+	descriptor := func(modes ServiceModes, id string) coreui.ServiceDescriptor {
+		t.Helper()
+		for _, service := range regFor(modes).Services() {
+			if service.ID == id {
+				return service
+			}
+		}
+		t.Fatalf("%s not advertised", id)
+		return coreui.ServiceDescriptor{}
+	}
+
+	// Dataproc docker is unwired: it must read as inactive with an unsupported
+	// docker backend (falls back to mock), not as engine-backed.
+	dataproc := descriptor(ServiceModes{Spark: "docker"}, "dataproc")
+	if dataproc.Engine == nil {
+		t.Fatal("dataproc: Engine is nil")
+	}
+	if dataproc.Engine.Active || dataproc.Engine.Mode != "" {
+		t.Errorf("dataproc docker: active=%v mode=%q, want inactive", dataproc.Engine.Active, dataproc.Engine.Mode)
+	}
+	if len(dataproc.Engine.Modes) != 3 || dataproc.Engine.Modes[1].Name != "docker" || dataproc.Engine.Modes[1].Supported {
+		t.Errorf("dataproc backends = %+v, want docker unsupported", dataproc.Engine.Modes)
+	}
+
+	// A k8s engine reads as active with the mode reported.
+	kafka := descriptor(ServiceModes{KafkaBroker: "native"}, "managedkafka")
+	if kafka.Engine == nil || !kafka.Engine.Active || kafka.Engine.Mode != "native" {
+		t.Errorf("managedkafka native engine = %+v, want active native", kafka.Engine)
+	}
+
+	// Same service, two supported orchestrators -> identical tier (no depth by
+	// orchestrator).
+	dockerTier := descriptor(ServiceModes{Lambda: "docker"}, "functions").Tier
+	k8sTier := descriptor(ServiceModes{Lambda: "k8s"}, "functions").Tier
+	if dockerTier != k8sTier || dockerTier != "full" {
+		t.Errorf("functions tier docker=%q k8s=%q, want identical 'full'", dockerTier, k8sTier)
 	}
 }
 

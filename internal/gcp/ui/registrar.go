@@ -8,6 +8,8 @@ package ui
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -63,6 +65,80 @@ type Registrar struct {
 	// enumerates (created + configured projects). It is nil when the service is
 	// disabled, in which case only the configured accounts are reported.
 	resourcemanager *resourcemanagercore.Service
+	// modes reports the configured engine/executor modes so the console status
+	// reflects what is actually running (see ServiceModes).
+	modes ServiceModes
+}
+
+// ServiceModes reports the configured engine/executor modes that upgrade an
+// otherwise shape-only service to an engine-backed one. An empty or "mock"
+// value means no engine. main.go resolves these once from the environment and
+// the executor config.
+type ServiceModes struct {
+	KafkaBroker string // managedkafka: mock (default) | k8s | native
+	Spark       string // dataproc: mock (default) | docker | k8s
+	Lambda      string // functions: mock (default) | docker | k8s
+	CloudRun    string // run: mock (default) | k8s
+
+	// Sources name where each mode came from (env var or "default"), shown in
+	// the admin Runtime view.
+	KafkaBrokerSource string
+	SparkSource       string
+	LambdaSource      string
+	CloudRunSource    string
+}
+
+// WithServiceModes sets the configured engine modes the catalog reports. It is
+// optional; the zero value reports every engine-capable service as if no engine
+// were configured.
+func (r *Registrar) WithServiceModes(modes ServiceModes) *Registrar {
+	r.modes = modes
+	return r
+}
+
+// engineBacked reports whether mode selects a real engine. allowed is the set
+// of modes the service actually honours; every other value (including a mode
+// that silently falls back to mock, e.g. Dataproc's unsupported docker mode)
+// reports no engine.
+func engineBacked(mode string, allowed ...string) bool {
+	m := strings.ToLower(strings.TrimSpace(mode))
+	for _, a := range allowed {
+		if m == a {
+			return true
+		}
+	}
+	return false
+}
+
+// statusTier returns the full tier when an engine is configured, else fallback.
+func statusTier(engineOn bool, fallback string) string {
+	if engineOn {
+		return coreui.TierFull
+	}
+	return fallback
+}
+
+// engineNote describes an engine-backed service, or returns the shape-only
+// fallback when no engine is configured.
+func engineNote(engineOn bool, engine, mode, fallback string) string {
+	if engineOn {
+		return fmt.Sprintf("Engine-backed — %s (%s)", engine, mode)
+	}
+	return fallback
+}
+
+// engineInfo builds the structured backend info for an engine-capable service.
+// realModes is the set of modes that actually run an engine (deciding Active);
+// modes lists every backend with its support state and caveat. Mode is only
+// reported when the configured backend is real, so a mode that falls back to
+// mock (e.g. Dataproc docker) reads as "no engine".
+func engineInfo(activeMode, source string, realModes []string, modes []coreui.EngineMode) *coreui.Engine {
+	info := &coreui.Engine{Source: source, Modes: modes}
+	if engineBacked(activeMode, realModes...) {
+		info.Active = true
+		info.Mode = strings.ToLower(strings.TrimSpace(activeMode))
+	}
+	return info
 }
 
 // NewRegistrar returns the GCP UI registrar. A nil provider leaves that
@@ -128,6 +204,38 @@ func (r *Registrar) Cloud() model.Cloud { return model.CloudGCP }
 // are advertised.
 func (r *Registrar) Services() []coreui.ServiceDescriptor {
 	services := make([]coreui.ServiceDescriptor, 0, 16)
+
+	// Engine-capable services report full fidelity when a real engine is
+	// configured, and their documented shape-only/metadata status otherwise.
+	// Each service honours a specific set of engine modes: Kafka k8s/native,
+	// Spark k8s only (docker falls back to mock), Lambda docker/k8s, Cloud Run
+	// k8s only.
+	kafkaOn := engineBacked(r.modes.KafkaBroker, "k8s", "native")
+	sparkOn := engineBacked(r.modes.Spark, "k8s")
+	lambdaOn := engineBacked(r.modes.Lambda, "docker", "k8s")
+	cloudRunOn := engineBacked(r.modes.CloudRun, "k8s")
+
+	// Structured backend availability, shown as the console's mode tag + matrix.
+	runEngine := engineInfo(r.modes.CloudRun, r.modes.CloudRunSource, []string{"k8s"}, []coreui.EngineMode{
+		{Name: "mock", Supported: true, Note: "stored record; no runtime"},
+		{Name: "docker", Supported: false, Note: "not scheduled"},
+		{Name: "k8s", Supported: true, Note: "Pod + ClusterIP Service, reverse-proxied"},
+	})
+	functionsEngine := engineInfo(r.modes.Lambda, r.modes.LambdaSource, []string{"docker", "k8s"}, []coreui.EngineMode{
+		{Name: "mock", Supported: true, Note: "echo handler; no real execution"},
+		{Name: "docker", Supported: true, Note: "warm container pool"},
+		{Name: "k8s", Supported: true, Note: "warm Pod + Service; survives restarts"},
+	})
+	dataprocEngine := engineInfo(r.modes.Spark, r.modes.SparkSource, []string{"k8s"}, []coreui.EngineMode{
+		{Name: "mock", Supported: true, Note: "jobs simulated"},
+		{Name: "docker", Supported: false, Note: "not wired; falls back to mock"},
+		{Name: "k8s", Supported: true, Note: "real Spark driver pods"},
+	})
+	kafkaEngine := engineInfo(r.modes.KafkaBroker, r.modes.KafkaBrokerSource, []string{"k8s", "native"}, []coreui.EngineMode{
+		{Name: "mock", Supported: true, Note: "no broker; metadata only"},
+		{Name: "k8s", Supported: true, Note: "Redpanda Pod + Service"},
+		{Name: "native", Supported: true, Note: "local rpk subprocess"},
+	})
 	if r.storage != nil {
 		services = append(services, coreui.ServiceDescriptor{
 			ID:       "storage",
@@ -184,7 +292,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Compute Engine",
 			Category: "Compute",
 			RootPath: "/gcp/compute/instances",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierMetadata,
+			Note:     "Metadata only — no VM/disk/network data plane",
 			Children: []coreui.ServiceChild{{Label: "Instances", Path: "/gcp/compute/instances"}},
 		})
 	}
@@ -194,7 +303,9 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Cloud Run",
 			Category: "Compute",
 			RootPath: "/gcp/run/services",
-			Tier:     coreui.TierFull,
+			Tier:     statusTier(cloudRunOn, coreui.TierShape),
+			Note:     engineNote(cloudRunOn, "K8s runtime executor", r.modes.CloudRun, "Shape only — control plane; K8s executor optional"),
+			Engine:   runEngine,
 			Children: []coreui.ServiceChild{{Label: "Services", Path: "/gcp/run/services"}},
 		})
 	}
@@ -204,7 +315,9 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Cloud Functions",
 			Category: "Compute",
 			RootPath: "/gcp/functions",
-			Tier:     coreui.TierFull,
+			Tier:     statusTier(lambdaOn, coreui.TierShape),
+			Note:     engineNote(lambdaOn, "code executor", r.modes.Lambda, "Shape only — GCS-source execution (Docker/K8s); no container build"),
+			Engine:   functionsEngine,
 			Children: []coreui.ServiceChild{{Label: "Functions", Path: "/gcp/functions"}},
 		})
 	}
@@ -234,7 +347,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Workflows",
 			Category: "Integration",
 			RootPath: "/gcp/workflows",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierShape,
+			Note:     "Shape only — executions complete synchronously",
 			Children: []coreui.ServiceChild{{Label: "Workflows", Path: "/gcp/workflows"}},
 		})
 	}
@@ -244,7 +358,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Eventarc",
 			Category: "Integration",
 			RootPath: "/gcp/eventarc/triggers",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierShape,
+			Note:     "Shape only — trigger/channel CRUD; limited delivery",
 			Children: []coreui.ServiceChild{
 				{Label: "Triggers", Path: "/gcp/eventarc/triggers"},
 				{Label: "Channels", Path: "/gcp/eventarc/channels"},
@@ -257,7 +372,9 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Managed Kafka",
 			Category: "Integration",
 			RootPath: "/gcp/managedkafka/clusters",
-			Tier:     coreui.TierFull,
+			Tier:     statusTier(kafkaOn, coreui.TierMetadata),
+			Note:     engineNote(kafkaOn, "live Kafka broker", r.modes.KafkaBroker, "Metadata only — no broker; opt-in JAISCLOUD_KAFKA_BROKER_MODE"),
+			Engine:   kafkaEngine,
 			Children: []coreui.ServiceChild{
 				{Label: "Clusters", Path: "/gcp/managedkafka/clusters"},
 				{Label: "Topics", Path: "/gcp/managedkafka/topics"},
@@ -270,7 +387,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "BigQuery",
 			Category: "Analytics",
 			RootPath: "/gcp/bigquery/datasets",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierShape,
+			Note:     "Shape only — documented SQL subset on an in-process engine",
 			Children: []coreui.ServiceChild{
 				{Label: "Datasets", Path: "/gcp/bigquery/datasets"},
 				{Label: "Jobs", Path: "/gcp/bigquery/jobs"},
@@ -283,7 +401,9 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Dataproc",
 			Category: "Analytics",
 			RootPath: "/gcp/dataproc/clusters",
-			Tier:     coreui.TierFull,
+			Tier:     statusTier(sparkOn, coreui.TierShape),
+			Note:     engineNote(sparkOn, "real Spark executor", r.modes.Spark, "Shape only — Spark family; no real cluster without an executor"),
+			Engine:   dataprocEngine,
 			Children: []coreui.ServiceChild{
 				{Label: "Clusters", Path: "/gcp/dataproc/clusters"},
 				{Label: "Jobs", Path: "/gcp/dataproc/jobs"},
@@ -297,7 +417,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "IAM",
 			Category: "Security",
 			RootPath: "/gcp/iam/service-accounts",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierShape,
+			Note:     "Shape only — authorization not enforced",
 			Children: []coreui.ServiceChild{{Label: "Service accounts", Path: "/gcp/iam/service-accounts"}},
 		})
 	}
@@ -356,7 +477,8 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Label:    "Resource Manager",
 			Category: "Management",
 			RootPath: "/gcp/resourcemanager/projects",
-			Tier:     coreui.TierFull,
+			Tier:     coreui.TierShape,
+			Note:     "Shape only — project registry; authorization not enforced",
 			Children: []coreui.ServiceChild{{Label: "Projects", Path: "/gcp/resourcemanager/projects"}},
 		})
 	}
@@ -366,6 +488,10 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 // MountRoutes implements coreui.Registrar. Routes are mounted inside the
 // authenticated group in the shared core router.
 func (r *Registrar) MountRoutes(router chi.Router) {
+	// Host engine liveness for the admin Runtime view. Not gated on a service
+	// provider — it reports the host the emulator runs on.
+	router.Get("/api/ui/v1/gcp/runtime", buildRuntimeHealthHandler())
+
 	if r.storage != nil {
 		router.Mount("/api/ui/v1/gcp/storage", storageui.BuildRouter(r.storage, r.cfg))
 	}

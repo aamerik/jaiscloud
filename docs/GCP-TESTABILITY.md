@@ -134,6 +134,14 @@ Tier groups: **Green (21)** `dataproc`, `datastore`, `eventarc`, `firestore`,
 `ga` ≠ "behaves like real GCP". These four classes tell you how much real behaviour sits
 behind a wire-conformant API.
 
+> **Executor parity.** For a service that runs real work (Dataproc, Cloud Run,
+> Functions, Managed Kafka), the real backends — `docker`, `k8s`, `native` — are
+> interchangeable implementations of **one executor seam**: observable API
+> behaviour must be identical across them, and only the **mock-vs-real**
+> distinction changes depth. `docker` vs `k8s` is an orchestration choice, never a
+> fidelity tier; a backend a service does not wire is a capability gap (listed in
+> its cell and the console's availability matrix), not a shallower tier.
+
 | Depth | Services | What you can actually rely on locally |
 | --- | --- | --- |
 | **Full** | `pubsub`, `storage`, `kms`, `secretmanager`, `firestore`, `datastore`, `monitoring`, `logging` | Data-plane operations and most semantics, gated against captured real-GCP responses. |

@@ -19,7 +19,7 @@ type (
 const (
 	TierFull     = coreui.TierFull
 	TierMetadata = coreui.TierMetadata
-	TierStub     = coreui.TierStub
+	TierShape    = coreui.TierShape
 )
 
 // executorNote reports the configured executor mode for an execution-backed
@@ -88,7 +88,7 @@ func awsServiceDescriptors(providers *AWSProviders) []ServiceDescriptor {
 		{providers.IAM != nil, ServiceDescriptor{ID: "iam", Label: "IAM", Category: "Security, Identity & Compliance", RootPath: "/aws/iam", Tier: TierFull, Children: []ServiceChild{{Label: "Roles", Path: "/aws/iam"}}}},
 		{providers.Key != nil, ServiceDescriptor{ID: "kms", Label: "KMS", Category: "Security, Identity & Compliance", RootPath: "/aws/kms", Tier: TierFull, Children: []ServiceChild{{Label: "Keys", Path: "/aws/kms"}}}},
 		{providers.Secret != nil, ServiceDescriptor{ID: "secretsmanager", Label: "Secrets Manager", Category: "Security, Identity & Compliance", RootPath: "/aws/secretsmanager", Tier: TierFull, Children: []ServiceChild{{Label: "Secrets", Path: "/aws/secretsmanager"}}}},
-		{providers.SES != nil, ServiceDescriptor{ID: "ses", Label: "SES", Category: "Business Applications", RootPath: "/aws/ses/identities", Tier: TierStub, Note: "limited operations", Children: []ServiceChild{{Label: "Identities", Path: "/aws/ses/identities"}}}},
+		{providers.SES != nil, ServiceDescriptor{ID: "ses", Label: "SES", Category: "Business Applications", RootPath: "/aws/ses/identities", Tier: TierShape, Note: "limited operations", Children: []ServiceChild{{Label: "Identities", Path: "/aws/ses/identities"}}}},
 	}
 
 	services := make([]ServiceDescriptor, 0, len(descriptors))

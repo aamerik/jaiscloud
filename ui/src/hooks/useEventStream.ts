@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { refreshSession } from '../api/client'
+import { FALLBACK_POLL_MS } from './useAutoRefresh'
 
 const SSE_PATH = '/api/ui/v1/events/stream'
 
@@ -17,6 +18,17 @@ export function useEventStream(): { connected: boolean } {
   const [connected, setConnected] = useState(false)
   const attempt = useRef(0)
   const esRef = useRef<EventSource | null>(null)
+
+  // Keep the "Polling" state honest: when the stream is down, actually poll via
+  // a global default refetch interval; when live, stop polling. Queries with an
+  // explicit refetchInterval keep their own cadence.
+  useEffect(() => {
+    const prev = qc.getDefaultOptions()
+    qc.setDefaultOptions({
+      ...prev,
+      queries: { ...prev.queries, refetchInterval: connected ? false : FALLBACK_POLL_MS },
+    })
+  }, [connected, qc])
 
   useEffect(() => {
     let cancelled = false

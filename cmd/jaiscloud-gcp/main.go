@@ -1343,7 +1343,29 @@ func startCmd() *cobra.Command {
 				// core is always constructed (its default mock topology starts
 				// no broker), so the console page is present in every mode.
 				managedkafkaUI := managedkafkaui.NewProvider(managedKafkaCore)
-				uiServer, uiErr = coreui.New(gcpui.NewRegistrar(storageP, pubsubP, firestoreP, datastoreCore, computeP, dataprocUI, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, managedkafkaUI, resourceManagerCore, cfg), adminHandler, cfg, eventBus, version)
+				// Report the configured engine/executor modes to the catalog so
+				// an engine-capable service is shown as engine-backed rather
+				// than shape-only (see gcpui.ServiceModes).
+				sparkExec, sparkSrc := config.ExecutorMode("spark", "mock")
+				lambdaExec, lambdaSrc := config.ExecutorMode("lambda", "mock")
+				cloudRunExec, cloudRunSrc := config.ExecutorMode("cloudrun", "mock")
+				kafkaBrokerMode := os.Getenv("JAISCLOUD_KAFKA_BROKER_MODE")
+				kafkaBrokerSrc := "default"
+				if kafkaBrokerMode != "" {
+					kafkaBrokerSrc = "JAISCLOUD_KAFKA_BROKER_MODE"
+				}
+				serviceModes := gcpui.ServiceModes{
+					KafkaBroker:       kafkaBrokerMode,
+					KafkaBrokerSource: kafkaBrokerSrc,
+					Spark:             sparkExec,
+					SparkSource:       sparkSrc,
+					Lambda:            lambdaExec,
+					LambdaSource:      lambdaSrc,
+					CloudRun:          cloudRunExec,
+					CloudRunSource:    cloudRunSrc,
+				}
+				gcpRegistrar := gcpui.NewRegistrar(storageP, pubsubP, firestoreP, datastoreCore, computeP, dataprocUI, bigqueryP, runCore, schedulerCore, iamP, kmsP, secretP, loggingRestP, monitoringRestP, tasksCore, workflowsUI, eventarcUI, functionsUI, managedkafkaUI, resourceManagerCore, cfg).WithServiceModes(serviceModes)
+				uiServer, uiErr = coreui.New(gcpRegistrar, adminHandler, cfg, eventBus, version)
 				if uiErr != nil {
 					slog.Warn("ui server init failed", "err", uiErr)
 				} else if uiServer != nil {
