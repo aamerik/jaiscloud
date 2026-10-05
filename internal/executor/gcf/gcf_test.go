@@ -125,15 +125,17 @@ func TestProfile_CloudEventInvocation(t *testing.T) {
 	p := FunctionsFrameworkProfile{}
 	when := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	req := container.Request{
-		Payload:       []byte(`{"msg":"hi"}`),
+		Payload:       []byte(`{"raw":"payload"}`),
 		SignatureType: "cloudevent",
 		Event: &container.CloudEvent{
-			SpecVersion: "1.0",
-			ID:          "evt-1",
-			Source:      "//pubsub.googleapis.com/projects/p/topics/t",
-			Type:        "google.cloud.pubsub.topic.v1.messagePublished",
-			Subject:     "sub",
-			Time:        when,
+			SpecVersion:     "1.0",
+			ID:              "evt-1",
+			Source:          "//pubsub.googleapis.com/projects/p/topics/t",
+			Type:            "google.cloud.pubsub.topic.v1.messagePublished",
+			Subject:         "sub",
+			Time:            when,
+			DataContentType: "application/json",
+			Data:            []byte(`{"message":{"data":"aGk="},"subscription":"projects/p/subscriptions/s"}`),
 		},
 	}
 	inv := p.Invocation(req)
@@ -147,6 +149,28 @@ func TestProfile_CloudEventInvocation(t *testing.T) {
 	}
 	if !strings.HasPrefix(inv.Header["ce-time"], "2026-01-02T03:04:05") {
 		t.Fatalf("ce-time = %q", inv.Header["ce-time"])
+	}
+	// In binary content mode the event data is the body, not the request payload.
+	if string(inv.Body) != string(req.Event.Data) {
+		t.Fatalf("body = %q, want the CloudEvent data %q", inv.Body, req.Event.Data)
+	}
+	if inv.Header["Content-Type"] != "application/json" {
+		t.Fatalf("Content-Type = %q", inv.Header["Content-Type"])
+	}
+}
+
+// TestProfile_CloudEventBodyFallsBackToPayload verifies a CloudEvent invocation
+// with no event data still sends the request payload as the body.
+func TestProfile_CloudEventBodyFallsBackToPayload(t *testing.T) {
+	p := FunctionsFrameworkProfile{}
+	req := container.Request{
+		Payload:       []byte(`{"msg":"hi"}`),
+		SignatureType: "cloudevent",
+		Event:         &container.CloudEvent{Type: "example.event", Source: "src"},
+	}
+	inv := p.Invocation(req)
+	if string(inv.Body) != `{"msg":"hi"}` {
+		t.Fatalf("body = %q, want the request payload", inv.Body)
 	}
 }
 

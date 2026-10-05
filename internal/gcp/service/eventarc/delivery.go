@@ -3,8 +3,6 @@ package eventarc
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"log/slog"
 	"net"
 	"net/http"
@@ -195,7 +193,7 @@ func buildCloudEvent(project, location, triggerID string, ev eventing.Event) ([]
 // object-metadata JSON. ce-id is minted fresh per event (real GCP and the emulator both
 // use a unique id): the producer's EventID is derived from bucket/object/
 // generation, which would collide between a finalize and a delete of the same
-// generation.
+// generation. subject is the object's name ("objects/{object}").
 func buildStorageCloudEvent(ev eventing.Event) ([]byte, map[string]string) {
 	body := ev.Data
 	if len(body) == 0 {
@@ -204,19 +202,15 @@ func buildStorageCloudEvent(ev eventing.Event) ([]byte, map[string]string) {
 	headers := map[string]string{
 		"Content-Type":   "application/json",
 		"ce-id":          uuid.NewString(),
-		"ce-source":      "//storage.googleapis.com/" + ev.Resource,
+		"ce-source":      eventing.StorageSource(ev.Resource),
 		"ce-specversion": "1.0",
-		"ce-type":        storageCloudEventType(ev.EventType),
+		"ce-type":        eventing.StorageCloudEventType(ev.EventType),
 		"ce-time":        ev.OccurredAt.UTC().Format(time.RFC3339Nano),
 	}
+	if subject := eventing.StorageObjectSubject(ev.Attributes); subject != "" {
+		headers["ce-subject"] = subject
+	}
 	return body, headers
-}
-
-// storageCloudEventType maps a storage event type onto the Eventarc CloudEvent
-// spelling a receiver sees (google.cloud.storage.object.v1.finalized|deleted),
-// normalizing the producer's v1/v2 spelling first.
-func storageCloudEventType(eventType string) string {
-	return storageFilterType(eventing.NormalizeEventType(eventType))
 }
 
 // httpEndpointURI returns the destination's httpEndpoint.uri, or "" when the
@@ -312,25 +306,12 @@ func (s *Service) deliverCloudRun(project string, target cloudRunTarget, headers
 // subscription is the emulator's own provisioned id
 // (eventarc-{location}-{triggerId}), which is what subscriptions.list returns.
 func buildPubSubCloudEvent(project, location, triggerID string, ev eventing.Event) ([]byte, map[string]string) {
-	message := map[string]any{
-		"messageId":   ev.EventID,
-		"publishTime": ev.OccurredAt.UTC().Format(time.RFC3339Nano),
-	}
-	if len(ev.Data) > 0 {
-		message["data"] = base64.StdEncoding.EncodeToString(ev.Data)
-	}
-	if len(ev.Attributes) > 0 {
-		message["attributes"] = ev.Attributes
-	}
-	payload := map[string]any{
-		"message":      message,
-		"subscription": "projects/" + project + "/subscriptions/" + eventing.EventarcSubscriptionID(location, triggerID),
-	}
-	body, _ := json.Marshal(payload)
+	sub := "projects/" + project + "/subscriptions/" + eventing.EventarcSubscriptionID(location, triggerID)
+	body := eventing.PubSubMessagePublished(ev.EventID, ev.OccurredAt, ev.Data, ev.Attributes, sub)
 	headers := map[string]string{
 		"Content-Type":   "application/json",
 		"ce-id":          ev.EventID,
-		"ce-source":      "//pubsub.googleapis.com/" + ev.Resource,
+		"ce-source":      eventing.PubSubSource(ev.Resource),
 		"ce-specversion": "1.0",
 		"ce-type":        eventing.TypePubSubPublishCloudEvent,
 		"ce-time":        ev.OccurredAt.UTC().Format(time.RFC3339Nano),

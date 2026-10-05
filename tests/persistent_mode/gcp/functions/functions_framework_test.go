@@ -55,11 +55,10 @@ def hello(request):
 // test published. A "delivered" record therefore proves the framework invoked
 // this handler with this event, not merely that an invocation was attempted.
 //
-// The handler decodes the marker from either CloudEvent data shape — the raw
-// event payload the emulator sends today, or a wrapper carrying the payload
-// base64 in data["message"]["data"] (the real Pub/Sub MessagePublishedData
-// envelope) — so the e2e asserts payload delivery without freezing the wire
-// envelope; the envelope divergence is tracked separately.
+// The handler reads the marker the way a real gen2 function does — from the
+// Pub/Sub MessagePublishedData envelope (cloud_event.data["message"]["data"],
+// base64) — so the e2e locks the real wire envelope (FNX5), not the raw payload
+// the emulator used to send.
 func ffEventSource(marker string) string {
 	return `import base64
 import json
@@ -67,18 +66,13 @@ import json
 import functions_framework
 
 
-def _payload(event_data):
-    if isinstance(event_data, dict) and "message" in event_data:
-        message = event_data.get("message") or {}
-        raw = message.get("data")
-        if isinstance(raw, str):
-            return json.loads(base64.b64decode(raw))
-    return event_data
-
-
 @functions_framework.cloud_event
 def hello_event(cloud_event):
-    got = (_payload(cloud_event.data) or {}).get("marker")
+    message = (cloud_event.data or {}).get("message") or {}
+    raw = message.get("data")
+    if not isinstance(raw, str):
+        raise RuntimeError(f"missing MessagePublishedData envelope: {cloud_event.data!r}")
+    got = (json.loads(base64.b64decode(raw)) or {}).get("marker")
     if got != "` + marker + `":
         raise RuntimeError(f"unexpected event marker: {got!r}")
     return {"marker": got}
