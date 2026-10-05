@@ -22,9 +22,8 @@ import { useAccount } from '../context/AccountContext'
 import { useMeta } from '../hooks/useMeta'
 import { useServices } from '../hooks/useServices'
 import { useFavorites } from '../hooks/useFavorites'
-import { TIERS, type Tier } from '../api/services'
 import { cloudName } from '../lib/cloudNames'
-import { TIER_NAMES, TIER_SUMMARY, tierLabel } from '../lib/tier'
+import { tierLabel } from '../lib/tier'
 import { GcpServiceIcon } from './icons/GcpServiceIcon'
 import { serviceAccent } from './icons/serviceIcons'
 import { ProjectPickerDialog } from './chrome/ProjectPicker'
@@ -107,12 +106,6 @@ export function GcpHome() {
   const [projectOpen, setProjectOpen] = useState(false)
 
   const project = accountId || meta?.accountId || '—'
-
-  const coverage = useMemo(() => {
-    const counts: Record<Tier, number> = { full: 0, metadata: 0, shape: 0 }
-    for (const service of services) counts[service.tier] += 1
-    return counts
-  }, [services])
 
   const groups = useMemo(
     () => buildNavGroups(services, favorites, recent, ''),
@@ -216,29 +209,10 @@ export function GcpHome() {
         </CardContent>
       </Card>
 
-      {services.length > 0 && (
-        <Box sx={{ mt: 3 }}>
-          <Typography variant="overline" color="text.secondary">
-            Service coverage
-          </Typography>
-          <Stack direction="row" spacing={1} sx={{ mt: 0.5, flexWrap: 'wrap', rowGap: 0.5 }}>
-            {TIERS.map((tier) => (
-              <Tooltip key={tier} title={TIER_SUMMARY[tier]}>
-                <Chip
-                  size="small"
-                  variant="outlined"
-                  label={`${TIER_NAMES[tier]} (${coverage[tier]})`}
-                />
-              </Tooltip>
-            ))}
-          </Stack>
-        </Box>
-      )}
-
       {pinned.length > 0 && (
         <>
           <Typography variant="h6" sx={{ mt: 4, mb: 1.5 }}>
-            Pinned
+            Pinned services
           </Typography>
           <Box sx={TILE_GRID}>{pinned.map(serviceTile)}</Box>
         </>
@@ -247,7 +221,7 @@ export function GcpHome() {
       {recentEntries.length > 0 && (
         <>
           <Typography variant="h6" sx={{ mt: 4, mb: 1.5 }}>
-            Recent
+            Recent services
           </Typography>
           <Box sx={TILE_GRID}>{recentEntries.map(serviceTile)}</Box>
         </>
@@ -259,8 +233,11 @@ export function GcpHome() {
         </Alert>
       )}
 
-      <Typography variant="h6" sx={{ mt: 4, mb: 1.5 }}>
-        Resources
+      <Typography variant="h6" sx={{ mt: 4, mb: 0.5 }}>
+        Resource types
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+        Resource types the console can summarize, with live counts.
       </Typography>
 
       {services.length === 0 ? (

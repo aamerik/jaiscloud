@@ -4,28 +4,24 @@ import {
   Box,
   Button,
   CssBaseline,
-  Divider,
   Drawer,
   IconButton,
-  List,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
   ThemeProvider,
   Toolbar,
   Typography,
+  useMediaQuery,
 } from '@mui/material'
+import { useTheme } from '@mui/material/styles'
 import MenuIcon from '@mui/icons-material/Menu'
+import MenuOpenIcon from '@mui/icons-material/MenuOpen'
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
 import CloudQueueIcon from '@mui/icons-material/CloudQueue'
-import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import { Link as RouterLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import '@fontsource/roboto/400.css'
 import '@fontsource/roboto/500.css'
 import '@fontsource/roboto/700.css'
 import { createGcpTheme } from './theme'
 import { useGcpAppearance, type GcpAppearance } from './appearance'
-import { GcpServiceIcon } from './icons/GcpServiceIcon'
 import { GcpHome } from './GcpHome'
 import { GcpAdminPage } from './admin/GcpAdminPage'
 import { GcpGlobalSearch } from './chrome/GcpGlobalSearch'
@@ -33,8 +29,7 @@ import { ProjectPickerDialog } from './chrome/ProjectPicker'
 import { AccountMenu } from './chrome/AccountMenu'
 import { ChromeActions } from './chrome/ChromeActions'
 import { GcpBreadcrumbs } from './chrome/GcpBreadcrumbs'
-import { NavMenu } from './chrome/NavMenu'
-import { rememberRecentService } from './chrome/recentServices'
+import { GcpNav } from './chrome/GcpNav'
 import { pageTitleFor } from './chrome/navModel'
 import { BucketsPage } from './storage/BucketsPage'
 import { ObjectsPage } from './storage/ObjectsPage'
@@ -107,9 +102,26 @@ import { useServices } from '../hooks/useServices'
 import { GcpSnackbarProvider } from './common/SnackbarProvider'
 
 const DRAWER_WIDTH = 256
+/** Icons-only rail width; the desktop default. */
+const MINI_WIDTH = 72
+const OVERLAY_WIDTH = 360
+
+/** Persisted choice: whether the desktop rail is expanded (labelled) or mini. */
+const NAV_EXPANDED_KEY = 'jaiscloud-nav-expanded'
+
+function readRailExpanded(): boolean {
+  try {
+    // Default to expanded so labels are visible; mini is an opt-in collapse.
+    return window.localStorage.getItem(NAV_EXPANDED_KEY) !== 'false'
+  } catch {
+    return true
+  }
+}
 
 /** Material shell approximating the Google Cloud Console chrome. */
 function GcpShell({ appearance }: { appearance: GcpAppearance }) {
+  const theme = useTheme()
+  const isDesktop = useMediaQuery(theme.breakpoints.up('md'))
   const location = useLocation()
   const { data: meta } = useMeta()
   const { accountId } = useAccount()
@@ -117,64 +129,36 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
   const services = useMemo(() => servicesData?.services ?? [], [servicesData])
   const { connected } = useEventStream()
 
-  const [navOpen, setNavOpen] = useState(false)
+  // One nav, two surfaces: on desktop the hamburger toggles the rail between
+  // mini (icons) and expanded (labelled, persisted); on mobile it opens the
+  // overlay. The rail is always present on desktop, never hidden.
+  const [railExpanded, setRailExpandedState] = useState<boolean>(readRailExpanded)
+  const [overlayOpen, setOverlayOpen] = useState(false)
   const [projectOpen, setProjectOpen] = useState(false)
+
+  const navExpanded = isDesktop ? railExpanded : overlayOpen
+
+  const toggleNav = () => {
+    if (!isDesktop) {
+      setOverlayOpen(true)
+      return
+    }
+    setRailExpandedState((value) => {
+      const next = !value
+      try {
+        window.localStorage.setItem(NAV_EXPANDED_KEY, String(next))
+      } catch {
+        /* ignore storage errors */
+      }
+      return next
+    })
+  }
+
+  const closeOverlay = () => setOverlayOpen(false)
 
   useEffect(() => {
     document.title = pageTitleFor(services, location.pathname)
   }, [services, location.pathname])
-
-  const isSelected = (path: string) =>
-    location.pathname === path || location.pathname.startsWith(`${path}/`)
-
-  const navigation = (
-    <Box role="navigation">
-      <Toolbar />
-      <Box sx={{ px: 2, py: 1.5 }}>
-        <Typography variant="overline" color="text.secondary">
-          JaisCloud
-        </Typography>
-        <Typography variant="subtitle1">Console</Typography>
-      </Box>
-      <Divider />
-      <List sx={{ py: 1 }}>
-        <ListItemButton
-          component={RouterLink}
-          to="/gcp"
-          selected={location.pathname === '/gcp'}
-        >
-          <ListItemText primary="Console home" />
-        </ListItemButton>
-        {services.map((service) => (
-          <ListItemButton
-            key={service.id}
-            component={RouterLink}
-            to={service.rootPath}
-            selected={isSelected(service.rootPath)}
-            onClick={() => rememberRecentService(service.id)}
-          >
-            <ListItemIcon sx={{ minWidth: 36 }}>
-              <GcpServiceIcon id={service.id} size={20} />
-            </ListItemIcon>
-            <ListItemText primary={service.label} secondary={service.category} />
-          </ListItemButton>
-        ))}
-      </List>
-      <Divider />
-      <List sx={{ py: 1 }}>
-        <ListItemButton
-          component={RouterLink}
-          to="/gcp/admin"
-          selected={isSelected('/gcp/admin')}
-        >
-          <ListItemIcon>
-            <SettingsOutlinedIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText primary="Admin" />
-        </ListItemButton>
-      </List>
-    </Box>
-  )
 
   return (
     <Box sx={{ display: 'flex' }}>
@@ -183,11 +167,15 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
           <IconButton
             edge="start"
             color="inherit"
-            aria-label="Open navigation menu"
-            onClick={() => setNavOpen(true)}
+            aria-label={navExpanded ? 'Collapse navigation menu' : 'Expand navigation menu'}
+            aria-expanded={navExpanded}
+            aria-controls={isDesktop ? 'gcp-nav-rail' : 'gcp-nav-overlay'}
+            onClick={toggleNav}
             sx={{ color: 'text.primary' }}
           >
-            <MenuIcon />
+            {/* MenuOpen when the nav is showing (desktop expanded rail or open
+                mobile overlay), plain Menu when it is collapsed/closed. */}
+            {navExpanded ? <MenuOpenIcon /> : <MenuIcon />}
           </IconButton>
           <Box
             component={RouterLink}
@@ -236,16 +224,44 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
         </Toolbar>
       </AppBar>
 
-      <Box component="nav" sx={{ width: { md: DRAWER_WIDTH }, flexShrink: { md: 0 } }}>
+      <Box
+        component="nav"
+        id="gcp-nav-rail"
+        aria-label="Service navigation"
+        sx={{
+          display: { xs: 'none', md: 'block' },
+          width: railExpanded ? DRAWER_WIDTH : MINI_WIDTH,
+          flexShrink: 0,
+          overflow: 'hidden',
+          transition: (theme) =>
+            theme.transitions.create('width', {
+              easing: theme.transitions.easing.sharp,
+              duration: theme.transitions.duration.enteringScreen,
+            }),
+        }}
+      >
         <Drawer
           variant="permanent"
           open
           sx={{
-            display: { xs: 'none', md: 'block' },
-            '& .MuiDrawer-paper': { width: DRAWER_WIDTH, boxSizing: 'border-box' },
+            '& .MuiDrawer-paper': {
+              width: railExpanded ? DRAWER_WIDTH : MINI_WIDTH,
+              boxSizing: 'border-box',
+              overflowX: 'hidden',
+              borderRightWidth: 1,
+              transition: (theme) =>
+                theme.transitions.create('width', {
+                  easing: theme.transitions.easing.sharp,
+                  duration: theme.transitions.duration.enteringScreen,
+                }),
+            },
           }}
         >
-          {navigation}
+          <GcpNav
+            services={services}
+            title="Console"
+            variant={railExpanded ? 'full' : 'mini'}
+          />
         </Drawer>
       </Box>
 
@@ -257,7 +273,6 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
           p: 3,
           bgcolor: 'background.default',
           minHeight: '100vh',
-          width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
         }}
       >
         <Toolbar />
@@ -372,7 +387,34 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
         </Routes>
       </Box>
 
-      <NavMenu open={navOpen} onClose={() => setNavOpen(false)} services={services} />
+      {/*
+        Mobile overlay: the same GcpNav in a temporary Drawer. It is only
+        mounted below the md breakpoint so desktop shows exactly one surface
+        (the rail); a tap navigates and closes it.
+      */}
+      {!isDesktop && (
+        <Drawer
+          id="gcp-nav-overlay"
+          anchor="left"
+          open={overlayOpen}
+          onClose={closeOverlay}
+          sx={{
+            '& .MuiDrawer-paper': {
+              width: OVERLAY_WIDTH,
+              maxWidth: '100vw',
+              boxSizing: 'border-box',
+            },
+          }}
+        >
+          <GcpNav
+            services={services}
+            open={overlayOpen}
+            showSearch
+            onClose={closeOverlay}
+            title="Navigation menu"
+          />
+        </Drawer>
+      )}
       <ProjectPickerDialog open={projectOpen} onClose={() => setProjectOpen(false)} />
     </Box>
   )

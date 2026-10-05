@@ -7,13 +7,6 @@ export const TIER_NAMES: Record<Tier, string> = {
   shape: 'Shape only',
 }
 
-/** One-line meaning of each tier, for legends and tooltips. */
-export const TIER_SUMMARY: Record<Tier, string> = {
-  full: 'Real data plane and semantics, gated against the real cloud.',
-  metadata: 'Resource records only; nothing executes.',
-  shape: 'Serves the API and runs a partial behaviour; verify against the real cloud.',
-}
-
 /** Short label for a non-full service tier, or undefined for full services. */
 export function tierLabel(service: ServiceDescriptor): string | undefined {
   return service.tier === 'full' ? undefined : TIER_NAMES[service.tier]
