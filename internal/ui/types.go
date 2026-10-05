@@ -46,6 +46,9 @@ type MetaResponse struct {
 	Version    string `json:"version"`
 	UIVersion  string `json:"uiVersion"`
 	InstanceId string `json:"instanceId"`
+	// BootID identifies this process start; it changes on every restart (unlike
+	// the persisted InstanceId) so the browser can invalidate cached data.
+	BootID string `json:"bootId"`
 }
 
 // AccountsResponse is the payload for GET /api/ui/v1/meta/accounts.

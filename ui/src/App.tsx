@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { Alert, Box, ContentLayout, Header, Spinner } from '@cloudscape-design/components'
 import { useMeta } from './hooks/useMeta'
+import { useRestartRecovery } from './hooks/useRestartRecovery'
 import { Layout } from './components/Layout'
 import { ConsoleHome } from './components/ConsoleHome'
 import { ResourceFavorites } from './components/ResourceFavorites'
@@ -38,6 +39,7 @@ import { AdminPanel } from './admin/AdminPanel'
 
 export default function App() {
   const { data: meta, isLoading } = useMeta()
+  useRestartRecovery(meta?.bootId)
 
   if (isLoading) {
     return (
