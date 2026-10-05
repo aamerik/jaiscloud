@@ -79,3 +79,39 @@ type RunQueryResponse struct {
 	ReadTime       string     `json:"readTime,omitempty"`
 	SkippedResults int        `json:"skippedResults,omitempty"`
 }
+
+// IndexField is one field of a composite index. Exactly one of Order
+// (ASCENDING/DESCENDING) or ArrayConfig (CONTAINS) is set for a directional or
+// array field respectively.
+type IndexField struct {
+	FieldPath   string `json:"fieldPath"`
+	Order       string `json:"order,omitempty"`
+	ArrayConfig string `json:"arrayConfig,omitempty"`
+}
+
+// Index is the UI representation of a Firestore composite index. ID and
+// CollectionGroup are derived from the fully qualified Name
+// (projects/{p}/databases/{db}/collectionGroups/{cg}/indexes/{id}).
+type Index struct {
+	Name            string       `json:"name"`
+	ID              string       `json:"id"`
+	CollectionGroup string       `json:"collectionGroup"`
+	QueryScope      string       `json:"queryScope,omitempty"`
+	State           string       `json:"state,omitempty"`
+	Fields          []IndexField `json:"fields"`
+}
+
+// ListIndexesResponse is the response for GET /indexes.
+type ListIndexesResponse struct {
+	Indexes       []Index `json:"indexes"`
+	Total         int     `json:"total"`
+	NextPageToken string  `json:"nextPageToken,omitempty"`
+}
+
+// CreateIndexRequest is the body for POST /indexes. Fields must contain at least
+// two entries; QueryScope defaults to COLLECTION when empty.
+type CreateIndexRequest struct {
+	CollectionGroup string       `json:"collectionGroup"`
+	QueryScope      string       `json:"queryScope,omitempty"`
+	Fields          []IndexField `json:"fields"`
+}

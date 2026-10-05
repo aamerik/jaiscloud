@@ -21,4 +21,12 @@ type ProviderInterface interface {
 
 	// RunQuery executes a StructuredQuery (newline-delimited JSON response).
 	RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+
+	// Composite indexes (the Firestore Admin surface). Indexes are addressed per
+	// collection group; the list call accepts the "-" wildcard for the whole
+	// database.
+	CreateIndex(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	ListIndexes(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	GetIndex(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	DeleteIndex(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 }
