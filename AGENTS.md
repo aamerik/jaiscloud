@@ -24,10 +24,14 @@ it TEST-NON-COMPLIANT and record it. The compliance gate is the offline
 conformance harness (`tests/gcpconformance`: vendored Discovery + committed
 transcripts, the official gRPC clients, and the `gcloud`/Python client suites).
 
-**e2e environment:** the provided dev environment also has a working k3d
-cluster and a remote Docker context, so cluster-/image-based gates (`*-k3d`,
-k8s executor modes) are runnable — the contexts and commands are in the
-`gcp-phase-workflow` skill's Environment section.
+**e2e environment:** the provided dev environment has a working k3d cluster and
+a Docker daemon, so cluster-/image-based gates (`*-k3d`, k8s executor modes) and
+docker-executor gates (`test-e2e-*-docker`, `test-e2e-cloudrun-docker`) are
+runnable — the contexts and commands are in the `gcp-phase-workflow` skill's
+Environment section. The `docker` CLI's active context is `remote` (SSH to the
+build host) for image builds; the emulator and the docker-executor gates use the
+**local** daemon at `/var/run/docker.sock` (`docker --context default`), so the
+invoking shell must be in the `docker` group (or `sg docker -c '…'`).
 
 **Starting a session (`/gcp:new`):** the command first runs
 `make gcp-session-start`, which aborts if the current checkout has uncommitted
