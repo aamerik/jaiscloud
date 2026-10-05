@@ -363,7 +363,10 @@ func TestListTimeSeriesAggregation(t *testing.T) {
 	ctx := context.Background()
 
 	metricType := "custom.googleapis.com/agg_test_metric"
-	end := time.Now().UTC().Truncate(time.Second)
+	// Anchor well inside a 1-hour alignment bucket (the previous hour at :45) so
+	// the points and the query interval always fall in one window regardless of
+	// when the test runs — a wall-clock boundary otherwise splits them.
+	end := time.Now().UTC().Truncate(time.Hour).Add(-15 * time.Minute)
 	write := func(env string, v float64, at time.Time) *monitoringpb.TimeSeries {
 		return &monitoringpb.TimeSeries{
 			Metric:   &metricpb.Metric{Type: metricType, Labels: map[string]string{"env": env}},
