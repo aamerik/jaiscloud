@@ -3,8 +3,8 @@
   "summary": {
     "total": 956,
     "by_state": {
-      "ga": 701,
-      "limited": 111,
+      "ga": 705,
+      "limited": 107,
       "preview": 14,
       "unsupported": 130
     },
@@ -15,8 +15,8 @@
         "unsupported": 118
       },
       "rest": {
-        "ga": 368,
-        "limited": 104,
+        "ga": 372,
+        "limited": 100,
         "preview": 14,
         "unsupported": 12
       }
@@ -82,15 +82,13 @@
         "unsupported": 22
       },
       "managedkafka": {
-        "ga": 42,
-        "limited": 2
+        "ga": 44
       },
       "memorystore": {
         "limited": 8
       },
       "metastore": {
-        "ga": 26,
-        "limited": 2,
+        "ga": 28,
         "unsupported": 10
       },
       "monitoring": {
@@ -6177,8 +6175,7 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.GetOperation",
       "transport": "rest",
-      "state": "limited",
-      "reason": "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)",
+      "state": "ga",
       "evidence": [
         "discovery=managedkafka.projects.locations.operations.get",
         "postgres=yes"
@@ -6228,8 +6225,7 @@
       "service": "managedkafka",
       "operation": "ManagedKafka.ListOperations",
       "transport": "rest",
-      "state": "limited",
-      "reason": "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)",
+      "state": "ga",
       "evidence": [
         "discovery=managedkafka.projects.locations.operations.list",
         "postgres=yes"
@@ -6688,8 +6684,7 @@
       "service": "metastore",
       "operation": "Metastore.GetOperation",
       "transport": "rest",
-      "state": "limited",
-      "reason": "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)",
+      "state": "ga",
       "evidence": [
         "discovery=metastore.projects.locations.operations.get",
         "postgres=yes"
@@ -6729,8 +6724,7 @@
       "service": "metastore",
       "operation": "Metastore.ListOperations",
       "transport": "rest",
-      "state": "limited",
-      "reason": "the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true)",
+      "state": "ga",
       "evidence": [
         "discovery=metastore.projects.locations.operations.list",
         "postgres=yes"

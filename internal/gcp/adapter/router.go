@@ -47,6 +47,21 @@ func DetectService(r *http.Request) (service string, source DetectionSource) {
 	if strings.HasPrefix(r.URL.Path, "/v1/") && firstHostLabel(r.Host) == "container" {
 		return "container", SourceHost
 	}
+	// Managed Kafka and Dataproc Metastore share the bare
+	// /v1/projects/{project}/locations/{location}/operations[/{id}] LRO path with
+	// Cloud Workflows on the single emulator origin, and the operation resource
+	// name carries no service discriminator (it is
+	// projects/{p}/locations/{l}/operations/{id} for every owner). Their canonical
+	// hosts — managedkafka.googleapis.com / metastore.googleapis.com, or the
+	// managedkafka.localhost / metastore.localhost test forms — disambiguate it:
+	// an operations request to that host resolves to the owning service instead of
+	// Workflows. Every other path is left to path detection, which already owns
+	// the clusters/services resource segments; the default host keeps the bare
+	// operations path on Workflows (that path also backs the Cloud Workflows LRO
+	// surface).
+	if svc := operationsHostService(firstHostLabel(r.Host), r.URL.EscapedPath()); svc != "" {
+		return svc, SourceHost
+	}
 	p := r.URL.Path
 	// SDK test clients concatenate an endpoint that may already end in "/" with
 	// "/v1/..." paths, yielding a leading "//". Collapse redundant leading
@@ -472,7 +487,10 @@ func detectDataprocResourceType(seg []string) string {
 // claimed here — it is path-ambiguous with Workflows' operations surface on a
 // single host, so it remains routed to workflows and Managed Kafka returns its
 // operations inline (done: true) from the cluster mutation that created them.
-// The provider still registers GetOperation/ListOperations for direct dispatch.
+// The provider still registers GetOperation/ListOperations for direct dispatch,
+// and the service's own host token (managedkafka.localhost /
+// managedkafka.googleapis.com) routes the operations family to Managed Kafka
+// instead; see operationsHostService.
 func detectManagedKafkaResourceType(seg []string) string {
 	if len(seg) < 3 || seg[0] != "locations" {
 		return ""
@@ -514,7 +532,9 @@ func detectMemorystoreResourceType(seg []string) string {
 // "workflows", functions uses "functions", KMS uses "keyRings", Managed Kafka
 // uses "clusters"). The shared locations/{location}/operations/{id} LRO path is
 // intentionally NOT claimed here — it is path-ambiguous with Workflows'
-// operations surface on a single host, so it remains routed to workflows.
+// operations surface on a single host, so it remains routed to workflows (the
+// service's own host token routes it to Metastore instead; see
+// operationsHostService).
 func detectMetastoreResourceType(seg []string) string {
 	if len(seg) < 3 || seg[0] != "locations" {
 		return ""
@@ -523,6 +543,48 @@ func detectMetastoreResourceType(seg []string) string {
 		return "services"
 	}
 	return ""
+}
+
+// operationsHostService maps a request host token plus path to the service that
+// owns the shared /v1/projects/{project}/locations/{location}/operations[/{id}]
+// LRO family. Managed Kafka and Dataproc Metastore each address their operations
+// under their own canonical host (managedkafka.googleapis.com /
+// metastore.googleapis.com, first DNS label managedkafka/metastore). Any other
+// host, or a non-operations path, returns "" so detection falls through to the
+// path-based resolver, which keeps the bare operations path on Cloud Workflows.
+func operationsHostService(hostLabel, path string) string {
+	switch hostLabel {
+	case "managedkafka", "metastore":
+	default:
+		return ""
+	}
+	if !isLocationOperationsPath(path) {
+		return ""
+	}
+	return hostLabel
+}
+
+// isLocationOperationsPath reports whether path is the shared
+// /v1/projects/{project}/locations/{location}/operations[/{id}] long-running
+// operations family. Only /v1/ is considered, mirroring the host-token guard on
+// the sibling GKE discriminator (a non-/v1/ path is never a control-plane LRO).
+func isLocationOperationsPath(path string) bool {
+	if !strings.HasPrefix(path, "/v1/") {
+		return false
+	}
+	seg := splitEscaped(path)
+	pi := -1
+	for i, s := range seg {
+		if s == "projects" {
+			pi = i
+			break
+		}
+	}
+	if pi < 0 || pi+2 > len(seg) {
+		return false
+	}
+	rest := seg[pi+2:]
+	return len(rest) >= 3 && rest[0] == "locations" && rest[2] == "operations"
 }
 
 // firstHostLabel returns the first DNS label of an HTTP Host header, stripping
