@@ -12,6 +12,16 @@
 // deferred and route to an explicit Unimplemented (501) rather than the
 // codec's 404.
 //
+// jobs.insert also accepts a configuration.load job: a single gs:// source
+// object (resolved through the injected SourceReader against the emulated GCS)
+// is decoded as NEWLINE_DELIMITED_JSON or CSV, coerced to the destination
+// schema and written per writeDisposition, synchronously, with statistics.load
+// on the job. Everything outside that subset (autodetect, Parquet/Avro/ORC,
+// compression, wildcards, partitioning, a non-default quote) fails loud
+// (400/501); a data-level failure (too many bad records, WRITE_EMPTY on a
+// non-empty table) is reported in status.errorResult like real BigQuery. See
+// load.go.
+//
 // Known limitations (emulator simplifications, documented rather than fixed):
 //   - tabledata.insertAll honors insertId (best-effort duplicate suppression
 //     over a bounded, TTL'd per-table window), skipInvalidRows,
@@ -61,11 +71,18 @@ const kindPrefix = "bigquery#"
 // Provider handles BigQuery datasets, tables, jobs, and tabledata.
 type Provider struct {
 	store bqstore.Store
+	// sourceReader resolves gs:// load-job sources against the emulated GCS.
+	// It is injected by main.go; nil means load jobs fail loud (Unimplemented).
+	sourceReader SourceReader
 }
 
 // New returns a Provider backed by the given store.
-func New(s bqstore.Store) *Provider {
-	return &Provider{store: s}
+func New(s bqstore.Store, opts ...Option) *Provider {
+	p := &Provider{store: s}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 // Reset wipes the store.
@@ -310,7 +327,18 @@ func (p *Provider) jobMap(projectID string, j bqstore.Job) map[string]any {
 	if _, ok := out["configuration"]; !ok {
 		out["configuration"] = map[string]any{}
 	}
-	out["status"] = map[string]any{"state": "DONE"}
+	// A job is always terminal here (loads/queries run synchronously), but a
+	// data-level failure (WRITE_EMPTY on a non-empty table, maxBadRecords
+	// exceeded) is reported in status.errorResult rather than as an HTTP error,
+	// matching real BigQuery. Preserve it while forcing state=DONE.
+	status := map[string]any{"state": "DONE"}
+	if existing, ok := out["status"].(map[string]any); ok {
+		for k, v := range existing {
+			status[k] = v
+		}
+		status["state"] = "DONE"
+	}
+	out["status"] = status
 	return out
 }
 
@@ -911,6 +939,7 @@ func (p *Provider) InsertJob(ctx context.Context, nr *model.NormalizedRequest) (
 	if _, err := p.store.GetJob(ctx, projectOf(nr), jobID); err == nil {
 		return nil, mapErr(bqstore.ErrAlreadyExists)
 	}
+	now := clock.Now().UTC()
 	// A query job is evaluated synchronously (accepted-risk LROs), exactly like
 	// jobs.query, so its statistics are persisted on the job. That also means a
 	// later getQueryResults never re-executes DDL/DML through this path.
@@ -930,7 +959,28 @@ func (p *Provider) InsertJob(ctx context.Context, nr *model.NormalizedRequest) (
 			body["statistics"] = map[string]any{"query": stats}
 		}
 	}
-	now := clock.Now().UTC()
+	// A load job is likewise evaluated synchronously: the source is read from
+	// the emulated GCS, decoded, coerced to the destination schema and written
+	// to the store before the job is returned (state=DONE). Options outside the
+	// documented subset fail loud (400/501); a data-level failure is reported in
+	// the job's status.errorResult like real BigQuery.
+	if l := mapValue(mapValue(body, "configuration"), "load"); l != nil {
+		loadStats, jobErr, err := p.runLoad(ctx, projectOf(nr), l, now)
+		if err != nil {
+			return nil, err
+		}
+		// application/callers expect the job type on the configuration.
+		mapValue(body, "configuration")["jobType"] = "LOAD"
+		body["statistics"] = map[string]any{
+			"creationTime": millis(now),
+			"startTime":    millis(now),
+			"endTime":      millis(now),
+			"load":         loadStats,
+		}
+		if jobErr != nil {
+			body["status"] = map[string]any{"state": "DONE", "errorResult": jobErr, "errors": []any{jobErr}}
+		}
+	}
 	j := bqstore.Job{JobID: jobID, CreateTime: now}
 	if body != nil {
 		if data, err := json.Marshal(body); err == nil {
