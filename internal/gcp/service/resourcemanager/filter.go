@@ -5,18 +5,34 @@ import (
 	"strings"
 )
 
-// projectFilter is a compiled v1 ListProjects filter expression
-// (cloudresourcemanager.projects.list.filter): a disjunction of field:value
-// clauses. The Discovery document states that "if multiple fields are included
-// in a filter query, the query will return results that match any of the
-// fields", so any matching clause admits the project. An empty filter matches
-// every project.
+// projectFilter is a compiled project filter expression, shared by the v1
+// ListProjects filter (cloudresourcemanager.projects.list.filter) and the v3
+// SearchProjects query (SearchProjectsRequest.query): a disjunction of
+// field:value clauses. The Discovery/proto docs state that "if multiple fields
+// are included in a filter query, the query will return results that match any
+// of the fields", so any matching clause admits the project. An empty filter
+// matches every project.
+//
+// The one exception is the v1 by-parent query, which the Discovery document
+// specifies as a conjunction: it "must contain both a parent.type and a
+// parent.id restriction (example: "parent.type:folder parent.id:123")" and is
+// served from an alternate index. When both clauses are present they are
+// required together, in addition to the usual OR over the remaining clauses.
 type projectFilter struct {
 	clauses []projectClause
+	// parentType and parentID are set when the filter carries a parent.type /
+	// parent.id clause, so a by-parent query can AND the two together.
+	parentType projectClause
+	parentID   projectClause
 }
 
 // match reports whether p satisfies the filter.
 func (f projectFilter) match(p Project) bool {
+	if f.parentType != nil && f.parentID != nil {
+		if !f.parentType.match(p) || !f.parentID.match(p) {
+			return false
+		}
+	}
 	if len(f.clauses) == 0 {
 		return true
 	}
@@ -66,19 +82,79 @@ func (c projectLabelExistsClause) match(p Project) bool {
 	return ok
 }
 
-// compileProjectFilter parses the bounded v1 project-list filter grammar:
+// projectLabelsClause matches a bare `labels:value` clause, which the v3
+// SearchProjects documentation defines as matching "by label name or value":
+// any label key or value equal to (or, with a trailing `*`, prefixed by) the
+// search value admits the project. A value of exactly `*` means the project
+// carries at least one label.
+type projectLabelsClause struct {
+	value  string
+	prefix bool
+	any    bool
+}
+
+func (c projectLabelsClause) match(p Project) bool {
+	for k, v := range p.Labels {
+		if c.any {
+			return true
+		}
+		if c.prefix {
+			if strings.HasPrefix(strings.ToLower(k), c.value) || strings.HasPrefix(strings.ToLower(v), c.value) {
+				return true
+			}
+			continue
+		}
+		if strings.EqualFold(k, c.value) || strings.EqualFold(v, c.value) {
+			return true
+		}
+	}
+	return false
+}
+
+// parentTypeOf derives the singular parent type ("organization"/"folder") from
+// a canonical parent reference ("organizations/{id}"/"folders/{id}"), or "" when
+// no parent is set.
+func parentTypeOf(parent string) string {
+	typ := parent
+	if i := strings.IndexByte(parent, '/'); i >= 0 {
+		typ = parent[:i]
+	}
+	switch typ {
+	case "organizations":
+		return "organization"
+	case "folders":
+		return "folder"
+	}
+	return strings.TrimSuffix(typ, "s")
+}
+
+// parentIDOf returns the numeric id of a canonical parent reference, or "".
+func parentIDOf(parent string) string {
+	if i := strings.IndexByte(parent, '/'); i >= 0 {
+		return parent[i+1:]
+	}
+	return ""
+}
+
+// compileProjectFilter parses the bounded project filter grammar shared by the
+// v1 ListProjects filter and the v3 SearchProjects query:
 //
 //	clause := field ":" value
 //	filter := clause ( <whitespace> clause )*
-//	field  := "name" | "id" | "labels." <key> | "lifecycleState"
+//	field  := "name" | "displayName" | "id" | "projectId" | "labels" |
+//	          "labels." <key> | "lifecycleState" | "state" |
+//	          "parent" | "parent.type" | "parent.id"
 //	value  := <token> | <double-quoted string>
 //
 // Field names and values are matched case-insensitively, clauses are OR-ed, a
 // trailing `*` in a value is a prefix match, and a value of exactly `*` matches
-// any value (for `labels.<key>` it means the key is present). Anything outside
-// the grammar is InvalidArgument rather than a silently wrong (unfiltered)
-// page. `parent.type`/`parent.id` are rejected: they need the org/folder
-// ancestry index the emulator does not model.
+// any value (for `labels.<key>` it means the key is present, for a bare
+// `labels` any label admits the project). Anything outside the grammar is
+// InvalidArgument rather than a silently wrong (unfiltered) page.
+//
+// `parent`/`parent.type`/`parent.id` match the stored parent reference
+// ("organizations/{id}"/"folders/{id}"); a by-parent query carrying both
+// parent.type and parent.id ANDs the two (see projectFilter).
 func compileProjectFilter(filter string) (projectFilter, error) {
 	if strings.TrimSpace(filter) == "" {
 		return projectFilter{}, nil
@@ -165,7 +241,9 @@ func tokenizeProjectFilter(s string) ([]projectFilterToken, error) {
 }
 
 func isProjectFilterIdentPart(c byte) bool {
-	return c == '_' || c == '-' || c == '.' || c == '*' ||
+	// '/' is included so parent references ("folders/123") and the
+	// "organizations/*" prefix form stay a single value token.
+	return c == '_' || c == '-' || c == '.' || c == '*' || c == '/' ||
 		(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
@@ -207,6 +285,12 @@ func (p *projectFilterParser) parse() (projectFilter, error) {
 			return projectFilter{}, err
 		}
 		f.clauses = append(f.clauses, clause)
+		switch strings.ToLower(field.text) {
+		case "parent.type":
+			f.parentType = clause
+		case "parent.id":
+			f.parentID = clause
+		}
 
 		switch p.peek().kind {
 		case pjEOF:
@@ -225,12 +309,20 @@ func newProjectClause(field, value string) (projectClause, error) {
 		return nil, fmt.Errorf("empty value for %q", field)
 	}
 	switch strings.ToLower(field) {
-	case "name":
+	case "name", "displayname":
 		return newProjectValueClause(value, func(p Project) string { return p.DisplayName }), nil
-	case "id":
+	case "id", "projectid":
 		return newProjectValueClause(value, func(p Project) string { return p.ProjectID }), nil
-	case "lifecyclestate":
+	case "lifecyclestate", "state":
 		return newProjectValueClause(value, func(p Project) string { return p.State }), nil
+	case "parent":
+		return newProjectValueClause(value, func(p Project) string { return p.Parent }), nil
+	case "parent.type":
+		return newProjectValueClause(value, func(p Project) string { return parentTypeOf(p.Parent) }), nil
+	case "parent.id":
+		return newProjectValueClause(value, func(p Project) string { return parentIDOf(p.Parent) }), nil
+	case "labels":
+		return newProjectLabelsClause(value), nil
 	}
 	// The "labels." prefix is matched case-insensitively (filter rules are), but
 	// the label key that follows is data and keeps its case.
@@ -243,6 +335,18 @@ func newProjectClause(field, value string) (projectClause, error) {
 		return newProjectValueClause(value, func(p Project) string { return p.Labels[key] }), nil
 	}
 	return nil, fmt.Errorf("unsupported filter field %q (only name, id, labels.<key> and lifecycleState are supported)", field)
+}
+
+// newProjectLabelsClause builds a bare-`labels` clause, applying the same
+// wildcard rules as a value clause but against both label keys and values.
+func newProjectLabelsClause(value string) projectClause {
+	if value == "*" {
+		return projectLabelsClause{any: true}
+	}
+	if prefix, ok := strings.CutSuffix(value, "*"); ok {
+		return projectLabelsClause{value: strings.ToLower(prefix), prefix: true}
+	}
+	return projectLabelsClause{value: value}
 }
 
 // newProjectValueClause builds a value clause, applying the shared wildcard

@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **956**
+Cells: **957**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 705 |
+| ga | 709 |
 | limited | 107 |
 | preview | 14 |
-| unsupported | 130 |
+| unsupported | 127 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 372 | 100 | 14 | 12 |
-| grpc | 333 | 7 | 0 | 118 |
+| rest | 373 | 100 | 14 | 12 |
+| grpc | 336 | 7 | 0 | 115 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -920,7 +920,7 @@ _45 cell(s): ga=45 limited=0 preview=0 unsupported=0_
 
 ## resourcemanager
 
-_19 cell(s): ga=16 limited=0 preview=0 unsupported=3_
+_20 cell(s): ga=20 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -929,7 +929,7 @@ _19 cell(s): ga=16 limited=0 preview=0 unsupported=3_
 | GetIamPolicy | grpc | ga | — |
 | GetProject | grpc | ga | — |
 | ListProjects | grpc | ga | — |
-| MoveProject | grpc | unsupported | project parent/ancestry is not modelled; explicit Unimplemented stub |
+| MoveProject | grpc | ga | — |
 | ResourceManager.ProjectCreate | rest | ga | — |
 | ResourceManager.ProjectDelete | rest | ga | — |
 | ResourceManager.ProjectGet | rest | ga | — |
@@ -938,11 +938,12 @@ _19 cell(s): ga=16 limited=0 preview=0 unsupported=3_
 | ResourceManager.ProjectSetIamPolicy | rest | ga | — |
 | ResourceManager.ProjectTestIamPermissions | rest | ga | — |
 | ResourceManager.ProjectUndelete | rest | ga | — |
-| SearchProjects | grpc | unsupported | project search is not modelled; explicit Unimplemented stub |
+| ResourceManager.ProjectUpdate | rest | ga | — |
+| SearchProjects | grpc | ga | — |
 | SetIamPolicy | grpc | ga | — |
 | TestIamPermissions | grpc | ga | — |
 | UndeleteProject | grpc | ga | — |
-| UpdateProject | grpc | unsupported | project metadata is not modelled; explicit Unimplemented stub |
+| UpdateProject | grpc | ga | — |
 
 ## run
 

@@ -287,6 +287,66 @@ func TestCreateProjectDuplicateConflict(t *testing.T) {
 	}
 }
 
+func TestUpdateProjectV1(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	if _, err := p.CreateProject(ctx, createNR("update-proj-123", "Before Name")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// The v1 body is the Project resource: name = display name, labels.
+	resp, err := p.UpdateProject(ctx, newNR(map[string]any{
+		"project": "update-proj-123",
+		"body":    map[string]any{"name": "After Name", "labels": map[string]any{"env": "prod"}},
+	}))
+	if err != nil {
+		t.Fatalf("updateProject: %v", err)
+	}
+	if resp.Data["name"] != "After Name" {
+		t.Errorf("name = %v, want After Name", resp.Data["name"])
+	}
+	if labels, _ := resp.Data["labels"].(map[string]string); labels["env"] != "prod" {
+		t.Errorf("labels = %v, want env=prod", resp.Data["labels"])
+	}
+	if _, ok := resp.Data["etag"]; ok {
+		t.Error("v1 Project has no etag field; adapter must not emit one")
+	}
+
+	// Omitting labels leaves them unchanged (merge, not full replace).
+	resp, err = p.UpdateProject(ctx, newNR(map[string]any{
+		"project": "update-proj-123",
+		"body":    map[string]any{"name": "Third Name"},
+	}))
+	if err != nil {
+		t.Fatalf("updateProject (name only): %v", err)
+	}
+	if labels, _ := resp.Data["labels"].(map[string]string); labels["env"] != "prod" {
+		t.Errorf("labels = %v, want env=prod preserved", resp.Data["labels"])
+	}
+
+	// An explicit empty labels object clears them.
+	resp, err = p.UpdateProject(ctx, newNR(map[string]any{
+		"project": "update-proj-123",
+		"body":    map[string]any{"labels": map[string]any{}},
+	}))
+	if err != nil {
+		t.Fatalf("updateProject (clear labels): %v", err)
+	}
+	if _, ok := resp.Data["labels"]; ok {
+		t.Errorf("labels = %v, want cleared", resp.Data["labels"])
+	}
+
+	// Updating an unknown project is 404.
+	_, err = p.UpdateProject(ctx, newNR(map[string]any{
+		"project": "never-created",
+		"body":    map[string]any{"name": "Ghost Project"},
+	}))
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) || pe.HTTPStatus != 404 {
+		t.Errorf("update unknown err = %v, want 404 NotFound", err)
+	}
+}
+
 func TestDeleteAndUndeleteProjects(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider()

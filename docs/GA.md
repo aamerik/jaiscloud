@@ -150,10 +150,10 @@ surface and durability.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **348/348 checks pass** (Dataproc 26,
+- **gRPC** — official `cloud.google.com/go` clients: **371/371 checks pass** (Dataproc 26,
   Datastore 15, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 20, IAM 6, IAM Credentials 4, KMS 31, Logging 21,
-  Managed Kafka 21, Metastore 13, Monitoring 34, Operations 5, Pub/Sub 25, Resource Manager 8,
-  Scheduler 8, Secret Manager 16, Service Usage 5, Storage 24, Tasks 16, Workflow Executions 4, Workflows 5) against `:8081`. The IAM probes
+  Managed Kafka 21, Metastore 13, Monitoring 34, Operations 9, Pub/Sub 25, Resource Manager 11,
+  Scheduler 8, Secret Manager 16, Service Usage 6, Storage 24, Tasks 16, Workflow Executions 4, Workflows 5) against `:8081`. The IAM probes
   include Eventarc trigger IAM (GetIamPolicy/SetIamPolicy/TestIamPermissions), which the shared
   `google.iam.v1.IAMPolicy` router dispatches alongside Pub/Sub and KMS.
 - **`gcloud` CLI** — **48 commands: 48 pass, 0 fail, 0 unsupported, 0 regressions**
@@ -243,13 +243,13 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   source mounted at `/workspace`, `FUNCTION_TARGET`/`FUNCTION_SIGNATURE_TYPE`/`LOG_EXECUTION_ID`
   injected), and `JAISCLOUD_FUNCTIONS_EXECUTOR=lambda` selects the legacy Lambda-RIE contract.
 - **gRPC** — **7** of **458** cells remain `limited`: verified against proto descriptors only.
-  The other **332** are `ga` and **119** are explicit `unsupported` stubs (see the `Unimplemented`
+  The other **336** are `ga` and **115** are explicit `unsupported` stubs (see the `Unimplemented`
   list below), verified with the official `cloud.google.com/go` clients against a live emulator.
-  The conformance harness exercises **363** checks over those `ga` proto methods (Cloud Run 15,
+  The conformance harness exercises **371** checks over those `ga` proto methods (Cloud Run 15,
   Dataproc 26,
   Datastore 15, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 20, IAM 6, KMS 31, Logging 21,
-  Managed Kafka 21, Metastore 13, Monitoring 34, Operations 5, Pub/Sub 25, Resource Manager 8,
-  Scheduler 8, Secret Manager 16, Service Usage 5, Storage 24, Tasks 16, Workflow Executions 4, Workflows 5, the rest one
+  Managed Kafka 21, Metastore 13, Monitoring 34, Operations 9, Pub/Sub 25, Resource Manager 11,
+  Scheduler 8, Secret Manager 16, Service Usage 6, Storage 24, Tasks 16, Workflow Executions 4, Workflows 5, the rest one
   per method). KMS
   `ImportCryptoKeyVersion`, `ImportTrustedKeyWrappedCryptoKeyVersion`,
   `ExportTrustedKeyWrappedCryptoKeyVersion` and `Decapsulate` remain `limited`, as do Secret
@@ -309,9 +309,12 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   keeps that path on Cloud Workflows);
   Cloud Resource Manager serves the legacy v1 REST and v3 gRPC project surfaces over one core:
   a lightweight project registry persists created projects (create/get/list/delete/undelete,
-  project IAM as metadata) while any uncreated id still synthesizes as ACTIVE, and project
-  numbers stay deterministic — org/folder ancestry, billing/quota, real project-number
-  allocation, and IAM enforcement are not modelled;
+  the metadata/search admin surface `update`/`move`/`search`, project IAM as metadata) while any
+  uncreated id still synthesizes as ACTIVE, and project numbers stay deterministic — the
+  org/folder *hierarchy* is not modelled (only the project's parent reference is stored and
+  reparentable via `MoveProject`), and a project etag rotates on update/move with a stale etag
+  rejected `ABORTED`; billing/quota, real project-number allocation, and IAM enforcement are not
+  modelled;
   Dataproc `Reset` does not drain in-flight Spark job goroutines, and a Dataproc gRPC
   `SubmitJobAsOperation` completes inline in the default mock executor but cannot be `Wait`-polled
   while a k8s-executor job is still in flight (the generic `google.longrunning.Operations` stub
@@ -426,8 +429,7 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   Dataproc `DiagnoseCluster` (no cluster node/agent/log plane to collect from — the
   diagnostic bundle would be fabricated);
   Workflows `ListWorkflowRevisions` (workflow revision history is not modelled);
-  Cloud Resource Manager v3 `SearchProjects`/`UpdateProject`/`MoveProject` (project search,
-  metadata edits, and org/folder ancestry are not modelled); Eventarc `ChannelConnection`/`GoogleChannelConfig`/`MessageBus`/`Enrollment`/
+  Eventarc `ChannelConnection`/`GoogleChannelConfig`/`MessageBus`/`Enrollment`/
   `Pipeline`/`GoogleApiSource` RPCs (no event-delivery engine is modelled — trigger/channel/
   provider CRUD is the whole implemented surface); Firestore Admin `Databases`/`Backups`/
   `UserCreds`/`Schedules`/`Fields`/`Export`/`Import` RPCs (the gRPC surface is composite-index CRUD

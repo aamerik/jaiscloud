@@ -9,10 +9,11 @@ import (
 func sampleProjects() []Project {
 	return []Project{
 		{ProjectID: "howl-story", DisplayName: "Howl", State: StateActive,
-			Labels: map[string]string{"color": "red", "size": "big"}},
+			Parent: "folders/123", Labels: map[string]string{"color": "red", "size": "big"}},
 		{ProjectID: "howitzer-1", DisplayName: "Howitzer", State: StateActive,
-			Labels: map[string]string{"color": "blue"}},
-		{ProjectID: "quiet-forest", DisplayName: "Quiet Forest", State: StateDeleteRequested},
+			Parent: "organizations/456", Labels: map[string]string{"color": "blue"}},
+		{ProjectID: "quiet-forest", DisplayName: "Quiet Forest", State: StateDeleteRequested,
+			Parent: "folders/123"},
 	}
 }
 
@@ -52,6 +53,24 @@ func TestProjectFilterMatches(t *testing.T) {
 		{"labels.size:big", []string{"howl-story"}},
 		{"lifecycleState:ACTIVE", []string{"howl-story", "howitzer-1"}},
 		{"lifecycleState:delete_requested", []string{"quiet-forest"}},
+		// v3 aliases for the same fields.
+		{"displayName:Howl", []string{"howl-story"}},
+		{"projectId:howitzer-1", []string{"howitzer-1"}},
+		{"state:ACTIVE", []string{"howl-story", "howitzer-1"}},
+		// The stored parent reference and its derived type/id.
+		{"parent:folders/123", []string{"howl-story", "quiet-forest"}},
+		{"parent:organizations/*", []string{"howitzer-1"}},
+		{"parent.type:folder", []string{"howl-story", "quiet-forest"}},
+		{"parent.type:organization", []string{"howitzer-1"}},
+		{"parent.id:123", []string{"howl-story", "quiet-forest"}},
+		// A by-parent query (both parent.type and parent.id) ANDs the two.
+		{"parent.type:folder parent.id:123", []string{"howl-story", "quiet-forest"}},
+		{"parent.type:folder parent.id:999", nil},
+		// A bare `labels` clause matches a label name or value.
+		{"labels:red", []string{"howl-story"}},
+		{"labels:big", []string{"howl-story"}},
+		{"labels:color", []string{"howl-story", "howitzer-1"}},
+		{"labels:*", []string{"howl-story", "howitzer-1"}},
 		// Multiple clauses are OR-ed (Discovery: match any of the fields).
 		{"labels.color:red labels.size:big", []string{"howl-story"}},
 		{"name:howl* lifecycleState:DELETE_REQUESTED", []string{"howl-story", "quiet-forest"}},
@@ -67,17 +86,17 @@ func TestProjectFilterMatches(t *testing.T) {
 
 func TestProjectFilterRejects(t *testing.T) {
 	for _, filter := range []string{
-		"bogus",              // missing ":value"
-		"id",                 // missing ":value"
-		":value",             // missing field
-		"id:",                // empty value
-		"labels.:red",        // empty label key
-		"parent.type:folder", // ancestry index not modelled
-		"parent.id:123",      // ancestry index not modelled
-		"unknown:value",      // unsupported field
-		"id:value extra",     // dangling field
-		"id:\"unterminated",  // unterminated quote
-		"id:one three:",      // missing value after the final colon
+		"bogus",             // missing ":value"
+		"id",                // missing ":value"
+		":value",            // missing field
+		"id:",               // empty value
+		"labels.:red",       // empty label key
+		"parent.type:",      // empty value
+		"parentx:folder",    // unsupported field
+		"unknown:value",     // unsupported field
+		"id:value extra",    // dangling field
+		"id:\"unterminated", // unterminated quote
+		"id:one three:",     // missing value after the final colon
 	} {
 		if _, err := compileProjectFilter(filter); err == nil {
 			t.Errorf("compile(%q) succeeded, want InvalidArgument", filter)

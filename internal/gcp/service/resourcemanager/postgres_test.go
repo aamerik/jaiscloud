@@ -38,6 +38,17 @@ func TestPostgresProjectRegistryRoundTrip(t *testing.T) {
 	if _, _, err := s.CreateProject(ctx, CreateProjectInput{ProjectID: "pg-project-123", DisplayName: "PG Project"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	if _, _, err := s.CreateProject(ctx, CreateProjectInput{ProjectID: "pg-project-456", DisplayName: "PG Admin"}); err != nil {
+		t.Fatalf("create admin project: %v", err)
+	}
+	if _, _, err := s.UpdateProject(ctx, "pg-project-456", UpdateProjectInput{
+		DisplayName: "PG Admin Updated", Labels: map[string]string{"env": "pg"}, UpdateMask: []string{"display_name", "labels"},
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if _, _, err := s.MoveProject(ctx, "pg-project-456", "folders/777"); err != nil {
+		t.Fatalf("move: %v", err)
+	}
 	if _, _, err := s.DeleteProject(ctx, "extra-proj1"); err != nil {
 		t.Fatalf("delete configured project: %v", err)
 	}
@@ -59,6 +70,13 @@ func TestPostgresProjectRegistryRoundTrip(t *testing.T) {
 	if got.DisplayName != "PG Project" || got.State != StateActive {
 		t.Fatalf("restored project = %+v, want displayName PG Project ACTIVE", got)
 	}
+	admin, err := s.GetProject(ctx, "pg-project-456")
+	if err != nil {
+		t.Fatalf("get admin project after restore: %v", err)
+	}
+	if admin.DisplayName != "PG Admin Updated" || admin.Labels["env"] != "pg" || admin.Parent != "folders/777" {
+		t.Fatalf("restored admin project = %+v, want updated displayName/labels/parent", admin)
+	}
 	deleted, err := s.GetProject(ctx, "extra-proj1")
 	if err != nil {
 		t.Fatalf("get deleted configured project: %v", err)
@@ -74,7 +92,7 @@ func TestPostgresProjectRegistryRoundTrip(t *testing.T) {
 	for _, p := range page {
 		ids[p.ProjectID] = true
 	}
-	for _, want := range []string{"pg-project-123", "default-proj", "extra-proj1"} {
+	for _, want := range []string{"pg-project-123", "pg-project-456", "default-proj", "extra-proj1"} {
 		if !ids[want] {
 			t.Errorf("restored list missing %s: %v", want, projectIDs(page))
 		}

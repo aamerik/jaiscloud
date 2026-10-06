@@ -12,6 +12,7 @@ func TestCodecDecode(t *testing.T) {
 		method, path, action string
 	}{
 		{"GET", "/v1/projects/p", "ProjectGet"},
+		{"PUT", "/v1/projects/p", "ProjectUpdate"},
 		{"DELETE", "/v1/projects/p", "ProjectDelete"},
 		{"POST", "/v1/projects/p:undelete", "ProjectUndelete"},
 		{"POST", "/v1/projects/p:getIamPolicy", "ProjectGetIamPolicy"},
