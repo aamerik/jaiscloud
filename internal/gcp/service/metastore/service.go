@@ -33,6 +33,7 @@ import (
 	"strings"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/paging"
 	metastorestore "jaiscloud/internal/gcp/store/metastore"
@@ -46,6 +47,9 @@ type Service struct {
 	// operation is stored done=true inline, matching the v1.1.0 contract. An
 	// enabled mode stores operations done=false and settles them lazily on read.
 	lroMode lro.Mode
+	// tracker publishes the one-time "operation settled" event when a lazily
+	// settled operation completes. Nil (no bus) makes it inert.
+	tracker *lro.Tracker
 }
 
 // Option configures Service.
@@ -56,6 +60,16 @@ type Option func(*Service)
 // operations done=false and settles them on read once d has elapsed.
 func WithLROMode(m lro.Mode) Option {
 	return func(s *Service) { s.lroMode = m }
+}
+
+// WithEventBus wires the shared event bus the console's live status stream
+// subscribes to. Nil (the default) disables status events.
+func WithEventBus(bus *events.EventBus) Option {
+	return func(s *Service) {
+		if bus != nil {
+			s.tracker = lro.NewTracker(bus)
+		}
+	}
 }
 
 // NewService returns a Dataproc Metastore core backed by the given store.

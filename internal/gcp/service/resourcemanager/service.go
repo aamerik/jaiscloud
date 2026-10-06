@@ -37,6 +37,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/resource"
@@ -67,6 +68,9 @@ type Service struct {
 	// synchronous: every operation is returned done=true inline. An enabled mode
 	// stores operations done=false and settles them lazily on read.
 	lroMode lro.Mode
+	// tracker publishes the one-time "operation settled" event when a lazily
+	// settled operation completes. Nil (no bus) makes it inert.
+	tracker *lro.Tracker
 }
 
 // Option configures Service.
@@ -88,6 +92,16 @@ func WithKnownProjects(defaultProject string, extra []string) Option {
 // done=false and settles them on read once d has elapsed.
 func WithLROMode(m lro.Mode) Option {
 	return func(s *Service) { s.lroMode = m }
+}
+
+// WithEventBus wires the shared event bus the console's live status stream
+// subscribes to. Nil (the default) disables status events.
+func WithEventBus(bus *events.EventBus) Option {
+	return func(s *Service) {
+		if bus != nil {
+			s.tracker = lro.NewTracker(bus)
+		}
+	}
 }
 
 // NewService returns a Service backed by the shared ResourceStore.

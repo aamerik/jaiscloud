@@ -252,5 +252,6 @@ func (s *Service) settle(op metastorestore.Operation) metastorestore.Operation {
 	}
 	op.Done = true
 	op.EndTime = op.CreateTime.Add(s.lroMode.Delay)
+	s.tracker.EmitOperation("metastore", op.ID, op.ID, op.Verb)
 	return op
 }

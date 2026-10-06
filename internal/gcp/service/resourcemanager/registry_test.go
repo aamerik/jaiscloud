@@ -3,11 +3,14 @@ package resourcemanager
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/gcp/lro"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -293,6 +296,76 @@ func TestOperationAsyncSettle(t *testing.T) {
 	}
 	if !got.Done || !got.EndTime.Equal(t0.Add(30*time.Second)) {
 		t.Errorf("settled operation = %+v, want done at create+delay", got)
+	}
+}
+
+// TestOperationAsyncSettleEmitsStatusEvent verifies the settle publishes exactly
+// one cloud-neutral status event (keyed for the Resource Manager pages) and that
+// a repeated poll does not re-emit.
+func TestOperationAsyncSettleEmitsStatusEvent(t *testing.T) {
+	ctx := context.Background()
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
+
+	bus := events.NewEventBus()
+	var mu sync.Mutex
+	var published []events.StatusEvent
+	bus.Subscribe(events.EventStatus, func(e events.Event) {
+		if p, ok := e.Payload.(events.StatusEvent); ok {
+			mu.Lock()
+			published = append(published, p)
+			mu.Unlock()
+		}
+	})
+
+	s, _ := newRegistryService(
+		WithLROMode(lro.Mode{Enabled: true, Delay: 30 * time.Second}),
+		WithEventBus(bus))
+	_, op, err := s.CreateProject(ctx, CreateProjectInput{ProjectID: "async-project"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Still pending: a read does not settle, so nothing is published.
+	if _, err := s.GetOperation(ctx, "async-project", op.Name); err != nil {
+		t.Fatalf("get pending: %v", err)
+	}
+	if n := len(published); n != 0 {
+		t.Fatalf("published %d events before settle, want 0", n)
+	}
+
+	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(30 * time.Second)})
+	if _, err := s.GetOperation(ctx, "async-project", op.Name); err != nil {
+		t.Fatalf("get settled: %v", err)
+	}
+	mu.Lock()
+	if len(published) != 1 {
+		mu.Unlock()
+		t.Fatalf("published %d events after settle, want 1", len(published))
+	}
+	ev := published[0]
+	mu.Unlock()
+	want := events.StatusEvent{
+		Cloud:    model.CloudGCP,
+		Keys:     []string{"gcp", "resourcemanager"},
+		Resource: "gcp-resourcemanager-operation",
+		ID:       op.Name,
+		State:    "DONE",
+		Detail:   "create",
+	}
+	if !reflect.DeepEqual(ev, want) {
+		t.Fatalf("settle event = %+v, want %+v", ev, want)
+	}
+
+	// A repeated poll must not re-emit.
+	if _, err := s.GetOperation(ctx, "async-project", op.Name); err != nil {
+		t.Fatalf("second get: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(published) != 1 {
+		t.Fatalf("published %d events after repeat poll, want 1", len(published))
 	}
 }
 
