@@ -43,6 +43,7 @@ import (
 	kinesisstore "jaiscloud/internal/aws/store/kinesis"
 	sfnstore "jaiscloud/internal/aws/store/stepfunctions"
 	stsprovider "jaiscloud/internal/aws/sts"
+	"jaiscloud/internal/docker"
 	"jaiscloud/internal/logstream"
 	"jaiscloud/internal/workers"
 
@@ -77,8 +78,8 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/events"
-	ecsexec "jaiscloud/internal/executor/ecs"
 	lambdaexec "jaiscloud/internal/executor/awslambda"
+	ecsexec "jaiscloud/internal/executor/ecs"
 	"jaiscloud/internal/gateway"
 	"jaiscloud/internal/k8shelpers"
 	"jaiscloud/internal/model"
@@ -776,8 +777,14 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		lambdaCfg.JaisCloudEndpoint = v
 	}
 	lambdaCfg = lambdaexec.LambdaConfigFrom(lambdaCfg)
+	// A docker mode with no reachable daemon degrades to the mock executor (as
+	// GCP Cloud Run/Dataproc do); otherwise startup would succeed and only the
+	// first invoke would fail inside the container-start path.
+	effLambdaMode := effectiveLambdaMode(lambdaMode, func(ctx context.Context) error {
+		return docker.Ping(ctx, "")
+	})
 	var lambdaExec lambdaexec.LambdaExecutor
-	switch lambdaMode {
+	switch effLambdaMode {
 	case "docker":
 		lambdaExec = lambdaexec.NewDockerExecutor(lambdaCfg, platformCfg)
 	case "k8s":
@@ -785,7 +792,7 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 	default:
 		lambdaExec = lambdaexec.NewExecutor(lambdaCfg)
 	}
-	slog.Info("lambda executor", "mode", lambdaMode, "source", lambdaModeSrc)
+	slog.Info("lambda executor", "mode", effLambdaMode, "requested", lambdaMode, "source", lambdaModeSrc)
 	prevCleanup := cleanup
 	cleanup = func() { lambdaExec.Close(); prevCleanup() }
 
@@ -1215,6 +1222,28 @@ func buildECRProvider(ctx context.Context, cfg *config.Config, s appStores) *ecr
 }
 
 // ─── kinesis provider factory ─────────────────────────────────────────────────
+
+// lambdaDockerPingTimeout bounds the daemon probe before selecting the docker
+// Lambda executor.
+const lambdaDockerPingTimeout = 5 * time.Second
+
+// effectiveLambdaMode resolves the executor actually used. A docker mode with no
+// reachable Docker daemon degrades to mock, matching GCP Cloud Run/Dataproc: the
+// emulator runs and reports the truth instead of accepting the config and then
+// failing every invoke inside the container-start path. ping is injectable for
+// tests.
+func effectiveLambdaMode(mode string, ping func(context.Context) error) string {
+	if mode != "docker" {
+		return mode
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), lambdaDockerPingTimeout)
+	defer cancel()
+	if err := ping(ctx); err != nil {
+		slog.Warn("lambda: docker daemon unreachable; falling back to mock", "err", err)
+		return "mock"
+	}
+	return "docker"
+}
 
 func buildKinesisProvider(ctx context.Context, cfg *config.Config, s appStores) *kinesisprovider.Provider {
 	if cfg.DSN != "" {
