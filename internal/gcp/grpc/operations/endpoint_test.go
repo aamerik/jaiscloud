@@ -180,3 +180,32 @@ func TestUntokenedListDoesNotCrossContaminate(t *testing.T) {
 		t.Fatalf("untokened ListOperations = %+v, want empty", page.GetOperations())
 	}
 }
+
+// TestEndpointTokenCarriesMultipleResolvers verifies a token can own more than
+// one resolver (Cloud Functions v1 and v2 share cloudfunctions.googleapis.com):
+// an endpoint request consults them in registration order, so a name owned by
+// either resolves.
+func TestEndpointTokenCarriesMultipleResolvers(t *testing.T) {
+	v1Name := "operations/v1-op"
+	v2Name := "projects/p/locations/us/operations/v2-op"
+	v1 := fakeResolver{name: v1Name, op: &longrunningpb.Operation{Name: v1Name, Done: false}}
+	v2 := fakeResolver{name: v2Name, op: &longrunningpb.Operation{Name: v2Name, Done: false}}
+	svc := New(v1, v2)
+	svc.SetEndpointResolvers("cloudfunctions", v1, v2)
+
+	addr, stop := startOperationsServer(t, svc)
+	defer stop()
+	client, closeClient := dialOperations(t, addr, "cloudfunctions.localhost:8081")
+	defer closeClient()
+	ctx := context.Background()
+
+	for _, name := range []string{v1Name, v2Name} {
+		op, err := client.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: name})
+		if err != nil {
+			t.Fatalf("GetOperation(%s): %v", name, err)
+		}
+		if op.GetName() != name || op.GetDone() {
+			t.Fatalf("GetOperation(%s) = %+v, want the resolver's in-flight op", name, op)
+		}
+	}
+}
