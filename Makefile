@@ -6,14 +6,15 @@
 PYTHON ?= python3
 
 # Plan families in priority order for `make gcp-status-next` (comma-separated);
-# other families sort after these, alphabetically. functions-docker-executor
-# (FDF1/FDF2: the GCP Functions docker-executor consistency fixes) is promoted
-# first, then console-ui (the GCP console UI effort), then ledger-integrity (it
-# repairs merge-link accuracy so the planned list can be trusted), then
-# dataproc-gke (the Dataproc-on-GKE completion work), then the Java-compat
-# effort owns waves W1–W3. The AWS-parity families run next; the BigQuery engine
-# decision (bigquery-ga) is deliberately deprioritized behind them.
-SERIES ?= functions-docker-executor,console-ui,ledger-integrity,dataproc-gke,java-compat,functions-parity,metastore-parity,bigquery-ga,bigquery-load-jobs,demo-spikes
+# other families sort after these, alphabetically. ga-fidelity (the GA-fidelity
+# wave plan: closing the tractable fidelity-matrix gaps) is the current priority,
+# then functions-docker-executor (FDF1/FDF2: the GCP Functions docker-executor
+# consistency fixes), then console-ui (the GCP console UI effort), then
+# ledger-integrity (it repairs merge-link accuracy so the planned list can be
+# trusted), then dataproc-gke (the Dataproc-on-GKE completion work), then the
+# Java-compat effort owns waves W1–W3. The AWS-parity families run next; the
+# BigQuery engine decision (bigquery-ga) is deliberately deprioritized behind them.
+SERIES ?= ga-fidelity,functions-docker-executor,console-ui,ledger-integrity,dataproc-gke,java-compat,functions-parity,metastore-parity,bigquery-ga,bigquery-load-jobs,demo-spikes
 
 # Include non-ga fidelity-matrix cells in the ledger (informational, kind=matrix).
 # Set MATRIX= to disable.
