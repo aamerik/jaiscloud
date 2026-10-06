@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 955,
+    "total": 956,
     "by_state": {
-      "ga": 697,
+      "ga": 699,
       "limited": 113,
       "preview": 14,
-      "unsupported": 131
+      "unsupported": 130
     },
     "by_transport": {
       "grpc": {
-        "ga": 332,
+        "ga": 333,
         "limited": 7,
-        "unsupported": 119
+        "unsupported": 118
       },
       "rest": {
-        "ga": 365,
+        "ga": 366,
         "limited": 106,
         "preview": 14,
         "unsupported": 12
@@ -118,8 +118,7 @@
         "limited": 2
       },
       "serviceusage": {
-        "ga": 10,
-        "unsupported": 1
+        "ga": 12
       },
       "storage": {
         "ga": 57
@@ -9107,11 +9106,10 @@
       "service": "serviceusage",
       "operation": "BatchGetServices",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "not served by the emulator (the REST surface does not implement it either); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -9164,6 +9162,16 @@
       "evidence": [
         "discovery=serviceusage.services.batchEnable",
         "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "serviceusage",
+      "operation": "ServiceUsage.ServicesBatchGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=serviceusage.services.batchGet",
         "postgres=yes"
       ]
     },

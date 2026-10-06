@@ -85,16 +85,23 @@ func bodyOf(nr *model.NormalizedRequest) map[string]any {
 	return map[string]any{}
 }
 
-// stringSlice extracts a []string from a decoded JSON array ([]any of string).
+// stringSlice extracts a []string from a decoded JSON array ([]any of string)
+// or a repeated query parameter ([]string).
 func stringSlice(v any) []string {
-	items, _ := v.([]any)
-	out := make([]string, 0, len(items))
-	for _, it := range items {
-		if s, ok := it.(string); ok {
-			out = append(out, s)
+	switch xs := v.(type) {
+	case []string:
+		return xs
+	case []any:
+		out := make([]string, 0, len(xs))
+		for _, it := range xs {
+			if s, ok := it.(string); ok {
+				out = append(out, s)
+			}
 		}
+		return out
+	default:
+		return nil
 	}
-	return out
 }
 
 // ─── wire encoding ────────────────────────────────────────────────────────────

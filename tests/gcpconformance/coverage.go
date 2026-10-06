@@ -77,6 +77,7 @@ var actionOverrides = map[string]string{
 	// Service Usage v1 services.* verbs.
 	"ServiceUsage.ServicesList":        "serviceusage.services.list",
 	"ServiceUsage.ServicesGet":         "serviceusage.services.get",
+	"ServiceUsage.ServicesBatchGet":    "serviceusage.services.batchGet",
 	"ServiceUsage.ServicesBatchEnable": "serviceusage.services.batchEnable",
 	"ServiceUsage.ServicesEnable":      "serviceusage.services.enable",
 	"ServiceUsage.ServicesDisable":     "serviceusage.services.disable",

@@ -57,6 +57,9 @@ const rtOperation = "gcp_serviceusage_operation"
 // maxBatchEnable mirrors real GCP's per-request batchEnable cap.
 const maxBatchEnable = 20
 
+// maxBatchGet mirrors real GCP's per-request BatchGetServices cap.
+const maxBatchGet = 30
+
 // ListServices page-size contract: the default is 50 and the maximum is 200
 // (serviceusage.googleapis.com Discovery, services.list pageSize).
 const (
@@ -227,6 +230,41 @@ func (s *Service) GetAPI(ctx context.Context, project, service string) (API, err
 		return API{}, err
 	}
 	return buildAPI(project, service, st), nil
+}
+
+// BatchGetAPIs returns one API per full resource name
+// (projects/{project}/services/{service}), preserving the requested order. Like
+// GetAPI, a name that has never been enabled resolves to DISABLED rather than
+// NotFound: real GCP lists every public API and the emulator has no catalog, so
+// an unknown id is simply not enabled. project, when non-empty, is the consumer
+// the names must belong to (the request's parent); a malformed name, a name
+// under a different project, an empty list, or more than maxBatchGet names is an
+// InvalidArgument.
+func (s *Service) BatchGetAPIs(ctx context.Context, project string, names []string) ([]API, error) {
+	if len(names) == 0 {
+		return nil, invalidArgument("names must not be empty")
+	}
+	if len(names) > maxBatchGet {
+		return nil, invalidArgument(fmt.Sprintf(
+			"A single request can get a maximum of %d services at a time.", maxBatchGet))
+	}
+	apis := make([]API, 0, len(names))
+	for _, name := range names {
+		nameProject, service, ok := splitServiceName(name)
+		if !ok {
+			return nil, invalidArgument(fmt.Sprintf("Invalid service name %q.", name))
+		}
+		if project != "" && nameProject != project {
+			return nil, invalidArgument(fmt.Sprintf(
+				"Service name %q must match parent projects/%s.", name, project))
+		}
+		st, err := s.readState(ctx, nameProject, service)
+		if err != nil {
+			return nil, err
+		}
+		apis = append(apis, buildAPI(nameProject, service, st))
+	}
+	return apis, nil
 }
 
 // EnableAPI flips a service to ENABLED and returns it with the operation.

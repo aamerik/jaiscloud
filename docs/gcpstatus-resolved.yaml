@@ -217,3 +217,18 @@ entries:
     match: "stale-doc"
     pr: 414
     note: "resolved: cleared the six stale-doc entries via the resolution overlay (GA0)"
+
+  # GA1 — Service Usage BatchGetServices now ships over the shared core on both
+  # transports (#415). The wave-plan row lives in gitignored scratch, so this
+  # commits the closure; evidence-gated on #415.
+  - source: "gcp-ga-fidelity-wave-plan"
+    match: "stub on both transports"
+    pr: 415
+    note: "resolved: serviceusage BatchGetServices served over the shared core, REST + gRPC (#415, GA1)"
+
+  # GA1 also resolves the java-compat R35 deferral (the same batchGet gap). Its
+  # source doc is gitignored scratch, so this commits that closure too.
+  - source: "gcp-java-compat"
+    match: "404 UnsupportedOperation"
+    pr: 415
+    note: "resolved: serviceusage services:batchGet served, closing R35 (#415, GA1)"

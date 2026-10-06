@@ -28,6 +28,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		"ServiceUsage.ServicesList":        p.ListServices,
 		"ServiceUsage.ServicesGet":         p.GetService,
+		"ServiceUsage.ServicesBatchGet":    p.BatchGetServices,
 		"ServiceUsage.ServicesBatchEnable": p.BatchEnableServices,
 		"ServiceUsage.ServicesEnable":      p.EnableService,
 		"ServiceUsage.ServicesDisable":     p.DisableService,
@@ -72,6 +73,18 @@ func (p *Provider) GetService(ctx context.Context, nr *model.NormalizedRequest) 
 		return nil, err
 	}
 	return provider.OK(serviceToJSON(api)), nil
+}
+
+func (p *Provider) BatchGetServices(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	apis, err := p.core.BatchGetAPIs(ctx, p.project(nr), stringSlice(nr.Params["names"]))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]any, 0, len(apis))
+	for _, a := range apis {
+		items = append(items, serviceToJSON(a))
+	}
+	return provider.OK(map[string]any{"services": items}), nil
 }
 
 func (p *Provider) EnableService(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
