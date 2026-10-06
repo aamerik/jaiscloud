@@ -344,13 +344,18 @@ func startCmd() *cobra.Command {
 			// Lambda-RIE contract for back-compat.
 			var functionsCore *functionscore.Service
 			// The requested Functions executor mode and the effective one: a
-			// docker mode with no reachable daemon degrades to mock (below), so
-			// the console reports the truth instead of claiming docker-backed.
+			// docker mode with no reachable daemon, or a k8s mode whose client
+			// cannot be built, degrades to mock (below), so the console reports
+			// the truth instead of claiming a backend that would fail on the
+			// first invoke.
 			funcMode, funcModeSrc := config.ExecutorMode("functions", "mock")
 			functionsMode := funcMode
 			if serviceEnabled("functions") {
 				funcCfg := gcf.DefaultConfig()
-				funcCfg.Mode = effectiveFunctionsMode(funcMode, func(ctx context.Context) error {
+				// Resolve the effective mode and, for k8s, the probed client so
+				// the executor reuses it rather than building a second one.
+				var funcK8sClient kubernetes.Interface
+				funcCfg.Mode, funcK8sClient = effectiveFunctionsMode(funcMode, func(ctx context.Context) error {
 					return docker.Ping(ctx, "")
 				})
 				functionsMode = funcCfg.Mode
@@ -370,7 +375,7 @@ func startCmd() *cobra.Command {
 				// bundle, extra volumes and env as the Cloud Run/Dataproc docker
 				// executors (FDF2). A platform load failure is non-fatal, as in
 				// that wiring.
-				funcExec := newFunctionsExecutor(funcCfg, profile)
+				funcExec := newFunctionsExecutor(funcCfg, profile, funcK8sClient)
 				defer funcExec.Close()
 				slog.Info("functions executor", "mode", functionsMode, "requested", funcMode, "source", funcModeSrc, "profile", profile.Name())
 				serviceOpts := []functionscore.Option{
@@ -2241,50 +2246,72 @@ func functionsPlatformConfig(mode string) *platform.PlatformConfig {
 	return platformCfg
 }
 
+// buildFunctionsK8sClient builds the Kubernetes client the k8s Functions
+// executor uses. It is a package variable so a test can inject a client (or a
+// build failure) without a cluster; production delegates to the shared
+// buildK8sClient bootstrap, as the Cloud Run/Dataproc wiring does.
+var buildFunctionsK8sClient = buildK8sClient
+
 // functions executor constructors, as package variables so a test can capture
-// the platform config without standing up a daemon or a cluster. Production
-// always uses the real container constructors.
+// the platform config (and the injected k8s client) without standing up a
+// daemon or a cluster. Production always uses the real container constructors.
 var (
 	newFunctionsDockerExecutor = func(cfg container.Config, profile container.Profile, plat *platform.PlatformConfig) container.Executor {
 		return container.NewDockerExecutor(cfg, profile, plat)
 	}
-	newFunctionsK8sExecutor = func(cfg container.Config, profile container.Profile, plat *platform.PlatformConfig) container.Executor {
-		return container.NewK8sExecutor(cfg, profile, plat)
+	newFunctionsK8sExecutor = func(cfg container.Config, profile container.Profile, plat *platform.PlatformConfig, opts ...container.K8sExecutorOption) container.Executor {
+		return container.NewK8sExecutor(cfg, profile, plat, opts...)
 	}
 )
 
 // newFunctionsExecutor builds the Functions executor for the effective mode,
 // threading the platform overlay (TLS PEM bundle, extra volumes/env) into the
-// docker/k8s executors so function containers/pods receive it. Mock stays the
-// default for every other mode.
-func newFunctionsExecutor(cfg container.Config, profile container.Profile) container.Executor {
+// docker/k8s executors so function containers/pods receive it. A k8s executor
+// reuses the client resolved during the startup probe (k8sClient) instead of
+// building a second one. Mock stays the default for every other mode.
+func newFunctionsExecutor(cfg container.Config, profile container.Profile, k8sClient kubernetes.Interface) container.Executor {
 	switch cfg.Mode {
 	case "docker":
 		return newFunctionsDockerExecutor(cfg, profile, functionsPlatformConfig(cfg.Mode))
 	case "k8s":
-		return newFunctionsK8sExecutor(cfg, profile, functionsPlatformConfig(cfg.Mode))
+		var opts []container.K8sExecutorOption
+		if k8sClient != nil {
+			opts = append(opts, container.WithK8sClient(k8sClient))
+		}
+		return newFunctionsK8sExecutor(cfg, profile, functionsPlatformConfig(cfg.Mode), opts...)
 	default:
 		return &container.MockExecutor{}
 	}
 }
 
-// effectiveFunctionsMode resolves the Functions executor actually used. A docker
-// mode with no reachable Docker daemon degrades to mock, matching the Cloud
-// Run/Dataproc docker startup probes (and AWS Lambda's effectiveLambdaMode): the
-// emulator runs and reports the truth instead of accepting the config and then
-// failing every invoke inside the container start path. ping is injectable for
-// tests.
-func effectiveFunctionsMode(mode string, ping func(context.Context) error) string {
-	if mode != "docker" {
-		return mode
+// effectiveFunctionsMode resolves the Functions executor actually used and, for
+// k8s, the client the executor should reuse. A docker mode with no reachable
+// Docker daemon, or a k8s mode whose client cannot be built, degrades to mock,
+// matching the Cloud Run/Dataproc startup probes (and AWS Lambda's
+// effectiveLambdaMode): the emulator runs and reports the truth instead of
+// accepting the config and then failing every invoke inside the container/pod
+// start path. dockerPing is injectable for tests; the k8s client comes from the
+// buildFunctionsK8sClient package variable.
+func effectiveFunctionsMode(mode string, dockerPing func(context.Context) error) (string, kubernetes.Interface) {
+	switch mode {
+	case "docker":
+		ctx, cancel := context.WithTimeout(context.Background(), functionsDockerPingTimeout)
+		defer cancel()
+		if err := dockerPing(ctx); err != nil {
+			slog.Warn("functions: docker daemon unreachable; falling back to mock", "err", err)
+			return "mock", nil
+		}
+		return "docker", nil
+	case "k8s":
+		client, err := buildFunctionsK8sClient()
+		if err != nil {
+			slog.Warn("functions: failed to build k8s client; falling back to mock", "err", err)
+			return "mock", nil
+		}
+		return "k8s", client
+	default:
+		return mode, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), functionsDockerPingTimeout)
-	defer cancel()
-	if err := ping(ctx); err != nil {
-		slog.Warn("functions: docker daemon unreachable; falling back to mock", "err", err)
-		return "mock"
-	}
-	return "docker"
 }
 
 // functionsRuntimeProfile selects the Cloud Functions runtime profile: the GCP
