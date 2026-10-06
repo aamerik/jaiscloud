@@ -12,8 +12,8 @@ Cells: **956**
 
 | state | count |
 | --- | --- |
-| ga | 699 |
-| limited | 113 |
+| ga | 701 |
+| limited | 111 |
 | preview | 14 |
 | unsupported | 130 |
 
@@ -21,7 +21,7 @@ Cells: **956**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 366 | 106 | 14 | 12 |
+| rest | 368 | 104 | 14 | 12 |
 | grpc | 333 | 7 | 0 | 118 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -946,7 +946,7 @@ _19 cell(s): ga=16 limited=0 preview=0 unsupported=3_
 
 ## run
 
-_28 cell(s): ga=26 limited=2 preview=0 unsupported=0_
+_28 cell(s): ga=28 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -958,7 +958,7 @@ _28 cell(s): ga=26 limited=2 preview=0 unsupported=0_
 | GetService | grpc | ga | — |
 | ListRevisions | grpc | ga | — |
 | ListServices | grpc | ga | — |
-| Run.CancelOperation | rest | limited | no matching Discovery method (unverified against the official schema) |
+| Run.CancelOperation | rest | ga | shared google.longrunning.Operations.CancelOperation common API; not enumerated in the run v2 Discovery document (operations.get/list/delete/wait only), but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:cancel) and wire-tested |
 | Run.CreateService | rest | ga | — |
 | Run.DeleteOperation | rest | ga | — |
 | Run.DeleteRevision | rest | ga | — |
@@ -967,7 +967,7 @@ _28 cell(s): ga=26 limited=2 preview=0 unsupported=0_
 | Run.GetOperation | rest | ga | — |
 | Run.GetRevision | rest | ga | — |
 | Run.GetService | rest | ga | — |
-| Run.Invoke | rest | limited | no matching Discovery method (unverified against the official schema) |
+| Run.Invoke | rest | ga | Cloud Run data-plane invocation (the synthesized {service}-{token}.{location}.run.app host, or the legacy /run/v2/.../services/{svc}/<subpath> path form), not a Discovery method; served by the InvocationCodec/runtime seam and wire/unit-tested (mock resolves 503, the docker/k8s executor proxies to the revision) |
 | Run.ListOperations | rest | ga | — |
 | Run.ListRevisions | rest | ga | — |
 | Run.ListServices | rest | ga | — |

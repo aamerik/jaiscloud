@@ -156,6 +156,21 @@ operations:
     state: ga
     allow_upgrade: true
     reason: "deployed function's HTTPS-trigger URL (a function URL host, not a Discovery method); served at {location}-{project}.cloudfunctions.net/{functionId} and wire-tested"
+  # Cloud Run REST common-API / data-plane methods. The run v2 Discovery document
+  # enumerates operations.get/list/delete/wait but not :cancel, and has no
+  # `invoke` method at all, so the classifier reports both as limited ("no
+  # matching Discovery method"). The handlers are served and wire/unit-tested, so
+  # the cells are upgraded to ga.
+  - service: run
+    operation: Run.CancelOperation
+    state: ga
+    allow_upgrade: true
+    reason: "shared google.longrunning.Operations.CancelOperation common API; not enumerated in the run v2 Discovery document (operations.get/list/delete/wait only), but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:cancel) and wire-tested"
+  - service: run
+    operation: Run.Invoke
+    state: ga
+    allow_upgrade: true
+    reason: "Cloud Run data-plane invocation (the synthesized {service}-{token}.{location}.run.app host, or the legacy /run/v2/.../services/{svc}/<subpath> path form), not a Discovery method; served by the InvocationCodec/runtime seam and wire/unit-tested (mock resolves 503, the docker/k8s executor proxies to the revision)"
   # Cloud Workflows gRPC is control-plane only: ListWorkflowRevisions has no
   # emulator implementation (workflow revision history is not modelled), so it
   # is an explicit Unimplemented stub.

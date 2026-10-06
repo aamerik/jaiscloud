@@ -54,8 +54,8 @@ fails CI if the committed matrix drifts.
 
 | state | cells |
 | --- | ---: |
-| ga | 699 |
-| limited | 113 |
+| ga | 701 |
+| limited | 111 |
 | preview | 14 |
 | unsupported | 130 |
 | **total** | **956** |
@@ -64,7 +64,7 @@ fails CI if the committed matrix drifts.
 
 | transport | ga | limited | preview | unsupported |
 | --- | ---: | ---: | ---: | ---: |
-| REST (JSON, Discovery-backed) | 366 | 106 | 14 | 12 |
+| REST (JSON, Discovery-backed) | 368 | 104 | 14 | 12 |
 | gRPC (proto descriptors + official-client conformance) | 333 | 7 | 0 | 118 |
 
 gRPC-only services (no REST transport): **Firestore Admin, Operations (long-running)**.
