@@ -7605,7 +7605,7 @@
       "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (conformance=3/3 pass)"
+        "transport=grpc (conformance=5/5 pass)"
       ]
     },
     {
