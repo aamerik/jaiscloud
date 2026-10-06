@@ -14,11 +14,6 @@ import {
   MenuItem,
   Paper,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
   TextField,
   Tooltip,
   Typography,
@@ -41,8 +36,7 @@ import {
 import type { ServiceDescriptor } from '../../api/services'
 import { getRuntimeHealth, type EngineHealth } from '../../api/gcp/runtime'
 import { useServices } from '../../hooks/useServices'
-import { engineModes, engineStatus } from '../../lib/engine'
-import { tierDescription, tierLabel } from '../../lib/tier'
+import { engineModes, engineStatus, type EngineReachability } from '../../lib/engine'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
@@ -365,6 +359,27 @@ function backendTooltip(service: ServiceDescriptor) {
   )
 }
 
+/** One engine-backed service: label + its backend status chip and mode tooltip. */
+function ServiceBackendRow({
+  service,
+  reach,
+}: {
+  service: ServiceDescriptor
+  reach: EngineReachability
+}) {
+  const status = engineStatus(service, reach)
+  return (
+    <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 0.25 }}>
+      <Typography variant="body2" sx={{ fontWeight: 500, minWidth: 140 }}>
+        {service.label}
+      </Typography>
+      <Tooltip title={backendTooltip(service)}>
+        <Chip size="small" label={status.label} color={status.color} />
+      </Tooltip>
+    </Stack>
+  )
+}
+
 /**
  * Read-only view of each engine-capable service's execution backend. The mode
  * is fixed at startup by the emulator's environment, so this reports it rather
@@ -377,7 +392,7 @@ function RuntimeCard() {
     queryFn: getRuntimeHealth,
     refetchInterval: 15000,
   })
-  const reach = { docker: health?.docker.available, kubernetes: health?.kubernetes.available }
+  const reach: EngineReachability = { docker: health?.docker.available, kubernetes: health?.kubernetes.available }
   const engineServices = (data?.services ?? []).filter((service) => service.engine)
   const anyActive = engineServices.some((service) => service.engine?.active)
 
@@ -410,47 +425,21 @@ function RuntimeCard() {
           No engine-capable services are enabled.
         </Typography>
       )}
-      {!isLoading && engineServices.length > 0 && !anyActive && (
-        <Typography variant="body2" color="text.secondary">
-          No engines configured — every service runs its mock path. Set
-          JAISCLOUD_EXECUTOR_MODE / JAISCLOUD_KAFKA_BROKER_MODE to enable one.
-        </Typography>
-      )}
-      {!isLoading && anyActive && (
-        <Table size="small" sx={{ '& th, & td': { borderBottom: 'none', py: 0.5, px: 1 } }}>
-          <TableHead>
-            <TableRow>
-              <TableCell>Service</TableCell>
-              <TableCell>Depth</TableCell>
-              <TableCell>Backend</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {engineServices.map((service) => {
-              const status = engineStatus(service, reach)
-              return (
-                <TableRow key={service.id}>
-                  <TableCell sx={{ fontWeight: 500 }}>{service.label}</TableCell>
-                  <TableCell>
-                    <Tooltip
-                      title={
-                        tierDescription(service) ??
-                        'Full fidelity — real data plane and semantics, gated against the real cloud.'
-                      }
-                    >
-                      <span>{tierLabel(service) ?? 'Full'}</span>
-                    </Tooltip>
-                  </TableCell>
-                  <TableCell>
-                    <Tooltip title={backendTooltip(service)}>
-                      <Chip size="small" label={status.label} color={status.color} />
-                    </Tooltip>
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
+      {!isLoading && engineServices.length > 0 && (
+        <>
+          {!anyActive && (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              No engines configured — every service runs its mock path. Set
+              JAISCLOUD_EXECUTOR_MODE / JAISCLOUD_KAFKA_BROKER_MODE to enable one
+              (mock = stored record / echo, no runtime).
+            </Typography>
+          )}
+          <Stack spacing={0.5}>
+            {engineServices.map((service) => (
+              <ServiceBackendRow key={service.id} service={service} reach={reach} />
+            ))}
+          </Stack>
+        </>
       )}
     </Panel>
   )
