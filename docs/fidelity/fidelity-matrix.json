@@ -3,8 +3,8 @@
   "summary": {
     "total": 956,
     "by_state": {
-      "ga": 699,
-      "limited": 113,
+      "ga": 701,
+      "limited": 111,
       "preview": 14,
       "unsupported": 130
     },
@@ -15,8 +15,8 @@
         "unsupported": 118
       },
       "rest": {
-        "ga": 366,
-        "limited": 106,
+        "ga": 368,
+        "limited": 104,
         "preview": 14,
         "unsupported": 12
       }
@@ -107,8 +107,7 @@
         "unsupported": 3
       },
       "run": {
-        "ga": 26,
-        "limited": 2
+        "ga": 28
       },
       "scheduler": {
         "ga": 16
@@ -8383,8 +8382,8 @@
       "service": "run",
       "operation": "Run.CancelOperation",
       "transport": "rest",
-      "state": "limited",
-      "reason": "no matching Discovery method (unverified against the official schema)",
+      "state": "ga",
+      "reason": "shared google.longrunning.Operations.CancelOperation common API; not enumerated in the run v2 Discovery document (operations.get/list/delete/wait only), but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:cancel) and wire-tested",
       "evidence": [
         "mutating",
         "postgres=yes"
@@ -8478,8 +8477,8 @@
       "service": "run",
       "operation": "Run.Invoke",
       "transport": "rest",
-      "state": "limited",
-      "reason": "no matching Discovery method (unverified against the official schema)",
+      "state": "ga",
+      "reason": "Cloud Run data-plane invocation (the synthesized {service}-{token}.{location}.run.app host, or the legacy /run/v2/.../services/{svc}/\u003csubpath\u003e path form), not a Discovery method; served by the InvocationCodec/runtime seam and wire/unit-tested (mock resolves 503, the docker/k8s executor proxies to the revision)",
       "evidence": [
         "postgres=yes"
       ]

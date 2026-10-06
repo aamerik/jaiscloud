@@ -574,6 +574,11 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "run", Method: "PATCH", Path: runBase + "/services/" + runSvc + "?updateMask=template",
 			Body: `{"template":{"containers":[{"image":"nginx:latest","ports":[{"containerPort":80}]}]}}`},
 		Scenario{Service: "run", Method: "DELETE", Path: "/v2/${runRev}"},
+		// The shared google.longrunning.Operations :cancel verb is served on the
+		// run surface (the run v2 Discovery document has no operations.cancel, so
+		// docs/fidelity-overrides.yaml upgrades the cell to ga). It validates a
+		// stored operation, so it runs before the operation is read back.
+		Scenario{Service: "run", Method: "POST", Path: "/v2/${runOp}:cancel"},
 		Scenario{Service: "run", Method: "GET", Path: "/v2/${runOp}"},
 		Scenario{Service: "run", Method: "DELETE", Path: runBase + "/services/" + runSvc},
 		Scenario{Service: "run", Method: "GET", Path: runBase + "/services/" + runSvc},
