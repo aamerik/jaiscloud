@@ -423,7 +423,8 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   (admin/DR operations off the Spark job path with no AWS Glue analogue — backend-RDBMS SQL + a Cloud
   Storage result manifest, a metadata-dump/restore format, and catalog mutations better served through
   the Hive Thrift `alter_table` path; see the README Known Limitations);
-  Dataproc `DiagnoseCluster`;
+  Dataproc `DiagnoseCluster` (no cluster node/agent/log plane to collect from — the
+  diagnostic bundle would be fabricated);
   Workflows `ListWorkflowRevisions` (workflow revision history is not modelled);
   Cloud Resource Manager v3 `SearchProjects`/`UpdateProject`/`MoveProject` (project search,
   metadata edits, and org/folder ancestry are not modelled); Eventarc `ChannelConnection`/`GoogleChannelConfig`/`MessageBus`/`Enrollment`/
