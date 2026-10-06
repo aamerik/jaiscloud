@@ -21,6 +21,10 @@ var actionOverrides = map[string]string{
 	"Storage.ObjectsGetMedia":             "storage.objects.get",
 	"Storage.ObjectsInsertStartResumable": "storage.objects.insert",
 	"Storage.ObjectsInsertResumable":      "storage.objects.insert",
+	// BigQuery load-from-file is jobs.insert on the wire; the multipart upload
+	// reuses InsertJob and the resumable session has its own start/chunk actions.
+	"BigQuery.InsertJobResumableStart": "bigquery.jobs.insert",
+	"BigQuery.InsertJobResumable":      "bigquery.jobs.insert",
 
 	// Secret Manager version verbs are 1:1 with Discovery's versions.* methods.
 	"Secret.GetVersion":     "secretmanager.projects.secrets.versions.get",

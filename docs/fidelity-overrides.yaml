@@ -14,7 +14,7 @@
 defaults:
   bigquery:
     state: limited
-    reason: "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression, wildcards and upload-session loads fail loud)"
+    reason: "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)"
   cloudsql:
     state: limited
     reason: "metadata-only over ResourceStore (no control plane)"

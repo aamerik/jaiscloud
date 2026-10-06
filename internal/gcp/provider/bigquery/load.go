@@ -55,22 +55,55 @@ type loadRecords struct {
 	bad  []string
 }
 
-// runLoad evaluates a configuration.load job synchronously: it reads the single
-// gs:// source from the emulated GCS, decodes it, coerces every row to the
-// destination schema, and writes the result according to writeDisposition. It
-// returns statistics.load, plus an optional status.errorResult for a data-level
-// failure (too many bad records, WRITE_EMPTY on a non-empty table) which real
-// BigQuery reports in the job result rather than as an HTTP error. A non-nil
-// error is a request-level failure (unsupported option/format, malformed URI,
-// missing schema) that fails jobs.insert loud.
-//
-// Nothing is written until every validation has passed, so a failed load never
-// creates the destination table (real BigQuery's create/truncate/append is one
-// atomic action on job completion).
+// runLoad evaluates a configuration.load job whose source is a single gs://
+// object: it resolves the URI through the injected GCS reader and delegates the
+// decode/coercion/write to runLoadData.
 func (p *Provider) runLoad(ctx context.Context, project string, load map[string]any, now time.Time) (stats map[string]any, jobErr map[string]any, err error) {
 	if p.sourceReader == nil {
 		return nil, nil, model.NewProviderError("Unimplemented", "load jobs are not enabled (no GCS source reader configured)", 501)
 	}
+	// Validate the documented subset before touching the source so an
+	// unsupported option fails loud regardless of the source's state.
+	if err := validateLoadOptions(load); err != nil {
+		return nil, nil, err
+	}
+
+	uris := stringSlice(load, "sourceUris")
+	switch len(uris) {
+	case 0:
+		return nil, nil, invalidArgument("configuration.load.sourceUris is required")
+	case 1:
+	default:
+		return nil, nil, model.NewProviderError("Unimplemented", "multiple sourceUris are not supported (one gs:// object per load)", 501)
+	}
+	bucket, object, perr := parseGSUri(uris[0])
+	if perr != nil {
+		return nil, nil, invalidArgument(perr.Error())
+	}
+
+	data, ferr := p.sourceReader.FetchObjectBytes(ctx, bucket, object)
+	if ferr != nil {
+		// A missing object is a job-level notFound (real BigQuery accepts the
+		// job then fails it); any other read failure is a real server error.
+		if errors.Is(ferr, gcs.ErrNoSuchObject) {
+			return map[string]any{"inputFiles": "0", "inputFileBytes": "0", "outputRows": "0", "badRecords": "0"},
+				notFound("Not found: URI " + uris[0]), nil
+		}
+		return nil, nil, model.NewProviderError("Internal", "failed to read source "+uris[0]+": "+ferr.Error(), 500)
+	}
+	return p.runLoadData(ctx, project, load, data, "1", now)
+}
+
+// runLoadData evaluates a configuration.load job against an in-memory source —
+// the file bytes, whether read from a gs:// object or supplied as an uploaded
+// media body. inputFiles is the statistics.load.inputFiles value the caller
+// reports ("1" for a gs:// source object, "0" for a media upload, which names no
+// sourceUris). It validates the documented subset, resolves the destination
+// schema, coerces every row, and writes the result per writeDisposition. Nothing
+// is written until every validation has passed, so a failed load never creates
+// the destination table (real BigQuery's create/truncate/append is one atomic
+// action on job completion).
+func (p *Provider) runLoadData(ctx context.Context, project string, load map[string]any, data []byte, inputFiles string, now time.Time) (stats map[string]any, jobErr map[string]any, err error) {
 	if err := validateLoadOptions(load); err != nil {
 		return nil, nil, err
 	}
@@ -91,30 +124,6 @@ func (p *Provider) runLoad(ctx context.Context, project string, load map[string]
 			"configuration.load.sourceFormat "+format+" is not supported (only NEWLINE_DELIMITED_JSON and CSV)", 501)
 	}
 
-	uris := stringSlice(load, "sourceUris")
-	switch len(uris) {
-	case 0:
-		return nil, nil, invalidArgument("configuration.load.sourceUris is required")
-	case 1:
-	default:
-		return nil, nil, model.NewProviderError("Unimplemented", "multiple sourceUris are not supported (one gs:// object per load)", 501)
-	}
-	bucket, object, perr := parseGSUri(uris[0])
-	if perr != nil {
-		return nil, nil, invalidArgument(perr.Error())
-	}
-
-	zeroStats := map[string]any{"inputFiles": "0", "inputFileBytes": "0", "outputRows": "0", "badRecords": "0"}
-	data, ferr := p.sourceReader.FetchObjectBytes(ctx, bucket, object)
-	if ferr != nil {
-		// A missing object is a job-level notFound (real BigQuery accepts the
-		// job then fails it); any other read failure is a real server error.
-		if errors.Is(ferr, gcs.ErrNoSuchObject) {
-			return zeroStats, notFound("Not found: URI " + uris[0]), nil
-		}
-		return nil, nil, model.NewProviderError("Internal", "failed to read source "+uris[0]+": "+ferr.Error(), 500)
-	}
-
 	loadSchema := mapValue(load, "schema")
 	fields := schemaFieldsFromMap(loadSchema)
 
@@ -133,7 +142,8 @@ func (p *Provider) runLoad(ctx context.Context, project string, load map[string]
 		if strings.EqualFold(strValue(load, "createDisposition"), "CREATE_NEVER") {
 			// Real BigQuery: the table must already exist, else a 'notFound'
 			// error is returned in the job result.
-			return zeroStats, notFound(fmt.Sprintf("Not found: Table %s:%s.%s", project, datasetID, tableID)), nil
+			return map[string]any{"inputFiles": "0", "inputFileBytes": "0", "outputRows": "0", "badRecords": "0"},
+				notFound(fmt.Sprintf("Not found: Table %s:%s.%s", project, datasetID, tableID)), nil
 		}
 	default:
 		return nil, nil, mapErr(terr)
@@ -162,7 +172,7 @@ func (p *Provider) runLoad(ctx context.Context, project string, load map[string]
 	}
 
 	stats = map[string]any{
-		"inputFiles":     "1",
+		"inputFiles":     inputFiles,
 		"inputFileBytes": strconv.FormatInt(int64(len(data)), 10),
 		"outputRows":     strconv.FormatInt(int64(len(recs.rows)), 10),
 		"badRecords":     strconv.FormatInt(int64(len(recs.bad)), 10),

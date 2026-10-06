@@ -1109,6 +1109,10 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.iceberg)
 			adminHandler.RegisterResetter(stores.hms)
 			adminHandler.RegisterResetter(stores.bigquery)
+			// The BigQuery provider holds in-progress resumable load-job upload
+			// sessions in memory; register it so /_jaiscloud/reset clears them
+			// alongside the store.
+			adminHandler.RegisterResetter(bigqueryP)
 			adminHandler.RegisterResetter(stores.logEntries)
 			adminHandler.RegisterResetter(stores.monitoring)
 			adminHandler.RegisterResetter(stores.eventarc)

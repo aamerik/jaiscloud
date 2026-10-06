@@ -114,7 +114,7 @@ func isRawStorageMediaPath(r *http.Request) bool {
 	// /v1//v2/ namespaces are reserved by the other GCP services' routers.
 	for _, prefix := range []string{
 		"v1/", "v2/", "bigquery/", "storage/v1/", "upload/storage/", "download/storage/",
-		"resumable/upload/", "batch/storage/", "projects/",
+		"upload/bigquery/", "resumable/upload/", "batch/storage/", "projects/",
 	} {
 		if strings.HasPrefix(p, prefix) {
 			return false
@@ -134,6 +134,14 @@ func isRawStorageMediaPath(r *http.Request) bool {
 // GCS media fallback without colliding.
 func detectBigQueryService(path string) string {
 	if strings.HasPrefix(path, "/bigquery/v2/projects/") {
+		return "bigquery"
+	}
+	// The jobs.insert media-upload endpoint (load_table_from_file) lives under
+	// /upload/bigquery/v2/ and /resumable/upload/bigquery/v2/, not under the
+	// service's normal /bigquery/v2/ prefix. It is unambiguous — no other
+	// emulated service claims /upload/bigquery/ — so claim it here before the
+	// GCS raw-media fallback (a resumable chunk is a PUT).
+	if isBigQueryUploadPath(path) {
 		return "bigquery"
 	}
 	if !strings.HasPrefix(path, "/projects/") {
