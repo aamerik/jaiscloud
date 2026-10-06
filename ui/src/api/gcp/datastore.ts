@@ -1,4 +1,5 @@
 import { api } from '../client'
+import { fetchAllPages } from '../paging'
 
 const BASE = '/api/ui/v1/gcp/datastore'
 
@@ -79,8 +80,26 @@ export function listKinds() {
   return api.get<ListKindsResponse>(`${BASE}/kinds`)
 }
 
-export function listEntities(kind: string, params?: { pageSize?: number; pageToken?: string }) {
-  return api.get<ListEntitiesResponse>(`${BASE}/kinds/${encodeURIComponent(kind)}/entities`, params)
+/** Drains every entity page; pass `pageToken` for a single raw page. The
+ * console's entities endpoint pages at 25 by default, so the drain asks for the
+ * handler's maximum (1000) to keep the number of round trips down. */
+export async function listEntities(
+  kind: string,
+  params?: { pageToken?: string },
+): Promise<ListEntitiesResponse> {
+  const path = `${BASE}/kinds/${encodeURIComponent(kind)}/entities`
+  if (params?.pageToken) {
+    return api.get<ListEntitiesResponse>(path, { pageToken: params.pageToken })
+  }
+  const entities = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListEntitiesResponse>(path, {
+        pageSize: 1000,
+        ...(pageToken ? { pageToken } : {}),
+      }),
+    (page) => page.entities,
+  )
+  return { entities, total: entities.length }
 }
 
 export function listProperties(kind: string) {

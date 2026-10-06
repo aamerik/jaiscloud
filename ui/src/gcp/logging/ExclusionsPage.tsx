@@ -31,7 +31,7 @@ export function ExclusionsPage() {
 
   const exclusions = useQuery({
     queryKey: ['gcp', 'logging', 'exclusions', accountId],
-    queryFn: listExclusions,
+    queryFn: () => listExclusions(),
   })
 
   const remove = useMutation({

@@ -28,7 +28,7 @@ export function EntitiesPage() {
 
   const entities = useQuery({
     queryKey: ['gcp', 'datastore', 'entities', kind, accountId],
-    queryFn: () => listEntities(kind, { pageSize: 1000 }),
+    queryFn: () => listEntities(kind),
     enabled: Boolean(kind),
   })
 

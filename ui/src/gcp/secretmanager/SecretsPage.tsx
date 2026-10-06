@@ -32,7 +32,7 @@ export function SecretsPage() {
 
   const secrets = useQuery({
     queryKey: ['gcp', 'secretmanager', 'secrets', accountId],
-    queryFn: listSecrets,
+    queryFn: () => listSecrets(),
   })
 
   const remove = useMutation({

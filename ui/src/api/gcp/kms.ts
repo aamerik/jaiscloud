@@ -1,4 +1,5 @@
 import { api } from '../client'
+import { fetchAllPages } from '../paging'
 
 const BASE = '/api/ui/v1/gcp/kms'
 
@@ -81,8 +82,22 @@ const cryptoKeyPath = (location: string, keyRing: string, key: string) =>
   `${keyRingPath(location, keyRing)}/cryptoKeys/${encodeURIComponent(key)}`
 
 // Key rings.
-export const listKeyRings = (location: string) =>
-  api.get<ListKeyRingsResponse>(`${locationPath(location)}/keyRings`)
+/** List every key ring in a location; pass `pageToken` for a single raw page. */
+export async function listKeyRings(
+  location: string,
+  params?: { pageToken?: string },
+): Promise<ListKeyRingsResponse> {
+  const path = `${locationPath(location)}/keyRings`
+  if (params?.pageToken) {
+    return api.get<ListKeyRingsResponse>(path, { pageToken: params.pageToken })
+  }
+  const keyRings = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListKeyRingsResponse>(path, pageToken ? { pageToken } : undefined),
+    (page) => page.keyRings,
+  )
+  return { keyRings, total: keyRings.length }
+}
 
 export const createKeyRing = (location: string, keyRingId: string) =>
   api.post<KeyRing>(`${locationPath(location)}/keyRings`, { keyRingId })
@@ -91,8 +106,23 @@ export const getKeyRing = (location: string, keyRing: string) =>
   api.get<KeyRing>(keyRingPath(location, keyRing))
 
 // Crypto keys.
-export const listCryptoKeys = (location: string, keyRing: string) =>
-  api.get<ListCryptoKeysResponse>(`${keyRingPath(location, keyRing)}/cryptoKeys`)
+/** List every crypto key in a key ring; pass `pageToken` for a single raw page. */
+export async function listCryptoKeys(
+  location: string,
+  keyRing: string,
+  params?: { pageToken?: string },
+): Promise<ListCryptoKeysResponse> {
+  const path = `${keyRingPath(location, keyRing)}/cryptoKeys`
+  if (params?.pageToken) {
+    return api.get<ListCryptoKeysResponse>(path, { pageToken: params.pageToken })
+  }
+  const cryptoKeys = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListCryptoKeysResponse>(path, pageToken ? { pageToken } : undefined),
+    (page) => page.cryptoKeys,
+  )
+  return { cryptoKeys, total: cryptoKeys.length }
+}
 
 export const createCryptoKey = (
   location: string,
@@ -114,8 +144,24 @@ export const setPrimaryVersion = (
   })
 
 // Versions.
-export const listCryptoKeyVersions = (location: string, keyRing: string, key: string) =>
-  api.get<ListCryptoKeyVersionsResponse>(`${cryptoKeyPath(location, keyRing, key)}/versions`)
+/** List every version of a crypto key; pass `pageToken` for a single raw page. */
+export async function listCryptoKeyVersions(
+  location: string,
+  keyRing: string,
+  key: string,
+  params?: { pageToken?: string },
+): Promise<ListCryptoKeyVersionsResponse> {
+  const path = `${cryptoKeyPath(location, keyRing, key)}/versions`
+  if (params?.pageToken) {
+    return api.get<ListCryptoKeyVersionsResponse>(path, { pageToken: params.pageToken })
+  }
+  const cryptoKeyVersions = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListCryptoKeyVersionsResponse>(path, pageToken ? { pageToken } : undefined),
+    (page) => page.cryptoKeyVersions,
+  )
+  return { cryptoKeyVersions, total: cryptoKeyVersions.length }
+}
 
 export const createCryptoKeyVersion = (location: string, keyRing: string, key: string) =>
   api.post<CryptoKeyVersion>(`${cryptoKeyPath(location, keyRing, key)}/versions`)

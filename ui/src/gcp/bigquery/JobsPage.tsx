@@ -28,7 +28,7 @@ export function JobsPage() {
 
   const jobs = useQuery({
     queryKey: ['gcp', 'bigquery', 'jobs', accountId],
-    queryFn: listJobs,
+    queryFn: () => listJobs(),
   })
 
   const cancel = useMutation({ mutationFn: (job: string) => cancelJob(job), onSuccess: invalidate })

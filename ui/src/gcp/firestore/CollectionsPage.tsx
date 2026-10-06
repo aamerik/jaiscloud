@@ -23,7 +23,7 @@ export function CollectionsPage() {
 
   const collections = useQuery({
     queryKey: ['gcp', 'firestore', 'collections', accountId],
-    queryFn: listCollections,
+    queryFn: () => listCollections(),
   })
 
   const rows = filterRows(collections.data?.collections ?? [], filter, (collection) => collection.id)

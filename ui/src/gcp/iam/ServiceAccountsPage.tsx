@@ -28,7 +28,7 @@ export function ServiceAccountsPage() {
 
   const accounts = useQuery({
     queryKey: ['gcp', 'iam', 'serviceAccounts', accountId],
-    queryFn: listServiceAccounts,
+    queryFn: () => listServiceAccounts(),
   })
 
   const remove = useMutation({

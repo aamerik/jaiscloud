@@ -1,4 +1,5 @@
 import { api } from '../client'
+import { fetchAllPages } from '../paging'
 
 const BASE = '/api/ui/v1/gcp/secretmanager'
 
@@ -76,7 +77,20 @@ const versionPath = (secret: string, version: string) =>
   `${secretPath(secret)}/versions/${encodeURIComponent(version)}`
 
 // Secrets.
-export const listSecrets = () => api.get<ListSecretsResponse>(`${BASE}/secrets`)
+/** List every secret; pass `pageToken` for a single raw page. */
+export async function listSecrets(params?: {
+  pageToken?: string
+}): Promise<ListSecretsResponse> {
+  if (params?.pageToken) {
+    return api.get<ListSecretsResponse>(`${BASE}/secrets`, { pageToken: params.pageToken })
+  }
+  const secrets = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListSecretsResponse>(`${BASE}/secrets`, pageToken ? { pageToken } : undefined),
+    (page) => page.secrets,
+  )
+  return { secrets, total: secrets.length }
+}
 
 export const createSecret = (body: CreateSecretRequest) =>
   api.post<Secret>(`${BASE}/secrets`, body)
@@ -96,8 +110,22 @@ export const putSecretIam = (secret: string, policy: IamPolicy) =>
   api.put<IamPolicy>(`${secretPath(secret)}/iam`, { policy })
 
 // Versions.
-export const listSecretVersions = (secret: string) =>
-  api.get<ListSecretVersionsResponse>(`${secretPath(secret)}/versions`)
+/** List every version of a secret; pass `pageToken` for a single raw page. */
+export async function listSecretVersions(
+  secret: string,
+  params?: { pageToken?: string },
+): Promise<ListSecretVersionsResponse> {
+  const path = `${secretPath(secret)}/versions`
+  if (params?.pageToken) {
+    return api.get<ListSecretVersionsResponse>(path, { pageToken: params.pageToken })
+  }
+  const versions = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListSecretVersionsResponse>(path, pageToken ? { pageToken } : undefined),
+    (page) => page.versions,
+  )
+  return { versions, total: versions.length }
+}
 
 export const addSecretVersion = (secret: string, payload: string) =>
   api.post<SecretVersion>(`${secretPath(secret)}/versions`, { payload })

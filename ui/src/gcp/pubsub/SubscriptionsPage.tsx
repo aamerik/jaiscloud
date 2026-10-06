@@ -53,11 +53,11 @@ export function SubscriptionsPage() {
 
   const subscriptions = useQuery({
     queryKey: ['gcp', 'pubsub', 'subscriptions', accountId],
-    queryFn: listSubscriptions,
+    queryFn: () => listSubscriptions(),
   })
   const topics = useQuery({
     queryKey: ['gcp', 'pubsub', 'topics', accountId],
-    queryFn: listTopics,
+    queryFn: () => listTopics(),
   })
 
   const create = useMutation({

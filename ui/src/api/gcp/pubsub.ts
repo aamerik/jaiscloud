@@ -1,4 +1,5 @@
 import { api } from '../client'
+import { fetchAllPages } from '../paging'
 
 const BASE = '/api/ui/v1/gcp/pubsub'
 
@@ -93,7 +94,18 @@ export interface IamPolicy {
 
 // ─── Topics ──────────────────────────────────────────────────────────────────
 
-export const listTopics = () => api.get<ListTopicsResponse>(`${BASE}/topics`)
+/** List every topic; pass `pageToken` for a single raw page. */
+export async function listTopics(params?: { pageToken?: string }): Promise<ListTopicsResponse> {
+  if (params?.pageToken) {
+    return api.get<ListTopicsResponse>(`${BASE}/topics`, { pageToken: params.pageToken })
+  }
+  const topics = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListTopicsResponse>(`${BASE}/topics`, pageToken ? { pageToken } : undefined),
+    (page) => page.topics,
+  )
+  return { topics, total: topics.length }
+}
 
 export const createTopic = (body: CreateTopicRequest) => api.post<Topic>(`${BASE}/topics`, body)
 
@@ -114,8 +126,25 @@ export const putTopicIam = (name: string, policy: IamPolicy) =>
 
 // ─── Subscriptions ───────────────────────────────────────────────────────────
 
-export const listSubscriptions = () =>
-  api.get<ListSubscriptionsResponse>(`${BASE}/subscriptions`)
+/** List every subscription; pass `pageToken` for a single raw page. */
+export async function listSubscriptions(params?: {
+  pageToken?: string
+}): Promise<ListSubscriptionsResponse> {
+  if (params?.pageToken) {
+    return api.get<ListSubscriptionsResponse>(`${BASE}/subscriptions`, {
+      pageToken: params.pageToken,
+    })
+  }
+  const subscriptions = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListSubscriptionsResponse>(
+        `${BASE}/subscriptions`,
+        pageToken ? { pageToken } : undefined,
+      ),
+    (page) => page.subscriptions,
+  )
+  return { subscriptions, total: subscriptions.length }
+}
 
 export const createSubscription = (body: CreateSubscriptionRequest) =>
   api.post<Subscription>(`${BASE}/subscriptions`, body)

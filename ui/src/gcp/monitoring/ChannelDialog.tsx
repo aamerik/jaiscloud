@@ -49,7 +49,7 @@ export function ChannelDialog({ open, onClose, initial }: ChannelDialogProps) {
 
   const descriptors = useQuery({
     queryKey: ['gcp', 'monitoring', 'channelDescriptors'],
-    queryFn: listNotificationChannelDescriptors,
+    queryFn: () => listNotificationChannelDescriptors(),
     enabled: open,
   })
 

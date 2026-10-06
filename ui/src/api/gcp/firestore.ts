@@ -1,4 +1,5 @@
 import { api } from '../client'
+import { fetchAllPages } from '../paging'
 
 const BASE = '/api/ui/v1/gcp/firestore'
 
@@ -97,14 +98,46 @@ export interface CreateIndexRequest {
   fields: FirestoreIndexField[]
 }
 
-export const listCollections = () => api.get<ListCollectionsResponse>(`${BASE}/collections`)
+/** List every top-level collection; pass `pageToken` for a single raw page. */
+export async function listCollections(params?: {
+  pageToken?: string
+}): Promise<ListCollectionsResponse> {
+  if (params?.pageToken) {
+    return api.get<ListCollectionsResponse>(`${BASE}/collections`, { pageToken: params.pageToken })
+  }
+  const collections = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListCollectionsResponse>(
+        `${BASE}/collections`,
+        pageToken ? { pageToken } : undefined,
+      ),
+    (page) => page.collections,
+  )
+  return { collections, total: collections.length }
+}
 
 /** Composite indexes. `collectionGroup` omitted lists the whole database (the
- * server applies the `-` wildcard). */
-export const listIndexes = (collectionGroup?: string) =>
-  api.get<ListIndexesResponse>(
-    `${BASE}/indexes${collectionGroup ? `?collectionGroup=${encodeURIComponent(collectionGroup)}` : ''}`,
+ * server applies the `-` wildcard). Pass `pageToken` for a single raw page. */
+export async function listIndexes(
+  collectionGroup?: string,
+  params?: { pageToken?: string },
+): Promise<ListIndexesResponse> {
+  if (params?.pageToken) {
+    return api.get<ListIndexesResponse>(`${BASE}/indexes`, {
+      ...(collectionGroup ? { collectionGroup } : {}),
+      pageToken: params.pageToken,
+    })
+  }
+  const indexes = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListIndexesResponse>(`${BASE}/indexes`, {
+        ...(collectionGroup ? { collectionGroup } : {}),
+        ...(pageToken ? { pageToken } : {}),
+      }),
+    (page) => page.indexes,
   )
+  return { indexes, total: indexes.length }
+}
 
 export const createIndex = (body: CreateIndexRequest) =>
   api.post<FirestoreIndex>(`${BASE}/indexes`, body)
@@ -124,18 +157,43 @@ export const runQuery = (body: RunQueryRequest) =>
   api.post<RunQueryResponse>(`${BASE}/query`, body)
 
 /** Subcollection IDs of a document. `collection` may itself be a nested
- * collection path (e.g. `users/alice/orders`). */
-export const listSubcollections = (collection: string, document: string) =>
-  api.get<ListCollectionsResponse>(
-    `${BASE}/collections/${encodeURIComponent(collection)}/documents/${encodeURIComponent(document)}/collections`,
+ * collection path (e.g. `users/alice/orders`). Pass `pageToken` for a single
+ * raw page. */
+export async function listSubcollections(
+  collection: string,
+  document: string,
+  params?: { pageToken?: string },
+): Promise<ListCollectionsResponse> {
+  const path = `${BASE}/collections/${encodeURIComponent(collection)}/documents/${encodeURIComponent(document)}/collections`
+  if (params?.pageToken) {
+    return api.get<ListCollectionsResponse>(path, { pageToken: params.pageToken })
+  }
+  const collections = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListCollectionsResponse>(path, pageToken ? { pageToken } : undefined),
+    (page) => page.collections,
   )
+  return { collections, total: collections.length }
+}
 
 /** `collection` is a collection path: a root id (`users`) or a nested
- * collection path (`users/alice/orders`); the '/' is escaped on the wire. */
-export const listDocuments = (collection: string) =>
-  api.get<ListDocumentsResponse>(
-    `${BASE}/collections/${encodeURIComponent(collection)}/documents`,
+ * collection path (`users/alice/orders`); the '/' is escaped on the wire. Pass
+ * `pageToken` for a single raw page. */
+export async function listDocuments(
+  collection: string,
+  params?: { pageToken?: string },
+): Promise<ListDocumentsResponse> {
+  const path = `${BASE}/collections/${encodeURIComponent(collection)}/documents`
+  if (params?.pageToken) {
+    return api.get<ListDocumentsResponse>(path, { pageToken: params.pageToken })
+  }
+  const documents = await fetchAllPages(
+    (pageToken) =>
+      api.get<ListDocumentsResponse>(path, pageToken ? { pageToken } : undefined),
+    (page) => page.documents,
   )
+  return { documents, total: documents.length }
+}
 
 export const getDocument = (collection: string, document: string) =>
   api.get<FirestoreDocument>(
