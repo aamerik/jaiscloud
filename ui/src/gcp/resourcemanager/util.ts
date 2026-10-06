@@ -35,3 +35,18 @@ export function validProjectId(id: string): boolean {
   return PROJECT_ID_RE.test(id)
 }
 
+/** Parse a `key=value`-per-line block into a map, or undefined when empty. */
+export function parseKV(text: string): Record<string, string> | undefined {
+  const out: Record<string, string> = {}
+  for (const raw of text.split('\n')) {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) continue
+    const i = line.indexOf('=')
+    if (i < 0) continue
+    const key = line.slice(0, i).trim()
+    if (!key) continue
+    out[key] = line.slice(i + 1).trim()
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Project } from '../../api/gcp/resourcemanager'
-import { PROJECT_ID_RE, shortDate, stateColor, stateLabel, validProjectId } from './util'
+import { PROJECT_ID_RE, parseKV, shortDate, stateColor, stateLabel, validProjectId } from './util'
 
 function project(overrides: Partial<Project>): Project {
   return { projectId: 'proj', state: 'ACTIVE', ...overrides }
@@ -47,5 +47,19 @@ describe('validProjectId', () => {
     expect(validProjectId('1project')).toBe(false)
     expect(validProjectId('trailing-')).toBe(false)
     expect(validProjectId('shrt')).toBe(false)
+  })
+})
+
+describe('parseKV', () => {
+  it('parses key=value lines, ignoring blanks and comments', () => {
+    expect(parseKV('env=dev\n\n# note\nowner = platform \n')).toEqual({
+      env: 'dev',
+      owner: 'platform',
+    })
+  })
+
+  it('returns undefined when the block is empty', () => {
+    expect(parseKV('')).toBeUndefined()
+    expect(parseKV('  \n# only a comment\n')).toBeUndefined()
   })
 })
