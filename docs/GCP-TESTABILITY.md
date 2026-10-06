@@ -151,6 +151,14 @@ behind a wire-conformant API.
 > probe only checks the socket, reports the backend reachable, and then invocations
 > and mounts fail. Use the `k8s` backend for an in-cluster emulator; the
 > containerized-docker fix is tracked as backlog item **CDE1**.
+>
+> **Startup fallback probe.** A requested `docker`/`k8s` backend is probed once at
+> startup and degrades to `mock` (reported truthfully in the console) when the
+> probe fails: the `docker` probe pings the daemon socket; the `k8s` probe builds
+> the Kubernetes client (`k8shelpers.NewClient`). The `k8s` probe is a
+> client-construction check, not a reachability check — a *configured but
+> unreachable* cluster still reports engine-backed and fails on first use, as in
+> the host-only `docker` case above.
 
 | Depth | Services | What you can actually rely on locally |
 | --- | --- | --- |

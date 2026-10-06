@@ -5,6 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
+
 	"jaiscloud/internal/executor/container"
 	"jaiscloud/internal/platform"
 )
@@ -59,43 +62,69 @@ func TestResolveKafkaBrokerMode(t *testing.T) {
 	}
 }
 
-// TestEffectiveFunctionsMode locks the docker-mode daemon probe: a docker mode
-// with no reachable daemon degrades to mock (as GCP Cloud Run/Dataproc and AWS
-// Lambda do), while every other mode passes through untouched and never probes.
+// TestEffectiveFunctionsMode locks the executor-mode probe: a requested docker
+// mode with no reachable daemon, or a k8s mode whose client cannot be built,
+// degrades to mock (as GCP Cloud Run/Dataproc and AWS Lambda do), while mock
+// and unknown modes pass through untouched and never probe.
 func TestEffectiveFunctionsMode(t *testing.T) {
 	reachable := func(context.Context) error { return nil }
 	unreachable := func(context.Context) error {
 		return errors.New("dial unix /var/run/docker.sock: connect: no such file or directory")
 	}
-	probes := 0
-	counting := func(context.Context) error { probes++; return nil }
+	k8sFail := func() (kubernetes.Interface, error) {
+		return nil, errors.New("no in-cluster config and no JAISCLOUD_K8S_APISERVER")
+	}
+
+	origClient := buildFunctionsK8sClient
+	t.Cleanup(func() { buildFunctionsK8sClient = origClient })
+	client := fake.NewSimpleClientset()
 
 	cases := []struct {
-		name string
-		mode string
-		ping func(context.Context) error
-		want string
+		name       string
+		mode       string
+		dockerPing func(context.Context) error
+		k8sClient  func() (kubernetes.Interface, error)
+		want       string
+		wantClient bool
 	}{
-		{"mock passes through", "mock", reachable, "mock"},
-		{"empty passes through", "", reachable, ""},
-		{"k8s passes through without probing", "k8s", unreachable, "k8s"},
-		{"docker with a reachable daemon stays docker", "docker", reachable, "docker"},
-		{"docker with no daemon degrades to mock", "docker", unreachable, "mock"},
+		{"mock passes through", "mock", unreachable, k8sFail, "mock", false},
+		{"empty passes through", "", unreachable, k8sFail, "", false},
+		{"docker with a reachable daemon stays docker", "docker", reachable, k8sFail, "docker", false},
+		{"docker with no daemon degrades to mock", "docker", unreachable, k8sFail, "mock", false},
+		{"k8s with a buildable client stays k8s", "k8s", unreachable, func() (kubernetes.Interface, error) { return client, nil }, "k8s", true},
+		{"k8s with no client degrades to mock", "k8s", reachable, k8sFail, "mock", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := effectiveFunctionsMode(tc.mode, tc.ping); got != tc.want {
+			buildFunctionsK8sClient = tc.k8sClient
+			got, gotClient := effectiveFunctionsMode(tc.mode, tc.dockerPing)
+			if got != tc.want {
 				t.Fatalf("effectiveFunctionsMode(%q) = %q, want %q", tc.mode, got, tc.want)
+			}
+			if (gotClient != nil) != tc.wantClient {
+				t.Fatalf("effectiveFunctionsMode(%q) client nil=%v, want client=%v", tc.mode, gotClient == nil, tc.wantClient)
 			}
 		})
 	}
 
-	// Only docker mode pings the daemon.
-	if got := effectiveFunctionsMode("k8s", counting); got != "k8s" || probes != 0 {
-		t.Fatalf("k8s mode probed the daemon (%d probes) or changed mode (%q)", probes, got)
+	// Only docker mode probes the daemon; only k8s builds a client.
+	var dockerProbes, k8sBuilds int
+	buildFunctionsK8sClient = func() (kubernetes.Interface, error) { k8sBuilds++; return client, nil }
+	if got, _ := effectiveFunctionsMode("mock", func(context.Context) error { dockerProbes++; return nil }); got != "mock" || dockerProbes != 0 {
+		t.Fatalf("mock mode probed (%d) or changed mode (%q)", dockerProbes, got)
 	}
-	if got := effectiveFunctionsMode("docker", counting); got != "docker" || probes != 1 {
-		t.Fatalf("docker mode did not probe exactly once (probes=%d, mode=%q)", probes, got)
+	if got, _ := effectiveFunctionsMode("docker", func(context.Context) error { dockerProbes++; return nil }); got != "docker" || dockerProbes != 1 {
+		t.Fatalf("docker mode did not probe exactly once (probes=%d, mode=%q)", dockerProbes, got)
+	}
+	if k8sBuilds != 0 {
+		t.Fatalf("non-k8s modes built a k8s client (%d)", k8sBuilds)
+	}
+	var probes int
+	if got, _ := effectiveFunctionsMode("k8s", func(context.Context) error { probes++; return nil }); got != "k8s" || probes != 0 {
+		t.Fatalf("k8s mode probed the daemon (%d) or changed mode (%q)", probes, got)
+	}
+	if k8sBuilds != 1 {
+		t.Fatalf("k8s mode built %d clients, want 1", k8sBuilds)
 	}
 }
 
@@ -133,8 +162,9 @@ func TestFunctionsPlatformConfig(t *testing.T) {
 }
 
 // TestNewFunctionsExecutorWiring locks the mode → platform → constructor path
-// (FDF2): docker and k8s receive a loaded platform overlay, every other mode
-// stays mock and never reaches a platform-aware constructor.
+// (FDF2/FDF3): docker and k8s receive a loaded platform overlay, a k8s executor
+// reuses the probed client instead of building a second one, and every other
+// mode stays mock and never reaches a platform-aware constructor.
 func TestNewFunctionsExecutorWiring(t *testing.T) {
 	clearPlatformEnv(t)
 
@@ -144,20 +174,21 @@ func TestNewFunctionsExecutorWiring(t *testing.T) {
 	})
 
 	var dockerPlat, k8sPlat *platform.PlatformConfig
-	var dockerCalls, k8sCalls int
+	var dockerCalls, k8sCalls, k8sOpts int
 	newFunctionsDockerExecutor = func(_ container.Config, _ container.Profile, p *platform.PlatformConfig) container.Executor {
 		dockerCalls++
 		dockerPlat = p
 		return &container.MockExecutor{}
 	}
-	newFunctionsK8sExecutor = func(_ container.Config, _ container.Profile, p *platform.PlatformConfig) container.Executor {
+	newFunctionsK8sExecutor = func(_ container.Config, _ container.Profile, p *platform.PlatformConfig, opts ...container.K8sExecutorOption) container.Executor {
 		k8sCalls++
 		k8sPlat = p
+		k8sOpts = len(opts)
 		return &container.MockExecutor{}
 	}
 
 	// docker: the docker constructor receives a loaded platform overlay.
-	newFunctionsExecutor(container.Config{Mode: "docker"}, nil)
+	newFunctionsExecutor(container.Config{Mode: "docker"}, nil, nil)
 	if dockerCalls != 1 || k8sCalls != 0 {
 		t.Fatalf("docker mode calls: docker=%d k8s=%d, want 1/0", dockerCalls, k8sCalls)
 	}
@@ -165,20 +196,28 @@ func TestNewFunctionsExecutorWiring(t *testing.T) {
 		t.Fatal("docker mode passed a nil platform overlay")
 	}
 
-	// k8s: the k8s constructor receives a loaded platform overlay.
-	newFunctionsExecutor(container.Config{Mode: "k8s"}, nil)
-	if k8sCalls != 1 || k8sPlat == nil {
-		t.Fatalf("k8s mode calls=%d plat=%v, want 1/non-nil", k8sCalls, k8sPlat)
+	// k8s with a resolved client: the constructor receives the overlay and the
+	// client option (so it never builds a second one).
+	newFunctionsExecutor(container.Config{Mode: "k8s"}, nil, fake.NewSimpleClientset())
+	if k8sCalls != 1 || k8sPlat == nil || k8sOpts != 1 {
+		t.Fatalf("k8s mode calls=%d plat=%v opts=%d, want 1/non-nil/1", k8sCalls, k8sPlat, k8sOpts)
+	}
+
+	// k8s with no resolved client (effectiveFunctionsMode should have already
+	// fallen back to mock) still builds the executor, passing no client option.
+	newFunctionsExecutor(container.Config{Mode: "k8s"}, nil, nil)
+	if k8sOpts != 0 {
+		t.Fatalf("k8s mode with a nil client passed %d options, want 0", k8sOpts)
 	}
 
 	// mock/unknown: stay mock and never reach a platform-aware constructor.
 	for _, mode := range []string{"mock", "", "native"} {
-		exec := newFunctionsExecutor(container.Config{Mode: mode}, nil)
+		exec := newFunctionsExecutor(container.Config{Mode: mode}, nil, nil)
 		if _, ok := exec.(*container.MockExecutor); !ok {
 			t.Fatalf("mode %q returned %T, want *container.MockExecutor", mode, exec)
 		}
 	}
-	if dockerCalls != 1 || k8sCalls != 1 {
+	if dockerCalls != 1 || k8sCalls != 2 {
 		t.Fatalf("non-platform modes called a constructor: docker=%d k8s=%d", dockerCalls, k8sCalls)
 	}
 }
