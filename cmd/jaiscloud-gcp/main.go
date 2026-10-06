@@ -1080,6 +1080,31 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("managedkafka") && managedKafkaCore != nil {
 					opsService.SetEndpointResolvers("managedkafka", managedKafkaGRPC)
 				}
+				// The other LRO-owning services are endpoint-scoped too, so a
+				// client addressed at their canonical host resolves and lists only
+				// their operations (real GCP serves Operations per endpoint).
+				// Functions v1 and v2 share cloudfunctions.googleapis.com, so the
+				// token carries both. Service Usage and Resource Manager are
+				// registered only in the opt-in async mode, matching their
+				// fallback-chain registration.
+				if transports.GRPCFor("dataproc") && dataprocCore != nil {
+					opsService.SetEndpointResolvers("dataproc", dataprocGRPC)
+				}
+				if transports.GRPCFor("functions") && functionsCore != nil {
+					opsService.SetEndpointResolvers("cloudfunctions", functionsGRPC, functionsV2GRPC)
+				}
+				if transports.GRPCFor("workflows") && workflowsCore != nil {
+					opsService.SetEndpointResolvers("workflows", workflowsGRPC)
+				}
+				if transports.GRPCFor("run") && runCore != nil {
+					opsService.SetEndpointResolvers("run", runGRPC)
+				}
+				if lroMode.Async() && transports.GRPCFor("serviceusage") && serviceUsageCore != nil {
+					opsService.SetEndpointResolvers("serviceusage", serviceUsageGRPC)
+				}
+				if lroMode.Async() && transports.GRPCFor("resourcemanager") && resourceManagerCore != nil {
+					opsService.SetEndpointResolvers("cloudresourcemanager", resourceManagerGRPC)
+				}
 				// The opt-in async mode reports a name no resolver or registry
 				// owns as NotFound (real google.longrunning semantics); the
 				// default keeps the lenient terminal stub the synchronous SDK

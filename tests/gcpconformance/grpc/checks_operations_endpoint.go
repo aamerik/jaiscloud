@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	apiv2functionspb "cloud.google.com/go/functions/apiv2/functionspb"
+	longrunning "cloud.google.com/go/longrunning/autogen"
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	managedkafkapb "cloud.google.com/go/managedkafka/apiv1/managedkafkapb"
 	metastorepb "cloud.google.com/go/metastore/apiv1/metastorepb"
@@ -105,4 +107,89 @@ func checkManagedKafkaOperationsEndpoint(ctx context.Context, cfg Config) error 
 	}
 	defer sibling.Close()
 	return operationsListExcludes(ctx, sibling, managedKafkaParent(cfg), opName)
+}
+
+// checkRunOperationsEndpoint verifies google.longrunning.Operations is
+// endpoint-scoped for Cloud Run: the operation a service create persisted is
+// resolved and listed at the run endpoint, and the Cloud Functions endpoint
+// (sharing the location parent) does not list it.
+func checkRunOperationsEndpoint(ctx context.Context, cfg Config) error {
+	client, err := newRunServicesClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("run client: %w", err)
+	}
+	defer client.Close()
+
+	op, err := client.CreateService(ctx, createRunServiceRequest(cfg, cfg.ResourceName("gcpc-grpc-run-ops")))
+	if err != nil {
+		return fmt.Errorf("create service: %w", err)
+	}
+	opName := op.Name()
+
+	own, err := newEndpointOperationsClient(ctx, cfg, "run.localhost")
+	if err != nil {
+		return fmt.Errorf("run operations client: %w", err)
+	}
+	defer own.Close()
+	if err := operationsEndpointResolvesAndLists(ctx, own, opName, runParent(cfg)); err != nil {
+		return err
+	}
+
+	sibling, err := newEndpointOperationsClient(ctx, cfg, "cloudfunctions.localhost")
+	if err != nil {
+		return fmt.Errorf("sibling operations client: %w", err)
+	}
+	defer sibling.Close()
+	return operationsListExcludes(ctx, sibling, runParent(cfg), opName)
+}
+
+// checkFunctionsOperationsEndpoint mirrors checkRunOperationsEndpoint for Cloud
+// Functions v2.
+func checkFunctionsOperationsEndpoint(ctx context.Context, cfg Config) error {
+	client, err := newFunctionsV2Client(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("functions v2 client: %w", err)
+	}
+	defer client.Close()
+
+	op, err := client.CreateFunction(ctx, &apiv2functionspb.CreateFunctionRequest{
+		Parent:     functionsParent(cfg),
+		FunctionId: cfg.ResourceName("gcpc-grpc-fn-ops"),
+		Function: &apiv2functionspb.Function{
+			BuildConfig: &apiv2functionspb.BuildConfig{Runtime: "nodejs20", EntryPoint: "handler"},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("create function: %w", err)
+	}
+	opName := op.Name()
+
+	own, err := newEndpointOperationsClient(ctx, cfg, "cloudfunctions.localhost")
+	if err != nil {
+		return fmt.Errorf("functions operations client: %w", err)
+	}
+	defer own.Close()
+	if err := operationsEndpointResolvesAndLists(ctx, own, opName, functionsParent(cfg)); err != nil {
+		return err
+	}
+
+	sibling, err := newEndpointOperationsClient(ctx, cfg, "run.localhost")
+	if err != nil {
+		return fmt.Errorf("sibling operations client: %w", err)
+	}
+	defer sibling.Close()
+	return operationsListExcludes(ctx, sibling, functionsParent(cfg), opName)
+}
+
+// operationsEndpointResolvesAndLists asserts the endpoint's Get resolves opName
+// and its List page for parent includes it.
+func operationsEndpointResolvesAndLists(ctx context.Context, client *longrunning.OperationsClient, opName, parent string) error {
+	got, err := client.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: opName})
+	if err != nil {
+		return fmt.Errorf("GetOperation: %w", err)
+	}
+	if got.GetName() != opName {
+		return fmt.Errorf("GetOperation name = %q, want %q", got.GetName(), opName)
+	}
+	return operationsListContains(ctx, client, parent, opName)
 }

@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 366,
-  "passed": 366,
+  "total": 368,
+  "passed": 368,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 366,
-    "passed": 366,
+    "checks": 368,
+    "passed": 368,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -114,8 +114,8 @@
     },
     {
       "service": "operations",
-      "total": 7,
-      "passed": 7,
+      "total": 9,
+      "passed": 9,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1314,6 +1314,20 @@
     {
       "service": "operations",
       "rpc": "ListOperations (managedkafka endpoint)",
+      "method": "ListOperations",
+      "status": "pass",
+      "key_field": "endpoint-scoped Get+List, sibling isolated"
+    },
+    {
+      "service": "operations",
+      "rpc": "ListOperations (run endpoint)",
+      "method": "ListOperations",
+      "status": "pass",
+      "key_field": "endpoint-scoped Get+List, sibling isolated"
+    },
+    {
+      "service": "operations",
+      "rpc": "ListOperations (cloudfunctions endpoint)",
       "method": "ListOperations",
       "status": "pass",
       "key_field": "endpoint-scoped Get+List, sibling isolated"
