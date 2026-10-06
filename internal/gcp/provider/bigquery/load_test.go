@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"testing"
 
 	bqstore "jaiscloud/internal/gcp/store/bigquery"
@@ -27,6 +29,21 @@ func (f *fakeSourceReader) FetchObjectBytes(_ context.Context, bucket, object st
 		return nil, gcs.ErrNoSuchObject
 	}
 	return b, nil
+}
+
+func (f *fakeSourceReader) ListObjectNames(_ context.Context, bucket, prefix string) ([]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	names := make([]string, 0, len(f.objects))
+	for k := range f.objects {
+		b, obj, ok := strings.Cut(k, "/")
+		if ok && b == bucket && strings.HasPrefix(obj, prefix) {
+			names = append(names, obj)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func newLoadProvider(data []byte) (*Provider, *fakeSourceReader) {
@@ -330,14 +347,14 @@ func TestLoadFailLoud(t *testing.T) {
 		status   int
 		noReader bool
 	}{
-		{"parquet", map[string]any{"sourceFormat": "PARQUET"}, "Unimplemented", 501, false},
-		{"autodetect", map[string]any{"sourceFormat": "NEWLINE_DELIMITED_JSON", "autodetect": true}, "Unimplemented", 501, false},
-		{"compression", map[string]any{"sourceFormat": "NEWLINE_DELIMITED_JSON", "compression": "GZIP"}, "Unimplemented", 501, false},
+		{"orc", map[string]any{"sourceFormat": "ORC"}, "Unimplemented", 501, false},
+		{"datastore-backup", map[string]any{"sourceFormat": "DATASTORE_BACKUP"}, "Unimplemented", 501, false},
 		{"quote", map[string]any{"sourceFormat": "CSV", "quote": "'"}, "Unimplemented", 501, false},
 		{"quote-empty", map[string]any{"sourceFormat": "CSV", "quote": ""}, "Unimplemented", 501, false},
 		{"partitioning", map[string]any{"sourceFormat": "CSV", "timePartitioning": map[string]any{"type": "DAY"}}, "Unimplemented", 501, false},
-		{"wildcard", map[string]any{"sourceFormat": "NEWLINE_DELIMITED_JSON", "sourceUris": []any{"gs://bucket/*.json"}}, "InvalidArgument", 400, false},
-		{"multiple", map[string]any{"sourceFormat": "NEWLINE_DELIMITED_JSON", "sourceUris": []any{"gs://b/1", "gs://b/2"}}, "Unimplemented", 501, false},
+		{"jagged", map[string]any{"sourceFormat": "CSV", "allowJaggedRows": true}, "Unimplemented", 501, false},
+		{"query-wildcard", map[string]any{"sourceFormat": "NEWLINE_DELIMITED_JSON", "sourceUris": []any{"gs://bucket/?.json"}}, "InvalidArgument", 400, false},
+		{"multi-wildcard", map[string]any{"sourceFormat": "NEWLINE_DELIMITED_JSON", "sourceUris": []any{"gs://bucket/a*b*c"}}, "InvalidArgument", 400, false},
 		{"no-sources", map[string]any{"sourceFormat": "NEWLINE_DELIMITED_JSON", "sourceUris": []any{}}, "InvalidArgument", 400, false},
 		{"date-format", map[string]any{"sourceFormat": "CSV", "dateFormat": "%Y"}, "Unimplemented", 501, false},
 		{"no-reader", map[string]any{"sourceFormat": "NEWLINE_DELIMITED_JSON"}, "Unimplemented", 501, true},
@@ -568,24 +585,29 @@ func TestParseGSUri(t *testing.T) {
 		uri        string
 		wantBucket string
 		wantObject string
+		wantGlob   bool
 		wantErr    bool
 	}{
-		{"gs://b/o.json", "b", "o.json", false},
-		{"gs://b/dir/o.csv", "b", "dir/o.csv", false},
-		{"http://b/o", "", "", true},
-		{"gs://b", "", "", true},
-		{"gs://b/", "", "", true},
-		{"gs://b/*.json", "", "", true},
+		{"gs://b/o.json", "b", "o.json", false, false},
+		{"gs://b/dir/o.csv", "b", "dir/o.csv", false, false},
+		{"gs://b/*.json", "b", "*.json", true, false},
+		{"gs://b/dir/part-*.parquet", "b", "dir/part-*.parquet", true, false},
+		{"http://b/o", "", "", false, true},
+		{"gs://b", "", "", false, true},
+		{"gs://b/", "", "", false, true},
+		{"gs://b/dir/?", "", "", false, true},
+		{"gs://b/a*b*c", "", "", false, true},
+		{"gs://b*/o", "", "", false, true},
 	} {
-		b, o, err := parseGSUri(tc.uri)
+		b, o, glob, err := parseGSUri(tc.uri)
 		if tc.wantErr {
 			if err == nil {
 				t.Errorf("%s: expected error", tc.uri)
 			}
 			continue
 		}
-		if err != nil || b != tc.wantBucket || o != tc.wantObject {
-			t.Errorf("%s: got %q/%q err=%v", tc.uri, b, o, err)
+		if err != nil || b != tc.wantBucket || o != tc.wantObject || glob != tc.wantGlob {
+			t.Errorf("%s: got %q/%q glob=%v err=%v", tc.uri, b, o, glob, err)
 		}
 	}
 }

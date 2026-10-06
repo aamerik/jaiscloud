@@ -3,12 +3,16 @@
 package gcpconformance
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/hamba/avro/v2/ocf"
+	"github.com/parquet-go/parquet-go"
 )
 
 // defaultProject is the emulator's default GCP project (internal/config).
@@ -192,6 +196,11 @@ func Scenarios(suffix string) []Scenario {
 	bqUploadTbl := "conf_uploadtbl_" + suffix
 	bqUploadBoundary := "jaiscloud-bq-" + suffix
 	bqUploadJob := "conf-upload-" + suffix
+	// Parquet/Avro gs:// loads (BQL3): embedded-schema formats.
+	bqParquetTbl := "conf_parquettbl_" + suffix
+	bqParquetBucket := "conf-parquet-" + suffix
+	bqAvroTbl := "conf_avrotbl_" + suffix
+	bqAvroBucket := "conf-avro-" + suffix
 	bqUploadJSON := fmt.Sprintf(
 		`{"jobReference":{"projectId":%q,"jobId":%q},"configuration":{"load":{"destinationTable":{"projectId":%q,"datasetId":%q,"tableId":%q},"sourceFormat":"CSV","writeDisposition":"WRITE_APPEND"}}}`,
 		p, bqUploadJob, p, ds, bqUploadTbl)
@@ -247,6 +256,35 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/jobs/${bqUploadJob}"},
 		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/tables/" + bqUploadTbl + "/data"},
 
+		// Parquet gs:// load (BQL3): the destination schema is derived from the
+		// file's embedded Parquet schema (no configuration.load.schema).
+		Scenario{Service: "storage", Method: "POST", Path: "/storage/v1/b?project=" + p,
+			Body: fmt.Sprintf(`{"name":%q}`, bqParquetBucket)},
+		Scenario{Service: "storage", Method: "POST",
+			Path:        "/upload/storage/v1/b/" + bqParquetBucket + "/o?uploadType=media&name=rows.parquet",
+			Body:        string(loadParquetFixture()),
+			ContentType: "application/octet-stream"},
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/jobs",
+			Body: fmt.Sprintf(`{"jobReference":{"projectId":%q,"jobId":%q},"configuration":{"load":{"destinationTable":{"projectId":%q,"datasetId":%q,"tableId":%q},"sourceUris":[%q],"sourceFormat":"PARQUET"}}}`,
+				p, "conf-parquet-"+suffix, p, ds, bqParquetTbl, "gs://"+bqParquetBucket+"/rows.parquet"),
+			Save: map[string]string{"bqParquetJob": "jobReference.jobId"}},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/jobs/${bqParquetJob}"},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/tables/" + bqParquetTbl + "/data"},
+
+		// Avro gs:// load (BQL3): same embedded-schema path as Parquet.
+		Scenario{Service: "storage", Method: "POST", Path: "/storage/v1/b?project=" + p,
+			Body: fmt.Sprintf(`{"name":%q}`, bqAvroBucket)},
+		Scenario{Service: "storage", Method: "POST",
+			Path:        "/upload/storage/v1/b/" + bqAvroBucket + "/o?uploadType=media&name=rows.avro",
+			Body:        string(loadAvroFixture()),
+			ContentType: "application/octet-stream"},
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/jobs",
+			Body: fmt.Sprintf(`{"jobReference":{"projectId":%q,"jobId":%q},"configuration":{"load":{"destinationTable":{"projectId":%q,"datasetId":%q,"tableId":%q},"sourceUris":[%q],"sourceFormat":"AVRO"}}}`,
+				p, "conf-avro-"+suffix, p, ds, bqAvroTbl, "gs://"+bqAvroBucket+"/rows.avro"),
+			Save: map[string]string{"bqAvroJob": "jobReference.jobId"}},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/jobs/${bqAvroJob}"},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/tables/" + bqAvroTbl + "/data"},
+
 		// SELECT over the stored row; capture the job id for the read-back calls.
 		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/queries",
 			Body: fmt.Sprintf("{\"query\":\"SELECT id FROM `%s.%s.%s` WHERE id = 1\",\"useLegacySql\":false}", p, ds, tbl),
@@ -273,6 +311,8 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + bqTbl2},
 		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + bqLoadTbl},
 		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + bqUploadTbl},
+		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + bqParquetTbl},
+		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + bqAvroTbl},
 		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds},
 	)
 
@@ -603,4 +643,51 @@ func captureVar(v any, path string) (string, bool) {
 		}
 		return string(b), true
 	}
+}
+
+// loadParquetFixture builds a small Parquet file whose embedded schema the
+// emulator derives for a PARQUET gs:// load (BQL3).
+func loadParquetFixture() []byte {
+	type row struct {
+		ID   int64   `parquet:"id"`
+		Name string  `parquet:"name"`
+		Amt  float64 `parquet:"amt"`
+	}
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[row](&buf)
+	if _, err := w.Write([]row{{1, "alice", 1.5}, {2, "bob", 2.5}}); err != nil {
+		panic("parquet fixture write: " + err.Error())
+	}
+	if err := w.Close(); err != nil {
+		panic("parquet fixture close: " + err.Error())
+	}
+	return buf.Bytes()
+}
+
+// loadAvroFixture builds a small Avro Object Container File (BQL3).
+func loadAvroFixture() []byte {
+	const schema = `{"type":"record","name":"row","fields":[
+	 {"name":"id","type":"long"},
+	 {"name":"name","type":"string"},
+	 {"name":"amt","type":"double"}
+	]}`
+	type row struct {
+		ID   int64   `avro:"id"`
+		Name string  `avro:"name"`
+		Amt  float64 `avro:"amt"`
+	}
+	var buf bytes.Buffer
+	enc, err := ocf.NewEncoder(schema, &buf)
+	if err != nil {
+		panic("avro fixture encoder: " + err.Error())
+	}
+	for _, r := range []row{{1, "alice", 1.5}, {2, "bob", 2.5}} {
+		if err := enc.Encode(r); err != nil {
+			panic("avro fixture encode: " + err.Error())
+		}
+	}
+	if err := enc.Close(); err != nil {
+		panic("avro fixture close: " + err.Error())
+	}
+	return buf.Bytes()
 }

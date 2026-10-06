@@ -635,7 +635,7 @@ type schemaField struct {
 	Name   string        `json:"name"`
 	Mode   string        `json:"mode"`
 	Type   string        `json:"type"`
-	Fields []schemaField `json:"fields"`
+	Fields []schemaField `json:"fields,omitempty"`
 }
 
 // parseSchemaFields extracts the top-level fields from a table's schema JSON.

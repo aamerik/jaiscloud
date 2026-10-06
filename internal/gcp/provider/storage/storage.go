@@ -2922,6 +2922,27 @@ func (p *Provider) FetchObjectBytes(ctx context.Context, bucket, object string) 
 	return p.decryptObjectWithKey(ctx, "", meta, ciphertext, nil)
 }
 
+// ListObjectNames returns the names of the live objects in bucket whose name has
+// the given prefix, sorted ascending. It is the server-side listing counterpart
+// to FetchObjectBytes, used by the BigQuery provider to resolve a gs:// load
+// URI that carries a `*` wildcard. The memory backend returns
+// gcs.ErrNoSuchBucket for a missing bucket while the Postgres backend returns an
+// empty list; both are treated as "no matching object" by the caller.
+func (p *Provider) ListObjectNames(ctx context.Context, bucket, prefix string) ([]string, error) {
+	metas, err := p.objects.ListObjects(ctx, bucket)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(metas))
+	for _, m := range metas {
+		if strings.HasPrefix(m.Name, prefix) {
+			names = append(names, m.Name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 // EnsureBucket creates a GCS bucket if it does not already exist. It backs the
 // Cloud Functions v2 generateUploadUrl source bucket (gcf-v2-sources-*), which
 // the emulator provisions lazily; a bucket the user already created is left
