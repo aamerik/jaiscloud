@@ -1065,6 +1065,21 @@ func startCmd() *cobra.Command {
 					opsResolvers = append(opsResolvers, runGRPC)
 				}
 				opsService := grpcoperations.New(opsResolvers...)
+				// Real GCP serves google.longrunning.Operations per service
+				// endpoint, so ListOperations returns only that service's
+				// operations. The emulator serves one Operations on a single
+				// listener, so register each service's resolvers under its
+				// endpoint host token (the request's HTTP/2 :authority first
+				// label). Managed Kafka and Dataproc Metastore operations share
+				// the location-scoped namespace with Workflows/Run and therefore
+				// need the discriminator to list their own; the registration is
+				// additive and leaves the untokened fallback chain unchanged.
+				if transports.GRPCFor("metastore") && metastoreCore != nil {
+					opsService.SetEndpointResolvers("metastore", metastoreGRPC)
+				}
+				if transports.GRPCFor("managedkafka") && managedKafkaCore != nil {
+					opsService.SetEndpointResolvers("managedkafka", managedKafkaGRPC)
+				}
 				// The opt-in async mode reports a name no resolver or registry
 				// owns as NotFound (real google.longrunning semantics); the
 				// default keeps the lenient terminal stub the synchronous SDK

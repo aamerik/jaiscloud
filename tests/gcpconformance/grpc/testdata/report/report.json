@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 364,
-  "passed": 364,
+  "total": 366,
+  "passed": 366,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 364,
-    "passed": 364,
+    "checks": 366,
+    "passed": 366,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -114,8 +114,8 @@
     },
     {
       "service": "operations",
-      "total": 5,
-      "passed": 5,
+      "total": 7,
+      "passed": 7,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1303,6 +1303,20 @@
       "method": "WaitOperation",
       "status": "pass",
       "key_field": "name round-trips with done=true"
+    },
+    {
+      "service": "operations",
+      "rpc": "ListOperations (metastore endpoint)",
+      "method": "ListOperations",
+      "status": "pass",
+      "key_field": "endpoint-scoped Get+List, sibling isolated"
+    },
+    {
+      "service": "operations",
+      "rpc": "ListOperations (managedkafka endpoint)",
+      "method": "ListOperations",
+      "status": "pass",
+      "key_field": "endpoint-scoped Get+List, sibling isolated"
     },
     {
       "service": "monitoring",

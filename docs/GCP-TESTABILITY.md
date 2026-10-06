@@ -219,7 +219,11 @@ evidence for any of them.
       then serves a registry-backed `list`/`cancel`/`delete` and reports an unowned name as
       `NOT_FOUND`. `make test-lro-async-gcp` exercises it end-to-end. It is a
       **local-testing affordance, not real-GCP timing**: code that assumes immediate readiness
-      must still be tested on real, eventually-consistent GCP.
+      must still be tested on real, eventually-consistent GCP. The `google.longrunning.Operations`
+      service is also endpoint-scoped: a client addressed at a service's endpoint
+      (`{service}.localhost` / `{service}.googleapis.com`, via the gRPC `:authority`) lists only
+      that service's operations, matching real GCP's per-endpoint Operations; an unregistered
+      endpoint gets the shared name-based `Get`/`Wait` and an empty list.
 - [ ] **Metadata-only services.** `compute`, `cloudsql`, `clouddns`, `memorystore` have
       no control/data plane locally — only resource records. Test the real data plane. The
       differential harness records read-only control-plane smoke for `compute`/`cloudsql`/

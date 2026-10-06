@@ -31,6 +31,16 @@ func OperationName(project, location, id string) string {
 	return resource.ResourceID(project)("metastore-operation", location+"/"+id)
 }
 
+// ParseParent splits a location parent name projects/{p}/locations/{l}. ok is
+// false for any other shape (e.g. a resource name or a collection-less path).
+func ParseParent(parent string) (project, location string, ok bool) {
+	segs := strings.Split(strings.Trim(parent, "/"), "/")
+	if len(segs) != 4 || segs[0] != "projects" || segs[2] != "locations" {
+		return "", "", false
+	}
+	return segs[1], segs[3], true
+}
+
 // ResourceName is the parsed form of a Dataproc Metastore resource name.
 type ResourceName struct {
 	Project        string
