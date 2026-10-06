@@ -141,6 +141,16 @@ behind a wire-conformant API.
 > distinction changes depth. `docker` vs `k8s` is an orchestration choice, never a
 > fidelity tier; a backend a service does not wire is a capability gap (listed in
 > its cell and the console's availability matrix), not a shallower tier.
+>
+> **Host-only `docker` executor.** The `docker` backend assumes the emulator process
+> runs on the same host as the Docker daemon: it reaches workloads on the host
+> loopback (`127.0.0.1`/`localhost:<publishedPort>`) and bind-mounts emulator-local
+> paths (code archives, layers, the platform TLS PEM bundle). Running the emulator
+> itself as a container (`docker-compose.yml` mounts the socket and defaults
+> `JAISCLOUD_EXECUTOR_MODE=docker`) is therefore **not supported** — the startup
+> probe only checks the socket, reports the backend reachable, and then invocations
+> and mounts fail. Use the `k8s` backend for an in-cluster emulator; the
+> containerized-docker fix is tracked as backlog item **CDE1**.
 
 | Depth | Services | What you can actually rely on locally |
 | --- | --- | --- |
