@@ -34,7 +34,6 @@ import (
 	grpcserver "jaiscloud/internal/gcp/grpc"
 	grpcfirestore "jaiscloud/internal/gcp/grpc/firestore"
 	grpcfirestoreadmin "jaiscloud/internal/gcp/grpc/firestoreadmin"
-	grpckms "jaiscloud/internal/gcp/grpc/kms"
 	grpcoperations "jaiscloud/internal/gcp/grpc/operations"
 	grpcpubsub "jaiscloud/internal/gcp/grpc/pubsub"
 	grpcsecretmanager "jaiscloud/internal/gcp/grpc/secretmanager"
@@ -49,7 +48,6 @@ import (
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	iamprovider "jaiscloud/internal/gcp/provider/iam"
 	icebergprovider "jaiscloud/internal/gcp/provider/iceberg"
-	kmsprovider "jaiscloud/internal/gcp/provider/kms"
 	memorystoreprovider "jaiscloud/internal/gcp/provider/memorystore"
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
@@ -61,6 +59,7 @@ import (
 	eventarccore "jaiscloud/internal/gcp/service/eventarc"
 	functionscore "jaiscloud/internal/gcp/service/functions"
 	iamcredentialscore "jaiscloud/internal/gcp/service/iamcredentials"
+	kmscore "jaiscloud/internal/gcp/service/kms"
 	loggingcore "jaiscloud/internal/gcp/service/logging"
 	managedkafkacore "jaiscloud/internal/gcp/service/managedkafka"
 	metastorecore "jaiscloud/internal/gcp/service/metastore"
@@ -102,6 +101,7 @@ import (
 	grpceventarc "jaiscloud/internal/gcp/transport/grpc/eventarc"
 	grpcfunctions "jaiscloud/internal/gcp/transport/grpc/functions"
 	grpciamcredentials "jaiscloud/internal/gcp/transport/grpc/iamcredentials"
+	grpckms "jaiscloud/internal/gcp/transport/grpc/kms"
 	grpclogging "jaiscloud/internal/gcp/transport/grpc/logging"
 	grpcmanagedkafka "jaiscloud/internal/gcp/transport/grpc/managedkafka"
 	grpcmetastore "jaiscloud/internal/gcp/transport/grpc/metastore"
@@ -119,6 +119,7 @@ import (
 	resteventarc "jaiscloud/internal/gcp/transport/rest/eventarc"
 	restfunctions "jaiscloud/internal/gcp/transport/rest/functions"
 	restiamcredentials "jaiscloud/internal/gcp/transport/rest/iamcredentials"
+	restkms "jaiscloud/internal/gcp/transport/rest/kms"
 	restlogging "jaiscloud/internal/gcp/transport/rest/logging"
 	restmanagedkafka "jaiscloud/internal/gcp/transport/rest/managedkafka"
 	restmetastore "jaiscloud/internal/gcp/transport/rest/metastore"
@@ -301,7 +302,10 @@ func startCmd() *cobra.Command {
 
 			storageP := storageprovider.New(stores.objects, stores.resources, stores.blobs, crypto.NewEnvelopeEncryptor(stores.keys))
 			secretP := secretmanagerprovider.New(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys))
-			kmsP := kmsprovider.New(stores.keys, stores.resources)
+			// Cloud KMS: one transport-neutral core shared by the REST provider
+			// and the gRPC adapter, so the two transports cannot drift.
+			kmsCore := kmscore.NewService(stores.keys, stores.resources, cfg.ProjectID)
+			kmsP := restkms.New(kmsCore)
 			iamP := iamprovider.New(stores.resources)
 			// IAM Service Account Credentials (iamcredentials) shares its key
 			// material with iam (internal/gcp/serviceaccount). Its
@@ -876,7 +880,7 @@ func startCmd() *cobra.Command {
 			firestoreAdminGRPC := grpcfirestoreadmin.NewService(firestoreP.Service, cfg.ProjectID)
 			pubsubGRPC := grpcpubsub.NewService(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			secretGRPC := grpcsecretmanager.NewService(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
-			kmsGRPC := grpckms.NewService(stores.keys, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
+			kmsGRPC := grpckms.NewService(kmsCore, cfg.ProjectID)
 			loggingGRPC := grpclogging.NewService(loggingCore, cfg.ProjectID)
 			loggingConfigGRPC := grpclogging.NewConfigService(loggingCore, cfg.ProjectID)
 			loggingMetricsGRPC := grpclogging.NewMetricsService(loggingCore, cfg.ProjectID)

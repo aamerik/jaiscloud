@@ -150,8 +150,8 @@ surface and durability.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **371/371 checks pass** (Dataproc 26,
-  Datastore 15, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 20, IAM 6, IAM Credentials 4, KMS 31, Logging 21,
+- **gRPC** — official `cloud.google.com/go` clients: **375/375 checks pass** (Dataproc 26,
+  Datastore 15, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 20, IAM 6, IAM Credentials 4, KMS 35, Logging 21,
   Managed Kafka 21, Metastore 13, Monitoring 34, Operations 9, Pub/Sub 25, Resource Manager 11,
   Scheduler 8, Secret Manager 16, Service Usage 6, Storage 24, Tasks 16, Workflow Executions 4, Workflows 5) against `:8081`. The IAM probes
   include Eventarc trigger IAM (GetIamPolicy/SetIamPolicy/TestIamPermissions), which the shared
@@ -243,18 +243,16 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   source mounted at `/workspace`, `FUNCTION_TARGET`/`FUNCTION_SIGNATURE_TYPE`/`LOG_EXECUTION_ID`
   injected), and `JAISCLOUD_FUNCTIONS_EXECUTOR=lambda` selects the legacy Lambda-RIE contract.
 - **gRPC** — **7** of **458** cells remain `limited`: verified against proto descriptors only.
-  The other **336** are `ga` and **115** are explicit `unsupported` stubs (see the `Unimplemented`
+  The other **340** are `ga` and **115** are explicit `unsupported` stubs (see the `Unimplemented`
   list below), verified with the official `cloud.google.com/go` clients against a live emulator.
-  The conformance harness exercises **371** checks over those `ga` proto methods (Cloud Run 15,
+  The conformance harness exercises **375** checks over those `ga` proto methods (Cloud Run 15,
   Dataproc 26,
-  Datastore 15, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 20, IAM 6, KMS 31, Logging 21,
+  Datastore 15, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 20, IAM 6, KMS 35, Logging 21,
   Managed Kafka 21, Metastore 13, Monitoring 34, Operations 9, Pub/Sub 25, Resource Manager 11,
   Scheduler 8, Secret Manager 16, Service Usage 6, Storage 24, Tasks 16, Workflow Executions 4, Workflows 5, the rest one
-  per method). KMS
-  `ImportCryptoKeyVersion`, `ImportTrustedKeyWrappedCryptoKeyVersion`,
-  `ExportTrustedKeyWrappedCryptoKeyVersion` and `Decapsulate` remain `limited`, as do Secret
-  Manager `RotateSecret`/`EnableManagedRotation` (Cloud SQL managed rotation with no data plane
-  to update) and Logging `TailLogEntries` (a bounded store-poll with no deterministic conformance
+  per method). Secret
+  Manager `RotateSecret`/`EnableManagedRotation` remain `limited` (Cloud SQL managed rotation with no data plane
+  to update), as does Logging `TailLogEntries` (a bounded store-poll with no deterministic conformance
   assertion). Managed Kafka consumer groups are `ga`: with the opt-in broker mode the list/get/
   update/delete surface reads the live broker's group coordinator, so the hermetic harness asserts
   the no-broker shape (`NOT_FOUND` for an absent group) and the real-Kafka data plane is covered by

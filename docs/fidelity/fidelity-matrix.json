@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 957,
+    "total": 967,
     "by_state": {
-      "ga": 709,
-      "limited": 107,
+      "ga": 723,
+      "limited": 103,
       "preview": 14,
       "unsupported": 127
     },
     "by_transport": {
       "grpc": {
-        "ga": 336,
-        "limited": 7,
+        "ga": 340,
+        "limited": 3,
         "unsupported": 115
       },
       "rest": {
-        "ga": 373,
+        "ga": 383,
         "limited": 100,
         "preview": 14,
         "unsupported": 12
@@ -73,8 +73,7 @@
         "preview": 14
       },
       "kms": {
-        "ga": 56,
-        "limited": 4
+        "ga": 70
       },
       "logging": {
         "ga": 41,
@@ -4630,11 +4629,10 @@
       "service": "kms",
       "operation": "Decapsulate",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "KEM decapsulation needs a KEM key type (ML-KEM/X-Wing) and raw-bytes public keys the emulator does not generate",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4693,12 +4691,11 @@
       "service": "kms",
       "operation": "ExportTrustedKeyWrappedCryptoKeyVersion",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4776,24 +4773,22 @@
       "service": "kms",
       "operation": "ImportCryptoKeyVersion",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "key import needs a store path to create a version from caller-supplied material plus RSA-OAEP + AES-KWP (RFC 5649) unwrapping",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "kms",
       "operation": "ImportTrustedKeyWrappedCryptoKeyVersion",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4814,6 +4809,17 @@
       "state": "ga",
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.decrypt",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.CryptoKeyDelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.delete",
+        "mutating",
         "postgres=yes"
       ]
     },
@@ -4922,11 +4928,43 @@
     },
     {
       "service": "kms",
+      "operation": "KMS.CryptoKeyVersionDecapsulate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.decapsulate",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.CryptoKeyVersionDelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
       "operation": "KMS.CryptoKeyVersionDestroy",
       "transport": "rest",
       "state": "ga",
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.destroy",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.CryptoKeyVersionExportTrusted",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.exportTrustedKeyWrappedCryptoKeyVersion",
+        "mutating",
         "postgres=yes"
       ]
     },
@@ -4947,6 +4985,28 @@
       "state": "ga",
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.getPublicKey",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.CryptoKeyVersionImport",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.import",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.CryptoKeyVersionImportTrusted",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.importTrustedKeyWrappedCryptoKeyVersion",
+        "mutating",
         "postgres=yes"
       ]
     },
@@ -4982,11 +5042,55 @@
     },
     {
       "service": "kms",
+      "operation": "KMS.CryptoKeyVersionRestore",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.restore",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
       "operation": "KMS.CryptoKeyVersionUpdate",
       "transport": "rest",
       "state": "ga",
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.patch",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.ImportJobCreate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.importJobs.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.ImportJobGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.importJobs.get",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.ImportJobList",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.importJobs.list",
         "mutating",
         "postgres=yes"
       ]

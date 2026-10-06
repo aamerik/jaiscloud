@@ -334,22 +334,6 @@ operations:
   # emulator does not model, so implementing it would fabricate a wire-divergent
   # result. They fail loudly with codes.Unimplemented rather than silently
   # succeeding.
-  - service: kms
-    operation: ImportCryptoKeyVersion
-    state: limited
-    reason: "key import needs a store path to create a version from caller-supplied material plus RSA-OAEP + AES-KWP (RFC 5649) unwrapping"
-  - service: kms
-    operation: ImportTrustedKeyWrappedCryptoKeyVersion
-    state: limited
-    reason: "HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled"
-  - service: kms
-    operation: ExportTrustedKeyWrappedCryptoKeyVersion
-    state: limited
-    reason: "HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled"
-  - service: kms
-    operation: Decapsulate
-    state: limited
-    reason: "KEM decapsulation needs a KEM key type (ML-KEM/X-Wing) and raw-bytes public keys the emulator does not generate"
   - service: secretmanager
     operation: RotateSecret
     state: limited
