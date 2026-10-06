@@ -190,6 +190,15 @@ func assignOrders(items []*Item, seriesOrder []string) {
 	for _, it := range items {
 		w, seq := parseWave(it)
 		if w == 0 {
+			// Backlog items carry no wave, but they still belong to a family.
+			// Rank them within their family (after that family's wave rows) so
+			// the SERIES family order governs backlog too, not just waves --
+			// otherwise an earlier family's remaining backlog always sorts
+			// behind a later family's waves.
+			if it.Kind == "backlog" && it.Series != "" {
+				it.Order = rank[it.Series]*100000 + 99999
+				it.OrderSource = "backlog"
+			}
 			continue
 		}
 		it.Order = rank[it.Series]*100000 + w*100 + seq

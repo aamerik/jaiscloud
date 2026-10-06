@@ -195,7 +195,10 @@ func TestAssignOrders(t *testing.T) {
 	items := []*Item{
 		{ID: "W1.1", Kind: "wave", Series: "java-compat", Wave: "W1.1"},
 		{ID: "W1.1", Kind: "wave", Series: "bigquery-ga", Wave: "W1.1"},
-		{ID: "B1", Kind: "backlog", Pri: 5}, // no wave -> Order untouched
+		{ID: "B1", Kind: "backlog", Pri: 5}, // no series -> Order untouched
+		// Backlog in a known family is ranked within that family, so an
+		// earlier family's backlog still sorts ahead of a later family's waves.
+		{ID: "UI24", Kind: "backlog", Series: "console-ui"},
 	}
 	assignOrders(items, []string{"java-compat"})
 	if items[0].Order != 101 {
@@ -205,7 +208,12 @@ func TestAssignOrders(t *testing.T) {
 		t.Errorf("bigquery-ga order = %d, want 100101", items[1].Order)
 	}
 	if items[2].Order != 0 {
-		t.Errorf("non-wave order = %d, want 0", items[2].Order)
+		t.Errorf("no-series backlog order = %d, want 0", items[2].Order)
+	}
+	// java-compat ranks 0, then the unlisted families alphabetically:
+	// bigquery-ga = 1, console-ui = 2.
+	if items[3].Order != 299999 || items[3].OrderSource != "backlog" {
+		t.Errorf("console-ui backlog = %d/%q, want 299999/backlog", items[3].Order, items[3].OrderSource)
 	}
 }
 

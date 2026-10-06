@@ -12,7 +12,7 @@ PYTHON ?= python3
 # work), then the Java-compat effort owns waves W1–W3. The AWS-parity families run
 # next; the BigQuery engine decision (bigquery-ga) is deliberately deprioritized
 # behind them.
-SERIES ?= console-ui,ledger-integrity,dataproc-gke,java-compat,functions-parity,metastore-parity,bigquery-ga
+SERIES ?= console-ui,ledger-integrity,dataproc-gke,java-compat,functions-parity,metastore-parity,bigquery-ga,bigquery-load-jobs,demo-spikes
 
 # Include non-ga fidelity-matrix cells in the ledger (informational, kind=matrix).
 # Set MATRIX= to disable.
