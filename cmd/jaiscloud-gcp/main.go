@@ -343,10 +343,17 @@ func startCmd() *cobra.Command {
 			// default; JAISCLOUD_FUNCTIONS_EXECUTOR=lambda selects the legacy
 			// Lambda-RIE contract for back-compat.
 			var functionsCore *functionscore.Service
+			// The requested Functions executor mode and the effective one: a
+			// docker mode with no reachable daemon degrades to mock (below), so
+			// the console reports the truth instead of claiming docker-backed.
+			funcMode, funcModeSrc := config.ExecutorMode("functions", "mock")
+			functionsMode := funcMode
 			if serviceEnabled("functions") {
-				funcMode, funcModeSrc := config.ExecutorMode("functions", "mock")
 				funcCfg := gcf.DefaultConfig()
-				funcCfg.Mode = funcMode
+				funcCfg.Mode = effectiveFunctionsMode(funcMode, func(ctx context.Context) error {
+					return docker.Ping(ctx, "")
+				})
+				functionsMode = funcCfg.Mode
 				funcCfg.Region = cfg.Region
 				funcCfg.InstanceID = instanceID
 				// K8s mode mounts source archives via a code-fetch init container,
@@ -359,7 +366,7 @@ func startCmd() *cobra.Command {
 				profile := functionsRuntimeProfile()
 				funcExec := container.NewExecutor(funcCfg, profile)
 				defer funcExec.Close()
-				slog.Info("functions executor", "mode", funcMode, "source", funcModeSrc, "profile", profile.Name())
+				slog.Info("functions executor", "mode", functionsMode, "requested", funcMode, "source", funcModeSrc, "profile", profile.Name())
 				serviceOpts := []functionscore.Option{
 					functionscore.WithExecutor(funcExec),
 					functionscore.WithBlobs(stores.blobs),
@@ -1421,7 +1428,7 @@ func startCmd() *cobra.Command {
 				// an engine-capable service is shown as engine-backed rather
 				// than shape-only (see gcpui.ServiceModes).
 				sparkExec, sparkSrc := config.ExecutorMode("spark", "mock")
-				lambdaExec, lambdaSrc := config.ExecutorMode("functions", "mock")
+				lambdaExec, lambdaSrc := functionsMode, funcModeSrc
 				cloudRunExec, cloudRunSrc := config.ExecutorMode("cloudrun", "mock")
 				kafkaBrokerMode, kafkaBrokerSrc := resolveKafkaBrokerMode()
 				// Report the effective backend: a requested docker mode with no
@@ -2205,6 +2212,29 @@ func functionsUploadOrigin(port int) string {
 		}
 	}
 	return fmt.Sprintf("http://localhost:%d", port)
+}
+
+// functionsDockerPingTimeout bounds the daemon probe before selecting the docker
+// Functions executor.
+const functionsDockerPingTimeout = 5 * time.Second
+
+// effectiveFunctionsMode resolves the Functions executor actually used. A docker
+// mode with no reachable Docker daemon degrades to mock, matching the Cloud
+// Run/Dataproc docker startup probes (and AWS Lambda's effectiveLambdaMode): the
+// emulator runs and reports the truth instead of accepting the config and then
+// failing every invoke inside the container start path. ping is injectable for
+// tests.
+func effectiveFunctionsMode(mode string, ping func(context.Context) error) string {
+	if mode != "docker" {
+		return mode
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), functionsDockerPingTimeout)
+	defer cancel()
+	if err := ping(ctx); err != nil {
+		slog.Warn("functions: docker daemon unreachable; falling back to mock", "err", err)
+		return "mock"
+	}
+	return "docker"
 }
 
 // functionsRuntimeProfile selects the Cloud Functions runtime profile: the GCP
