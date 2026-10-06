@@ -16,7 +16,10 @@
 // object (resolved through the injected SourceReader against the emulated GCS)
 // is decoded as NEWLINE_DELIMITED_JSON or CSV, coerced to the destination
 // schema and written per writeDisposition, synchronously, with statistics.load
-// on the job. Everything outside that subset (autodetect, Parquet/Avro/ORC,
+// on the job. The same decoder backs the media-upload endpoint the official
+// clients use for load_table_from_file: a multipart/related jobs.insert, or a
+// resumable session (POST /upload/bigquery/v2/.../jobs then PUT chunks with
+// Content-Range). Everything outside that subset (autodetect, Parquet/Avro/ORC,
 // compression, wildcards, partitioning, a non-default quote) fails loud
 // (400/501); a data-level failure (too many bad records, WRITE_EMPTY on a
 // non-empty table) is reported in status.errorResult like real BigQuery. See
@@ -51,10 +54,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"jaiscloud/internal/clock"
@@ -62,6 +67,7 @@ import (
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/queryengine"
 	bqstore "jaiscloud/internal/gcp/store/bigquery"
+	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -74,45 +80,59 @@ type Provider struct {
 	// sourceReader resolves gs:// load-job sources against the emulated GCS.
 	// It is injected by main.go; nil means load jobs fail loud (Unimplemented).
 	sourceReader SourceReader
+
+	// mu guards uploads, the in-progress resumable load-job upload sessions
+	// (load_table_from_file with an unknown size). Sessions are in-memory only:
+	// a load source is decoded from a whole buffer (see BQF3), so a session is
+	// bounded and cleared on Reset.
+	mu      sync.Mutex
+	uploads map[string]*loadUploadSession
 }
 
 // New returns a Provider backed by the given store.
 func New(s bqstore.Store, opts ...Option) *Provider {
-	p := &Provider{store: s}
+	p := &Provider{store: s, uploads: map[string]*loadUploadSession{}}
 	for _, opt := range opts {
 		opt(p)
 	}
 	return p
 }
 
-// Reset wipes the store.
-func (p *Provider) Reset(ctx context.Context) { p.store.Reset(ctx) }
+// Reset wipes the store and any in-progress resumable load-job upload sessions.
+func (p *Provider) Reset(ctx context.Context) {
+	p.store.Reset(ctx)
+	p.mu.Lock()
+	p.uploads = map[string]*loadUploadSession{}
+	p.mu.Unlock()
+}
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"BigQuery.CreateDataset":     p.CreateDataset,
-		"BigQuery.GetDataset":        p.GetDataset,
-		"BigQuery.ListDatasets":      p.ListDatasets,
-		"BigQuery.UpdateDataset":     p.UpdateDataset,
-		"BigQuery.DeleteDataset":     p.DeleteDataset,
-		"BigQuery.CreateTable":       p.CreateTable,
-		"BigQuery.GetTable":          p.GetTable,
-		"BigQuery.ListTables":        p.ListTables,
-		"BigQuery.UpdateTable":       p.UpdateTable,
-		"BigQuery.DeleteTable":       p.DeleteTable,
-		"BigQuery.InsertAll":         p.InsertAll,
-		"BigQuery.ListRows":          p.ListRows,
-		"BigQuery.InsertJob":         p.InsertJob,
-		"BigQuery.GetJob":            p.GetJob,
-		"BigQuery.ListJobs":          p.ListJobs,
-		"BigQuery.DeleteJob":         p.DeleteJob,
-		"BigQuery.CancelJob":         p.CancelJob,
-		"BigQuery.Query":             p.Query,
-		"BigQuery.GetQueryResults":   p.GetQueryResults,
-		"BigQuery.GetServiceAccount": p.GetServiceAccount,
-		"BigQuery.Routines":          p.Routines,
-		"BigQuery.Models":            p.Models,
-		"BigQuery.RowAccessPolicies": p.RowAccessPolicies,
+		"BigQuery.CreateDataset":           p.CreateDataset,
+		"BigQuery.GetDataset":              p.GetDataset,
+		"BigQuery.ListDatasets":            p.ListDatasets,
+		"BigQuery.UpdateDataset":           p.UpdateDataset,
+		"BigQuery.DeleteDataset":           p.DeleteDataset,
+		"BigQuery.CreateTable":             p.CreateTable,
+		"BigQuery.GetTable":                p.GetTable,
+		"BigQuery.ListTables":              p.ListTables,
+		"BigQuery.UpdateTable":             p.UpdateTable,
+		"BigQuery.DeleteTable":             p.DeleteTable,
+		"BigQuery.InsertAll":               p.InsertAll,
+		"BigQuery.ListRows":                p.ListRows,
+		"BigQuery.InsertJob":               p.InsertJob,
+		"BigQuery.InsertJobResumableStart": p.InsertJobResumableStart,
+		"BigQuery.InsertJobResumable":      p.InsertJobResumable,
+		"BigQuery.GetJob":                  p.GetJob,
+		"BigQuery.ListJobs":                p.ListJobs,
+		"BigQuery.DeleteJob":               p.DeleteJob,
+		"BigQuery.CancelJob":               p.CancelJob,
+		"BigQuery.Query":                   p.Query,
+		"BigQuery.GetQueryResults":         p.GetQueryResults,
+		"BigQuery.GetServiceAccount":       p.GetServiceAccount,
+		"BigQuery.Routines":                p.Routines,
+		"BigQuery.Models":                  p.Models,
+		"BigQuery.RowAccessPolicies":       p.RowAccessPolicies,
 	}
 }
 
@@ -960,26 +980,26 @@ func (p *Provider) InsertJob(ctx context.Context, nr *model.NormalizedRequest) (
 		}
 	}
 	// A load job is likewise evaluated synchronously: the source is read from
-	// the emulated GCS, decoded, coerced to the destination schema and written
-	// to the store before the job is returned (state=DONE). Options outside the
+	// the emulated GCS (or, for a multipart upload, supplied as the request
+	// media), decoded, coerced to the destination schema and written to the
+	// store before the job is returned (state=DONE). Options outside the
 	// documented subset fail loud (400/501); a data-level failure is reported in
 	// the job's status.errorResult like real BigQuery.
 	if l := mapValue(mapValue(body, "configuration"), "load"); l != nil {
-		loadStats, jobErr, err := p.runLoad(ctx, projectOf(nr), l, now)
+		source, uploaded, err := p.loadSourceBytes(nr)
 		if err != nil {
 			return nil, err
 		}
-		// application/callers expect the job type on the configuration.
-		mapValue(body, "configuration")["jobType"] = "LOAD"
-		body["statistics"] = map[string]any{
-			"creationTime": millis(now),
-			"startTime":    millis(now),
-			"endTime":      millis(now),
-			"load":         loadStats,
+		var loadStats, jobErr map[string]any
+		if uploaded {
+			loadStats, jobErr, err = p.runLoadData(ctx, projectOf(nr), l, source, "0", now)
+		} else {
+			loadStats, jobErr, err = p.runLoad(ctx, projectOf(nr), l, now)
 		}
-		if jobErr != nil {
-			body["status"] = map[string]any{"state": "DONE", "errorResult": jobErr, "errors": []any{jobErr}}
+		if err != nil {
+			return nil, err
 		}
+		attachLoadStats(body, loadStats, jobErr, now)
 	}
 	j := bqstore.Job{JobID: jobID, CreateTime: now}
 	if body != nil {
@@ -991,6 +1011,239 @@ func (p *Provider) InsertJob(ctx context.Context, nr *model.NormalizedRequest) (
 		return nil, mapErr(err)
 	}
 	return provider.OK(p.jobMap(projectOf(nr), j)), nil
+}
+
+// attachLoadStats stamps a load job body with configuration.jobType and the
+// statistics/status real BigQuery reports for a completed load. loadStats is the
+// statistics.load object; jobErr, when non-nil, is a data-level failure carried
+// in status.errorResult rather than as an HTTP error.
+func attachLoadStats(body map[string]any, loadStats, jobErr map[string]any, now time.Time) {
+	// application/callers expect the job type on the configuration.
+	mapValue(body, "configuration")["jobType"] = "LOAD"
+	body["statistics"] = map[string]any{
+		"creationTime": millis(now),
+		"startTime":    millis(now),
+		"endTime":      millis(now),
+		"load":         loadStats,
+	}
+	if jobErr != nil {
+		body["status"] = map[string]any{"state": "DONE", "errorResult": jobErr, "errors": []any{jobErr}}
+	}
+}
+
+// loadSourceBytes returns the uploaded file bytes carried on the request for a
+// media (multipart) load job, and whether they were present. It reads either the
+// buffered wire.MediaKey or the streamed wire.StreamKey, applying the size cap.
+func (p *Provider) loadSourceBytes(nr *model.NormalizedRequest) ([]byte, bool, error) {
+	if b, ok := nr.Params[wire.MediaKey].([]byte); ok {
+		if len(b) > maxLoadUploadBytes {
+			return nil, true, model.NewProviderError("InvalidArgument", "uploaded load source exceeds the size cap", 400)
+		}
+		return b, true, nil
+	}
+	if rd, ok := nr.Params[wire.StreamKey].(io.Reader); ok {
+		data, err := io.ReadAll(io.LimitReader(rd, maxLoadUploadBytes+1))
+		if err != nil {
+			return nil, true, invalidArgument("failed to read uploaded load source: " + err.Error())
+		}
+		if len(data) > maxLoadUploadBytes {
+			return nil, true, model.NewProviderError("InvalidArgument", "uploaded load source exceeds the size cap", 400)
+		}
+		return data, true, nil
+	}
+	return nil, false, nil
+}
+
+// --- Resumable load-job uploads (jobs.insert media, load_table_from_file) ---
+
+const (
+	// maxLoadUploadSessions caps concurrent resumable load-upload sessions.
+	maxLoadUploadSessions = 100
+	// loadUploadSessionTTL bounds how long an inactive session is kept.
+	loadUploadSessionTTL = time.Hour
+	// maxLoadUploadBytes caps an uploaded load source. A load source is decoded
+	// from a whole buffer (BQF3), so the upload is bounded rather than spilled.
+	maxLoadUploadBytes = 256 << 20 // 256 MiB
+)
+
+// loadUploadSession holds the state of an in-progress resumable load-job upload:
+// the Job resource supplied at session start plus the accumulated file bytes.
+type loadUploadSession struct {
+	project    string
+	body       map[string]any
+	data       []byte
+	lastAccess time.Time
+}
+
+// sweepLoadUploads drops sessions idle past loadUploadSessionTTL. The caller must
+// hold p.mu.
+func (p *Provider) sweepLoadUploads(now time.Time) {
+	for id, s := range p.uploads {
+		if now.Sub(s.lastAccess) > loadUploadSessionTTL {
+			delete(p.uploads, id)
+		}
+	}
+}
+
+// InsertJobResumableStart begins a resumable load-job upload. Real BigQuery
+// answers 200 with a Location header (the upload session URI) and no body; the
+// job resource arrives as the initiate request body and is validated here so an
+// unsupported configuration fails before the client uploads any bytes.
+func (p *Provider) InsertJobResumableStart(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	body := bodyMap(nr)
+	if body == nil {
+		return nil, invalidArgument("a resumable upload requires a job resource body")
+	}
+	if strValue(mapValue(body, "jobReference"), "jobId") == "" {
+		return nil, invalidArgument("jobReference.jobId is required")
+	}
+	l := mapValue(mapValue(body, "configuration"), "load")
+	if l == nil {
+		return nil, invalidArgument("a resumable upload requires a configuration.load job resource")
+	}
+	if err := validateLoadOptions(l); err != nil {
+		return nil, err
+	}
+	if _, err := p.store.GetJob(ctx, projectOf(nr), strValue(mapValue(body, "jobReference"), "jobId")); err == nil {
+		return nil, mapErr(bqstore.ErrAlreadyExists)
+	}
+
+	id := newUploadID()
+	now := clock.RealNow()
+	p.mu.Lock()
+	p.sweepLoadUploads(now)
+	if len(p.uploads) >= maxLoadUploadSessions {
+		p.mu.Unlock()
+		return nil, model.NewProviderError("ResourceExhausted", "too many concurrent load-upload sessions", 429)
+	}
+	p.uploads[id] = &loadUploadSession{project: projectOf(nr), body: body, lastAccess: now}
+	p.mu.Unlock()
+
+	base, _ := nr.Params[wire.BaseURLKey].(string)
+	if base == "" {
+		base = "http://localhost"
+	}
+	loc := fmt.Sprintf("%s/upload/bigquery/v2/projects/%s/jobs?uploadType=resumable&upload_id=%s", base, projectOf(nr), id)
+	return &model.ProviderResponse{HTTPStatus: http.StatusOK, Data: map[string]any{wire.LocationKey: loc}}, nil
+}
+
+// InsertJobResumable appends a chunk to a load-upload session. An incomplete
+// chunk answers 308 with a Range header (bytes=0-N) — the only resume-incomplete
+// shape google-resumable-media accepts. The chunk that completes the source runs
+// the load and returns the completed Job.
+func (p *Provider) InsertJobResumable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	uploadID, _ := nr.Params["upload_id"].(string)
+	media, _ := nr.Params[wire.MediaKey].([]byte)
+	cr, _ := nr.Params["contentRange"].(string)
+	project := projectOf(nr)
+
+	p.mu.Lock()
+	sess, ok := p.uploads[uploadID]
+	if !ok || sess.project != project {
+		p.mu.Unlock()
+		return nil, model.NewProviderError("NotFound", "unknown upload_id", 404)
+	}
+	start, total, hasTotal, perr := parseContentRange(cr)
+	if perr != nil {
+		p.mu.Unlock()
+		return nil, invalidArgument(perr.Error())
+	}
+	received := len(sess.data)
+	// A "bytes */N" status query carries no payload; otherwise the chunk must
+	// begin exactly where the previous one ended (concurrent/misordered chunks
+	// are not modeled — the client is sequential).
+	if start >= 0 && start != int64(received) {
+		p.mu.Unlock()
+		return nil, invalidArgument(fmt.Sprintf("Content-Range start %d does not match the %d bytes received", start, received))
+	}
+	if received+len(media) > maxLoadUploadBytes {
+		p.mu.Unlock()
+		return nil, model.NewProviderError("InvalidArgument", "uploaded load source exceeds the size cap", 400)
+	}
+	if start >= 0 {
+		sess.data = append(sess.data, media...)
+	}
+	received = len(sess.data)
+	sess.lastAccess = clock.RealNow()
+	done := hasTotal && received == int(total)
+	body := sess.body
+	data := sess.data
+	if done {
+		delete(p.uploads, uploadID)
+	}
+	p.mu.Unlock()
+
+	if !done {
+		// google-resumable-media requires a Range header on every 308 and parses
+		// it as "bytes=0-{end}"; with no bytes received there is no range to
+		// report, so the body stays empty (real GCS does the same).
+		data := map[string]any{}
+		if received > 0 {
+			data[wire.RangeKey] = fmt.Sprintf("bytes=0-%d", received-1)
+		}
+		return &model.ProviderResponse{HTTPStatus: http.StatusPermanentRedirect, Data: data}, nil
+	}
+
+	now := clock.Now().UTC()
+	loadStats, jobErr, err := p.runLoadData(ctx, project, mapValue(mapValue(body, "configuration"), "load"), data, "0", now)
+	if err != nil {
+		return nil, err
+	}
+	attachLoadStats(body, loadStats, jobErr, now)
+	jobID := strValue(mapValue(body, "jobReference"), "jobId")
+	j := bqstore.Job{JobID: jobID, CreateTime: now}
+	if raw, merr := json.Marshal(body); merr == nil {
+		j.Config = raw
+	}
+	if err := p.store.CreateJob(ctx, project, j); err != nil {
+		return nil, mapErr(err)
+	}
+	return provider.OK(p.jobMap(project, j)), nil
+}
+
+// parseContentRange parses a resumable Content-Range header. Forms:
+// "bytes {start}-{end}/{total}", "bytes {start}-{end}/*" (total unknown), and
+// "bytes */{total}" (a status query with no payload, start = -1). hasTotal
+// reports whether a concrete total was given.
+func parseContentRange(cr string) (start, total int64, hasTotal bool, err error) {
+	if cr == "" {
+		return 0, 0, false, errors.New("Content-Range header is required")
+	}
+	if !strings.HasPrefix(cr, "bytes ") {
+		return 0, 0, false, errors.New("malformed Content-Range header")
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(cr, "bytes "))
+	slash := strings.IndexByte(rest, '/')
+	if slash < 0 {
+		return 0, 0, false, errors.New("malformed Content-Range header")
+	}
+	span, totalStr := rest[:slash], strings.TrimSpace(rest[slash+1:])
+	if totalStr != "*" {
+		total, err = strconv.ParseInt(totalStr, 10, 64)
+		if err != nil || total < 0 {
+			return 0, 0, false, errors.New("malformed Content-Range header")
+		}
+		hasTotal = true
+	}
+	if span == "*" {
+		return -1, total, hasTotal, nil
+	}
+	dash := strings.IndexByte(span, '-')
+	if dash < 0 {
+		return 0, 0, false, errors.New("malformed Content-Range header")
+	}
+	start, err = strconv.ParseInt(strings.TrimSpace(span[:dash]), 10, 64)
+	if err != nil || start < 0 {
+		return 0, 0, false, errors.New("malformed Content-Range header")
+	}
+	return start, total, hasTotal, nil
+}
+
+// newUploadID returns a random resumable load-upload session id.
+func newUploadID() string {
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	return "bql_" + hex.EncodeToString(b)
 }
 
 func (p *Provider) GetJob(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

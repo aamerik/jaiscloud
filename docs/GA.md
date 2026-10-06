@@ -206,7 +206,8 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   configuration) evaluate a documented Standard SQL subset — `SELECT` plus DDL/DML — on an
   in-process pure-Go SQLite engine in both memory and `--dsn` modes
   (`docs/gcp-bigquery-sql-engine.md`); `jobs.insert` also runs `configuration.load` jobs from
-  a single `gs://` NDJSON/CSV source; `tabledata.*` reads and writes the stored rows;
+  a single `gs://` NDJSON/CSV source or an uploaded file (multipart/resumable media session,
+  `load_table_from_file`); `tabledata.*` reads and writes the stored rows;
   `routines`/`models`/`rowAccessPolicies` are explicit `501` stubs. Simplifications
   (synchronous DDL/DML jobs, no result paging, degraded `getQueryResults` snapshot,
   documented divergences) are the cell reasons.

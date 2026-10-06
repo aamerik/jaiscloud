@@ -9,6 +9,10 @@ storage client (``STORAGE_EMULATOR_HOST``) and loaded from ``gs://`` with
 
 from __future__ import annotations
 
+import io
+import os
+import tempfile
+
 import pytest
 from google.cloud import bigquery
 
@@ -77,4 +81,72 @@ def test_load_ndjson_from_uri(client, dataset):
             blob.delete()
             bucket.delete()
         except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
+
+
+def _make_upload_table(client, dataset):
+    table_id = unique("pyc_bq_up").replace("-", "_")
+    return client.create_table(
+        bigquery.Table(
+            f"{CONFIG.project}.{dataset.dataset_id}.{table_id}",
+            schema=[
+                bigquery.SchemaField("id", "INTEGER", mode="REQUIRED"),
+                bigquery.SchemaField("name", "STRING"),
+            ],
+        )
+    )
+
+
+def test_load_ndjson_from_file_resumable(client, dataset):
+    """load_table_from_file with an unknown size uses the resumable session path."""
+    table = _make_upload_table(client, dataset)
+    payload = b'{"id":1,"name":"a"}\n{"id":2,"name":"b"}\n'
+
+    def op():
+        cfg = bigquery.LoadJobConfig(
+            source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        )
+        # size is intentionally omitted: the client then drives a resumable
+        # upload session (initiate -> chunk PUT -> finalize).
+        job = client.load_table_from_file(io.BytesIO(payload), table, job_config=cfg)
+        job.result()
+        assert job.state == "DONE", f"job state {job.state!r}"
+        rows = sorted((r["id"], r["name"]) for r in client.list_rows(table))
+        assert rows == [(1, "a"), (2, "b")], rows
+        return f"{len(rows)} rows"
+
+    check(SERVICE, "LoadTableFromFileResumable", op)
+
+
+def test_load_ndjson_from_file_multipart(client, dataset):
+    """load_table_from_file with an explicit size uses the multipart path."""
+    table = _make_upload_table(client, dataset)
+    payload = b'{"id":3,"name":"c"}\n{"id":4,"name":"d"}\n'
+
+    fd, path = tempfile.mkstemp(suffix=".ndjson")
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(payload)
+
+    def op():
+        cfg = bigquery.LoadJobConfig(
+            source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        )
+        with open(path, "rb") as file_obj:
+            job = client.load_table_from_file(
+                file_obj, table, job_config=cfg, size=len(payload)
+            )
+            job.result()
+            assert job.state == "DONE", f"job state {job.state!r}"
+        rows = sorted((r["id"], r["name"]) for r in client.list_rows(table))
+        assert rows == [(3, "c"), (4, "d")], rows
+        return f"{len(rows)} rows"
+
+    try:
+        check(SERVICE, "LoadTableFromFileMultipart", op)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
             pass

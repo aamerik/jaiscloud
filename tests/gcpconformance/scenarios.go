@@ -187,6 +187,21 @@ func Scenarios(suffix string) []Scenario {
 	bqTbl2 := "conf_tbl2_" + suffix
 	bqLoadTbl := "conf_loadtbl_" + suffix
 	bqLoadBucket := "conf-load-" + suffix
+	// Uploaded-file load (BQL2): the multipart job-resource part names the
+	// destination, and the media part carries the CSV bytes.
+	bqUploadTbl := "conf_uploadtbl_" + suffix
+	bqUploadBoundary := "jaiscloud-bq-" + suffix
+	bqUploadJob := "conf-upload-" + suffix
+	bqUploadJSON := fmt.Sprintf(
+		`{"jobReference":{"projectId":%q,"jobId":%q},"configuration":{"load":{"destinationTable":{"projectId":%q,"datasetId":%q,"tableId":%q},"sourceFormat":"CSV","writeDisposition":"WRITE_APPEND"}}}`,
+		p, bqUploadJob, p, ds, bqUploadTbl)
+	bqUploadBody := "--" + bqUploadBoundary + "\r\n" +
+		"Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+		bqUploadJSON + "\r\n" +
+		"--" + bqUploadBoundary + "\r\n" +
+		"Content-Type: */*\r\n\r\n" +
+		"1,alice\n" +
+		"\r\n--" + bqUploadBoundary + "--\r\n"
 	sc = append(sc,
 		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets",
 			Body: fmt.Sprintf(`{"datasetReference":{"projectId":%q,"datasetId":%q}}`, p, ds)},
@@ -219,6 +234,19 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/jobs/${bqLoadJob}"},
 		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/tables/" + bqLoadTbl + "/data"},
 
+		// Uploaded-file load (BQL2): a multipart/related jobs.insert media
+		// upload (load_table_from_file with a known size). The job resource is
+		// the JSON part; the media part carries the CSV bytes.
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + ds + "/tables",
+			Body: fmt.Sprintf(`{"tableReference":{"projectId":%q,"datasetId":%q,"tableId":%q},"schema":{"fields":[{"name":"id","type":"INTEGER","mode":"REQUIRED"},{"name":"name","type":"STRING"}]}}`, p, ds, bqUploadTbl)},
+		Scenario{Service: "bigquery", Method: "POST",
+			Path:        "/upload/bigquery/v2/projects/" + p + "/jobs?uploadType=multipart",
+			Body:        bqUploadBody,
+			ContentType: "multipart/related; boundary=" + bqUploadBoundary,
+			Save:        map[string]string{"bqUploadJob": "jobReference.jobId"}},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/jobs/${bqUploadJob}"},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/tables/" + bqUploadTbl + "/data"},
+
 		// SELECT over the stored row; capture the job id for the read-back calls.
 		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/queries",
 			Body: fmt.Sprintf("{\"query\":\"SELECT id FROM `%s.%s.%s` WHERE id = 1\",\"useLegacySql\":false}", p, ds, tbl),
@@ -244,6 +272,7 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl},
 		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + bqTbl2},
 		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + bqLoadTbl},
+		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + bqUploadTbl},
 		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds},
 	)
 
