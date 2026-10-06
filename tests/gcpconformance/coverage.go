@@ -51,6 +51,18 @@ var actionOverrides = map[string]string{
 
 	// KMS crypto-key-version public key is Discovery's cryptoKeyVersions.getPublicKey.
 	"KMS.CryptoKeyVersionGetPublicKey": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.getPublicKey",
+	// KMS key import / trusted wrapping / KEM custom methods and import jobs
+	// nest under cryptoKeyVersions / importJobs in Discovery.
+	"KMS.CryptoKeyVersionImport":        "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.import",
+	"KMS.CryptoKeyVersionImportTrusted": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.importTrustedKeyWrappedCryptoKeyVersion",
+	"KMS.CryptoKeyVersionExportTrusted": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.exportTrustedKeyWrappedCryptoKeyVersion",
+	"KMS.CryptoKeyVersionDecapsulate":   "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.decapsulate",
+	"KMS.ImportJobCreate":               "cloudkms.projects.locations.keyRings.importJobs.create",
+	"KMS.ImportJobGet":                  "cloudkms.projects.locations.keyRings.importJobs.get",
+	"KMS.ImportJobList":                 "cloudkms.projects.locations.keyRings.importJobs.list",
+	"KMS.CryptoKeyVersionRestore":       "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.restore",
+	"KMS.CryptoKeyVersionDelete":        "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.delete",
+	"KMS.CryptoKeyDelete":               "cloudkms.projects.locations.keyRings.cryptoKeys.delete",
 
 	// Remaining resource/verb naming differences across services.
 	"CloudSQL.ConnectGet":                        "sql.connect.get",

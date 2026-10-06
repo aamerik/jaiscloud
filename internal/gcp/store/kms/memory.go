@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/storeutil"
 )
 
@@ -122,6 +123,8 @@ func (s *MemoryStore) CreateCryptoKey(_ context.Context, projectID, location, ke
 	v.Version = "1"
 	v.State = "ENABLED"
 	v.CreateTime = ck.CreateTime
+	v.ProtectionLevel = ck.ProtectionLevel
+	v.HsmTrusted = ck.ProtectionLevel == "HSM" || ck.ProtectionLevel == "HSM_SINGLE_TENANT"
 	s.versions[vk] = map[string]Version{"1": v}
 	return nil
 }
@@ -203,6 +206,62 @@ func (s *MemoryStore) CreateVersion(_ context.Context, projectID, location, keyr
 	v.KeyMaterial = wrapped.KeyMaterial
 	v.PrivateKey = wrapped.PrivateKey
 	v.PublicKey = wrapped.PublicKey
+	s.versions[vk][version] = v
+	return version, nil
+}
+
+// CreateImportedVersion stores a version from caller-supplied key material,
+// DEK-wrapping each non-nil component at rest.
+func (s *MemoryStore) CreateImportedVersion(_ context.Context, projectID, location, keyringID, keyID string, v Version, keyMat, privDER, pubDER []byte) (string, error) {
+	dek, err := s.dek()
+	if err != nil {
+		return "", err
+	}
+	if v.Algorithm == "" {
+		v.Algorithm = defaultAlgorithm
+	}
+	if v.State == "" {
+		v.State = "ENABLED"
+	}
+	if v.CreateTime.IsZero() {
+		v.CreateTime = clock.Now()
+	}
+	if keyMat != nil {
+		if v.KeyMaterial, err = EncryptData(dek, keyMat, []byte(keyID)); err != nil {
+			return "", err
+		}
+	}
+	if privDER != nil {
+		if v.PrivateKey, err = EncryptData(dek, privDER, []byte(keyID)); err != nil {
+			return "", err
+		}
+	}
+	if pubDER != nil {
+		if v.PublicKey, err = EncryptData(dek, pubDER, []byte(keyID)); err != nil {
+			return "", err
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := ckKey(projectID, location, keyringID)
+	if _, ok := s.cryptokeys[key][keyID]; !ok {
+		return "", ErrNoSuchCryptoKey
+	}
+	vk := vKey(projectID, location, keyringID, keyID)
+	if s.versions[vk] == nil {
+		s.versions[vk] = make(map[string]Version)
+	}
+	next := 0
+	for ver := range s.versions[vk] {
+		if n, err := strconv.Atoi(ver); err == nil && n > next {
+			next = n
+		}
+	}
+	next++
+	version := strconv.Itoa(next)
+	v.KeyID = keyID
+	v.Version = version
 	s.versions[vk][version] = v
 	return version, nil
 }

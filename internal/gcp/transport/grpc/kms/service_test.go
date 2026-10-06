@@ -16,7 +16,7 @@ import (
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
 
 	"jaiscloud/internal/clock"
-	gcpcrypto "jaiscloud/internal/gcp/crypto"
+	kmscore "jaiscloud/internal/gcp/service/kms"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/store"
 
@@ -35,7 +35,7 @@ func kmsTestService(t *testing.T) (kmspb.KeyManagementServiceClient, iampb.IAMPo
 	t.Helper()
 	keys := kmsstore.NewMemoryStore()
 	resources := store.NewMemoryResourceStore()
-	svc := NewService(keys, resources, gcpcrypto.NewEnvelopeEncryptor(keys), "test")
+	svc := NewService(kmscore.NewService(keys, resources, "test"), "test")
 
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {

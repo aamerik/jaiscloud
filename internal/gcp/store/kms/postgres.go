@@ -154,9 +154,9 @@ func (s *PostgresStore) CreateCryptoKey(ctx context.Context, projectID, location
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO jc_kms_cryptokeys (project_id, location, keyring_id, key_id, purpose, create_time, primary_version, algorithm, next_version, labels, rotation_period, next_rotation_time)
-		VALUES ($1,$2,$3,$4,$5,$6,'1',$7,2,$8,$9,$10)
-	`, projectID, location, keyringID, id, ck.Purpose, ck.CreateTime, ck.Algorithm, labelsJSON(ck.Labels), rotationSeconds(ck.RotationPeriod), nullableTime(ck.NextRotationTime)); err != nil {
+		INSERT INTO jc_kms_cryptokeys (project_id, location, keyring_id, key_id, purpose, create_time, primary_version, algorithm, next_version, labels, rotation_period, next_rotation_time, protection_level, import_only)
+		VALUES ($1,$2,$3,$4,$5,$6,'1',$7,2,$8,$9,$10,$11,$12)
+	`, projectID, location, keyringID, id, ck.Purpose, ck.CreateTime, ck.Algorithm, labelsJSON(ck.Labels), rotationSeconds(ck.RotationPeriod), nullableTime(ck.NextRotationTime), protectionLevelOrDefault(ck.ProtectionLevel), ck.ImportOnly); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return ErrAlreadyExists
@@ -164,9 +164,9 @@ func (s *PostgresStore) CreateCryptoKey(ctx context.Context, projectID, location
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO jc_kms_cryptokey_versions (project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key)
-		VALUES ($1,$2,$3,$4,'1','ENABLED',$5,$6,$7,$8,$9)
-	`, projectID, location, keyringID, id, v.Algorithm, ck.CreateTime, v.KeyMaterial, v.PrivateKey, v.PublicKey); err != nil {
+		INSERT INTO jc_kms_cryptokey_versions (project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key, protection_level, hsm_trusted)
+		VALUES ($1,$2,$3,$4,'1','ENABLED',$5,$6,$7,$8,$9,$10,$11)
+	`, projectID, location, keyringID, id, v.Algorithm, ck.CreateTime, v.KeyMaterial, v.PrivateKey, v.PublicKey, protectionLevelOrDefault(ck.ProtectionLevel), ck.ProtectionLevel == "HSM" || ck.ProtectionLevel == "HSM_SINGLE_TENANT"); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -206,7 +206,7 @@ func scanCryptoKey(sc interface{ Scan(dest ...any) error }) (CryptoKey, error) {
 	var labels []byte
 	var rotationSecs *int64
 	var next *time.Time
-	if err := sc.Scan(&ck.Location, &ck.KeyRingID, &ck.ID, &ck.Purpose, &ck.CreateTime, &ck.PrimaryVersion, &ck.Algorithm, &labels, &rotationSecs, &next); err != nil {
+	if err := sc.Scan(&ck.Location, &ck.KeyRingID, &ck.ID, &ck.Purpose, &ck.CreateTime, &ck.PrimaryVersion, &ck.Algorithm, &labels, &rotationSecs, &next, &ck.ProtectionLevel, &ck.ImportOnly); err != nil {
 		return CryptoKey{}, err
 	}
 	if len(labels) > 0 {
@@ -221,7 +221,7 @@ func scanCryptoKey(sc interface{ Scan(dest ...any) error }) (CryptoKey, error) {
 	return ck, nil
 }
 
-const cryptoKeyColumns = `location, keyring_id, key_id, purpose, create_time, primary_version, algorithm, labels, rotation_period, next_rotation_time`
+const cryptoKeyColumns = `location, keyring_id, key_id, purpose, create_time, primary_version, algorithm, labels, rotation_period, next_rotation_time, protection_level, import_only`
 
 func (s *PostgresStore) GetCryptoKey(ctx context.Context, projectID, location, keyringID, id string) (CryptoKey, error) {
 	ck, err := scanCryptoKey(s.pool.QueryRow(ctx, `
@@ -327,9 +327,81 @@ func (s *PostgresStore) CreateVersion(ctx context.Context, projectID, location, 
 	}
 	version := strconv.Itoa(next)
 	_, err = s.pool.Exec(ctx, `
-		INSERT INTO jc_kms_cryptokey_versions (project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-	`, projectID, location, keyringID, keyID, version, v.State, wrapped.Algorithm, v.CreateTime, wrapped.KeyMaterial, wrapped.PrivateKey, wrapped.PublicKey)
+		INSERT INTO jc_kms_cryptokey_versions (project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key, protection_level, trusted_wrapping_enabled, hsm_trusted)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+	`, projectID, location, keyringID, keyID, version, v.State, wrapped.Algorithm, v.CreateTime, wrapped.KeyMaterial, wrapped.PrivateKey, wrapped.PublicKey,
+		protectionLevelOrDefault(v.ProtectionLevel), v.TrustedWrappingEnabled, v.HsmTrusted)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return "", ErrAlreadyExists
+		}
+		return "", err
+	}
+	return version, nil
+}
+
+// protectionLevelOrDefault maps an empty protection level to SOFTWARE.
+func protectionLevelOrDefault(p string) string {
+	if p == "" {
+		return "SOFTWARE"
+	}
+	return p
+}
+
+// CreateImportedVersion allocates the next version number and stores a version
+// built from caller-supplied material (Cloud KMS key import), DEK-wrapping each
+// non-nil component at rest.
+func (s *PostgresStore) CreateImportedVersion(ctx context.Context, projectID, location, keyringID, keyID string, v Version, keyMat, privDER, pubDER []byte) (string, error) {
+	dek, err := s.dek(ctx)
+	if err != nil {
+		return "", err
+	}
+	if v.Algorithm == "" {
+		v.Algorithm = defaultAlgorithm
+	}
+	if v.State == "" {
+		v.State = "ENABLED"
+	}
+	if v.CreateTime.IsZero() {
+		v.CreateTime = clock.Now()
+	}
+	var wrappedKeyMat, wrappedPriv, wrappedPub []byte
+	if keyMat != nil {
+		if wrappedKeyMat, err = EncryptData(dek, keyMat, []byte(keyID)); err != nil {
+			return "", err
+		}
+	}
+	if privDER != nil {
+		if wrappedPriv, err = EncryptData(dek, privDER, []byte(keyID)); err != nil {
+			return "", err
+		}
+	}
+	if pubDER != nil {
+		if wrappedPub, err = EncryptData(dek, pubDER, []byte(keyID)); err != nil {
+			return "", err
+		}
+	}
+
+	var next int
+	err = s.pool.QueryRow(ctx, `
+		UPDATE jc_kms_cryptokeys SET next_version = next_version + 1
+		WHERE project_id=$1 AND location=$2 AND keyring_id=$3 AND key_id=$4
+		RETURNING next_version - 1
+	`, projectID, location, keyringID, keyID).Scan(&next)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNoSuchCryptoKey
+	}
+	if err != nil {
+		return "", err
+	}
+	version := strconv.Itoa(next)
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO jc_kms_cryptokey_versions (project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key, protection_level, import_time, trusted_wrapping_enabled, hsm_trusted)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+	`, projectID, location, keyringID, keyID, version, v.State, v.Algorithm, v.CreateTime,
+		wrappedKeyMat, wrappedPriv, wrappedPub,
+		protectionLevelOrDefault(v.ProtectionLevel), nullableTime(v.ImportTime), v.TrustedWrappingEnabled, v.HsmTrusted)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -342,14 +414,14 @@ func (s *PostgresStore) CreateVersion(ctx context.Context, projectID, location, 
 
 // versionColumns is the shared column list for scanning a
 // jc_kms_cryptokey_versions row.
-const versionColumns = `key_id, version, state, algorithm, create_time, key_material, private_key, public_key, destroy_time, destroy_event_time`
+const versionColumns = `key_id, version, state, algorithm, create_time, key_material, private_key, public_key, destroy_time, destroy_event_time, protection_level, import_time, trusted_wrapping_enabled, hsm_trusted`
 
 // scanVersion decodes a jc_kms_cryptokey_versions row (the shared column list)
-// into a Version, mapping the nullable destruction timestamps.
+// into a Version, mapping the nullable destruction/import timestamps.
 func scanVersion(sc interface{ Scan(dest ...any) error }) (Version, error) {
 	var v Version
-	var destroyTime, destroyEventTime *time.Time
-	if err := sc.Scan(&v.KeyID, &v.Version, &v.State, &v.Algorithm, &v.CreateTime, &v.KeyMaterial, &v.PrivateKey, &v.PublicKey, &destroyTime, &destroyEventTime); err != nil {
+	var destroyTime, destroyEventTime, importTime *time.Time
+	if err := sc.Scan(&v.KeyID, &v.Version, &v.State, &v.Algorithm, &v.CreateTime, &v.KeyMaterial, &v.PrivateKey, &v.PublicKey, &destroyTime, &destroyEventTime, &v.ProtectionLevel, &importTime, &v.TrustedWrappingEnabled, &v.HsmTrusted); err != nil {
 		return Version{}, err
 	}
 	if destroyTime != nil {
@@ -357,6 +429,9 @@ func scanVersion(sc interface{ Scan(dest ...any) error }) (Version, error) {
 	}
 	if destroyEventTime != nil {
 		v.DestroyEventTime = *destroyEventTime
+	}
+	if importTime != nil {
+		v.ImportTime = *importTime
 	}
 	return v, nil
 }

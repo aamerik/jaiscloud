@@ -223,6 +223,9 @@ func detectResourceType(segs []string) string {
 			return "indexes"
 		case "keys":
 			return "keys" // service account keys
+		case "importJobs":
+			// Cloud KMS import jobs (…/keyRings/{kr}/importJobs[/{id}]).
+			return "importJobs"
 		case "cryptoKeyVersions":
 			hasVersions = true
 		case "cryptoKeys":
@@ -412,6 +415,8 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			switch custom {
 			case "destroy":
 				return "CryptoKeyVersionDestroy"
+			case "restore":
+				return "CryptoKeyVersionRestore"
 			case "asymmetricSign":
 				return "CryptoKeyVersionAsymmetricSign"
 			case "asymmetricDecrypt":
@@ -420,6 +425,14 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "CryptoKeyVersionMacSign"
 			case "macVerify":
 				return "CryptoKeyVersionMacVerify"
+			case "import":
+				return "CryptoKeyVersionImport"
+			case "importTrustedKeyWrappedCryptoKeyVersion":
+				return "CryptoKeyVersionImportTrusted"
+			case "exportTrustedKeyWrappedCryptoKeyVersion":
+				return "CryptoKeyVersionExportTrusted"
+			case "decapsulate":
+				return "CryptoKeyVersionDecapsulate"
 			}
 		case "keyRings":
 			switch custom {
@@ -618,6 +631,17 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "CryptoKeyList"
 		case method == http.MethodGet:
 			return "CryptoKeyGet"
+		case custom == "" && method == http.MethodDelete:
+			return "CryptoKeyDelete"
+		}
+	case "importJobs":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "ImportJobCreate"
+		case isCollection && method == http.MethodGet:
+			return "ImportJobList"
+		case method == http.MethodGet:
+			return "ImportJobGet"
 		}
 	case "cryptoKeyVersions":
 		// Only non-custom requests dispatch here; an unrecognized custom verb
@@ -632,6 +656,8 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "CryptoKeyVersionList"
 		case custom == "" && method == http.MethodPatch:
 			return "CryptoKeyVersionUpdate"
+		case custom == "" && method == http.MethodDelete:
+			return "CryptoKeyVersionDelete"
 		case custom == "" && method == http.MethodGet:
 			return "CryptoKeyVersionGet"
 		}

@@ -9,6 +9,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/resource"
+	kmscore "jaiscloud/internal/gcp/service/kms"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -23,7 +24,7 @@ func newNR(params map[string]any) *model.NormalizedRequest {
 
 // newTestProvider returns a KMS provider backed by fresh in-memory stores.
 func newTestProvider() *Provider {
-	return New(kmsstore.NewMemoryStore(), store.NewMemoryResourceStore())
+	return New(kmscore.NewService(kmsstore.NewMemoryStore(), store.NewMemoryResourceStore(), "test"))
 }
 
 func TestKMSEncryptDecryptRoundTrip(t *testing.T) {

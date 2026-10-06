@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 371,
-  "passed": 371,
+  "total": 375,
+  "passed": 375,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 371,
-    "passed": 371,
+    "checks": 375,
+    "passed": 375,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -79,8 +79,8 @@
     },
     {
       "service": "kms",
-      "total": 31,
-      "passed": 31,
+      "total": 35,
+      "passed": 35,
       "failed": 0,
       "unimplemented": 0
     },
@@ -575,6 +575,34 @@
       "method": "ListImportJobs",
       "status": "pass",
       "key_field": "importJobs[] contains job"
+    },
+    {
+      "service": "kms",
+      "rpc": "ImportCryptoKeyVersion",
+      "method": "ImportCryptoKeyVersion",
+      "status": "pass",
+      "key_field": "state=ENABLED/importTime"
+    },
+    {
+      "service": "kms",
+      "rpc": "ImportTrustedKeyWrappedCryptoKeyVersion",
+      "method": "ImportTrustedKeyWrappedCryptoKeyVersion",
+      "status": "pass",
+      "key_field": "trustedWrappingEnabled"
+    },
+    {
+      "service": "kms",
+      "rpc": "ExportTrustedKeyWrappedCryptoKeyVersion",
+      "method": "ExportTrustedKeyWrappedCryptoKeyVersion",
+      "status": "pass",
+      "key_field": "wrappedKey round-trips"
+    },
+    {
+      "service": "kms",
+      "rpc": "Decapsulate",
+      "method": "Decapsulate",
+      "status": "pass",
+      "key_field": "shared secret matches encapsulation"
     },
     {
       "service": "secretmanager",

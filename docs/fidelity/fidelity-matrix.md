@@ -6,14 +6,14 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **957**
+Cells: **967**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 709 |
-| limited | 107 |
+| ga | 723 |
+| limited | 103 |
 | preview | 14 |
 | unsupported | 127 |
 
@@ -21,8 +21,8 @@ Cells: **957**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 373 | 100 | 14 | 12 |
-| grpc | 336 | 7 | 0 | 115 |
+| rest | 383 | 100 | 14 | 12 |
+| grpc | 340 | 3 | 0 | 115 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -532,7 +532,7 @@ _14 cell(s): ga=0 limited=0 preview=14 unsupported=0_
 
 ## kms
 
-_60 cell(s): ga=56 limited=4 preview=0 unsupported=0_
+_70 cell(s): ga=70 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -542,13 +542,13 @@ _60 cell(s): ga=56 limited=4 preview=0 unsupported=0_
 | CreateCryptoKeyVersion | grpc | ga | — |
 | CreateImportJob | grpc | ga | — |
 | CreateKeyRing | grpc | ga | — |
-| Decapsulate | grpc | limited | KEM decapsulation needs a KEM key type (ML-KEM/X-Wing) and raw-bytes public keys the emulator does not generate |
+| Decapsulate | grpc | ga | — |
 | Decrypt | grpc | ga | — |
 | DeleteCryptoKey | grpc | ga | — |
 | DeleteCryptoKeyVersion | grpc | ga | — |
 | DestroyCryptoKeyVersion | grpc | ga | — |
 | Encrypt | grpc | ga | — |
-| ExportTrustedKeyWrappedCryptoKeyVersion | grpc | limited | HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled |
+| ExportTrustedKeyWrappedCryptoKeyVersion | grpc | ga | — |
 | GenerateRandomBytes | grpc | ga | — |
 | GetCryptoKey | grpc | ga | — |
 | GetCryptoKeyVersion | grpc | ga | — |
@@ -556,10 +556,11 @@ _60 cell(s): ga=56 limited=4 preview=0 unsupported=0_
 | GetKeyRing | grpc | ga | — |
 | GetPublicKey | grpc | ga | — |
 | GetRetiredResource | grpc | ga | — |
-| ImportCryptoKeyVersion | grpc | limited | key import needs a store path to create a version from caller-supplied material plus RSA-OAEP + AES-KWP (RFC 5649) unwrapping |
-| ImportTrustedKeyWrappedCryptoKeyVersion | grpc | limited | HSM trusted key wrapping (preview/EKM, AES-256-KWP) is not modelled |
+| ImportCryptoKeyVersion | grpc | ga | — |
+| ImportTrustedKeyWrappedCryptoKeyVersion | grpc | ga | — |
 | KMS.CryptoKeyCreate | rest | ga | — |
 | KMS.CryptoKeyDecrypt | rest | ga | — |
+| KMS.CryptoKeyDelete | rest | ga | — |
 | KMS.CryptoKeyEncrypt | rest | ga | — |
 | KMS.CryptoKeyGet | rest | ga | — |
 | KMS.CryptoKeyGetIamPolicy | rest | ga | — |
@@ -570,13 +571,22 @@ _60 cell(s): ga=56 limited=4 preview=0 unsupported=0_
 | KMS.CryptoKeyVersionAsymmetricDecrypt | rest | ga | — |
 | KMS.CryptoKeyVersionAsymmetricSign | rest | ga | — |
 | KMS.CryptoKeyVersionCreate | rest | ga | — |
+| KMS.CryptoKeyVersionDecapsulate | rest | ga | — |
+| KMS.CryptoKeyVersionDelete | rest | ga | — |
 | KMS.CryptoKeyVersionDestroy | rest | ga | — |
+| KMS.CryptoKeyVersionExportTrusted | rest | ga | — |
 | KMS.CryptoKeyVersionGet | rest | ga | — |
 | KMS.CryptoKeyVersionGetPublicKey | rest | ga | — |
+| KMS.CryptoKeyVersionImport | rest | ga | — |
+| KMS.CryptoKeyVersionImportTrusted | rest | ga | — |
 | KMS.CryptoKeyVersionList | rest | ga | — |
 | KMS.CryptoKeyVersionMacSign | rest | ga | — |
 | KMS.CryptoKeyVersionMacVerify | rest | ga | — |
+| KMS.CryptoKeyVersionRestore | rest | ga | — |
 | KMS.CryptoKeyVersionUpdate | rest | ga | — |
+| KMS.ImportJobCreate | rest | ga | — |
+| KMS.ImportJobGet | rest | ga | — |
+| KMS.ImportJobList | rest | ga | — |
 | KMS.KeyRingCreate | rest | ga | — |
 | KMS.KeyRingGet | rest | ga | — |
 | KMS.KeyRingGetIamPolicy | rest | ga | — |

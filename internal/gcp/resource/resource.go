@@ -44,6 +44,22 @@ var formatters = map[string]func(project, name string) string{
 		loc, kr, k, v := parts4(n)
 		return fmt.Sprintf("projects/%s/locations/%s/keyRings/%s/cryptoKeys/%s/cryptoKeyVersions/%s", p, loc, kr, k, v)
 	},
+	"kms-importjob": func(p, n string) string {
+		// callers pass "location/keyRing/importJob"
+		parts := strings.SplitN(n, "/", 3)
+		if len(parts) < 3 {
+			return n
+		}
+		return fmt.Sprintf("projects/%s/locations/%s/keyRings/%s/importJobs/%s", p, parts[0], parts[1], parts[2])
+	},
+	"kms-retiredresource": func(p, n string) string {
+		// callers pass "location/retiredResource"
+		parts := strings.SplitN(n, "/", 2)
+		if len(parts) < 2 {
+			return n
+		}
+		return fmt.Sprintf("projects/%s/locations/%s/retiredResources/%s", p, parts[0], parts[1])
+	},
 	// IAM — service accounts are identified by their email in the full name.
 	"service-account": func(p, n string) string { return fmt.Sprintf("projects/%s/serviceAccounts/%s", p, n) },
 	// Firestore — document names: projects/{p}/databases/{db}/documents/{path}.
