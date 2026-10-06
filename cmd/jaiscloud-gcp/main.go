@@ -20,6 +20,7 @@ import (
 	"jaiscloud/internal/certstore"
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
+	"jaiscloud/internal/docker"
 	"jaiscloud/internal/events"
 	"jaiscloud/internal/executor/awslambda"
 	"jaiscloud/internal/executor/container"
@@ -578,7 +579,7 @@ func startCmd() *cobra.Command {
 			// cloud.goog name; k8s/native start a Redpanda broker per cluster
 			// and the core renders its live endpoint. Brokers are runtime state,
 			// reaped on shutdown (reset/orphan sweep is the planned MK5).
-			mkBroker := buildManagedKafkaBroker(cfg)
+			mkBroker := buildManagedKafkaBroker(cfg, instanceID)
 			defer mkBroker.Shutdown(context.Background())
 
 			// Managed Kafka's transport-neutral core is shared by the REST
@@ -1417,11 +1418,11 @@ func startCmd() *cobra.Command {
 				sparkExec, sparkSrc := config.ExecutorMode("spark", "mock")
 				lambdaExec, lambdaSrc := config.ExecutorMode("functions", "mock")
 				cloudRunExec, cloudRunSrc := config.ExecutorMode("cloudrun", "mock")
-				kafkaBrokerMode := os.Getenv("JAISCLOUD_KAFKA_BROKER_MODE")
-				kafkaBrokerSrc := "default"
-				if kafkaBrokerMode != "" {
-					kafkaBrokerSrc = "JAISCLOUD_KAFKA_BROKER_MODE"
-				}
+				kafkaBrokerMode, kafkaBrokerSrc := resolveKafkaBrokerMode()
+				// Report the effective backend: a requested docker mode with no
+				// reachable daemon already degraded to mock when the broker was
+				// built above (mkBroker is in scope here).
+				kafkaBrokerMode = string(mkBroker.Mode())
 				serviceModes := gcpui.ServiceModes{
 					KafkaBroker:       kafkaBrokerMode,
 					KafkaBrokerSource: kafkaBrokerSrc,
@@ -1743,34 +1744,71 @@ func versionCmd() *cobra.Command {
 	}
 }
 
+// resolveKafkaBrokerMode resolves the Managed Kafka broker backend:
+// JAISCLOUD_KAFKA_BROKER_MODE → JAISCLOUD_EXECUTOR_MODE → mock. It keeps
+// Kafka's own variable (JAISCLOUD_KAFKA_BROKER_MODE) at first-class precedence
+// for back-compat while letting a global JAISCLOUD_EXECUTOR_MODE=docker cover
+// Kafka like Cloud Run/Dataproc/Functions.
+func resolveKafkaBrokerMode() (mode, source string) {
+	if v := os.Getenv("JAISCLOUD_KAFKA_BROKER_MODE"); v != "" {
+		return v, "JAISCLOUD_KAFKA_BROKER_MODE"
+	}
+	if v := os.Getenv("JAISCLOUD_EXECUTOR_MODE"); v != "" {
+		return v, "JAISCLOUD_EXECUTOR_MODE"
+	}
+	return "mock", "default"
+}
+
 // buildManagedKafkaBroker builds the optional real Kafka broker behind Managed
 // Kafka clusters from the environment:
 //
-//	JAISCLOUD_KAFKA_BROKER_MODE   mock (default) | k8s | native
-//	JAISCLOUD_KAFKA_BROKER_IMAGE  Redpanda image for k8s mode
+//	JAISCLOUD_KAFKA_BROKER_MODE   mock (default) | k8s | native | docker
+//	JAISCLOUD_EXECUTOR_MODE       global fallback when the above is unset
+//	JAISCLOUD_KAFKA_BROKER_IMAGE  Redpanda image for k8s/docker mode
 //	JAISCLOUD_KAFKA_BROKER_BIN    Redpanda CLI (rpk) path for native mode
 //
-// k8s mode needs a Kubernetes client; native mode needs a resolvable binary.
-// Both degrade to the mock topology (no broker) when unavailable, mirroring the
-// Dataproc executor wiring. Broker endpoint durability and reaping are the
-// planned MK5 session.
-func buildManagedKafkaBroker(cfg *config.Config) kafkabroker.Broker {
-	mode := os.Getenv("JAISCLOUD_KAFKA_BROKER_MODE")
+// k8s mode needs a Kubernetes client, native mode a resolvable binary, and
+// docker mode a reachable daemon; each degrades to the mock topology (no
+// broker) when unavailable, mirroring the Cloud Run/Dataproc executor wiring.
+func buildManagedKafkaBroker(cfg *config.Config, instanceID string) kafkabroker.Broker {
+	mode, source := resolveKafkaBrokerMode()
 	bcfg := kafkabroker.Config{
 		Mode:       mode,
 		Namespace:  cfg.K8sNamespace,
 		Image:      os.Getenv("JAISCLOUD_KAFKA_BROKER_IMAGE"),
 		BinaryPath: os.Getenv("JAISCLOUD_KAFKA_BROKER_BIN"),
 		DataDir:    cfg.DataDir,
+		InstanceID: instanceID,
 	}
-	if kafkabroker.Mode(mode) == kafkabroker.ModeK8s {
+	switch kafkabroker.Mode(mode) {
+	case kafkabroker.ModeK8s:
 		if client, err := buildK8sClient(); err != nil {
 			slog.Warn("managedkafka: failed to build k8s client; broker falls back to mock", "err", err)
 		} else {
-			bcfg.Client = client
+			bcfg.K8sClient = client
+		}
+	case kafkabroker.ModeDocker:
+		// The docker broker needs the local Docker daemon; if none is
+		// reachable, fall back to mock (a cluster create would otherwise fail)
+		// rather than run blind. A platform load failure (bad TLS/volume
+		// config) is not fatal.
+		pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pingErr := docker.Ping(pingCtx, "")
+		cancel()
+		if pingErr != nil {
+			slog.Warn("managedkafka: docker daemon unreachable; broker falls back to mock", "err", pingErr)
+			bcfg.Mode = string(kafkabroker.ModeMock)
+			break
+		}
+		if platformCfg, err := platform.LoadFromEnv(); err != nil {
+			slog.Warn("managedkafka: platform config failed; continuing without it", "err", err)
+		} else {
+			bcfg.Platform = platformCfg
 		}
 	}
-	return kafkabroker.New(bcfg)
+	broker := kafkabroker.New(bcfg)
+	slog.Info("managedkafka broker", "mode", broker.Mode(), "requested", mode, "source", source)
+	return broker
 }
 
 // buildK8sClient builds the shared Kubernetes client (in-cluster config first,
