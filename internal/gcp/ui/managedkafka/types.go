@@ -8,10 +8,10 @@
 // carried from the list row, so a resource id never has to be disambiguated by
 // hand.
 //
-// This surface is read + cluster lifecycle only: clusters list/detail, topics
-// list/detail, and read-only ACL and consumer-group tabs on the cluster detail.
-// Cluster create/update, topic create and all ACL/consumer-group writes are
-// deferred (see the console-UI plan's deferral rows).
+// The console covers the full management surface: clusters list/detail/create/
+// update, topics list/detail/create/update/delete, and ACL and consumer-group
+// writes on the cluster detail (the core owns the wire behavior; the console
+// reuses it in-process).
 package managedkafkaui
 
 import "encoding/json"
@@ -112,4 +112,43 @@ type ConsumerGroup struct {
 type ListConsumerGroupsResponse struct {
 	Groups []ConsumerGroup `json:"groups"`
 	Total  int             `json:"total"`
+}
+
+// ─── write inputs ────────────────────────────────────────────────────────────
+
+// ClusterWriteInput is the console's cluster create/update body. ID and Location
+// are required on create (and ignored on update, where the target comes from the
+// path). Labels is the extracted labels map; Config is the verbatim cluster body
+// (capacityConfig, gcpConfig, ...) the core stores and renders back.
+type ClusterWriteInput struct {
+	ID       string            `json:"id"`
+	Location string            `json:"location"`
+	Labels   map[string]string `json:"labels,omitempty"`
+	Config   json.RawMessage   `json:"config,omitempty"`
+}
+
+// TopicWriteInput is the console's topic create/update body. PartitionCount and
+// ReplicationFactor are required on create and immutable on update (the core
+// rejects a change); Configs are the Kafka property overrides.
+type TopicWriteInput struct {
+	ID                string            `json:"id"`
+	PartitionCount    int               `json:"partitionCount,omitempty"`
+	ReplicationFactor int               `json:"replicationFactor,omitempty"`
+	Configs           map[string]string `json:"configs,omitempty"`
+}
+
+// AclWriteInput is the console's ACL create/update body. ID is the ACL id, which
+// encodes the resource pattern (e.g. "topic/orders", "allTopics", "cluster").
+// Etag is required on update (optimistic concurrency); Entries replaces the
+// entry list.
+type AclWriteInput struct {
+	ID      string     `json:"id"`
+	Etag    string     `json:"etag,omitempty"`
+	Entries []AclEntry `json:"aclEntries"`
+}
+
+// ConsumerGroupWriteInput is the console's consumer-group update body: the
+// committed offsets to set, keyed by topic and partition.
+type ConsumerGroupWriteInput struct {
+	Offsets []ConsumerGroupOffset `json:"offsets"`
 }
