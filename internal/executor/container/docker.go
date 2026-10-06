@@ -61,9 +61,18 @@ func (e *DockerExecutor) SetLayerBlobLoader(l LayerBlobLoader) { e.layerLoader =
 // Docker logs directly; this is retained for callers that wire a log sink.
 func (e *DockerExecutor) SetLogsAPI(l LogsIngestor) { e.logsAPI = l }
 
+// DockerExecutorOption customizes a DockerExecutor at construction.
+type DockerExecutorOption func(*DockerExecutor)
+
+// WithDockerClient injects the Docker Engine API client. Without it,
+// NewDockerExecutor dials the local /var/run/docker.sock.
+func WithDockerClient(c *docker.Client) DockerExecutorOption {
+	return func(e *DockerExecutor) { e.docker = c }
+}
+
 // NewDockerExecutor creates a DockerExecutor and starts the GC goroutine.
 // profile supplies the per-cloud runtime contract; plat may be nil.
-func NewDockerExecutor(cfg Config, profile Profile, plat *platform.PlatformConfig) *DockerExecutor {
+func NewDockerExecutor(cfg Config, profile Profile, plat *platform.PlatformConfig, opts ...DockerExecutorOption) *DockerExecutor {
 	e := &DockerExecutor{
 		cfg:        cfg,
 		profile:    profile,
@@ -75,6 +84,9 @@ func NewDockerExecutor(cfg Config, profile Profile, plat *platform.PlatformConfi
 		// The invoke request goes to the container's published port over TCP,
 		// NOT through the Docker API socket the `docker` client dials.
 		invokeClient: &http.Client{Timeout: dockerInvokeTimeout},
+	}
+	for _, opt := range opts {
+		opt(e)
 	}
 	e.cleanupOrphans()
 	e.wg.Add(1)
