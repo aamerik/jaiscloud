@@ -180,3 +180,33 @@ entries:
     match: "not-implemented-cloud-tasks-cloud-schedu"
     pr: 291
     note: "resolved: Cloud Scheduler v1 shipped in #291 (SCH1); Cloud Tasks v2 fully implemented — control plane in #292 (CT1/CT2), dispatch engine with rate limits + retries in #293 (CT3)"
+
+  # GA0 — clear the six `stale-doc` entries whose source rows live in gitignored
+  # scratch (or were closed after their plan was finalized) and still read open
+  # because `parseDocState` matched a stray "open"/"not implemented" substring.
+  # Each entry is matched on a phrase from the ORIGINAL row so it closes on a
+  # copy that was never hand-edited, and is evidence-gated on the merged PR.
+  - source: "final/EV4"
+    match: "the trigger's source does not define"
+    pr: 363
+    note: "resolved: Eventarc cross-source filter validation shipped in #363 (EV10)"
+  - source: "gcp-console-ui-wave-plan"
+    match: "gcp-firestore-show-missing"
+    pr: 369
+    note: "resolved: Firestore documents.list showMissing shipped in #369 (UI60)"
+  - source: "final/MKD1"
+    match: "JAISCLOUD_KAFKA_BROKER_MODE=docker"
+    pr: 398
+    note: "resolved: Managed Kafka docker broker backend shipped in #398 (MKD1)"
+  - source: "final/RMP3"
+    match: "console create-project form"
+    pr: 409
+    note: "resolved: console project-create labels shipped in #409 (RMP10)"
+  - source: "gcp-console-ui-wave-plan"
+    match: "not session-safe"
+    pr: 378
+    note: "resolved: console session reliability (stable token + 401 recovery) shipped in #378 (UI70)"
+  - source: "gcp-console-ui-wave-plan"
+    match: "stacked two navigation surfaces"
+    pr: 380
+    note: "resolved: unified console navigation shipped in #380 (UI73)"
