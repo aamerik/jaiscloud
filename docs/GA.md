@@ -291,7 +291,7 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   a published Pub/Sub message and a GCS object finalize reach a real HTTP sink with the right
   `ce-*` headers and body, and that `cloudRun` delivery lands through the run runtime); Managed
   Kafka is metadata-only by default
-  (an opt-in k8s/native broker mode stands up a real Redpanda endpoint behind `bootstrapAddress`,
+  (an opt-in docker/k8s/native broker mode stands up a real Redpanda endpoint behind `bootstrapAddress`,
   over which topic create/update/delete and ACL mutations are mirrored and consumer groups are read
   from its group coordinator — with no broker the list is empty and get/update/delete return
   `NOT_FOUND`; ACLs are installed on the broker but only enforced when its own

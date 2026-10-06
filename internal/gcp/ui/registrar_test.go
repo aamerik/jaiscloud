@@ -524,8 +524,8 @@ func TestRegistrar_TiersPinnedToImplementationMatrix(t *testing.T) {
 
 // Configuring a real engine upgrades an otherwise shape-only service to full
 // with a note naming the engine, mirroring the AWS executorNote behaviour. Each
-// service honours only the modes it actually supports (Dataproc, Cloud Run and
-// Functions support docker and k8s; Kafka k8s/native).
+// service honours only the modes it actually supports (Dataproc, Cloud Run,
+// Functions and Managed Kafka support docker and k8s; Kafka also native).
 func TestRegistrar_EngineModesUpgradeTier(t *testing.T) {
 	engineReg := func(modes ServiceModes) (tiers, notes map[string]string) {
 		t.Helper()
@@ -554,19 +554,27 @@ func TestRegistrar_EngineModesUpgradeTier(t *testing.T) {
 		}
 	})
 
-	t.Run("docker upgrades dataproc, functions and run", func(t *testing.T) {
-		// Dataproc, Functions and Cloud Run all execute real workloads under
-		// docker; Managed Kafka's k8s-free engine is native, not docker.
+	t.Run("docker upgrades every engine service", func(t *testing.T) {
+		// Dataproc, Functions, Cloud Run and Managed Kafka all execute real
+		// workloads under docker.
 		tiers, _ := engineReg(ServiceModes{KafkaBroker: "docker", Spark: "docker", Lambda: "docker", CloudRun: "docker"})
-		for _, id := range []string{"dataproc", "functions", "run"} {
+		for _, id := range []string{"managedkafka", "dataproc", "functions", "run"} {
 			if tiers[id] != "full" {
 				t.Errorf("%s: tier = %q, want full under docker", id, tiers[id])
 			}
 		}
-		if want := "metadata"; tiers["managedkafka"] != want {
-			t.Errorf("managedkafka: tier = %q, want %q (docker unsupported)", tiers["managedkafka"], want)
-		}
 	})
+}
+
+// engineModeSupported reports whether the named backend is offered and marked
+// supported, independent of the modes slice's ordering.
+func engineModeSupported(modes []coreui.EngineMode, name string) bool {
+	for _, m := range modes {
+		if m.Name == name {
+			return m.Supported
+		}
+	}
+	return false
 }
 
 // The structured Engine field drives the console's mode tag + availability
@@ -602,7 +610,7 @@ func TestRegistrar_EngineDescriptorAndOrchestratorParity(t *testing.T) {
 	if !dataprocDocker.Engine.Active || dataprocDocker.Engine.Mode != "docker" {
 		t.Errorf("dataproc docker: active=%v mode=%q, want active docker", dataprocDocker.Engine.Active, dataprocDocker.Engine.Mode)
 	}
-	if len(dataprocDocker.Engine.Modes) != 3 || dataprocDocker.Engine.Modes[1].Name != "docker" || !dataprocDocker.Engine.Modes[1].Supported {
+	if len(dataprocDocker.Engine.Modes) != 3 || !engineModeSupported(dataprocDocker.Engine.Modes, "docker") {
 		t.Errorf("dataproc backends = %+v, want docker supported", dataprocDocker.Engine.Modes)
 	}
 	if dataprocDocker.Tier != dataprocK8s.Tier || dataprocDocker.Tier != "full" {
@@ -613,6 +621,20 @@ func TestRegistrar_EngineDescriptorAndOrchestratorParity(t *testing.T) {
 	kafka := descriptor(ServiceModes{KafkaBroker: "native"}, "managedkafka")
 	if kafka.Engine == nil || !kafka.Engine.Active || kafka.Engine.Mode != "native" {
 		t.Errorf("managedkafka native engine = %+v, want active native", kafka.Engine)
+	}
+
+	// Managed Kafka also honours docker: an active, supported backend whose tier
+	// does not depend on the orchestrator (docker/k8s/native are one seam).
+	kafkaDocker := descriptor(ServiceModes{KafkaBroker: "docker"}, "managedkafka")
+	kafkaK8s := descriptor(ServiceModes{KafkaBroker: "k8s"}, "managedkafka")
+	if kafkaDocker.Engine == nil || !kafkaDocker.Engine.Active || kafkaDocker.Engine.Mode != "docker" {
+		t.Errorf("managedkafka docker engine = %+v, want active docker", kafkaDocker.Engine)
+	}
+	if kafkaDocker.Engine != nil && !engineModeSupported(kafkaDocker.Engine.Modes, "docker") {
+		t.Errorf("managedkafka backends = %+v, want docker supported", kafkaDocker.Engine.Modes)
+	}
+	if kafkaDocker.Tier != kafkaK8s.Tier || kafkaDocker.Tier != "full" {
+		t.Errorf("managedkafka tier docker=%q k8s=%q, want identical 'full'", kafkaDocker.Tier, kafkaK8s.Tier)
 	}
 
 	// Same service, two supported orchestrators -> identical tier (no depth by

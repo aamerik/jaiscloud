@@ -75,7 +75,7 @@ type Registrar struct {
 // value means no engine. main.go resolves these once from the environment and
 // the executor config.
 type ServiceModes struct {
-	KafkaBroker string // managedkafka: mock (default) | k8s | native
+	KafkaBroker string // managedkafka: mock (default) | docker | k8s | native
 	Spark       string // dataproc: mock (default) | docker | k8s
 	Lambda      string // functions: mock (default) | docker | k8s
 	CloudRun    string // run: mock (default) | docker | k8s
@@ -207,9 +207,10 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 
 	// Engine-capable services report full fidelity when a real engine is
 	// configured, and their documented shape-only/metadata status otherwise.
-	// Each service honours a specific set of engine modes: Kafka k8s/native,
-	// Spark docker/k8s, Lambda docker/k8s, Cloud Run docker/k8s.
-	kafkaOn := engineBacked(r.modes.KafkaBroker, "k8s", "native")
+	// Each service honours a specific set of engine modes: Kafka
+	// docker/k8s/native, Spark docker/k8s, Lambda docker/k8s, Cloud Run
+	// docker/k8s.
+	kafkaOn := engineBacked(r.modes.KafkaBroker, "docker", "k8s", "native")
 	sparkOn := engineBacked(r.modes.Spark, "k8s", "docker")
 	lambdaOn := engineBacked(r.modes.Lambda, "docker", "k8s")
 	cloudRunOn := engineBacked(r.modes.CloudRun, "k8s", "docker")
@@ -230,8 +231,9 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 		{Name: "docker", Supported: true, Note: "containerized spark-submit (local[*])"},
 		{Name: "k8s", Supported: true, Note: "real Spark driver pods"},
 	})
-	kafkaEngine := engineInfo(r.modes.KafkaBroker, r.modes.KafkaBrokerSource, []string{"k8s", "native"}, []coreui.EngineMode{
+	kafkaEngine := engineInfo(r.modes.KafkaBroker, r.modes.KafkaBrokerSource, []string{"docker", "k8s", "native"}, []coreui.EngineMode{
 		{Name: "mock", Supported: true, Note: "no broker; metadata only"},
+		{Name: "docker", Supported: true, Note: "Redpanda container on the local Docker daemon"},
 		{Name: "k8s", Supported: true, Note: "Redpanda Pod + Service"},
 		{Name: "native", Supported: true, Note: "local rpk subprocess"},
 	})

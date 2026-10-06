@@ -44,9 +44,10 @@ func TestNewModeSelection(t *testing.T) {
 	}{
 		{"empty defaults to mock", Config{}, ModeMock},
 		{"explicit mock", Config{Mode: "mock"}, ModeMock},
-		{"unknown degrades to mock", Config{Mode: "docker"}, ModeMock},
+		{"unknown degrades to mock", Config{Mode: "bogus"}, ModeMock},
+		{"docker selects the docker backend", Config{Mode: "docker"}, ModeDocker},
 		{"k8s without client degrades to mock", Config{Mode: "k8s"}, ModeMock},
-		{"k8s with client", Config{Mode: "k8s", Client: fake.NewSimpleClientset()}, ModeK8s},
+		{"k8s with client", Config{Mode: "k8s", K8sClient: fake.NewSimpleClientset()}, ModeK8s},
 		{"native without binary degrades to mock", Config{Mode: "native"}, ModeMock},
 		{"native with binary", Config{Mode: "native", BinaryPath: "/bin/true"}, ModeNative},
 	}
