@@ -81,6 +81,9 @@ const keyRingPath = (location: string, keyRing: string) =>
 const cryptoKeyPath = (location: string, keyRing: string, key: string) =>
   `${keyRingPath(location, keyRing)}/cryptoKeys/${encodeURIComponent(key)}`
 
+const cryptoKeyVersionPath = (location: string, keyRing: string, key: string, version: string) =>
+  `${cryptoKeyPath(location, keyRing, key)}/versions/${encodeURIComponent(version)}`
+
 // Key rings.
 /** List every key ring in a location; pass `pageToken` for a single raw page. */
 export async function listKeyRings(
@@ -222,3 +225,146 @@ export const putCryptoKeyIam = (
   key: string,
   policy: IamPolicy,
 ) => api.put<IamPolicy>(`${cryptoKeyPath(location, keyRing, key)}/iam`, { policy })
+
+// Crypto operations.
+export interface EncryptRequest {
+  plaintext: string
+  additionalAuthenticatedData?: string
+}
+
+export interface EncryptResponse {
+  name?: string
+  ciphertext: string
+  ciphertextCrc32c?: string
+  protectionLevel?: string
+  verifiedPlaintextCrc32c?: boolean
+  verifiedAdditionalAuthenticatedDataCrc32c?: boolean
+}
+
+export interface DecryptRequest {
+  ciphertext: string
+  additionalAuthenticatedData?: string
+}
+
+export interface DecryptResponse {
+  plaintext: string
+  plaintextCrc32c?: string
+  protectionLevel?: string
+  usedPrimary?: boolean
+}
+
+export interface AsymmetricSignRequest {
+  digest: Record<string, string>
+}
+
+export interface AsymmetricSignResponse {
+  name?: string
+  signature: string
+  signatureCrc32c?: string
+  protectionLevel?: string
+}
+
+export interface AsymmetricDecryptRequest {
+  ciphertext: string
+}
+
+export interface AsymmetricDecryptResponse {
+  plaintext: string
+  plaintextCrc32c?: string
+  protectionLevel?: string
+}
+
+export interface MacSignRequest {
+  data: string
+}
+
+export interface MacSignResponse {
+  name?: string
+  mac: string
+  macCrc32c?: string
+  protectionLevel?: string
+}
+
+export interface MacVerifyRequest {
+  data: string
+  mac: string
+}
+
+export interface MacVerifyResponse {
+  success: boolean
+  protectionLevel?: string
+}
+
+export interface PublicKeyResponse {
+  pem: string
+  algorithm?: string
+  name?: string
+  pemCrc32c?: string
+  protectionLevel?: string
+}
+
+/** Encrypt base64 plaintext with the key's primary version. */
+export const encryptCryptoKey = (
+  location: string,
+  keyRing: string,
+  key: string,
+  body: EncryptRequest,
+) => api.post<EncryptResponse>(`${cryptoKeyPath(location, keyRing, key)}/encrypt`, body)
+
+/** Decrypt base64 ciphertext with the key's primary version. */
+export const decryptCryptoKey = (
+  location: string,
+  keyRing: string,
+  key: string,
+  body: DecryptRequest,
+) => api.post<DecryptResponse>(`${cryptoKeyPath(location, keyRing, key)}/decrypt`, body)
+
+/** Sign a base64 digest with an asymmetric-sign version. */
+export const asymmetricSign = (
+  location: string,
+  keyRing: string,
+  key: string,
+  version: string,
+  body: AsymmetricSignRequest,
+) =>
+  api.post<AsymmetricSignResponse>(`${cryptoKeyVersionPath(location, keyRing, key, version)}/asymmetricSign`, body)
+
+/** Decrypt base64 ciphertext with an RSA_DECRYPT version. */
+export const asymmetricDecrypt = (
+  location: string,
+  keyRing: string,
+  key: string,
+  version: string,
+  body: AsymmetricDecryptRequest,
+) =>
+  api.post<AsymmetricDecryptResponse>(
+    `${cryptoKeyVersionPath(location, keyRing, key, version)}/asymmetricDecrypt`,
+    body,
+  )
+
+/** Compute an HMAC tag over base64 data with a MAC version. */
+export const macSign = (
+  location: string,
+  keyRing: string,
+  key: string,
+  version: string,
+  body: MacSignRequest,
+) => api.post<MacSignResponse>(`${cryptoKeyVersionPath(location, keyRing, key, version)}/macSign`, body)
+
+/** Verify an HMAC tag against base64 data with a MAC version. */
+export const macVerify = (
+  location: string,
+  keyRing: string,
+  key: string,
+  version: string,
+  body: MacVerifyRequest,
+) => api.post<MacVerifyResponse>(`${cryptoKeyVersionPath(location, keyRing, key, version)}/macVerify`, body)
+
+/** Download a version's public key (PEM). */
+export const getCryptoKeyVersionPublicKey = (
+  location: string,
+  keyRing: string,
+  key: string,
+  version: string,
+) =>
+  api.get<PublicKeyResponse>(`${cryptoKeyVersionPath(location, keyRing, key, version)}/publicKey`)

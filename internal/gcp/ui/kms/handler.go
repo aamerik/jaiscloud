@@ -7,6 +7,7 @@ import (
 
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gcp/ui/uihelper"
+	"jaiscloud/internal/model"
 )
 
 // Handler serves Cloud KMS UI API requests by calling the KMS provider.
@@ -429,6 +430,188 @@ func (h *Handler) setVersionState(w http.ResponseWriter, r *http.Request, state 
 		return
 	}
 	uihelper.WriteJSON(w, versionFromMap(resp.Data))
+}
+
+// ─── Crypto operations ───────────────────────────────────────────────────────
+
+// POST .../cryptoKeys/{key}/encrypt
+func (h *Handler) Encrypt(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.cryptoKeyName(w, r)
+	if !ok {
+		return
+	}
+	var req EncryptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Plaintext == "" {
+		uihelper.UIError(w, "BadRequest", "plaintext is required", http.StatusBadRequest)
+		return
+	}
+	body := map[string]any{"plaintext": req.Plaintext}
+	if req.AdditionalAuthenticatedData != "" {
+		body["additionalAuthenticatedData"] = req.AdditionalAuthenticatedData
+	}
+	h.cryptoOp(w, r, "KMS.CryptoKeyEncrypt", name, body, func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return h.provider.CryptoKeyEncrypt(r.Context(), nr)
+	})
+}
+
+// POST .../cryptoKeys/{key}/decrypt
+func (h *Handler) Decrypt(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.cryptoKeyName(w, r)
+	if !ok {
+		return
+	}
+	var req DecryptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Ciphertext == "" {
+		uihelper.UIError(w, "BadRequest", "ciphertext is required", http.StatusBadRequest)
+		return
+	}
+	body := map[string]any{"ciphertext": req.Ciphertext}
+	if req.AdditionalAuthenticatedData != "" {
+		body["additionalAuthenticatedData"] = req.AdditionalAuthenticatedData
+	}
+	h.cryptoOp(w, r, "KMS.CryptoKeyDecrypt", name, body, func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return h.provider.CryptoKeyDecrypt(r.Context(), nr)
+	})
+}
+
+// POST .../versions/{version}/asymmetricSign
+func (h *Handler) AsymmetricSign(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.versionName(w, r)
+	if !ok {
+		return
+	}
+	var req AsymmetricSignRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if !validDigest(req.Digest) {
+		uihelper.UIError(w, "BadRequest", "digest is required", http.StatusBadRequest)
+		return
+	}
+	h.cryptoOp(w, r, "KMS.CryptoKeyVersionAsymmetricSign", name, map[string]any{"digest": req.Digest},
+		func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return h.provider.CryptoKeyVersionAsymmetricSign(r.Context(), nr)
+		})
+}
+
+// POST .../versions/{version}/asymmetricDecrypt
+func (h *Handler) AsymmetricDecrypt(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.versionName(w, r)
+	if !ok {
+		return
+	}
+	var req AsymmetricDecryptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Ciphertext == "" {
+		uihelper.UIError(w, "BadRequest", "ciphertext is required", http.StatusBadRequest)
+		return
+	}
+	h.cryptoOp(w, r, "KMS.CryptoKeyVersionAsymmetricDecrypt", name, map[string]any{"ciphertext": req.Ciphertext},
+		func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return h.provider.CryptoKeyVersionAsymmetricDecrypt(r.Context(), nr)
+		})
+}
+
+// POST .../versions/{version}/macSign
+func (h *Handler) MacSign(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.versionName(w, r)
+	if !ok {
+		return
+	}
+	var req MacSignRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Data == "" {
+		uihelper.UIError(w, "BadRequest", "data is required", http.StatusBadRequest)
+		return
+	}
+	h.cryptoOp(w, r, "KMS.CryptoKeyVersionMacSign", name, map[string]any{"data": req.Data},
+		func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return h.provider.CryptoKeyVersionMacSign(r.Context(), nr)
+		})
+}
+
+// POST .../versions/{version}/macVerify
+func (h *Handler) MacVerify(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.versionName(w, r)
+	if !ok {
+		return
+	}
+	var req MacVerifyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Data == "" || req.Mac == "" {
+		uihelper.UIError(w, "BadRequest", "data and mac are required", http.StatusBadRequest)
+		return
+	}
+	h.cryptoOp(w, r, "KMS.CryptoKeyVersionMacVerify", name, map[string]any{"data": req.Data, "mac": req.Mac},
+		func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return h.provider.CryptoKeyVersionMacVerify(r.Context(), nr)
+		})
+}
+
+// GET .../versions/{version}/publicKey
+func (h *Handler) GetPublicKey(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.versionName(w, r)
+	if !ok {
+		return
+	}
+	h.cryptoOp(w, r, "KMS.CryptoKeyVersionGetPublicKey", name, nil,
+		func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return h.provider.CryptoKeyVersionGetPublicKey(r.Context(), nr)
+		})
+}
+
+// cryptoOp runs one direct provider call, forwarding name/body on the
+// NormalizedRequest and echoing the provider's Discovery-shaped response. The
+// provider's crypto methods accept the same body field names as the wire API
+// (plaintext/ciphertext/digest/data/mac), so the console needs no reshaping.
+func (h *Handler) cryptoOp(
+	w http.ResponseWriter,
+	r *http.Request,
+	action, name string,
+	body map[string]any,
+	call func(*model.NormalizedRequest) (*model.ProviderResponse, error),
+) {
+	nr := uihelper.NR(r.Context(), h.cfg, "kms", action, "", h.account(r))
+	nr.Params["name"] = name
+	if body != nil {
+		nr.Params["body"] = body
+	}
+	resp, err := call(nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, resp.Data)
+}
+
+// validDigest reports whether an asymmetric-sign digest names exactly one of
+// the base64 digest fields Cloud KMS accepts (its Digest is a oneof).
+func validDigest(digest map[string]any) bool {
+	n := 0
+	for _, k := range []string{"sha256", "sha384", "sha512"} {
+		if s, _ := digest[k].(string); s != "" {
+			n++
+		}
+	}
+	return n == 1
 }
 
 // ─── IAM policy ──────────────────────────────────────────────────────────────

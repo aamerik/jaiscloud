@@ -37,5 +37,14 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/versions/{version}/disable", h.DisableVersion)
 	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/versions/{version}/enable", h.EnableVersion)
 
+	// Crypto operations.
+	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/encrypt", h.Encrypt)
+	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/decrypt", h.Decrypt)
+	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/versions/{version}/asymmetricSign", h.AsymmetricSign)
+	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/versions/{version}/asymmetricDecrypt", h.AsymmetricDecrypt)
+	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/versions/{version}/macSign", h.MacSign)
+	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/versions/{version}/macVerify", h.MacVerify)
+	r.Get("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/versions/{version}/publicKey", h.GetPublicKey)
+
 	return r
 }

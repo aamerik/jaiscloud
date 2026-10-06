@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
@@ -35,6 +36,21 @@ import {
 import { useAccount } from '../../context/AccountContext'
 import { IamPolicyPanel } from '../common/IamPolicyPanel'
 import { GcpPageTitle } from '../common/PageTitle'
+import {
+  AsymmetricDecryptDialog,
+  AsymmetricSignDialog,
+  DecryptDialog,
+  EncryptDialog,
+  MacSignDialog,
+  MacVerifyDialog,
+  PublicKeyDialog,
+} from './CryptoOperationsDialogs'
+import {
+  isAsymmetricAlgorithm,
+  isAsymmetricDecryptAlgorithm,
+  isMacAlgorithm,
+  isSignAlgorithm,
+} from './util'
 
 function versionColor(state?: string): 'success' | 'default' | 'warning' | 'error' {
   switch (state) {
@@ -55,6 +71,14 @@ export function CryptoKeyDetailPage() {
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'kms'] })
+
+  const [encryptOpen, setEncryptOpen] = useState(false)
+  const [decryptOpen, setDecryptOpen] = useState(false)
+  const [signVersion, setSignVersion] = useState<CryptoKeyVersion | null>(null)
+  const [asymDecryptVersion, setAsymDecryptVersion] = useState<CryptoKeyVersion | null>(null)
+  const [macSignVersion, setMacSignVersion] = useState<CryptoKeyVersion | null>(null)
+  const [macVerifyVersion, setMacVerifyVersion] = useState<CryptoKeyVersion | null>(null)
+  const [publicKeyVersion, setPublicKeyVersion] = useState<CryptoKeyVersion | null>(null)
 
   const detail = useQuery({
     queryKey: ['gcp', 'kms', 'cryptoKey', location, keyRing, key, accountId],
@@ -113,6 +137,16 @@ export function CryptoKeyDetailPage() {
             Crypto key · {keyRing} · {location} · project {accountId || '—'}
           </Typography>
         </Box>
+        {detail.data?.purpose === 'ENCRYPT_DECRYPT' && (
+          <>
+            <Button variant="outlined" onClick={() => setEncryptOpen(true)}>
+              Encrypt
+            </Button>
+            <Button variant="outlined" onClick={() => setDecryptOpen(true)}>
+              Decrypt
+            </Button>
+          </>
+        )}
         <Button
           variant="contained"
           startIcon={<AddIcon />}
@@ -178,6 +212,7 @@ export function CryptoKeyDetailPage() {
             {versions.data?.cryptoKeyVersions.map((version) => {
               const isPrimary = version.versionId === detail.data?.primaryVersion
               const mutable = version.state === 'ENABLED' || version.state === 'DISABLED'
+              const enabled = version.state === 'ENABLED'
               return (
                 <TableRow key={version.versionId} hover>
                   <TableCell>
@@ -212,6 +247,31 @@ export function CryptoKeyDetailPage() {
                         </span>
                       </Tooltip>
                     )}
+                    {enabled && isSignAlgorithm(version.algorithm) && (
+                      <Button size="small" onClick={() => setSignVersion(version)}>
+                        Sign
+                      </Button>
+                    )}
+                    {enabled && isAsymmetricDecryptAlgorithm(version.algorithm) && (
+                      <Button size="small" onClick={() => setAsymDecryptVersion(version)}>
+                        Decrypt
+                      </Button>
+                    )}
+                    {enabled && isMacAlgorithm(version.algorithm) && (
+                      <>
+                        <Button size="small" onClick={() => setMacSignVersion(version)}>
+                          MAC sign
+                        </Button>
+                        <Button size="small" onClick={() => setMacVerifyVersion(version)}>
+                          MAC verify
+                        </Button>
+                      </>
+                    )}
+                    {enabled && isAsymmetricAlgorithm(version.algorithm) && (
+                      <Button size="small" onClick={() => setPublicKeyVersion(version)}>
+                        Public key
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               )
@@ -229,6 +289,70 @@ export function CryptoKeyDetailPage() {
           defaultRole="roles/cloudkms.cryptoKeyEncrypterDecrypter"
         />
       </Box>
+
+      <EncryptDialog
+        open={encryptOpen}
+        location={location}
+        keyRing={keyRing}
+        cryptoKey={key}
+        onClose={() => setEncryptOpen(false)}
+      />
+      <DecryptDialog
+        open={decryptOpen}
+        location={location}
+        keyRing={keyRing}
+        cryptoKey={key}
+        onClose={() => setDecryptOpen(false)}
+      />
+      <AsymmetricSignDialog
+        open={Boolean(signVersion)}
+        location={location}
+        keyRing={keyRing}
+        cryptoKey={key}
+        version={signVersion?.versionId ?? ''}
+        algorithm={signVersion?.algorithm}
+        accountId={accountId}
+        onClose={() => setSignVersion(null)}
+      />
+      <AsymmetricDecryptDialog
+        open={Boolean(asymDecryptVersion)}
+        location={location}
+        keyRing={keyRing}
+        cryptoKey={key}
+        version={asymDecryptVersion?.versionId ?? ''}
+        algorithm={asymDecryptVersion?.algorithm}
+        accountId={accountId}
+        onClose={() => setAsymDecryptVersion(null)}
+      />
+      <MacSignDialog
+        open={Boolean(macSignVersion)}
+        location={location}
+        keyRing={keyRing}
+        cryptoKey={key}
+        version={macSignVersion?.versionId ?? ''}
+        algorithm={macSignVersion?.algorithm}
+        accountId={accountId}
+        onClose={() => setMacSignVersion(null)}
+      />
+      <MacVerifyDialog
+        open={Boolean(macVerifyVersion)}
+        location={location}
+        keyRing={keyRing}
+        cryptoKey={key}
+        version={macVerifyVersion?.versionId ?? ''}
+        algorithm={macVerifyVersion?.algorithm}
+        accountId={accountId}
+        onClose={() => setMacVerifyVersion(null)}
+      />
+      <PublicKeyDialog
+        open={Boolean(publicKeyVersion)}
+        location={location}
+        keyRing={keyRing}
+        cryptoKey={key}
+        version={publicKeyVersion?.versionId ?? ''}
+        accountId={accountId}
+        onClose={() => setPublicKeyVersion(null)}
+      />
     </Box>
   )
 }
