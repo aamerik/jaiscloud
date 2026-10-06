@@ -65,6 +65,16 @@ export interface IamPolicy {
   version?: number
 }
 
+export interface SignBlobResponse {
+  keyId?: string
+  signature: string
+}
+
+export interface SignJwtResponse {
+  keyId?: string
+  signedJwt: string
+}
+
 // Service accounts.
 /** List every service account; pass `pageToken` for a single raw page. */
 export async function listServiceAccounts(params?: {
@@ -146,3 +156,16 @@ export const enableServiceAccountKey = (email: string, key: string) =>
   api.post<ServiceAccountKey>(
     `${BASE}/serviceAccounts/${encodeURIComponent(email)}/keys/${encodeURIComponent(key)}/enable`,
   )
+
+// Signing.
+/** Sign an arbitrary (base64) blob with the account's key (IAM signBlob). */
+export const signServiceAccountBlob = (email: string, bytesToSign: string) =>
+  api.post<SignBlobResponse>(`${BASE}/serviceAccounts/${encodeURIComponent(email)}/signBlob`, {
+    bytesToSign,
+  })
+
+/** Mint a signed JWT from a serialized JSON claims object (IAM signJwt). */
+export const signServiceAccountJwt = (email: string, payload: string) =>
+  api.post<SignJwtResponse>(`${BASE}/serviceAccounts/${encodeURIComponent(email)}/signJwt`, {
+    payload,
+  })

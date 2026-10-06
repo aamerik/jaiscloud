@@ -76,6 +76,12 @@ func (m *mockProvider) ServiceAccountKeyDisable(_ context.Context, nr *model.Nor
 func (m *mockProvider) ServiceAccountKeyEnable(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
 }
+func (m *mockProvider) ServiceAccountSignBlob(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) ServiceAccountSignJwt(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
 
 func testCfg() *config.Config {
 	return &config.Config{
@@ -245,5 +251,101 @@ func TestDisableKey_UsesKeyName(t *testing.T) {
 	}
 	if got := mock.lastNR.Params["name"]; got != "serviceAccounts/a@p.iam.gserviceaccount.com/keys/k1" {
 		t.Fatalf("name = %v", got)
+	}
+}
+
+func TestSignBlob_SetsNameAndBytesToSign(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
+		"keyId": "k1", "signature": "c2ln",
+	}}}
+	w := do(t, mock, http.MethodPost, "/serviceAccounts/a@p.iam.gserviceaccount.com/signBlob",
+		`{"bytesToSign":"aGVsbG8="}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR.Action != "IAM.ServiceAccountSignBlob" {
+		t.Fatalf("action = %v", mock.lastNR.Action)
+	}
+	if got := mock.lastNR.Params["name"]; got != "serviceAccounts/a@p.iam.gserviceaccount.com" {
+		t.Fatalf("name = %v", got)
+	}
+	body := mock.lastNR.Params["body"].(map[string]any)
+	if body["bytesToSign"] != "aGVsbG8=" {
+		t.Fatalf("bytesToSign = %v", body["bytesToSign"])
+	}
+	var resp SignBlobResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.KeyID != "k1" || resp.Signature != "c2ln" {
+		t.Fatalf("response = %+v", resp)
+	}
+}
+
+func TestSignBlob_RequiresBytesToSign(t *testing.T) {
+	mock := &mockProvider{}
+	w := do(t, mock, http.MethodPost, "/serviceAccounts/a@p.iam.gserviceaccount.com/signBlob", `{}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestSignJwt_SetsNameAndPayload(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
+		"keyId": "k1", "signedJwt": "a.b.c",
+	}}}
+	w := do(t, mock, http.MethodPost, "/serviceAccounts/a@p.iam.gserviceaccount.com/signJwt",
+		`{"payload":"{\"iss\":\"a@p.iam.gserviceaccount.com\"}"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR.Action != "IAM.ServiceAccountSignJwt" {
+		t.Fatalf("action = %v", mock.lastNR.Action)
+	}
+	if got := mock.lastNR.Params["name"]; got != "serviceAccounts/a@p.iam.gserviceaccount.com" {
+		t.Fatalf("name = %v", got)
+	}
+	body := mock.lastNR.Params["body"].(map[string]any)
+	if body["payload"] != `{"iss":"a@p.iam.gserviceaccount.com"}` {
+		t.Fatalf("payload = %v", body["payload"])
+	}
+	var resp SignJwtResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.KeyID != "k1" || resp.SignedJwt != "a.b.c" {
+		t.Fatalf("response = %+v", resp)
+	}
+}
+
+func TestSignJwt_RequiresPayload(t *testing.T) {
+	mock := &mockProvider{}
+	w := do(t, mock, http.MethodPost, "/serviceAccounts/a@p.iam.gserviceaccount.com/signJwt", `{}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestSignBlob_MalformedBody(t *testing.T) {
+	mock := &mockProvider{}
+	w := do(t, mock, http.MethodPost, "/serviceAccounts/a@p.iam.gserviceaccount.com/signBlob", `{`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestSignBlob_ProviderErrorPassthrough(t *testing.T) {
+	mock := &mockProvider{err: model.NewProviderError("InvalidRequest", "payload must be base64", 400)}
+	w := do(t, mock, http.MethodPost, "/serviceAccounts/a@p.iam.gserviceaccount.com/signBlob",
+		`{"bytesToSign":"!!!"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["code"] != "InvalidRequest" {
+		t.Fatalf("code = %v", body["code"])
 	}
 }

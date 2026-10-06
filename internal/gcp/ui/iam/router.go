@@ -33,5 +33,9 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Post("/serviceAccounts/{email}/keys/{key}/disable", h.DisableKey)
 	r.Post("/serviceAccounts/{email}/keys/{key}/enable", h.EnableKey)
 
+	// Signing.
+	r.Post("/serviceAccounts/{email}/signBlob", h.SignBlob)
+	r.Post("/serviceAccounts/{email}/signJwt", h.SignJwt)
+
 	return r
 }

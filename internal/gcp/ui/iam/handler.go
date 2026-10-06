@@ -438,3 +438,65 @@ func (h *Handler) setKeyDisabled(w http.ResponseWriter, r *http.Request, disable
 	}
 	uihelper.WriteJSON(w, keyFromMap(resp.Data))
 }
+
+// ─── Signing ─────────────────────────────────────────────────────────────────
+
+// POST /serviceAccounts/{email}/signBlob
+func (h *Handler) SignBlob(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.serviceAccountName(w, r)
+	if !ok {
+		return
+	}
+	var req SignBlobRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.BytesToSign == "" {
+		uihelper.UIError(w, "BadRequest", "bytesToSign is required", http.StatusBadRequest)
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "iam", "IAM.ServiceAccountSignBlob", "global", h.account(r))
+	nr.Params["name"] = name
+	nr.Params["body"] = map[string]any{"bytesToSign": req.BytesToSign}
+
+	resp, err := h.provider.ServiceAccountSignBlob(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, SignBlobResponse{
+		KeyID:     uihelper.Str(resp.Data, "keyId"),
+		Signature: uihelper.Str(resp.Data, "signature"),
+	})
+}
+
+// POST /serviceAccounts/{email}/signJwt
+func (h *Handler) SignJwt(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.serviceAccountName(w, r)
+	if !ok {
+		return
+	}
+	var req SignJwtRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Payload == "" {
+		uihelper.UIError(w, "BadRequest", "payload is required", http.StatusBadRequest)
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "iam", "IAM.ServiceAccountSignJwt", "global", h.account(r))
+	nr.Params["name"] = name
+	nr.Params["body"] = map[string]any{"payload": req.Payload}
+
+	resp, err := h.provider.ServiceAccountSignJwt(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, SignJwtResponse{
+		KeyID:     uihelper.Str(resp.Data, "keyId"),
+		SignedJwt: uihelper.Str(resp.Data, "signedJwt"),
+	})
+}
