@@ -28,6 +28,7 @@ import (
 
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/events"
 	"jaiscloud/internal/executor/container"
 	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/lro"
@@ -124,6 +125,9 @@ type Service struct {
 	// matching the v1.1.0 contract. An enabled mode stores operations
 	// done=false and settles them lazily on read (see settle).
 	lroMode lro.Mode
+	// tracker publishes the one-time "operation settled" event when a lazily
+	// settled operation completes. Nil (no bus) makes it inert.
+	tracker *lro.Tracker
 	// runtimeImage optionally pre-resolves a function's container image before
 	// the executor profile sees it. nil (the default) leaves resolution to the
 	// profile. The legacy Lambda-RIE back-compat path sets it to map GCP
@@ -200,6 +204,16 @@ func WithAccountConcurrencyLimit(limit int64) Option {
 // has elapsed.
 func WithLROMode(m lro.Mode) Option {
 	return func(s *Service) { s.lroMode = m }
+}
+
+// WithEventBus wires the shared event bus the console's live status stream
+// subscribes to. Nil (the default) disables status events.
+func WithEventBus(bus *events.EventBus) Option {
+	return func(s *Service) {
+		if bus != nil {
+			s.tracker = lro.NewTracker(bus)
+		}
+	}
 }
 
 // WithRuntimeImageResolver sets a pre-resolution hook that maps a function onto

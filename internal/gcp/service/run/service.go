@@ -46,6 +46,9 @@ type Service struct {
 	// stream. Nil disables them (unit tests that only exercise the control
 	// plane).
 	eventBus *events.EventBus
+	// tracker publishes the one-time "operation settled" event when a lazily
+	// settled operation completes. Nil (no bus) makes it inert.
+	tracker *lro.Tracker
 }
 
 // Option customises a Service.
@@ -89,6 +92,7 @@ func WithEventBus(bus *events.EventBus) Option {
 	return func(s *Service) {
 		if bus != nil {
 			s.eventBus = bus
+			s.tracker = lro.NewTracker(bus)
 		}
 	}
 }
@@ -606,6 +610,7 @@ func (s *Service) settle(op runstore.Operation) runstore.Operation {
 	}
 	op.Done = true
 	op.EndTime = op.CreateTime.Add(s.lro.Delay)
+	s.tracker.EmitOperation("run", op.ID, op.ID, op.Verb)
 	return op
 }
 

@@ -368,6 +368,10 @@ func startCmd() *cobra.Command {
 					// Long-running-operation timing (LRO2): opt-in async mode,
 					// default sync, reusing the cross-service mode parsed above.
 					functionscore.WithLROMode(lroMode),
+					// The console's live stream: a lazily settled operation
+					// publishes a one-time status event so the Functions pages
+					// refetch when it completes.
+					functionscore.WithEventBus(eventBus),
 					// The executor is the shared concurrency resource, so its
 					// account-level cap is also the project-wide admission cap
 					// (FP1). JAISCLOUD_FUNCTIONS_CONCURRENCY_LIMIT, default 1000.
@@ -411,7 +415,7 @@ func startCmd() *cobra.Command {
 			// core is only built when workflows is enabled on some transport.
 			var workflowsCore *workflowscore.Service
 			if serviceEnabled("workflows") {
-				workflowsCore = workflowscore.NewService(stores.workflows, workflowscore.WithLROMode(lroMode))
+				workflowsCore = workflowscore.NewService(stores.workflows, workflowscore.WithLROMode(lroMode), workflowscore.WithEventBus(eventBus))
 			}
 			workflowsP := restworkflows.NewProvider(workflowsCore, cfg.ProjectID)
 			// Cloud Workflow Executions' transport-neutral core is shared by the
@@ -424,7 +428,7 @@ func startCmd() *cobra.Command {
 			// provider and the gRPC adapter below, so both transports run against
 			// one store and cannot drift. It is built before Dataproc because the
 			// Dataproc core resolves a cluster's metastore attachment through it.
-			metastoreCore := metastorecore.NewService(stores.metastore, metastorecore.WithLROMode(lroMode))
+			metastoreCore := metastorecore.NewService(stores.metastore, metastorecore.WithLROMode(lroMode), metastorecore.WithEventBus(eventBus))
 			metastoreP := restmetastore.NewProvider(metastoreCore, cfg.ProjectID)
 
 			// Cloud Dataproc reuses the Spark client-mode executor: mock by
@@ -585,7 +589,7 @@ func startCmd() *cobra.Command {
 			// Managed Kafka's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports run
 			// against one store and cannot drift.
-			managedKafkaCore := managedkafkacore.NewService(stores.managedkafka, managedkafkacore.WithLROMode(lroMode), managedkafkacore.WithBroker(mkBroker))
+			managedKafkaCore := managedkafkacore.NewService(stores.managedkafka, managedkafkacore.WithLROMode(lroMode), managedkafkacore.WithBroker(mkBroker), managedkafkacore.WithEventBus(eventBus))
 			managedkafkaP := restmanagedkafka.NewProvider(managedKafkaCore, cfg.ProjectID)
 
 			icebergP := icebergprovider.New(stores.iceberg)
@@ -740,7 +744,7 @@ func startCmd() *cobra.Command {
 			// Service Usage v1's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports run
 			// against one store and cannot drift.
-			serviceUsageCore := serviceusagecore.NewService(stores.resources, serviceusagecore.WithLROMode(lroMode))
+			serviceUsageCore := serviceusagecore.NewService(stores.resources, serviceusagecore.WithLROMode(lroMode), serviceusagecore.WithEventBus(eventBus))
 			serviceusageP := restserviceusage.NewProvider(serviceUsageCore, cfg.ProjectID)
 
 			// Cloud Scheduler v1's transport-neutral core is shared by the REST
@@ -773,7 +777,8 @@ func startCmd() *cobra.Command {
 			if serviceEnabled("resourcemanager") {
 				resourceManagerCore = resourcemanagercore.NewService(stores.resources,
 					resourcemanagercore.WithKnownProjects(cfg.ProjectID, cfg.ExtraAccounts),
-					resourcemanagercore.WithLROMode(lroMode))
+					resourcemanagercore.WithLROMode(lroMode),
+					resourcemanagercore.WithEventBus(eventBus))
 			}
 			resourcemanagerP := restresourcemanager.NewProvider(resourceManagerCore, cfg.ProjectID)
 
