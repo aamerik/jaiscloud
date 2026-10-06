@@ -1,8 +1,8 @@
 // Package kmsui serves the Cloud KMS UI API. Handlers call the KMS provider
 // directly (in-process) and reshape its Discovery-shaped response maps for the
 // console. Scope is key rings, crypto keys and crypto-key versions plus IAM
-// policy; encrypt/decrypt, asymmetric signing and getPublicKey are deferred (see
-// the console-UI wave plan).
+// policy and the crypto operations: symmetric encrypt/decrypt, asymmetric
+// sign/decrypt, MAC sign/verify and public-key download.
 package kmsui
 
 import "jaiscloud/internal/gcp/ui/uihelper"
@@ -106,4 +106,43 @@ type TestIamPermissionsRequest struct {
 // TestIamPermissionsResponse is the response for testIamPermissions.
 type TestIamPermissionsResponse struct {
 	Permissions []string `json:"permissions"`
+}
+
+// EncryptRequest is the body for POST .../cryptoKeys/{key}/encrypt. plaintext
+// is base64-encoded, matching Cloud KMS's EncryptRequest.
+type EncryptRequest struct {
+	Plaintext                   string `json:"plaintext"`
+	AdditionalAuthenticatedData string `json:"additionalAuthenticatedData,omitempty"`
+}
+
+// DecryptRequest is the body for POST .../cryptoKeys/{key}/decrypt.
+type DecryptRequest struct {
+	Ciphertext                  string `json:"ciphertext"`
+	AdditionalAuthenticatedData string `json:"additionalAuthenticatedData,omitempty"`
+}
+
+// AsymmetricSignRequest is the body for POST
+// .../versions/{version}/asymmetricSign. Digest carries exactly one of
+// sha256/sha384/sha512, base64-encoded, matching Cloud KMS's Digest.
+type AsymmetricSignRequest struct {
+	Digest map[string]any `json:"digest"`
+}
+
+// AsymmetricDecryptRequest is the body for POST
+// .../versions/{version}/asymmetricDecrypt.
+type AsymmetricDecryptRequest struct {
+	Ciphertext string `json:"ciphertext"`
+}
+
+// MacSignRequest is the body for POST .../versions/{version}/macSign. data is
+// base64-encoded.
+type MacSignRequest struct {
+	Data string `json:"data"`
+}
+
+// MacVerifyRequest is the body for POST .../versions/{version}/macVerify. Both
+// data and mac are base64-encoded.
+type MacVerifyRequest struct {
+	Data string `json:"data"`
+	Mac  string `json:"mac"`
 }
