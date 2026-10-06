@@ -1,9 +1,13 @@
-import { useQuery } from '@tanstack/react-query'
-import { Alert, Box, CircularProgress, Divider, Stack, Typography } from '@mui/material'
-import { useParams } from 'react-router-dom'
-import { getTopic } from '../../api/gcp/managedkafka'
+import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Alert, Box, Button, CircularProgress, Divider, Stack, Typography } from '@mui/material'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
+import { useNavigate, useParams } from 'react-router-dom'
+import { deleteTopic, getTopic } from '../../api/gcp/managedkafka'
 import { formatDate } from '../../lib/date'
 import { useAccount } from '../../context/AccountContext'
+import { TopicDialog } from './TopicDialog'
 import { Detail } from './common'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 
@@ -11,6 +15,9 @@ import { GcpPageHeader } from '../common/GcpPageHeader'
 export function TopicDetailPage() {
   const { location = '', cluster = '', topic: topicId = '' } = useParams()
   const { accountId } = useAccount()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [editOpen, setEditOpen] = useState(false)
 
   const detail = useQuery({
     queryKey: ['gcp', 'managedkafka', 'topic', location, cluster, topicId, accountId],
@@ -21,6 +28,14 @@ export function TopicDetailPage() {
   const topic = detail.data
   const backTo = `/gcp/managedkafka/clusters/${encodeURIComponent(location)}/${encodeURIComponent(cluster)}`
 
+  const remove = useMutation({
+    mutationFn: () => deleteTopic(location, cluster, topicId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['gcp', 'managedkafka'] })
+      navigate(backTo)
+    },
+  })
+
   return (
     <Box>
       <GcpPageHeader
@@ -29,7 +44,45 @@ export function TopicDetailPage() {
         subtitle={`Managed Kafka topic · ${cluster || '—'} · ${location || '—'}`}
         backTo={backTo}
         backAriaLabel="Back to cluster"
+        actions={
+          <>
+            <Button
+              variant="outlined"
+              startIcon={<EditOutlinedIcon />}
+              onClick={() => setEditOpen(true)}
+              disabled={!topic}
+            >
+              Edit
+            </Button>
+            <Button
+              variant="outlined"
+              color="error"
+              startIcon={<DeleteOutlineIcon />}
+              onClick={() => remove.mutate()}
+              disabled={!topic || remove.isPending}
+              sx={{ ml: 1 }}
+            >
+              Delete
+            </Button>
+          </>
+        }
       />
+
+      {topic && (
+        <TopicDialog
+          open={editOpen}
+          onClose={() => setEditOpen(false)}
+          location={location}
+          cluster={cluster}
+          topic={topic}
+        />
+      )}
+
+      {remove.isError && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {(remove.error as Error).message}
+        </Alert>
+      )}
 
       {detail.isError && <Alert severity="error">Failed to load the topic.</Alert>}
       {detail.isLoading && (

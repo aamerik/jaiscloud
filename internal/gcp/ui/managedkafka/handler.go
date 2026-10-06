@@ -312,7 +312,314 @@ func (h *Handler) ListConsumerGroups(w http.ResponseWriter, r *http.Request) {
 	uihelper.WriteJSON(w, ListConsumerGroupsResponse{Groups: out, Total: len(out)})
 }
 
+// ─── Cluster writes ──────────────────────────────────────────────────────────
+
+// POST /clusters
+func (h *Handler) CreateCluster(w http.ResponseWriter, r *http.Request) {
+	in, ok := decodeInput[ClusterWriteInput](w, r)
+	if !ok {
+		return
+	}
+	if in.Location == "" {
+		uihelper.UIError(w, "InvalidArgument", "location is required", http.StatusBadRequest)
+		return
+	}
+	if in.ID == "" {
+		uihelper.UIError(w, "InvalidArgument", "cluster id is required", http.StatusBadRequest)
+		return
+	}
+	project := h.account(r)
+	c, err := h.provider.CreateCluster(r.Context(), project, in.Location, in.ID, in)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSONStatus(w, http.StatusCreated, renderCluster(project, c, true))
+}
+
+// PUT /clusters/{location}/{cluster}
+func (h *Handler) UpdateCluster(w http.ResponseWriter, r *http.Request) {
+	location, cluster, ok := h.target(w, r, "cluster")
+	if !ok {
+		return
+	}
+	in, ok := decodeInput[ClusterWriteInput](w, r)
+	if !ok {
+		return
+	}
+	project := h.account(r)
+	c, err := h.provider.UpdateCluster(r.Context(), project, location, cluster, in)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, renderCluster(project, c, true))
+}
+
+// ─── Topic writes ────────────────────────────────────────────────────────────
+
+// POST /clusters/{location}/{cluster}/topics
+func (h *Handler) CreateTopic(w http.ResponseWriter, r *http.Request) {
+	location, cluster, ok := h.target(w, r, "cluster")
+	if !ok {
+		return
+	}
+	in, ok := decodeInput[TopicWriteInput](w, r)
+	if !ok {
+		return
+	}
+	if in.ID == "" {
+		uihelper.UIError(w, "InvalidArgument", "topic id is required", http.StatusBadRequest)
+		return
+	}
+	project := h.account(r)
+	t, err := h.provider.CreateTopic(r.Context(), project, location, cluster, in.ID, in)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSONStatus(w, http.StatusCreated, renderTopic(project, t, true))
+}
+
+// PUT /clusters/{location}/{cluster}/topics/{topic}
+func (h *Handler) UpdateTopic(w http.ResponseWriter, r *http.Request) {
+	location, cluster, ok := h.target(w, r, "cluster")
+	if !ok {
+		return
+	}
+	topic, ok := uihelper.Segment(r, "topic")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid topic", http.StatusBadRequest)
+		return
+	}
+	in, ok := decodeInput[TopicWriteInput](w, r)
+	if !ok {
+		return
+	}
+	project := h.account(r)
+	t, err := h.provider.UpdateTopic(r.Context(), project, location, cluster, topic, in)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, renderTopic(project, t, true))
+}
+
+// DELETE /clusters/{location}/{cluster}/topics/{topic}
+func (h *Handler) DeleteTopic(w http.ResponseWriter, r *http.Request) {
+	location, cluster, ok := h.target(w, r, "cluster")
+	if !ok {
+		return
+	}
+	topic, ok := uihelper.Segment(r, "topic")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid topic", http.StatusBadRequest)
+		return
+	}
+	if err := h.provider.DeleteTopic(r.Context(), h.account(r), location, cluster, topic); err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ─── ACL writes ──────────────────────────────────────────────────────────────
+
+// POST /clusters/{location}/{cluster}/acls
+func (h *Handler) CreateAcl(w http.ResponseWriter, r *http.Request) {
+	location, cluster, ok := h.target(w, r, "cluster")
+	if !ok {
+		return
+	}
+	in, ok := decodeInput[AclWriteInput](w, r)
+	if !ok {
+		return
+	}
+	if in.ID == "" {
+		uihelper.UIError(w, "InvalidArgument", "acl id is required", http.StatusBadRequest)
+		return
+	}
+	project := h.account(r)
+	a, err := h.provider.CreateAcl(r.Context(), project, location, cluster, in.ID, in)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSONStatus(w, http.StatusCreated, renderAcl(project, a))
+}
+
+// PUT /clusters/{location}/{cluster}/acls/{acl}
+func (h *Handler) UpdateAcl(w http.ResponseWriter, r *http.Request) {
+	location, cluster, ok := h.target(w, r, "cluster")
+	if !ok {
+		return
+	}
+	acl, ok := aclParam(w, r)
+	if !ok {
+		return
+	}
+	in, ok := decodeInput[AclWriteInput](w, r)
+	if !ok {
+		return
+	}
+	project := h.account(r)
+	a, err := h.provider.UpdateAcl(r.Context(), project, location, cluster, acl, in)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, renderAcl(project, a))
+}
+
+// DELETE /clusters/{location}/{cluster}/acls/{acl}
+func (h *Handler) DeleteAcl(w http.ResponseWriter, r *http.Request) {
+	location, cluster, ok := h.target(w, r, "cluster")
+	if !ok {
+		return
+	}
+	acl, ok := aclParam(w, r)
+	if !ok {
+		return
+	}
+	if err := h.provider.DeleteAcl(r.Context(), h.account(r), location, cluster, acl); err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AddAclEntryResponse is the response for POST .../acls/{acl}/entries.
+type AddAclEntryResponse struct {
+	Acl        Acl  `json:"acl"`
+	AclCreated bool `json:"aclCreated"`
+}
+
+// POST /clusters/{location}/{cluster}/acls/{acl}/entries
+func (h *Handler) AddAclEntry(w http.ResponseWriter, r *http.Request) {
+	location, cluster, ok := h.target(w, r, "cluster")
+	if !ok {
+		return
+	}
+	acl, ok := aclParam(w, r)
+	if !ok {
+		return
+	}
+	entry, ok := decodeInput[AclEntry](w, r)
+	if !ok {
+		return
+	}
+	project := h.account(r)
+	a, created, err := h.provider.AddAclEntry(r.Context(), project, location, cluster, acl, entry)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, AddAclEntryResponse{Acl: renderAcl(project, a), AclCreated: created})
+}
+
+// RemoveAclEntryResponse is the response for DELETE .../acls/{acl}/entries.
+// Exactly one of Acl / AclDeleted is set.
+type RemoveAclEntryResponse struct {
+	Acl        *Acl `json:"acl,omitempty"`
+	AclDeleted bool `json:"aclDeleted,omitempty"`
+}
+
+// DELETE /clusters/{location}/{cluster}/acls/{acl}/entries
+func (h *Handler) RemoveAclEntry(w http.ResponseWriter, r *http.Request) {
+	location, cluster, ok := h.target(w, r, "cluster")
+	if !ok {
+		return
+	}
+	acl, ok := aclParam(w, r)
+	if !ok {
+		return
+	}
+	entry, ok := decodeInput[AclEntry](w, r)
+	if !ok {
+		return
+	}
+	project := h.account(r)
+	a, deleted, err := h.provider.RemoveAclEntry(r.Context(), project, location, cluster, acl, entry)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	if deleted || a == nil {
+		uihelper.WriteJSON(w, RemoveAclEntryResponse{AclDeleted: true})
+		return
+	}
+	rendered := renderAcl(project, *a)
+	uihelper.WriteJSON(w, RemoveAclEntryResponse{Acl: &rendered})
+}
+
+// ─── Consumer-group writes ───────────────────────────────────────────────────
+
+// PUT /clusters/{location}/{cluster}/consumer-groups/{group}
+func (h *Handler) UpdateConsumerGroup(w http.ResponseWriter, r *http.Request) {
+	location, cluster, ok := h.target(w, r, "cluster")
+	if !ok {
+		return
+	}
+	group, ok := uihelper.Segment(r, "group")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid consumer group", http.StatusBadRequest)
+		return
+	}
+	in, ok := decodeInput[ConsumerGroupWriteInput](w, r)
+	if !ok {
+		return
+	}
+	project := h.account(r)
+	g, err := h.provider.UpdateConsumerGroup(r.Context(), project, location, cluster, group, in)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, renderConsumerGroup(project, g))
+}
+
+// DELETE /clusters/{location}/{cluster}/consumer-groups/{group}
+func (h *Handler) DeleteConsumerGroup(w http.ResponseWriter, r *http.Request) {
+	location, cluster, ok := h.target(w, r, "cluster")
+	if !ok {
+		return
+	}
+	group, ok := uihelper.Segment(r, "group")
+	if !ok {
+		uihelper.UIError(w, "BadRequest", "invalid consumer group", http.StatusBadRequest)
+		return
+	}
+	if err := h.provider.DeleteConsumerGroup(r.Context(), h.account(r), location, cluster, group); err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
+
+// decodeInput decodes a JSON request body into T, writing a 400 and reporting
+// false on a malformed body.
+func decodeInput[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
+	var in T
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		uihelper.UIError(w, "InvalidArgument", "invalid JSON body", http.StatusBadRequest)
+		return in, false
+	}
+	return in, true
+}
+
+// aclParam returns the decoded {acl} path param. An ACL id may contain "/"
+// (e.g. "topic/orders") and is carried percent-encoded; uihelper.PathParam
+// decodes it, and the core validates the encoded pattern.
+func aclParam(w http.ResponseWriter, r *http.Request) (string, bool) {
+	v := uihelper.PathParam(r, "acl")
+	if v == "" {
+		uihelper.UIError(w, "BadRequest", "invalid acl", http.StatusBadRequest)
+		return "", false
+	}
+	return v, true
+}
 
 // target reads and validates the {location}/{<resource>} path parameters,
 // writing a 400 and returning false when either is missing or malformed. key is

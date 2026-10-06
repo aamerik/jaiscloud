@@ -1,8 +1,26 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Alert, Box, Chip, CircularProgress, Divider, Link, Stack, Typography } from '@mui/material'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  Divider,
+  IconButton,
+  Link,
+  Stack,
+  Tooltip,
+  Typography,
+} from '@mui/material'
+import AddIcon from '@mui/icons-material/Add'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import { Link as RouterLink, useParams } from 'react-router-dom'
 import {
+  deleteAcl,
+  deleteConsumerGroup,
+  deleteTopic,
   getCluster,
   listAcls,
   listClusterTopics,
@@ -14,6 +32,10 @@ import {
 } from '../../api/gcp/managedkafka'
 import { formatDate } from '../../lib/date'
 import { useAccount } from '../../context/AccountContext'
+import { AclDialog } from './AclDialog'
+import { ClusterDialog } from './ClusterDialog'
+import { ConsumerGroupDialog } from './ConsumerGroupDialog'
+import { TopicDialog } from './TopicDialog'
 import { Detail, JsonBlock } from './common'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
@@ -32,6 +54,7 @@ export function ClusterDetailPage() {
   const { location = '', cluster: clusterId = '' } = useParams()
   const { accountId } = useAccount()
   const [tab, setTab] = useState<TabKey>('topics')
+  const [editOpen, setEditOpen] = useState(false)
 
   const detail = useQuery({
     queryKey: ['gcp', 'managedkafka', 'cluster', location, clusterId, accountId],
@@ -50,7 +73,21 @@ export function ClusterDetailPage() {
         subtitle={`Managed Kafka cluster · ${location || '—'}`}
         backTo="/gcp/managedkafka/clusters"
         backAriaLabel="Back to clusters"
+        actions={
+          <Button
+            variant="outlined"
+            startIcon={<EditOutlinedIcon />}
+            onClick={() => setEditOpen(true)}
+            disabled={!cluster}
+          >
+            Edit cluster
+          </Button>
+        }
       />
+
+      {cluster && (
+        <ClusterDialog open={editOpen} onClose={() => setEditOpen(false)} cluster={cluster} />
+      )}
 
       {detail.isError && <Alert severity="error">Failed to load the cluster.</Alert>}
       {detail.isLoading && (
@@ -131,10 +168,18 @@ export function ClusterDetailPage() {
 
 function TopicsTab({ location, cluster, base }: { location: string; cluster: string; base: string }) {
   const { accountId } = useAccount()
+  const queryClient = useQueryClient()
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [editing, setEditing] = useState<ManagedKafkaTopic | undefined>(undefined)
   const topics = useQuery({
     queryKey: ['gcp', 'managedkafka', 'cluster-topics', location, cluster, accountId],
     queryFn: () => listClusterTopics(location, cluster),
     enabled: Boolean(location && cluster),
+  })
+
+  const remove = useMutation({
+    mutationFn: (topic: ManagedKafkaTopic) => deleteTopic(location, cluster, topic.id),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'managedkafka'] }),
   })
 
   const columns: GcpColumn<ManagedKafkaTopic>[] = [
@@ -172,27 +217,96 @@ function TopicsTab({ location, cluster, base }: { location: string; cluster: str
       sortValue: (topic) => topic.createTime ?? '',
       render: (topic) => formatDate(topic.createTime),
     },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (topic) => (
+        <>
+          <Tooltip title="Edit topic">
+            <span>
+              <IconButton
+                size="small"
+                aria-label={`Edit ${topic.id}`}
+                onClick={() => {
+                  setEditing(topic)
+                  setDialogOpen(true)
+                }}
+              >
+                <EditOutlinedIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Delete topic">
+            <span>
+              <IconButton
+                size="small"
+                aria-label={`Delete ${topic.id}`}
+                disabled={remove.isPending}
+                onClick={() => remove.mutate(topic)}
+              >
+                <DeleteOutlineIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </>
+      ),
+    },
   ]
 
   return (
-    <GcpDataTable
-      aria-label="Cluster topics"
-      columns={columns}
-      rows={topics.data?.topics ?? []}
-      getRowKey={(topic) => topic.id}
-      loading={topics.isLoading}
-      error={topics.isError ? 'Failed to load topics.' : null}
-      emptyMessage="No topics on this cluster."
-    />
+    <>
+      <Stack direction="row" sx={{ justifyContent: 'flex-end', mb: 1 }}>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={() => {
+            setEditing(undefined)
+            setDialogOpen(true)
+          }}
+        >
+          Create topic
+        </Button>
+      </Stack>
+      {remove.isError && (
+        <Alert severity="error" sx={{ mb: 1 }}>
+          {(remove.error as Error).message}
+        </Alert>
+      )}
+      <GcpDataTable
+        aria-label="Cluster topics"
+        columns={columns}
+        rows={topics.data?.topics ?? []}
+        getRowKey={(topic) => topic.id}
+        loading={topics.isLoading}
+        error={topics.isError ? 'Failed to load topics.' : null}
+        emptyMessage="No topics on this cluster."
+      />
+      <TopicDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        location={location}
+        cluster={cluster}
+        topic={editing}
+      />
+    </>
   )
 }
 
 function AclsTab({ location, cluster }: { location: string; cluster: string }) {
   const { accountId } = useAccount()
+  const queryClient = useQueryClient()
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [editing, setEditing] = useState<ManagedKafkaAcl | undefined>(undefined)
   const acls = useQuery({
     queryKey: ['gcp', 'managedkafka', 'acls', location, cluster, accountId],
     queryFn: () => listAcls(location, cluster),
     enabled: Boolean(location && cluster),
+  })
+
+  const remove = useMutation({
+    mutationFn: (acl: ManagedKafkaAcl) => deleteAcl(location, cluster, acl.id),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'managedkafka'] }),
   })
 
   const columns: GcpColumn<ManagedKafkaAcl>[] = [
@@ -232,27 +346,96 @@ function AclsTab({ location, cluster }: { location: string; cluster: string }) {
         </Stack>
       ),
     },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (acl) => (
+        <>
+          <Tooltip title="Edit ACL">
+            <span>
+              <IconButton
+                size="small"
+                aria-label={`Edit ${acl.id}`}
+                onClick={() => {
+                  setEditing(acl)
+                  setDialogOpen(true)
+                }}
+              >
+                <EditOutlinedIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Delete ACL">
+            <span>
+              <IconButton
+                size="small"
+                aria-label={`Delete ${acl.id}`}
+                disabled={remove.isPending}
+                onClick={() => remove.mutate(acl)}
+              >
+                <DeleteOutlineIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </>
+      ),
+    },
   ]
 
   return (
-    <GcpDataTable
-      aria-label="Cluster ACLs"
-      columns={columns}
-      rows={acls.data?.acls ?? []}
-      getRowKey={(acl) => acl.id}
-      loading={acls.isLoading}
-      error={acls.isError ? 'Failed to load ACLs.' : null}
-      emptyMessage="No ACLs on this cluster."
-    />
+    <>
+      <Stack direction="row" sx={{ justifyContent: 'flex-end', mb: 1 }}>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={() => {
+            setEditing(undefined)
+            setDialogOpen(true)
+          }}
+        >
+          Create ACL
+        </Button>
+      </Stack>
+      {remove.isError && (
+        <Alert severity="error" sx={{ mb: 1 }}>
+          {(remove.error as Error).message}
+        </Alert>
+      )}
+      <GcpDataTable
+        aria-label="Cluster ACLs"
+        columns={columns}
+        rows={acls.data?.acls ?? []}
+        getRowKey={(acl) => acl.id}
+        loading={acls.isLoading}
+        error={acls.isError ? 'Failed to load ACLs.' : null}
+        emptyMessage="No ACLs on this cluster."
+      />
+      <AclDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        location={location}
+        cluster={cluster}
+        acl={editing}
+      />
+    </>
   )
 }
 
 function ConsumerGroupsTab({ location, cluster }: { location: string; cluster: string }) {
   const { accountId } = useAccount()
+  const queryClient = useQueryClient()
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [editing, setEditing] = useState<ManagedKafkaConsumerGroup | undefined>(undefined)
   const groups = useQuery({
     queryKey: ['gcp', 'managedkafka', 'consumer-groups', location, cluster, accountId],
     queryFn: () => listConsumerGroups(location, cluster),
     enabled: Boolean(location && cluster),
+  })
+
+  const remove = useMutation({
+    mutationFn: (group: ManagedKafkaConsumerGroup) => deleteConsumerGroup(location, cluster, group.id),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'managedkafka'] }),
   })
 
   const columns: GcpColumn<ManagedKafkaConsumerGroup>[] = [
@@ -279,6 +462,41 @@ function ConsumerGroupsTab({ location, cluster }: { location: string; cluster: s
       sortValue: (group) => group.offsets.length,
       render: (group) => group.offsets.length,
     },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (group) => (
+        <>
+          <Tooltip title="Edit committed offsets">
+            <span>
+              <IconButton
+                size="small"
+                aria-label={`Edit ${group.id}`}
+                onClick={() => {
+                  setEditing(group)
+                  setDialogOpen(true)
+                }}
+              >
+                <EditOutlinedIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Delete consumer group">
+            <span>
+              <IconButton
+                size="small"
+                aria-label={`Delete ${group.id}`}
+                disabled={remove.isPending}
+                onClick={() => remove.mutate(group)}
+              >
+                <DeleteOutlineIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </>
+      ),
+    },
   ]
 
   return (
@@ -287,6 +505,11 @@ function ConsumerGroupsTab({ location, cluster }: { location: string; cluster: s
         Consumer groups are read from the cluster&apos;s live Kafka broker. With the default mock
         topology (no broker running) the list is empty.
       </Alert>
+      {remove.isError && (
+        <Alert severity="error" sx={{ mb: 1 }}>
+          {(remove.error as Error).message}
+        </Alert>
+      )}
       <GcpDataTable
         aria-label="Cluster consumer groups"
         columns={columns}
@@ -297,6 +520,13 @@ function ConsumerGroupsTab({ location, cluster }: { location: string; cluster: s
         emptyMessage="No consumer groups on this cluster."
         renderDetail={(group) => <ConsumerGroupOffsets group={group} />}
         detailTitle={(group) => group.id}
+      />
+      <ConsumerGroupDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        location={location}
+        cluster={cluster}
+        group={editing}
       />
     </>
   )

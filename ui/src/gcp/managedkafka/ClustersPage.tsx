@@ -1,21 +1,35 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Chip, Link, Stack, Typography } from '@mui/material'
+import { Button, Chip, IconButton, Link, Stack, Tooltip, Typography } from '@mui/material'
+import AddIcon from '@mui/icons-material/Add'
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { listClusters, type ManagedKafkaCluster } from '../../api/gcp/managedkafka'
 import { formatDate } from '../../lib/date'
 import { useAccount } from '../../context/AccountContext'
+import { ClusterDialog } from './ClusterDialog'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
 import { GcpToolbar } from '../common/GcpToolbar'
 import { filterRows } from '../common/pagination'
 
-/** Managed Kafka clusters across every location (read-only). */
+/** Managed Kafka clusters across every location, with create/edit. */
 export function ClustersPage() {
   const { accountId } = useAccount()
   const [filter, setFilter] = useState('')
   const [selected, setSelected] = useState<string[]>([])
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [editing, setEditing] = useState<ManagedKafkaCluster | undefined>(undefined)
+
+  const openCreate = () => {
+    setEditing(undefined)
+    setDialogOpen(true)
+  }
+  const openEdit = (cluster: ManagedKafkaCluster) => {
+    setEditing(cluster)
+    setDialogOpen(true)
+  }
 
   const clusters = useQuery({
     queryKey: ['gcp', 'managedkafka', 'clusters', accountId],
@@ -96,6 +110,20 @@ export function ClustersPage() {
       sortValue: (cluster) => cluster.createTime ?? '',
       render: (cluster) => formatDate(cluster.createTime),
     },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (cluster) => (
+        <Tooltip title="Edit cluster">
+          <span>
+            <IconButton size="small" onClick={() => openEdit(cluster)} aria-label={`Edit ${cluster.id}`}>
+              <EditOutlinedIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      ),
+    },
   ]
 
   return (
@@ -104,6 +132,11 @@ export function ClustersPage() {
         id="managedkafka"
         title="Managed Kafka"
         subtitle={`Clusters · project ${accountId || '—'}`}
+        actions={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
+            Create cluster
+          </Button>
+        }
       />
 
       <GcpToolbar
@@ -129,6 +162,12 @@ export function ClustersPage() {
         onSelectionChange={setSelected}
         renderDetail={(cluster) => <GcpRowDetail row={cluster} />}
         detailTitle={(cluster) => cluster.id}
+      />
+
+      <ClusterDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        cluster={editing}
       />
     </Stack>
   )
