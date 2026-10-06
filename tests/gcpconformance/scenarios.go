@@ -185,6 +185,8 @@ func Scenarios(suffix string) []Scenario {
 	// responses feed getQueryResults and jobs.get.
 	bqBase := "/bigquery/v2/projects/" + p
 	bqTbl2 := "conf_tbl2_" + suffix
+	bqLoadTbl := "conf_loadtbl_" + suffix
+	bqLoadBucket := "conf-load-" + suffix
 	sc = append(sc,
 		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets",
 			Body: fmt.Sprintf(`{"datasetReference":{"projectId":%q,"datasetId":%q}}`, p, ds)},
@@ -197,6 +199,26 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/insertAll",
 			Body: `{"rows":[{"insertId":"1","json":{"id":"1"}}]}`},
 		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl + "/data"},
+		// Load job (BQL1): stage a CSV row in the emulated GCS, then jobs.insert a
+		// configuration.load that reads it back through the same gs:// path the
+		// official clients use. (CSV rather than NDJSON: the wire harness parses
+		// any JSON-looking upload body as an objects.insert request, a
+		// media-upload false positive; plain CSV text is skipped.)
+		Scenario{Service: "storage", Method: "POST", Path: "/storage/v1/b?project=" + p,
+			Body: fmt.Sprintf(`{"name":%q}`, bqLoadBucket)},
+		Scenario{Service: "storage", Method: "POST",
+			Path:        "/upload/storage/v1/b/" + bqLoadBucket + "/o?uploadType=media&name=load.csv",
+			Body:        "5,alice\n",
+			ContentType: "text/plain"},
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + ds + "/tables",
+			Body: fmt.Sprintf(`{"tableReference":{"projectId":%q,"datasetId":%q,"tableId":%q},"schema":{"fields":[{"name":"id","type":"INTEGER","mode":"REQUIRED"},{"name":"name","type":"STRING"}]}}`, p, ds, bqLoadTbl)},
+		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/jobs",
+			Body: fmt.Sprintf(`{"jobReference":{"projectId":%q,"jobId":%q},"configuration":{"load":{"destinationTable":{"projectId":%q,"datasetId":%q,"tableId":%q},"sourceUris":[%q],"sourceFormat":"CSV","writeDisposition":"WRITE_APPEND"}}}`,
+				p, "conf-load-"+suffix, p, ds, bqLoadTbl, "gs://"+bqLoadBucket+"/load.csv"),
+			Save: map[string]string{"bqLoadJob": "jobReference.jobId"}},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/jobs/${bqLoadJob}"},
+		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + ds + "/tables/" + bqLoadTbl + "/data"},
+
 		// SELECT over the stored row; capture the job id for the read-back calls.
 		Scenario{Service: "bigquery", Method: "POST", Path: bqBase + "/queries",
 			Body: fmt.Sprintf("{\"query\":\"SELECT id FROM `%s.%s.%s` WHERE id = 1\",\"useLegacySql\":false}", p, ds, tbl),
@@ -221,6 +243,7 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/missing_" + suffix},
 		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + tbl},
 		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + bqTbl2},
+		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds + "/tables/" + bqLoadTbl},
 		Scenario{Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + ds},
 	)
 
