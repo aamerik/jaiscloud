@@ -82,7 +82,8 @@ func TestListProjectsIncludesConfiguredAndCreated(t *testing.T) {
 func TestCreateProject(t *testing.T) {
 	_, h := newRouter()
 
-	rec := do(t, h, http.MethodPost, "/projects", `{"projectId":"new-proj","displayName":"New Project"}`)
+	rec := do(t, h, http.MethodPost, "/projects",
+		`{"projectId":"new-proj","displayName":"New Project","labels":{"env":"dev"}}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -92,6 +93,9 @@ func TestCreateProject(t *testing.T) {
 	}
 	if p.DisplayName != "New Project" || p.ProjectNumber == "" || p.CreateTime == "" {
 		t.Fatalf("created project missing fields: %+v", p)
+	}
+	if p.Labels["env"] != "dev" {
+		t.Fatalf("labels not persisted: %+v", p.Labels)
 	}
 
 	// A duplicate id (including a configured project) is AlreadyExists → 409.

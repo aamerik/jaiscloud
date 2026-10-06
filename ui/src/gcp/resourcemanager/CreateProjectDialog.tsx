@@ -11,8 +11,9 @@ import {
   TextField,
 } from '@mui/material'
 import { createProject } from '../../api/gcp/resourcemanager'
+import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { invalidateProjects } from './queries'
-import { validProjectId } from './util'
+import { parseKV, validProjectId } from './util'
 
 export interface CreateProjectDialogProps {
   onClose: () => void
@@ -26,9 +27,11 @@ export function CreateProjectDialog({ onClose }: CreateProjectDialogProps) {
   const queryClient = useQueryClient()
   const [projectId, setProjectId] = useState('')
   const [displayName, setDisplayName] = useState('')
+  const [labelsText, setLabelsText] = useState('')
 
   const create = useMutation({
-    mutationFn: () => createProject({ projectId, displayName: displayName || undefined }),
+    mutationFn: () =>
+      createProject({ projectId, displayName: displayName || undefined, labels: parseKV(labelsText) }),
     onSuccess: () => {
       invalidateProjects(queryClient)
       onClose()
@@ -63,6 +66,13 @@ export function CreateProjectDialog({ onClose }: CreateProjectDialogProps) {
             onChange={(e) => setDisplayName(e.target.value)}
             placeholder="My Project"
             fullWidth
+          />
+          <GcpCodeEditor
+            label="Labels (key=value per line)"
+            value={labelsText}
+            onChange={setLabelsText}
+            language="text"
+            minRows={3}
           />
         </Stack>
       </DialogContent>
