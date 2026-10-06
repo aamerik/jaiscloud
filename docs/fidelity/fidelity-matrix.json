@@ -146,7 +146,7 @@
       "operation": "BigQuery.CancelJob",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.jobs.cancel",
         "mutating",
@@ -158,7 +158,7 @@
       "operation": "BigQuery.CreateDataset",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.datasets.insert",
         "mutating",
@@ -170,7 +170,7 @@
       "operation": "BigQuery.CreateTable",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.tables.insert",
         "mutating",
@@ -182,7 +182,7 @@
       "operation": "BigQuery.DeleteDataset",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.datasets.delete",
         "mutating",
@@ -194,7 +194,7 @@
       "operation": "BigQuery.DeleteJob",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.jobs.delete",
         "mutating",
@@ -206,7 +206,7 @@
       "operation": "BigQuery.DeleteTable",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.tables.delete",
         "mutating",
@@ -218,7 +218,7 @@
       "operation": "BigQuery.GetDataset",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.datasets.get",
         "postgres=yes"
@@ -229,7 +229,7 @@
       "operation": "BigQuery.GetJob",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.jobs.get",
         "postgres=yes"
@@ -240,7 +240,7 @@
       "operation": "BigQuery.GetQueryResults",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.jobs.getQueryResults",
         "postgres=yes"
@@ -251,7 +251,7 @@
       "operation": "BigQuery.GetServiceAccount",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.projects.getServiceAccount",
         "postgres=yes"
@@ -262,7 +262,7 @@
       "operation": "BigQuery.GetTable",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.tables.get",
         "postgres=yes"
@@ -273,7 +273,7 @@
       "operation": "BigQuery.InsertAll",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.tabledata.insertAll",
         "mutating",
@@ -285,7 +285,7 @@
       "operation": "BigQuery.InsertJob",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.jobs.insert",
         "mutating",
@@ -297,7 +297,7 @@
       "operation": "BigQuery.InsertJobResumable",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.jobs.insert",
         "mutating",
@@ -309,7 +309,7 @@
       "operation": "BigQuery.InsertJobResumableStart",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.jobs.insert",
         "mutating",
@@ -321,7 +321,7 @@
       "operation": "BigQuery.ListDatasets",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.datasets.list",
         "postgres=yes"
@@ -332,7 +332,7 @@
       "operation": "BigQuery.ListJobs",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.jobs.list",
         "postgres=yes"
@@ -343,7 +343,7 @@
       "operation": "BigQuery.ListRows",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.tabledata.list",
         "postgres=yes"
@@ -354,7 +354,7 @@
       "operation": "BigQuery.ListTables",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.tables.list",
         "postgres=yes"
@@ -375,7 +375,7 @@
       "operation": "BigQuery.Query",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.jobs.query",
         "postgres=yes"
@@ -406,7 +406,7 @@
       "operation": "BigQuery.UpdateDataset",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.datasets.update",
         "mutating",
@@ -418,7 +418,7 @@
       "operation": "BigQuery.UpdateTable",
       "transport": "rest",
       "state": "limited",
-      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one gs:// source object or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON or CSV with an explicit schema (autodetect, Parquet/Avro/ORC, compression and wildcards fail loud)",
+      "reason": "documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud)",
       "evidence": [
         "discovery=bigquery.tables.update",
         "mutating",

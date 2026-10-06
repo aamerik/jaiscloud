@@ -154,7 +154,7 @@ func TestInsertJobResumableStartFailLoud(t *testing.T) {
 
 	// Unsupported option fails at initiate, before any bytes are uploaded.
 	body := uploadJobBody("ds", "t", "bad1")
-	body["configuration"].(map[string]any)["load"].(map[string]any)["autodetect"] = true
+	body["configuration"].(map[string]any)["load"].(map[string]any)["allowJaggedRows"] = true
 	_, err := p.InsertJobResumableStart(ctx, newNR(map[string]any{"project": "proj", "body": body}))
 	assertProviderErr(t, err, "Unimplemented", 501)
 

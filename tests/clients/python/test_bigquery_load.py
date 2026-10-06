@@ -150,3 +150,80 @@ def test_load_ndjson_from_file_multipart(client, dataset):
             os.unlink(path)
         except OSError:
             pass
+
+
+def _stage_bytes(prefix: str, name: str, data: bytes, content_type: str):
+    """Upload bytes to the emulated GCS, returning (bucket, blob) for teardown."""
+    bucket = storage_client().create_bucket(unique(prefix))
+    blob = bucket.blob(name)
+    blob.upload_from_string(data, content_type=content_type)
+    return bucket, blob
+
+
+def test_load_parquet_from_uri(client, dataset):
+    """The self-describing Parquet path (BQL3): the file's schema drives the table."""
+    table = _make_upload_table(client, dataset)
+    fixture = os.path.join(os.path.dirname(__file__), "testdata", "load.parquet")
+    with open(fixture, "rb") as fh:
+        payload = fh.read()
+    bucket, blob = _stage_bytes(
+        "pyc-bq-parquet", "rows.parquet", payload, "application/octet-stream"
+    )
+
+    def op():
+        cfg = bigquery.LoadJobConfig(
+            source_format=bigquery.SourceFormat.PARQUET,
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        )
+        job = client.load_table_from_uri(
+            f"gs://{bucket.name}/{blob.name}", table, job_config=cfg
+        )
+        job.result()
+        assert job.state == "DONE", f"job state {job.state!r}"
+        rows = sorted((r["id"], r["name"]) for r in client.list_rows(table))
+        assert rows == [(101, "alice"), (102, "bob")], rows
+        return f"{len(rows)} rows"
+
+    try:
+        check(SERVICE, "LoadTableFromUriParquet", op)
+    finally:
+        try:
+            blob.delete()
+            bucket.delete()
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
+
+
+def test_load_parquet_autodetect_table(client, dataset):
+    """A PARQUET load into a table created with no schema derives it from the file."""
+    table_id = unique("pyc_bq_pqauto").replace("-", "_")
+    table = client.create_table(bigquery.Table(f"{CONFIG.project}.{dataset.dataset_id}.{table_id}"))
+    fixture = os.path.join(os.path.dirname(__file__), "testdata", "load.parquet")
+    with open(fixture, "rb") as fh:
+        payload = fh.read()
+    bucket, blob = _stage_bytes(
+        "pyc-bq-pqauto", "rows.parquet", payload, "application/octet-stream"
+    )
+
+    def op():
+        cfg = bigquery.LoadJobConfig(
+            source_format=bigquery.SourceFormat.PARQUET,
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        )
+        job = client.load_table_from_uri(
+            f"gs://{bucket.name}/{blob.name}", table, job_config=cfg
+        )
+        job.result()
+        assert job.state == "DONE", f"job state {job.state!r}"
+        rows = sorted((r["id"], r["name"]) for r in client.list_rows(table))
+        assert rows == [(101, "alice"), (102, "bob")], rows
+        return f"{len(rows)} rows"
+
+    try:
+        check(SERVICE, "LoadTableFromUriParquetDerivedSchema", op)
+    finally:
+        try:
+            blob.delete()
+            bucket.delete()
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
