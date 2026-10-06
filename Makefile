@@ -14,7 +14,10 @@ PYTHON ?= python3
 # trusted), then dataproc-gke (the Dataproc-on-GKE completion work), then the
 # Java-compat effort owns waves W1–W3. The AWS-parity families run next; the
 # BigQuery engine decision (bigquery-ga) is deliberately deprioritized behind them.
-SERIES ?= ga-fidelity,functions-docker-executor,console-ui,ledger-integrity,dataproc-gke,java-compat,functions-parity,metastore-parity,bigquery-ga,bigquery-load-jobs,demo-spikes
+# The audit family (gcp-audit-wave-plan.md: evidence coverage, cross-transport
+# parity, convention invariants) runs after the service families and immediately
+# before demo-spikes, so the emulator is verified before the demo is de-risked.
+SERIES ?= ga-fidelity,functions-docker-executor,console-ui,ledger-integrity,dataproc-gke,java-compat,functions-parity,metastore-parity,bigquery-ga,bigquery-load-jobs,audit,demo-spikes
 
 # Include non-ga fidelity-matrix cells in the ledger (informational, kind=matrix).
 # Set MATRIX= to disable.
