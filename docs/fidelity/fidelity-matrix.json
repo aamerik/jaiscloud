@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 956,
+    "total": 957,
     "by_state": {
-      "ga": 705,
+      "ga": 709,
       "limited": 107,
       "preview": 14,
-      "unsupported": 130
+      "unsupported": 127
     },
     "by_transport": {
       "grpc": {
-        "ga": 333,
+        "ga": 336,
         "limited": 7,
-        "unsupported": 118
+        "unsupported": 115
       },
       "rest": {
-        "ga": 372,
+        "ga": 373,
         "limited": 100,
         "preview": 14,
         "unsupported": 12
@@ -101,8 +101,7 @@
         "ga": 45
       },
       "resourcemanager": {
-        "ga": 16,
-        "unsupported": 3
+        "ga": 20
       },
       "run": {
         "ga": 28
@@ -8144,12 +8143,11 @@
       "service": "resourcemanager",
       "operation": "MoveProject",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "project parent/ancestry is not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -8237,13 +8235,23 @@
     },
     {
       "service": "resourcemanager",
+      "operation": "ResourceManager.ProjectUpdate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=cloudresourcemanager.projects.update",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "resourcemanager",
       "operation": "SearchProjects",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "project search is not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -8281,12 +8289,11 @@
       "service": "resourcemanager",
       "operation": "UpdateProject",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "project metadata is not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

@@ -5,10 +5,10 @@
 // and maps core errors to gRPC status codes. It owns no business logic.
 //
 // The project lookup (GetProject), project lifecycle (CreateProject /
-// ListProjects / DeleteProject / UndeleteProject), and project IAM
-// (GetIamPolicy / SetIamPolicy / TestIamPermissions) are implemented; the
-// remaining Projects RPCs (Search/Update/Move) are the embedded Unimplemented
-// stubs. The Folders, Organizations, and Tag* services are not registered.
+// ListProjects / DeleteProject / UndeleteProject), project administration
+// (SearchProjects / UpdateProject / MoveProject), and project IAM
+// (GetIamPolicy / SetIamPolicy / TestIamPermissions) are implemented. The
+// Folders, Organizations, and Tag* services are not registered.
 //
 // Project mutations return google.longrunning.Operations whose names are
 // top-level (operations/{id}); ResolveOperation lets the shared
@@ -86,6 +86,63 @@ func (s *Service) CreateProject(ctx context.Context, req *resourcemanagerpb.Crea
 		Parent:      p.GetParent(),
 		Labels:      p.GetLabels(),
 	})
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return operationToProto(op)
+}
+
+// SearchProjects returns a page of projects matching the query expression. The
+// query grammar is the same bounded field:value grammar ListProjects accepts
+// (projectadmin.go), evaluated by the core; an invalid query is InvalidArgument.
+func (s *Service) SearchProjects(ctx context.Context, req *resourcemanagerpb.SearchProjectsRequest) (*resourcemanagerpb.SearchProjectsResponse, error) {
+	page, next, err := s.core.SearchProjects(ctx, int(req.GetPageSize()), req.GetPageToken(), req.GetQuery())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	out := &resourcemanagerpb.SearchProjectsResponse{NextPageToken: next}
+	for _, p := range page {
+		out.Projects = append(out.Projects, projectToProto(p))
+	}
+	return out, nil
+}
+
+// UpdateProject applies a masked metadata update (display_name/labels) and
+// returns the long-running operation. The project is identified by the request
+// project's resource name, which is required.
+func (s *Service) UpdateProject(ctx context.Context, req *resourcemanagerpb.UpdateProjectRequest) (*longrunningpb.Operation, error) {
+	in := req.GetProject()
+	if in.GetName() == "" {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "project name is required", 400))
+	}
+	project, ok := s.projectFor(ctx, in.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid project name", 400))
+	}
+	_, op, err := s.core.UpdateProject(ctx, project, core.UpdateProjectInput{
+		DisplayName: in.GetDisplayName(),
+		Labels:      in.GetLabels(),
+		UpdateMask:  updateMaskPaths(req.GetUpdateMask()),
+		Etag:        in.GetEtag(),
+	})
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return operationToProto(op)
+}
+
+// MoveProject reparents a project and returns the long-running operation. The
+// project name is required (an empty name must not fall back to the default
+// project, which would silently reparent it).
+func (s *Service) MoveProject(ctx context.Context, req *resourcemanagerpb.MoveProjectRequest) (*longrunningpb.Operation, error) {
+	if req.GetName() == "" {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "project name is required", 400))
+	}
+	project, ok := s.projectFor(ctx, req.GetName())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid project name", 400))
+	}
+	_, op, err := s.core.MoveProject(ctx, project, req.GetDestinationParent())
 	if err != nil {
 		return nil, mapError(err)
 	}

@@ -9,6 +9,7 @@ import (
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
@@ -132,8 +133,8 @@ func operationToProto(op core.Operation) (*longrunningpb.Operation, error) {
 }
 
 // operationMetadataProto packs the v3 typed metadata message for a project
-// mutation verb. Delete/Undelete metadata are empty marker messages; Create
-// carries the workflow timing/gettable/ready fields.
+// mutation verb. Update/Move/Delete/Undelete metadata are empty marker
+// messages; Create carries the workflow timing/gettable/ready fields.
 func operationMetadataProto(op core.Operation) (*anypb.Any, error) {
 	switch op.Verb {
 	case "create":
@@ -142,12 +143,25 @@ func operationMetadataProto(op core.Operation) (*anypb.Any, error) {
 			md.CreateTime = timestamppb.New(op.CreateTime)
 		}
 		return anypb.New(md)
+	case "update":
+		return anypb.New(&resourcemanagerpb.UpdateProjectMetadata{})
+	case "move":
+		return anypb.New(&resourcemanagerpb.MoveProjectMetadata{})
 	case "delete":
 		return anypb.New(&resourcemanagerpb.DeleteProjectMetadata{})
 	case "undelete":
 		return anypb.New(&resourcemanagerpb.UndeleteProjectMetadata{})
 	}
 	return nil, nil
+}
+
+// updateMaskPaths returns the field-mask paths of an UpdateProjectRequest, or
+// nil when no mask was supplied.
+func updateMaskPaths(m *fieldmaskpb.FieldMask) []string {
+	if m == nil {
+		return nil
+	}
+	return append([]string(nil), m.GetPaths()...)
 }
 
 // isTopLevelOperationName reports whether name is a top-level operations/{id}

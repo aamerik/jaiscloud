@@ -29,6 +29,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"ResourceManager.ProjectGet":                p.GetProject,
 		"ResourceManager.ProjectList":               p.ListProjects,
 		"ResourceManager.ProjectCreate":             p.CreateProject,
+		"ResourceManager.ProjectUpdate":             p.UpdateProject,
 		"ResourceManager.ProjectDelete":             p.DeleteProject,
 		"ResourceManager.ProjectUndelete":           p.UndeleteProject,
 		"ResourceManager.ProjectGetIamPolicy":       p.GetIamPolicy,
@@ -99,6 +100,52 @@ func (p *Provider) CreateProject(ctx context.Context, nr *model.NormalizedReques
 		response = projectToV1JSON(proj)
 	}
 	return provider.OK(operationToJSON(op, response)), nil
+}
+
+// UpdateProject applies the v1 projects.update. The v1 body is the Project
+// resource (name = display name, labels), addressed by the path project; only
+// the mutable fields present in the body are applied (a merge), so omitting a
+// field leaves it unchanged rather than clearing it. The v1 response is the
+// Project, not an operation.
+func (p *Provider) UpdateProject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	body := bodyOf(nr)
+	project := p.project(nr)
+
+	// The v1 Project.parent is mutable through update (the Discovery doc:
+	// "Once set, the parent cannot be cleared"), which the core models as a
+	// move. Apply it first so a rejected destination leaves metadata untouched.
+	if raw, ok := body["parent"]; ok {
+		dest := parentString(raw)
+		if dest == "" {
+			return nil, model.NewProviderError("InvalidArgument", "invalid parent", 400)
+		}
+		if _, _, err := p.core.MoveProject(ctx, project, dest); err != nil {
+			return nil, err
+		}
+	}
+
+	in := core.UpdateProjectInput{}
+	if _, ok := body["name"]; ok {
+		in.DisplayName = mapStr(body, "name")
+		in.UpdateMask = append(in.UpdateMask, "display_name")
+	}
+	if _, ok := body["labels"]; ok {
+		in.Labels = labelMap(body["labels"])
+		in.UpdateMask = append(in.UpdateMask, "labels")
+	}
+	if len(in.UpdateMask) == 0 {
+		// A parent-only (or empty) update: read back the current project.
+		proj, err := p.core.GetProject(ctx, project)
+		if err != nil {
+			return nil, err
+		}
+		return provider.OK(projectToV1JSON(proj)), nil
+	}
+	proj, _, err := p.core.UpdateProject(ctx, project, in)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(projectToV1JSON(proj)), nil
 }
 
 // DeleteProject marks a project for deletion. The v1 method returns Empty, not

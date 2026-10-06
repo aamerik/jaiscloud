@@ -10,6 +10,7 @@ import (
 	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/lro"
@@ -268,6 +269,105 @@ func TestResolveOperationAsyncSettles(t *testing.T) {
 	}
 	if _, handled, err := s.ResolveOperation(ctx, "operations/missing"); handled || err != nil {
 		t.Errorf("unknown id handled=%v err=%v, want false/nil", handled, err)
+	}
+}
+
+func TestSearchUpdateMoveProject(t *testing.T) {
+	ctx := context.Background()
+	s := newGRPCService()
+
+	// Seed a project to administer.
+	if _, err := s.CreateProject(ctx, &resourcemanagerpb.CreateProjectRequest{
+		Project: &resourcemanagerpb.Project{ProjectId: "admin-proj-123", DisplayName: "Admin Proj", Parent: "organizations/111"},
+	}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	// UpdateProject: display_name + labels via the field mask.
+	up, err := s.UpdateProject(ctx, &resourcemanagerpb.UpdateProjectRequest{
+		Project: &resourcemanagerpb.Project{
+			Name: "projects/admin-proj-123", DisplayName: "Renamed Proj",
+			Labels: map[string]string{"env": "prod"},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name", "labels"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateProject: %v", err)
+	}
+	if !up.GetDone() {
+		t.Fatalf("update operation = %+v, want done", up)
+	}
+	if got := up.GetMetadata().GetTypeUrl(); !strings.HasSuffix(got, "UpdateProjectMetadata") {
+		t.Errorf("update metadata type = %q, want UpdateProjectMetadata", got)
+	}
+	var updated resourcemanagerpb.Project
+	if err := up.GetResponse().UnmarshalTo(&updated); err != nil {
+		t.Fatalf("unpack update response: %v", err)
+	}
+	if updated.GetDisplayName() != "Renamed Proj" || updated.GetLabels()["env"] != "prod" {
+		t.Errorf("updated = %+v, want renamed with env=prod", &updated)
+	}
+
+	// MoveProject reparents the project.
+	mv, err := s.MoveProject(ctx, &resourcemanagerpb.MoveProjectRequest{
+		Name: "projects/admin-proj-123", DestinationParent: "folders/222",
+	})
+	if err != nil {
+		t.Fatalf("MoveProject: %v", err)
+	}
+	if got := mv.GetMetadata().GetTypeUrl(); !strings.HasSuffix(got, "MoveProjectMetadata") {
+		t.Errorf("move metadata type = %q, want MoveProjectMetadata", got)
+	}
+	var moved resourcemanagerpb.Project
+	if err := mv.GetResponse().UnmarshalTo(&moved); err != nil {
+		t.Fatalf("unpack move response: %v", err)
+	}
+	if moved.GetParent() != "folders/222" {
+		t.Errorf("moved parent = %q, want folders/222", moved.GetParent())
+	}
+
+	// SearchProjects finds the project by id.
+	res, err := s.SearchProjects(ctx, &resourcemanagerpb.SearchProjectsRequest{Query: "id:admin-proj-123"})
+	if err != nil {
+		t.Fatalf("SearchProjects: %v", err)
+	}
+	if len(res.GetProjects()) != 1 || res.GetProjects()[0].GetProjectId() != "admin-proj-123" {
+		t.Errorf("search = %+v, want the one admin project", res.GetProjects())
+	}
+
+	// Errors: invalid query, missing update name, unknown project, bad move dest.
+	if _, err := s.SearchProjects(ctx, &resourcemanagerpb.SearchProjectsRequest{Query: "bogus"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("invalid query err = %v, want InvalidArgument", err)
+	}
+	if _, err := s.UpdateProject(ctx, &resourcemanagerpb.UpdateProjectRequest{Project: &resourcemanagerpb.Project{DisplayName: "No Name"}}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("missing update name err = %v, want InvalidArgument", err)
+	}
+	if _, err := s.UpdateProject(ctx, &resourcemanagerpb.UpdateProjectRequest{
+		Project: &resourcemanagerpb.Project{Name: "projects/never-created", DisplayName: "X"},
+	}); status.Code(err) != codes.NotFound {
+		t.Errorf("update unknown err = %v, want NotFound", err)
+	}
+	if _, err := s.MoveProject(ctx, &resourcemanagerpb.MoveProjectRequest{Name: "projects/admin-proj-123", DestinationParent: "projects/1"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("bad move dest err = %v, want InvalidArgument", err)
+	}
+	// An empty name must not fall back to the default project.
+	if _, err := s.MoveProject(ctx, &resourcemanagerpb.MoveProjectRequest{DestinationParent: "folders/1"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("empty move name err = %v, want InvalidArgument", err)
+	}
+	// A `*` update mask applies every mutable field.
+	star, err := s.UpdateProject(ctx, &resourcemanagerpb.UpdateProjectRequest{
+		Project:    &resourcemanagerpb.Project{Name: "projects/admin-proj-123", DisplayName: "Star Proj", Labels: map[string]string{"star": "yes"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"*"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateProject(*): %v", err)
+	}
+	var starred resourcemanagerpb.Project
+	if err := star.GetResponse().UnmarshalTo(&starred); err != nil {
+		t.Fatalf("unpack star response: %v", err)
+	}
+	if starred.GetDisplayName() != "Star Proj" || starred.GetLabels()["star"] != "yes" {
+		t.Errorf("star update = %+v, want Star Proj with star=yes", &starred)
 	}
 }
 

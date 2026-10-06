@@ -118,25 +118,9 @@ func (s *Service) ListProjects(ctx context.Context, pageSize int, pageToken stri
 	if err != nil {
 		return nil, "", err
 	}
-	entries, err := s.resources.List(ctx, "", "", rtProject, "")
+	byID, err := s.collectProjects(ctx)
 	if err != nil {
 		return nil, "", err
-	}
-	byID := make(map[string]Project, len(entries)+len(s.extraProjects)+1)
-	for _, e := range entries {
-		var p Project
-		if err := json.Unmarshal(e.Data, &p); err != nil {
-			return nil, "", err
-		}
-		if p.ProjectID == "" {
-			p.ProjectID = e.ID
-		}
-		byID[p.ProjectID] = p
-	}
-	for _, id := range s.knownProjects() {
-		if _, ok := byID[id]; !ok {
-			byID[id] = synthesizeProject(id)
-		}
 	}
 	out := make([]Project, 0, len(byID))
 	for _, p := range byID {
@@ -154,6 +138,34 @@ func (s *Service) ListProjects(ctx context.Context, pageSize int, pageToken stri
 	}
 	page, next := paging.Page(out, func(p Project) string { return p.ProjectID }, params)
 	return page, next, nil
+}
+
+// collectProjects builds the project set the read surfaces page over: every
+// registry entry unioned with the configured default + extra projects
+// (deduplicated by id, a persisted entry winning over the synthesized ACTIVE
+// shape). ListProjects and SearchProjects share it.
+func (s *Service) collectProjects(ctx context.Context) (map[string]Project, error) {
+	entries, err := s.resources.List(ctx, "", "", rtProject, "")
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]Project, len(entries)+len(s.extraProjects)+1)
+	for _, e := range entries {
+		var p Project
+		if err := json.Unmarshal(e.Data, &p); err != nil {
+			return nil, err
+		}
+		if p.ProjectID == "" {
+			p.ProjectID = e.ID
+		}
+		byID[p.ProjectID] = p
+	}
+	for _, id := range s.knownProjects() {
+		if _, ok := byID[id]; !ok {
+			byID[id] = synthesizeProject(id)
+		}
+	}
+	return byID, nil
 }
 
 // DeleteProject marks a project DELETE_REQUESTED (real GCP keeps it restorable

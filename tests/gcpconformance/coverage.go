@@ -118,6 +118,7 @@ var actionOverrides = map[string]string{
 	// service is "cloudresourcemanager"; the vendored snapshot is keyed by the
 	// emulator's wire service name "resourcemanager").
 	"ResourceManager.ProjectGet":                "cloudresourcemanager.projects.get",
+	"ResourceManager.ProjectUpdate":             "cloudresourcemanager.projects.update",
 	"ResourceManager.ProjectGetIamPolicy":       "cloudresourcemanager.projects.getIamPolicy",
 	"ResourceManager.ProjectSetIamPolicy":       "cloudresourcemanager.projects.setIamPolicy",
 	"ResourceManager.ProjectTestIamPermissions": "cloudresourcemanager.projects.testIamPermissions",

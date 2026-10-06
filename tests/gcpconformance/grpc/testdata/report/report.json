@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 368,
-  "passed": 368,
+  "total": 371,
+  "passed": 371,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 368,
-    "passed": 368,
+    "checks": 371,
+    "passed": 371,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -128,8 +128,8 @@
     },
     {
       "service": "resourcemanager",
-      "total": 8,
-      "passed": 8,
+      "total": 11,
+      "passed": 11,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1863,6 +1863,27 @@
       "method": "ListProjects",
       "status": "pass",
       "key_field": "created project listed"
+    },
+    {
+      "service": "resourcemanager",
+      "rpc": "SearchProjects",
+      "method": "SearchProjects",
+      "status": "pass",
+      "key_field": "query matches created project"
+    },
+    {
+      "service": "resourcemanager",
+      "rpc": "UpdateProject",
+      "method": "UpdateProject",
+      "status": "pass",
+      "key_field": "display_name/labels updated"
+    },
+    {
+      "service": "resourcemanager",
+      "rpc": "MoveProject",
+      "method": "MoveProject",
+      "status": "pass",
+      "key_field": "parent reparented"
     },
     {
       "service": "resourcemanager",

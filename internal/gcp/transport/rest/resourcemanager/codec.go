@@ -5,6 +5,7 @@
 //	GET    /v1/projects                            (projects.list)
 //	POST   /v1/projects                            (projects.create)
 //	GET    /v1/projects/{project}                  (projects.get)
+//	PUT    /v1/projects/{project}                  (projects.update)
 //	DELETE /v1/projects/{project}                  (projects.delete)
 //	POST   /v1/projects/{project}:undelete         (projects.undelete)
 //	POST   /v1/projects/{project}:getIamPolicy     (projects.getIamPolicy)
@@ -105,7 +106,8 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 	nr.Params["project"] = project
 
 	// The project lifecycle + IAM custom methods are POST-only per Discovery; a
-	// bare project read is GET and a bare project delete is DELETE.
+	// bare project read is GET, a bare project update is PUT and a bare project
+	// delete is DELETE.
 	switch {
 	case custom == "getIamPolicy" && r.Method == http.MethodPost:
 		nr.Action = "ProjectGetIamPolicy"
@@ -117,6 +119,8 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 		nr.Action = "ProjectUndelete"
 	case custom == "" && r.Method == http.MethodGet:
 		nr.Action = "ProjectGet"
+	case custom == "" && r.Method == http.MethodPut:
+		nr.Action = "ProjectUpdate"
 	case custom == "" && r.Method == http.MethodDelete:
 		nr.Action = "ProjectDelete"
 	default:

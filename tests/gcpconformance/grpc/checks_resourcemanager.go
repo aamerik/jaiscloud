@@ -10,6 +10,7 @@ import (
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 )
@@ -17,19 +18,22 @@ import (
 // resourceManagerChecks covers the Cloud Resource Manager v3 project surface
 // (google.cloud.resourcemanager.v3.Projects) the emulator serves: the project
 // lifecycle (CreateProject / GetProject / ListProjects / DeleteProject /
-// UndeleteProject) and project IAM (GetIamPolicy / SetIamPolicy /
-// TestIamPermissions). Search/Update/Move remain explicit Unimplemented stubs
-// and are not probed.
+// UndeleteProject), project administration (SearchProjects / UpdateProject /
+// MoveProject) and project IAM (GetIamPolicy / SetIamPolicy /
+// TestIamPermissions).
 //
 // The lifecycle probes share one run-unique project id (rmCreatedProjectID) so
-// create feeds list, then delete, then undelete. GetProject/IAM use their own
-// run-unique synthesized ids, keeping the shared default project's IAM policy
-// untouched and the run idempotent.
+// create feeds list, then delete, then undelete. GetProject/IAM/admin use their
+// own run-unique ids, keeping the shared default project's IAM policy untouched
+// and the run idempotent.
 func resourceManagerChecks() []Check {
 	return []Check{
 		{Service: "resourcemanager", RPC: "CreateProject", Method: "CreateProject", KeyField: "operation done, project ACTIVE", Run: checkRMCreateProject},
 		{Service: "resourcemanager", RPC: "GetProject", Method: "GetProject", KeyField: "name/projectId/state ACTIVE round-trip", Run: checkRMGetProject},
 		{Service: "resourcemanager", RPC: "ListProjects", Method: "ListProjects", KeyField: "created project listed", Run: checkRMListProjects},
+		{Service: "resourcemanager", RPC: "SearchProjects", Method: "SearchProjects", KeyField: "query matches created project", Run: checkRMSearchProjects},
+		{Service: "resourcemanager", RPC: "UpdateProject", Method: "UpdateProject", KeyField: "display_name/labels updated", Run: checkRMUpdateProject},
+		{Service: "resourcemanager", RPC: "MoveProject", Method: "MoveProject", KeyField: "parent reparented", Run: checkRMMoveProject},
 		{Service: "resourcemanager", RPC: "DeleteProject", Method: "DeleteProject", KeyField: "state DELETE_REQUESTED", Run: checkRMDeleteProject},
 		{Service: "resourcemanager", RPC: "UndeleteProject", Method: "UndeleteProject", KeyField: "state ACTIVE restored", Run: checkRMUndeleteProject},
 		{Service: "resourcemanager", RPC: "GetIamPolicy", Method: "GetIamPolicy", KeyField: "policy etag present", Run: checkRMGetIamPolicy},
@@ -247,6 +251,104 @@ func checkRMSetIamPolicy(ctx context.Context, cfg Config) error {
 	}
 	if len(after.GetEtag()) == 0 {
 		return fmt.Errorf("SetIamPolicy returned no etag")
+	}
+	return nil
+}
+
+// Check: SearchProjects evaluates the v3 query grammar. The probe creates a
+// run-unique project and searches for it by id.
+func checkRMSearchProjects(ctx context.Context, cfg Config) error {
+	client, err := newResourceManagerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := "rms" + cfg.Suffix
+	if _, err := client.CreateProject(ctx, &resourcemanagerpb.CreateProjectRequest{
+		Project: &resourcemanagerpb.Project{ProjectId: id, DisplayName: "Search Target"},
+	}); err != nil {
+		return fmt.Errorf("CreateProject: %w", err)
+	}
+	it := client.SearchProjects(ctx, &resourcemanagerpb.SearchProjectsRequest{Query: "id:" + id})
+	for {
+		p, err := it.Next()
+		if err == iterator.Done {
+			return fmt.Errorf("SearchProjects did not return created project %q", id)
+		}
+		if err != nil {
+			return fmt.Errorf("SearchProjects: %w", err)
+		}
+		if p.GetProjectId() == id {
+			return nil
+		}
+	}
+}
+
+// Check: UpdateProject applies a field-masked metadata update and returns the
+// updated project once the operation settles.
+func checkRMUpdateProject(ctx context.Context, cfg Config) error {
+	client, err := newResourceManagerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := "rmu" + cfg.Suffix
+	if _, err := client.CreateProject(ctx, &resourcemanagerpb.CreateProjectRequest{
+		Project: &resourcemanagerpb.Project{ProjectId: id, DisplayName: "Before Update"},
+	}); err != nil {
+		return fmt.Errorf("CreateProject: %w", err)
+	}
+	op, err := client.UpdateProject(ctx, &resourcemanagerpb.UpdateProjectRequest{
+		Project: &resourcemanagerpb.Project{
+			Name: "projects/" + id, DisplayName: "After Update",
+			Labels: map[string]string{"env": "prod"},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name", "labels"}},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateProject: %w", err)
+	}
+	updated, err := op.Wait(ctx)
+	if err != nil {
+		return fmt.Errorf("UpdateProject wait: %w", err)
+	}
+	if updated.GetDisplayName() != "After Update" {
+		return fmt.Errorf("updated displayName = %q, want After Update", updated.GetDisplayName())
+	}
+	if updated.GetLabels()["env"] != "prod" {
+		return fmt.Errorf("updated labels = %v, want env=prod", updated.GetLabels())
+	}
+	return nil
+}
+
+// Check: MoveProject reparents a project and returns the moved project.
+func checkRMMoveProject(ctx context.Context, cfg Config) error {
+	client, err := newResourceManagerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := "rmm" + cfg.Suffix
+	if _, err := client.CreateProject(ctx, &resourcemanagerpb.CreateProjectRequest{
+		Project: &resourcemanagerpb.Project{ProjectId: id, DisplayName: "Move Me", Parent: "organizations/123"},
+	}); err != nil {
+		return fmt.Errorf("CreateProject: %w", err)
+	}
+	op, err := client.MoveProject(ctx, &resourcemanagerpb.MoveProjectRequest{
+		Name: "projects/" + id, DestinationParent: "folders/456",
+	})
+	if err != nil {
+		return fmt.Errorf("MoveProject: %w", err)
+	}
+	moved, err := op.Wait(ctx)
+	if err != nil {
+		return fmt.Errorf("MoveProject wait: %w", err)
+	}
+	if moved.GetParent() != "folders/456" {
+		return fmt.Errorf("moved parent = %q, want folders/456", moved.GetParent())
 	}
 	return nil
 }

@@ -19,9 +19,15 @@
 // address arbitrary projects keep working. On top of that fallback a lightweight
 // project registry (registry.go) persists created ids — displayName, labels,
 // lifecycle state, and create/delete times — in the shared ResourceStore, so
-// create/get/list/delete/undelete round-trip and are enumerable. Org/folder
-// ancestry, billing, quota, IAM enforcement, and real project-number allocation
-// are still not modelled. IAM policies are stored in the shared ResourceStore
+// create/get/list/delete/undelete round-trip and are enumerable. Project
+// administration is modelled on top of that registry (projectadmin.go): the
+// parent reference (organizations/{id} or folders/{id}) is stored and mutable
+// via MoveProject, mutable metadata (display name, labels) via UpdateProject,
+// and SearchProjects evaluates the v3 query grammar over the same set. A
+// project's etag rotates on every successful update/move and a supplied stale
+// etag is rejected with ABORTED. Billing, quota, a real org/folder hierarchy
+// (only the parent reference is kept), IAM enforcement, and real project-number
+// allocation are still not modelled. IAM policies are stored in the shared ResourceStore
 // through internal/gcp/policy (etag optimistic concurrency control, fresh etag
 // per set), so memory and PostgreSQL backends behave identically and no
 // provider-level Reset/Snapshotter is needed — the registry shares the same
