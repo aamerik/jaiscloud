@@ -18,7 +18,7 @@
 | Secret Manager | REST + gRPC | Secrets, versions, rotation, CMEK envelope encryption |
 | Cloud KMS | REST + gRPC | Key rings, crypto keys/versions, symmetric + asymmetric, rotation; crypto ops honor a default-permissive cryptoKey IAM policy |
 | Cloud IAM | REST + gRPC | Service accounts, service account keys; gRPC `IAMPolicy` for project/resource policies (authz not enforced) |
-| Service Usage | REST + gRPC | Project service enable/disable/get/list (`services.enable`/`disable`/`batchEnable`), `filter=state:ENABLED` |
+| Service Usage | REST + gRPC | Project service enable/disable/get/list (`services.enable`/`disable`/`batchEnable`/`batchGet`), `filter=state:ENABLED` |
 | Cloud Resource Manager | REST + gRPC | Project lifecycle (create/get/list/delete/undelete) + project-level IAM policy (`getIamPolicy`/`setIamPolicy`/`testIamPermissions`); unknown ids still synthesize as `ACTIVE`, project numbers are deterministic, and org/folder ancestry is not modelled — authz not enforced |
 | Cloud Scheduler | REST + gRPC | Cron jobs (`jobs` CRUD + `pause`/`resume`/`run`); a real cron engine fires `httpTarget`/`pubsubTarget` jobs on the emulator clock — see [Known Limitations](#known-limitations) |
 | Cloud Tasks | REST + gRPC | Queues (`queues` CRUD + `pause`/`resume`/`purge`, queue IAM) and tasks (`tasks` CRUD + REST `tasks:batchCreate`/`tasks:batchDelete`); a dispatch engine delivers due `httpRequest` tasks with rate limits and retries, and `run` forces an attempt — see [Known Limitations](#known-limitations) |

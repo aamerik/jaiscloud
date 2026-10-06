@@ -156,13 +156,6 @@ operations:
     state: ga
     allow_upgrade: true
     reason: "deployed function's HTTPS-trigger URL (a function URL host, not a Discovery method); served at {location}-{project}.cloudfunctions.net/{functionId} and wire-tested"
-  # Service Usage gRPC is control-plane only: the service/get/list/enable/disable
-  # surface is implemented, while BatchGetServices is an explicit Unimplemented
-  # stub (the REST surface does not implement it either).
-  - service: serviceusage
-    operation: BatchGetServices
-    state: unsupported
-    reason: "not served by the emulator (the REST surface does not implement it either); explicit Unimplemented stub"
   # Cloud Workflows gRPC is control-plane only: ListWorkflowRevisions has no
   # emulator implementation (workflow revision history is not modelled), so it
   # is an explicit Unimplemented stub.

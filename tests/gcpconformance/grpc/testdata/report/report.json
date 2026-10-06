@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 363,
-  "passed": 363,
+  "total": 364,
+  "passed": 364,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 363,
-    "passed": 363,
+    "checks": 364,
+    "passed": 364,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -156,8 +156,8 @@
     },
     {
       "service": "serviceusage",
-      "total": 5,
-      "passed": 5,
+      "total": 6,
+      "passed": 6,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1625,6 +1625,13 @@
       "method": "ListServices",
       "status": "pass",
       "key_field": "enabled service present"
+    },
+    {
+      "service": "serviceusage",
+      "rpc": "BatchGetServices",
+      "method": "BatchGetServices",
+      "status": "pass",
+      "key_field": "enabled + absent states, order preserved"
     },
     {
       "service": "serviceusage",

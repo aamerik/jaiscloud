@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **955**
+Cells: **956**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 697 |
+| ga | 699 |
 | limited | 113 |
 | preview | 14 |
-| unsupported | 131 |
+| unsupported | 130 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 365 | 106 | 14 | 12 |
-| grpc | 332 | 7 | 0 | 119 |
+| rest | 366 | 106 | 14 | 12 |
+| grpc | 333 | 7 | 0 | 118 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -1043,17 +1043,18 @@ _32 cell(s): ga=30 limited=2 preview=0 unsupported=0_
 
 ## serviceusage
 
-_11 cell(s): ga=10 limited=0 preview=0 unsupported=1_
+_12 cell(s): ga=12 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | BatchEnableServices | grpc | ga | — |
-| BatchGetServices | grpc | unsupported | not served by the emulator (the REST surface does not implement it either); explicit Unimplemented stub |
+| BatchGetServices | grpc | ga | — |
 | DisableService | grpc | ga | — |
 | EnableService | grpc | ga | — |
 | GetService | grpc | ga | — |
 | ListServices | grpc | ga | — |
 | ServiceUsage.ServicesBatchEnable | rest | ga | — |
+| ServiceUsage.ServicesBatchGet | rest | ga | — |
 | ServiceUsage.ServicesDisable | rest | ga | — |
 | ServiceUsage.ServicesEnable | rest | ga | — |
 | ServiceUsage.ServicesGet | rest | ga | — |

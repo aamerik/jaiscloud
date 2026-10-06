@@ -604,6 +604,24 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "run", Method: "DELETE", Path: runBase + "/services/" + missSvc},
 	)
 
+	// ─── Service Usage ────────────────────────────────────────────────────────
+	// Enable one service, then BatchGet it alongside a never-enabled one. batchGet
+	// carries its `names` as repeated query parameters (full resource names), so
+	// one request exercises the whole BatchGetServicesResponse shape: an ENABLED
+	// entry plus a DISABLED (never-enabled) one, in request order.
+	suBase := "/v1/projects/" + p + "/services"
+	suEnabled := "conf-su-" + suffix + ".googleapis.com"
+	suAbsent := "conf-su-absent-" + suffix + ".googleapis.com"
+	sc = append(sc,
+		Scenario{Service: "serviceusage", Method: "POST", Path: suBase + "/" + suEnabled + ":enable"},
+		Scenario{Service: "serviceusage", Method: "GET", Path: suBase + "/" + suEnabled},
+		Scenario{Service: "serviceusage", Method: "GET", Path: suBase + "?filter=state:ENABLED"},
+		Scenario{Service: "serviceusage", Method: "GET",
+			Path: suBase + ":batchGet?names=" + url.PathEscape("projects/"+p+"/services/"+suEnabled) +
+				"&names=" + url.PathEscape("projects/"+p+"/services/"+suAbsent)},
+		Scenario{Service: "serviceusage", Method: "POST", Path: suBase + "/" + suEnabled + ":disable"},
+	)
+
 	return sc
 }
 
