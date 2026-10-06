@@ -1,9 +1,10 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Alert,
   Box,
+  Button,
   CircularProgress,
-  IconButton,
   Stack,
   Table,
   TableBody,
@@ -13,12 +14,14 @@ import {
   TableRow,
   Typography,
 } from '@mui/material'
-import ArrowBackIcon from '@mui/icons-material/ArrowBack'
+import AddIcon from '@mui/icons-material/Add'
+import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import { Link as RouterLink, useParams } from 'react-router-dom'
 import { getTable, listRows } from '../../api/gcp/bigquery'
 import { useAccount } from '../../context/AccountContext'
+import { InsertRowsDialog } from './InsertRowsDialog'
 import { cellValue, formatMillis, schemaFields } from './util'
-import { GcpPageTitle } from '../common/PageTitle'
+import { GcpPageHeader } from '../common/GcpPageHeader'
 
 function str(detail: Record<string, unknown> | undefined, key: string): string {
   const v = detail?.[key]
@@ -33,6 +36,7 @@ function cellsOf(row: Record<string, unknown>): unknown[] {
 export function TableDetailPage() {
   const { dataset = '', table = '' } = useParams()
   const { accountId } = useAccount()
+  const [insertOpen, setInsertOpen] = useState(false)
 
   const detail = useQuery({
     queryKey: ['gcp', 'bigquery', 'table', dataset, table, accountId],
@@ -57,25 +61,29 @@ export function TableDetailPage() {
 
   return (
     <Box>
-      <Stack
-        direction="row"
-        spacing={1}
-        sx={{ alignItems: 'center', mb: 2, flexWrap: 'wrap', rowGap: 1 }}
-      >
-        <IconButton
-          component={RouterLink}
-          to={`/gcp/bigquery/datasets/${encodeURIComponent(dataset)}`}
-          aria-label="Back to dataset"
-        >
-          <ArrowBackIcon />
-        </IconButton>
-        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <GcpPageTitle id="bigquery">{table}</GcpPageTitle>
-          <Typography variant="body2" color="text.secondary">
-            Table in {dataset} · project {accountId || '—'}
-          </Typography>
-        </Box>
-      </Stack>
+      <GcpPageHeader
+        id="bigquery"
+        title={table}
+        subtitle={`Table in ${dataset} · project ${accountId || '—'}`}
+        backTo={`/gcp/bigquery/datasets/${encodeURIComponent(dataset)}`}
+        backAriaLabel="Back to dataset"
+        actions={
+          <>
+            <Button
+              component={RouterLink}
+              to={`/gcp/bigquery/query?datasetId=${encodeURIComponent(
+                dataset,
+              )}&tableId=${encodeURIComponent(table)}`}
+              startIcon={<PlayArrowIcon />}
+            >
+              Query table
+            </Button>
+            <Button variant="contained" startIcon={<AddIcon />} onClick={() => setInsertOpen(true)}>
+              Insert rows
+            </Button>
+          </>
+        }
+      />
 
       {detail.isError && <Alert severity="error">Failed to load the table.</Alert>}
       {detail.data && (
@@ -173,6 +181,14 @@ export function TableDetailPage() {
           </TableBody>
         </Table>
       </TableContainer>
+
+      <InsertRowsDialog
+        open={insertOpen}
+        onClose={() => setInsertOpen(false)}
+        dataset={dataset}
+        table={table}
+        fields={fields}
+      />
     </Box>
   )
 }

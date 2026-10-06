@@ -70,6 +70,7 @@ import { DatasetDetailPage } from './bigquery/DatasetDetailPage'
 import { TableDetailPage } from './bigquery/TableDetailPage'
 import { JobsPage } from './bigquery/JobsPage'
 import { JobDetailPage } from './bigquery/JobDetailPage'
+import { QueryPage as BigQueryQueryPage } from './bigquery/QueryPage'
 import { ClustersPage as DataprocClustersPage } from './dataproc/ClustersPage'
 import { ClusterDetailPage as DataprocClusterDetailPage } from './dataproc/ClusterDetailPage'
 import { JobsPage as DataprocJobsPage } from './dataproc/JobsPage'
@@ -342,6 +343,7 @@ function GcpShell({ appearance }: { appearance: GcpAppearance }) {
           />
           <Route path="/gcp/bigquery/jobs" element={<JobsPage />} />
           <Route path="/gcp/bigquery/jobs/:job" element={<JobDetailPage />} />
+          <Route path="/gcp/bigquery/query" element={<BigQueryQueryPage />} />
           <Route path="/gcp/dataproc/clusters" element={<DataprocClustersPage />} />
           <Route
             path="/gcp/dataproc/clusters/:region/:cluster"

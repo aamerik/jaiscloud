@@ -4,8 +4,10 @@
 // returns.
 //
 // Scope is the control plane: datasets, tables and jobs. A table page previews
-// rows via tabledata.list; running SQL from the console is deferred (see the
-// console-UI wave plan).
+// rows via tabledata.list and can stream rows in via tabledata.insertAll; the
+// SQL workspace runs jobs.query. Every response is the provider's
+// Discovery-shaped body, passed through verbatim so the console renders exactly
+// what the wire API returns.
 package bigqueryui
 
 // Dataset is the UI summary of a BigQuery dataset (the datasets.list shape).
@@ -84,4 +86,40 @@ type ListRowsResponse struct {
 	Rows          []map[string]any `json:"rows"`
 	TotalRows     string           `json:"totalRows"`
 	NextPageToken string           `json:"nextPageToken,omitempty"`
+}
+
+// DatasetReference identifies a dataset for a query's defaultDataset. projectId
+// defaults to the console's current project when omitted.
+type DatasetReference struct {
+	ProjectID string `json:"projectId,omitempty"`
+	DatasetID string `json:"datasetId"`
+}
+
+// QueryRequest is the body for POST /query. It mirrors the writable fields of
+// the jobs.query request: query is the SQL text, defaultDataset qualifies
+// unqualified table references, dryRun validates without executing or mutating,
+// and useLegacySql is rejected by the provider (standard SQL only).
+type QueryRequest struct {
+	Query          string            `json:"query"`
+	DefaultDataset *DatasetReference `json:"defaultDataset,omitempty"`
+	DryRun         bool              `json:"dryRun,omitempty"`
+	UseLegacySQL   bool              `json:"useLegacySql,omitempty"`
+	Location       string            `json:"location,omitempty"`
+}
+
+// InsertRowsRequest is the body for
+// POST /datasets/{dataset}/tables/{table}/rows. rows carries the
+// tabledata.insertAll rows; each row's json is one table row and its optional
+// insertId deduplicates repeats.
+type InsertRowsRequest struct {
+	Rows                []InsertRow `json:"rows"`
+	SkipInvalidRows     bool        `json:"skipInvalidRows,omitempty"`
+	IgnoreUnknownValues bool        `json:"ignoreUnknownValues,omitempty"`
+}
+
+// InsertRow is one tabledata.insertAll row: the row's field values plus an
+// optional insertId used for best-effort duplicate suppression.
+type InsertRow struct {
+	InsertID string         `json:"insertId,omitempty"`
+	JSON     map[string]any `json:"json"`
 }

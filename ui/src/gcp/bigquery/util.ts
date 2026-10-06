@@ -1,3 +1,5 @@
+import type { InsertRow } from '../../api/gcp/bigquery'
+
 /** A table schema field, reduced to the columns the console previews. */
 export interface SchemaField {
   name: string
@@ -56,4 +58,35 @@ export function cellValue(cell: unknown): string {
   if (v === null || v === undefined) return 'null'
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
+}
+
+/** rowTemplate builds an empty row (each schema field mapped to null) as the
+ * insert dialog's starting JSON. */
+export function rowTemplate(fields: SchemaField[]): Record<string, unknown> {
+  const row: Record<string, unknown> = {}
+  for (const field of fields) {
+    if (field.name) row[field.name] = null
+  }
+  return row
+}
+
+/** parseInsertRows accepts a single row object or an array of row objects and
+ * returns tabledata.insertAll rows, or a human-readable error. */
+export function parseInsertRows(text: string): { rows?: InsertRow[]; error?: string } {
+  if (text.trim() === '') return { error: 'Enter one row object or an array of rows' }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'invalid JSON' }
+  }
+  const list = Array.isArray(parsed) ? parsed : [parsed]
+  if (list.length === 0) return { error: 'Provide at least one row' }
+  const rows: InsertRow[] = []
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i]
+    if (!isRecord(item)) return { error: `Row ${i + 1} must be a JSON object` }
+    rows.push({ json: item })
+  }
+  return { rows }
 }

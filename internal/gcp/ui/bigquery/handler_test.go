@@ -55,6 +55,12 @@ func (m *mockProvider) DeleteTable(_ context.Context, nr *model.NormalizedReques
 func (m *mockProvider) ListRows(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
 }
+func (m *mockProvider) InsertAll(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
+func (m *mockProvider) Query(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
 func (m *mockProvider) ListJobs(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
 }
@@ -398,5 +404,172 @@ func TestDeleteJob_NoContent(t *testing.T) {
 	}
 	if mock.lastNR.Action != "BigQuery.DeleteJob" || mock.lastNR.Params["jobId"] != "job1" {
 		t.Fatalf("unexpected NR: action=%q params=%v", mock.lastNR.Action, mock.lastNR.Params)
+	}
+}
+
+func TestRunQuery_ForwardsBodyAndScopesDefaultDataset(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data: map[string]any{
+			"kind":         "bigquery#queryResponse",
+			"jobComplete":  true,
+			"jobReference": map[string]any{"projectId": "test-project", "jobId": "job1"},
+			"schema":       map[string]any{"fields": []any{map[string]any{"name": "n", "type": "INTEGER"}}},
+			"rows":         []any{map[string]any{"f": []any{map[string]any{"v": "1"}}}},
+			"totalRows":    "1",
+		},
+	}}
+	w := do(t, mock, http.MethodPost, "/query",
+		`{"query":"SELECT 1","defaultDataset":{"datasetId":"analytics"}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	// The provider's Discovery-shaped body is passed through unchanged.
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["jobReference"].(map[string]any)["jobId"] != "job1" {
+		t.Fatalf("query response not passed through: %+v", resp)
+	}
+	if mock.lastNR.Action != "BigQuery.Query" {
+		t.Fatalf("action = %q", mock.lastNR.Action)
+	}
+	body, _ := mock.lastNR.Params["body"].(map[string]any)
+	if body["query"] != "SELECT 1" {
+		t.Fatalf("query not forwarded: %+v", body)
+	}
+	dd, _ := body["defaultDataset"].(map[string]any)
+	if dd["datasetId"] != "analytics" || dd["projectId"] != "test-project" {
+		t.Fatalf("defaultDataset project not scoped to the account: %+v", dd)
+	}
+}
+
+func TestRunQuery_ForwardsDryRunLegacyAndLocation(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodPost, "/query",
+		`{"query":"SELECT 1","dryRun":true,"useLegacySql":true,"location":"US"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	body, _ := mock.lastNR.Params["body"].(map[string]any)
+	if body["dryRun"] != true || body["useLegacySql"] != true || body["location"] != "US" {
+		t.Fatalf("query flags not forwarded: %+v", body)
+	}
+}
+
+func TestRunQuery_RequiresQuery(t *testing.T) {
+	mock := &mockProvider{}
+	w := do(t, mock, http.MethodPost, "/query", `{"defaultDataset":{"datasetId":"analytics"}}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR != nil {
+		t.Fatalf("provider called on an empty query")
+	}
+}
+
+func TestRunQuery_PropagatesInvalidQuery(t *testing.T) {
+	mock := &mockProvider{err: model.NewProviderError("InvalidQuery", "Syntax error", http.StatusBadRequest)}
+	w := do(t, mock, http.MethodPost, "/query", `{"query":"SELEC 1"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["code"] != "InvalidQuery" {
+		t.Fatalf("code = %q, want InvalidQuery", body["code"])
+	}
+}
+
+func TestInsertRows_BuildsBody(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data:       map[string]any{"kind": "bigquery#tableDataInsertAllResponse", "insertErrors": []any{}},
+	}}
+	w := do(t, mock, http.MethodPost, "/datasets/analytics/tables/events/rows",
+		`{"rows":[{"insertId":"a","json":{"id":"1"}}],"skipInvalidRows":true,"ignoreUnknownValues":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR.Action != "BigQuery.InsertAll" ||
+		mock.lastNR.Params["datasetId"] != "analytics" || mock.lastNR.Params["tableId"] != "events" {
+		t.Fatalf("unexpected NR: action=%q params=%v", mock.lastNR.Action, mock.lastNR.Params)
+	}
+	body, _ := mock.lastNR.Params["body"].(map[string]any)
+	rows, _ := body["rows"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("rows not forwarded: %+v", body)
+	}
+	row, _ := rows[0].(map[string]any)
+	if row["insertId"] != "a" {
+		t.Fatalf("insertId not forwarded: %+v", row)
+	}
+	jsonRow, _ := row["json"].(map[string]any)
+	if jsonRow["id"] != "1" {
+		t.Fatalf("row json not forwarded: %+v", jsonRow)
+	}
+	if body["skipInvalidRows"] != true || body["ignoreUnknownValues"] != true {
+		t.Fatalf("insert flags not forwarded: %+v", body)
+	}
+}
+
+func TestInsertRows_RequiresRows(t *testing.T) {
+	mock := &mockProvider{}
+	w := do(t, mock, http.MethodPost, "/datasets/analytics/tables/events/rows", `{"rows":[]}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if mock.lastNR != nil {
+		t.Fatalf("provider called with no rows")
+	}
+}
+
+func TestInsertRows_PassesThroughRowErrors(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data: map[string]any{
+			"kind": "bigquery#tableDataInsertAllResponse",
+			"insertErrors": []any{
+				map[string]any{
+					"index": 0,
+					"errors": []any{map[string]any{
+						"reason":   "invalid",
+						"location": "id",
+						"message":  `missing required field "id"`,
+					}},
+				},
+			},
+		},
+	}}
+	w := do(t, mock, http.MethodPost, "/datasets/analytics/tables/events/rows",
+		`{"rows":[{"json":{"name":"x"}}]}`)
+	// The real insertAll contract is HTTP 200 with row-level errors.
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	errs, _ := resp["insertErrors"].([]any)
+	if len(errs) != 1 {
+		t.Fatalf("insertErrors not passed through: %+v", resp)
+	}
+}
+
+func TestRunQuery_KeepsExplicitProject(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}}
+	w := do(t, mock, http.MethodPost, "/query",
+		`{"query":"SELECT 1","defaultDataset":{"projectId":"other-project","datasetId":"analytics"}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	body, _ := mock.lastNR.Params["body"].(map[string]any)
+	dd, _ := body["defaultDataset"].(map[string]any)
+	if dd["projectId"] != "other-project" {
+		t.Fatalf("explicit project overwritten: %+v", dd)
 	}
 }

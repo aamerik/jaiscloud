@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { cellValue, formatMillis, parseJsonObject, schemaFields } from './util'
+import {
+  cellValue,
+  formatMillis,
+  parseInsertRows,
+  parseJsonObject,
+  rowTemplate,
+  schemaFields,
+} from './util'
 
 describe('parseJsonObject', () => {
   it('accepts an object', () => {
@@ -50,5 +57,41 @@ describe('cellValue', () => {
   })
   it('JSON-encodes nested values', () => {
     expect(cellValue({ v: { f: [] } })).toBe('{"f":[]}')
+  })
+})
+
+describe('rowTemplate', () => {
+  it('maps each named schema field to null', () => {
+    expect(
+      rowTemplate([
+        { name: 'id', type: 'STRING' },
+        { name: 'n', type: 'INTEGER' },
+      ]),
+    ).toEqual({ id: null, n: null })
+  })
+  it('skips unnamed fields', () => {
+    expect(rowTemplate([{ name: '', type: 'STRING' }])).toEqual({})
+  })
+})
+
+describe('parseInsertRows', () => {
+  it('accepts a single row object', () => {
+    const parsed = parseInsertRows('{"id":"1"}')
+    expect(parsed.error).toBeUndefined()
+    expect(parsed.rows).toEqual([{ json: { id: '1' } }])
+  })
+  it('accepts an array of rows', () => {
+    const parsed = parseInsertRows('[{"id":"1"},{"id":"2"}]')
+    expect(parsed.rows).toHaveLength(2)
+    expect(parsed.rows?.[1]?.json).toEqual({ id: '2' })
+  })
+  it('rejects a non-object row', () => {
+    expect(parseInsertRows('[1]').error).toBeTruthy()
+  })
+  it('rejects empty input', () => {
+    expect(parseInsertRows('   ').error).toBeTruthy()
+  })
+  it('reports invalid JSON', () => {
+    expect(parseInsertRows('{').error).toBeTruthy()
   })
 })

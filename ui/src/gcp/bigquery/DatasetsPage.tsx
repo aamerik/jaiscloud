@@ -6,6 +6,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { deleteDataset, listDatasets, type BigQueryDataset } from '../../api/gcp/bigquery'
 import { useAccount } from '../../context/AccountContext'
+import { BigQueryTabs } from './BigQueryTabs'
 import { CreateDatasetDialog } from './CreateDatasetDialog'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
@@ -97,7 +98,9 @@ export function DatasetsPage() {
             Create dataset
           </Button>
         }
-      />
+      >
+        <BigQueryTabs />
+      </GcpPageHeader>
 
       <GcpToolbar
         filter={filter}

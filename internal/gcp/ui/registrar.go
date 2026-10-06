@@ -391,6 +391,7 @@ func (r *Registrar) Services() []coreui.ServiceDescriptor {
 			Children: []coreui.ServiceChild{
 				{Label: "Datasets", Path: "/gcp/bigquery/datasets"},
 				{Label: "Jobs", Path: "/gcp/bigquery/jobs"},
+				{Label: "Query", Path: "/gcp/bigquery/query"},
 			},
 		})
 	}

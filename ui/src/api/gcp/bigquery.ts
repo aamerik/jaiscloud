@@ -81,6 +81,63 @@ export interface ListJobsResponse {
 /** A full bigquery#job wire object. */
 export type BigQueryJobDetail = Record<string, unknown>
 
+/** A dataset reference for a query's defaultDataset. */
+export interface DatasetReference {
+  projectId?: string
+  datasetId: string
+}
+
+/** The body for POST /query (a jobs.query request). */
+export interface QueryRequest {
+  query: string
+  defaultDataset?: DatasetReference
+  dryRun?: boolean
+  useLegacySql?: boolean
+  location?: string
+}
+
+/** A jobs.query result — the bigquery#queryResponse shape, passed through. */
+export interface QueryResponse {
+  kind?: string
+  jobComplete?: boolean
+  jobReference?: { projectId?: string; jobId?: string; location?: string }
+  schema?: { fields?: unknown[] }
+  rows?: Record<string, unknown>[]
+  totalRows?: string
+  statementType?: string
+  numDmlAffectedRows?: string
+}
+
+/** One tabledata.insertAll row: the row's values plus an optional insertId. */
+export interface InsertRow {
+  insertId?: string
+  json: Record<string, unknown>
+}
+
+/** The body for POST /datasets/{dataset}/tables/{table}/rows. */
+export interface InsertRowsRequest {
+  rows: InsertRow[]
+  skipInvalidRows?: boolean
+  ignoreUnknownValues?: boolean
+}
+
+export interface InsertError {
+  reason?: string
+  location?: string
+  message?: string
+}
+
+export interface InsertErrorsEntry {
+  index: number
+  errors: InsertError[]
+}
+
+/** A tabledata.insertAll result — the bigquery#tableDataInsertAllResponse shape. */
+export interface InsertRowsResponse {
+  kind?: string
+  insertErrors?: InsertErrorsEntry[]
+}
+
 // Datasets.
 /** List every dataset; pass `pageToken` for a single raw page. */
 export async function listDatasets(params?: {
@@ -144,6 +201,13 @@ export const listRows = (dataset: string, table: string) =>
     `${BASE}/datasets/${encodeURIComponent(dataset)}/tables/${encodeURIComponent(table)}/rows`,
   )
 
+/** Stream rows into a table via tabledata.insertAll. */
+export const insertRows = (dataset: string, table: string, body: InsertRowsRequest) =>
+  api.post<InsertRowsResponse>(
+    `${BASE}/datasets/${encodeURIComponent(dataset)}/tables/${encodeURIComponent(table)}/rows`,
+    body,
+  )
+
 // Jobs.
 /** List every job; pass `pageToken` for a single raw page. */
 export async function listJobs(params?: { pageToken?: string }): Promise<ListJobsResponse> {
@@ -165,3 +229,6 @@ export const deleteJob = (job: string) => api.delete<void>(`${BASE}/jobs/${encod
 
 export const cancelJob = (job: string) =>
   api.post<BigQueryJobDetail>(`${BASE}/jobs/${encodeURIComponent(job)}/cancel`)
+
+/** Run standard SQL via jobs.query; the created job appears in the Jobs list. */
+export const runQuery = (body: QueryRequest) => api.post<QueryResponse>(`${BASE}/query`, body)
