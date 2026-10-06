@@ -6,6 +6,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { cancelJob, deleteJob, listJobs, type BigQueryJob } from '../../api/gcp/bigquery'
 import { useAccount } from '../../context/AccountContext'
+import { BigQueryTabs } from './BigQueryTabs'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
@@ -122,7 +123,9 @@ export function JobsPage() {
         id="bigquery"
         title="BigQuery"
         subtitle={`Jobs · project ${accountId || '—'}`}
-      />
+      >
+        <BigQueryTabs />
+      </GcpPageHeader>
 
       <GcpToolbar
         filter={filter}

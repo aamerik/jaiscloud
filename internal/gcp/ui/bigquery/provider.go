@@ -21,10 +21,12 @@ type ProviderInterface interface {
 	CreateTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	DeleteTable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 
-	// Rows (tabledata.list), read-only preview for the table page.
+	// Rows (tabledata.list preview and tabledata.insertAll streaming insert).
 	ListRows(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
+	InsertAll(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 
 	// Jobs.
+	Query(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	ListJobs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	GetJob(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)
 	DeleteJob(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error)

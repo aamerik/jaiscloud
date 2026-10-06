@@ -200,8 +200,11 @@ func TestRegistrar_BigQueryAdvertised(t *testing.T) {
 	if got.ID != "bigquery" || got.RootPath != "/gcp/bigquery/datasets" || got.Tier != "shape" {
 		t.Fatalf("unexpected descriptor: %+v", got)
 	}
-	if len(got.Children) != 2 {
-		t.Fatalf("children = %+v, want datasets + jobs", got.Children)
+	if len(got.Children) != 3 {
+		t.Fatalf("children = %+v, want datasets + jobs + query", got.Children)
+	}
+	if got.Children[2].Path != "/gcp/bigquery/query" {
+		t.Fatalf("query child = %+v", got.Children[2])
 	}
 }
 

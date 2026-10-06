@@ -453,6 +453,112 @@ func (h *Handler) CancelJob(w http.ResponseWriter, r *http.Request) {
 	uihelper.WriteJSON(w, resp.Data)
 }
 
+// ─── Query ───────────────────────────────────────────────────────────────────
+
+// POST /query  body: { query, defaultDataset?, dryRun?, useLegacySql?, location? }
+func (h *Handler) RunQuery(w http.ResponseWriter, r *http.Request) {
+	var req QueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Query) == "" {
+		uihelper.UIError(w, "BadRequest", "query is required", http.StatusBadRequest)
+		return
+	}
+	account := h.account(r)
+	nr := uihelper.NR(r.Context(), h.cfg, "bigquery", "BigQuery.Query", "global", account)
+	nr.Params["body"] = queryBody(req, account)
+
+	resp, err := h.provider.Query(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, resp.Data)
+}
+
+// queryBody translates the console's query request into the jobs.query body the
+// provider reads. A defaultDataset without a projectId is scoped to the
+// console's current project.
+func queryBody(req QueryRequest, account string) map[string]any {
+	body := map[string]any{"query": req.Query}
+	if req.DefaultDataset != nil && req.DefaultDataset.DatasetID != "" {
+		project := req.DefaultDataset.ProjectID
+		if project == "" {
+			project = account
+		}
+		body["defaultDataset"] = map[string]any{
+			"projectId": project,
+			"datasetId": req.DefaultDataset.DatasetID,
+		}
+	}
+	if req.DryRun {
+		body["dryRun"] = true
+	}
+	if req.UseLegacySQL {
+		body["useLegacySql"] = true
+	}
+	if req.Location != "" {
+		body["location"] = req.Location
+	}
+	return body
+}
+
+// POST /datasets/{dataset}/tables/{table}/rows
+// body: { rows: [{ insertId?, json }], skipInvalidRows?, ignoreUnknownValues? }
+func (h *Handler) InsertRows(w http.ResponseWriter, r *http.Request) {
+	dataset, table, ok := h.targetTable(w, r)
+	if !ok {
+		return
+	}
+	var req InsertRowsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		uihelper.UIError(w, "BadRequest", "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(req.Rows) == 0 {
+		uihelper.UIError(w, "BadRequest", "rows is required", http.StatusBadRequest)
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "bigquery", "BigQuery.InsertAll", "global", h.account(r))
+	nr.Params["datasetId"] = dataset
+	nr.Params["tableId"] = table
+	nr.Params["body"] = insertBody(req)
+
+	resp, err := h.provider.InsertAll(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, resp.Data)
+}
+
+// insertBody renders the console's rows as the tabledata.insertAll body the
+// provider's body readers expect: a []any of {json, insertId?} entries.
+func insertBody(req InsertRowsRequest) map[string]any {
+	rows := make([]any, 0, len(req.Rows))
+	for _, row := range req.Rows {
+		jsonRow := row.JSON
+		if jsonRow == nil {
+			jsonRow = map[string]any{}
+		}
+		entry := map[string]any{"json": jsonRow}
+		if row.InsertID != "" {
+			entry["insertId"] = row.InsertID
+		}
+		rows = append(rows, entry)
+	}
+	body := map[string]any{"rows": rows}
+	if req.SkipInvalidRows {
+		body["skipInvalidRows"] = true
+	}
+	if req.IgnoreUnknownValues {
+		body["ignoreUnknownValues"] = true
+	}
+	return body
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 func (h *Handler) targetDataset(w http.ResponseWriter, r *http.Request) (string, bool) {
