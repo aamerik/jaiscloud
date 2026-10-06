@@ -210,3 +210,10 @@ entries:
     match: "stacked two navigation surfaces"
     pr: 380
     note: "resolved: unified console navigation shipped in #380 (UI73)"
+
+  # The GA0 session itself: its row reads "open ... stale-doc" and stays
+  # stale-doc after merge; the overlay closes it (evidence-gated on this PR).
+  - source: "gcp-ga-fidelity-wave-plan"
+    match: "stale-doc"
+    pr: 414
+    note: "resolved: cleared the six stale-doc entries via the resolution overlay (GA0)"
