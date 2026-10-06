@@ -54,6 +54,17 @@ func TestUpdateProjectMasked(t *testing.T) {
 	if len(p.Labels) != 0 {
 		t.Errorf("labels = %v, want cleared", p.Labels)
 	}
+
+	// A `*` mask applies every mutable field (AIP-134 full replacement).
+	p, _, err = s.UpdateProject(ctx, "update-me-123", UpdateProjectInput{
+		DisplayName: "Star Name", Labels: map[string]string{"star": "yes"}, UpdateMask: []string{"*"},
+	})
+	if err != nil {
+		t.Fatalf("star update: %v", err)
+	}
+	if p.DisplayName != "Star Name" || p.Labels["star"] != "yes" {
+		t.Errorf("star update = %+v, want Star Name with star=yes", p)
+	}
 }
 
 func TestUpdateProjectDefaultsToPopulatedFields(t *testing.T) {
@@ -165,7 +176,7 @@ func TestMoveProject(t *testing.T) {
 	}
 
 	// Bad destinations, unknown ids and a non-ACTIVE project.
-	for _, dest := range []string{"", "projects/1", "folders/", "123"} {
+	for _, dest := range []string{"", "projects/1", "folders/", "123", "folders/1/2", "organizations/abc", "folders/12a"} {
 		if _, _, err := s.MoveProject(ctx, "move-me-1234", dest); codeOf(t, err) != "InvalidArgument" {
 			t.Errorf("move dest %q code = %q, want InvalidArgument", dest, codeOf(t, err))
 		}

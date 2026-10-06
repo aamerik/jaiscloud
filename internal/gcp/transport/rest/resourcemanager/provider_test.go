@@ -347,6 +347,50 @@ func TestUpdateProjectV1(t *testing.T) {
 	}
 }
 
+// TestUpdateProjectParentV1 covers the v1 ResourceId parent round-trip: create
+// with a parent, render it, and reparent it through update.
+func TestUpdateProjectParentV1(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	nr := createNR("parent-proj-9", "Parent Proj")
+	nr.Params["body"].(map[string]any)["parent"] = map[string]any{"type": "folder", "id": "111"}
+	if _, err := p.CreateProject(ctx, nr); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	resp, err := p.GetProject(ctx, newNR(map[string]any{"project": "parent-proj-9"}))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	parent, _ := resp.Data["parent"].(map[string]any)
+	if parent["type"] != "folder" || parent["id"] != "111" {
+		t.Errorf("parent = %v, want {folder 111}", resp.Data["parent"])
+	}
+
+	// A parent in the update body moves the project.
+	resp, err = p.UpdateProject(ctx, newNR(map[string]any{
+		"project": "parent-proj-9",
+		"body":    map[string]any{"parent": map[string]any{"type": "organization", "id": "222"}},
+	}))
+	if err != nil {
+		t.Fatalf("update parent: %v", err)
+	}
+	parent, _ = resp.Data["parent"].(map[string]any)
+	if parent["type"] != "organization" || parent["id"] != "222" {
+		t.Errorf("updated parent = %v, want {organization 222}", resp.Data["parent"])
+	}
+
+	// An incomplete parent is InvalidArgument.
+	_, err = p.UpdateProject(ctx, newNR(map[string]any{
+		"project": "parent-proj-9",
+		"body":    map[string]any{"parent": map[string]any{"type": "folder"}},
+	}))
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) || pe.HTTPStatus != 400 {
+		t.Errorf("incomplete parent err = %v, want 400 InvalidArgument", err)
+	}
+}
+
 func TestDeleteAndUndeleteProjects(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider()

@@ -109,6 +109,21 @@ func (p *Provider) CreateProject(ctx context.Context, nr *model.NormalizedReques
 // Project, not an operation.
 func (p *Provider) UpdateProject(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	body := bodyOf(nr)
+	project := p.project(nr)
+
+	// The v1 Project.parent is mutable through update (the Discovery doc:
+	// "Once set, the parent cannot be cleared"), which the core models as a
+	// move. Apply it first so a rejected destination leaves metadata untouched.
+	if raw, ok := body["parent"]; ok {
+		dest := parentString(raw)
+		if dest == "" {
+			return nil, model.NewProviderError("InvalidArgument", "invalid parent", 400)
+		}
+		if _, _, err := p.core.MoveProject(ctx, project, dest); err != nil {
+			return nil, err
+		}
+	}
+
 	in := core.UpdateProjectInput{}
 	if _, ok := body["name"]; ok {
 		in.DisplayName = mapStr(body, "name")
@@ -118,7 +133,15 @@ func (p *Provider) UpdateProject(ctx context.Context, nr *model.NormalizedReques
 		in.Labels = labelMap(body["labels"])
 		in.UpdateMask = append(in.UpdateMask, "labels")
 	}
-	proj, _, err := p.core.UpdateProject(ctx, p.project(nr), in)
+	if len(in.UpdateMask) == 0 {
+		// A parent-only (or empty) update: read back the current project.
+		proj, err := p.core.GetProject(ctx, project)
+		if err != nil {
+			return nil, err
+		}
+		return provider.OK(projectToV1JSON(proj)), nil
+	}
+	proj, _, err := p.core.UpdateProject(ctx, project, in)
 	if err != nil {
 		return nil, err
 	}

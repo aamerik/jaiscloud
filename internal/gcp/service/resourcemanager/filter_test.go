@@ -66,6 +66,10 @@ func TestProjectFilterMatches(t *testing.T) {
 		// A by-parent query (both parent.type and parent.id) ANDs the two.
 		{"parent.type:folder parent.id:123", []string{"howl-story", "quiet-forest"}},
 		{"parent.type:folder parent.id:999", nil},
+		// A mixed by-parent query ANDs the parent pair with the OR of the
+		// remaining clauses.
+		{"parent.type:folder parent.id:123 name:Howl", []string{"howl-story"}},
+		{"parent.type:folder parent.id:123 name:zzz", nil},
 		// A bare `labels` clause matches a label name or value.
 		{"labels:red", []string{"howl-story"}},
 		{"labels:big", []string{"howl-story"}},

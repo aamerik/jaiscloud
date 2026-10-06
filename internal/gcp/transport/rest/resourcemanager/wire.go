@@ -111,10 +111,24 @@ func projectToV1JSON(p core.Project) map[string]any {
 	if len(p.Labels) > 0 {
 		out["labels"] = p.Labels
 	}
+	if p.Parent != "" {
+		out["parent"] = parentToV1Resource(p.Parent)
+	}
 	if !p.CreateTime.IsZero() {
 		out["createTime"] = p.CreateTime.UTC().Format(time.RFC3339Nano)
 	}
 	return out
+}
+
+// parentToV1Resource renders the canonical parent reference
+// ("organizations/{id}"/"folders/{id}") as the v1 ResourceId ({type,id}) whose
+// singular type values are "organization"/"folder".
+func parentToV1Resource(parent string) map[string]any {
+	typ, id := parent, ""
+	if i := strings.IndexByte(parent, '/'); i >= 0 {
+		typ, id = parent[:i], parent[i+1:]
+	}
+	return map[string]any{"type": strings.TrimSuffix(typ, "s"), "id": id}
 }
 
 // operationToJSON renders a core operation as a google.longrunning.Operation.

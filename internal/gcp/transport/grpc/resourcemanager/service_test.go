@@ -350,6 +350,25 @@ func TestSearchUpdateMoveProject(t *testing.T) {
 	if _, err := s.MoveProject(ctx, &resourcemanagerpb.MoveProjectRequest{Name: "projects/admin-proj-123", DestinationParent: "projects/1"}); status.Code(err) != codes.InvalidArgument {
 		t.Errorf("bad move dest err = %v, want InvalidArgument", err)
 	}
+	// An empty name must not fall back to the default project.
+	if _, err := s.MoveProject(ctx, &resourcemanagerpb.MoveProjectRequest{DestinationParent: "folders/1"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("empty move name err = %v, want InvalidArgument", err)
+	}
+	// A `*` update mask applies every mutable field.
+	star, err := s.UpdateProject(ctx, &resourcemanagerpb.UpdateProjectRequest{
+		Project:    &resourcemanagerpb.Project{Name: "projects/admin-proj-123", DisplayName: "Star Proj", Labels: map[string]string{"star": "yes"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"*"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateProject(*): %v", err)
+	}
+	var starred resourcemanagerpb.Project
+	if err := star.GetResponse().UnmarshalTo(&starred); err != nil {
+		t.Fatalf("unpack star response: %v", err)
+	}
+	if starred.GetDisplayName() != "Star Proj" || starred.GetLabels()["star"] != "yes" {
+		t.Errorf("star update = %+v, want Star Proj with star=yes", &starred)
+	}
 }
 
 func protoHasProject(resp *resourcemanagerpb.ListProjectsResponse, id string) bool {

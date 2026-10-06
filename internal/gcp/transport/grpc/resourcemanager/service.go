@@ -131,8 +131,13 @@ func (s *Service) UpdateProject(ctx context.Context, req *resourcemanagerpb.Upda
 	return operationToProto(op)
 }
 
-// MoveProject reparents a project and returns the long-running operation.
+// MoveProject reparents a project and returns the long-running operation. The
+// project name is required (an empty name must not fall back to the default
+// project, which would silently reparent it).
 func (s *Service) MoveProject(ctx context.Context, req *resourcemanagerpb.MoveProjectRequest) (*longrunningpb.Operation, error) {
+	if req.GetName() == "" {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "project name is required", 400))
+	}
 	project, ok := s.projectFor(ctx, req.GetName())
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid project name", 400))

@@ -20,18 +20,39 @@ import (
 // required together, in addition to the usual OR over the remaining clauses.
 type projectFilter struct {
 	clauses []projectClause
-	// parentType and parentID are set when the filter carries a parent.type /
-	// parent.id clause, so a by-parent query can AND the two together.
-	parentType projectClause
-	parentID   projectClause
+	// parentTypeIdx / parentIDIdx are the indexes into clauses of a parent.type
+	// / parent.id clause (-1 when absent), so a by-parent query can AND the two
+	// together while excluding them from the ordinary OR.
+	parentTypeIdx int
+	parentIDIdx   int
+}
+
+// newProjectFilter returns a filter with the parent-clause indexes unset (-1),
+// which is also the correct zero-state for an empty expression.
+func newProjectFilter() projectFilter {
+	return projectFilter{parentTypeIdx: -1, parentIDIdx: -1}
 }
 
 // match reports whether p satisfies the filter.
 func (f projectFilter) match(p Project) bool {
-	if f.parentType != nil && f.parentID != nil {
-		if !f.parentType.match(p) || !f.parentID.match(p) {
+	if f.parentTypeIdx >= 0 && f.parentIDIdx >= 0 {
+		// By-parent query: the two parent clauses are required together, and
+		// any other clauses OR over the remaining fields.
+		if !f.clauses[f.parentTypeIdx].match(p) || !f.clauses[f.parentIDIdx].match(p) {
 			return false
 		}
+		remaining := 0
+		for i, c := range f.clauses {
+			if i == f.parentTypeIdx || i == f.parentIDIdx {
+				continue
+			}
+			remaining++
+			if c.match(p) {
+				return true
+			}
+		}
+		// No other clauses: the parent conjunction is the whole filter.
+		return remaining == 0
 	}
 	if len(f.clauses) == 0 {
 		return true
@@ -157,7 +178,7 @@ func parentIDOf(parent string) string {
 // parent.type and parent.id ANDs the two (see projectFilter).
 func compileProjectFilter(filter string) (projectFilter, error) {
 	if strings.TrimSpace(filter) == "" {
-		return projectFilter{}, nil
+		return newProjectFilter(), nil
 	}
 	toks, err := tokenizeProjectFilter(filter)
 	if err != nil {
@@ -266,7 +287,7 @@ func (p *projectFilterParser) next() projectFilterToken {
 
 // parse consumes `field:value` clauses until end of input.
 func (p *projectFilterParser) parse() (projectFilter, error) {
-	var f projectFilter
+	f := newProjectFilter()
 	for {
 		field := p.next()
 		if field.kind != pjIdent {
@@ -284,13 +305,13 @@ func (p *projectFilterParser) parse() (projectFilter, error) {
 		if err != nil {
 			return projectFilter{}, err
 		}
-		f.clauses = append(f.clauses, clause)
 		switch strings.ToLower(field.text) {
 		case "parent.type":
-			f.parentType = clause
+			f.parentTypeIdx = len(f.clauses)
 		case "parent.id":
-			f.parentID = clause
+			f.parentIDIdx = len(f.clauses)
 		}
+		f.clauses = append(f.clauses, clause)
 
 		switch p.peek().kind {
 		case pjEOF:

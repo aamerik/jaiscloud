@@ -83,7 +83,7 @@ func applyProjectUpdate(cur Project, in UpdateProjectInput) Project {
 			cur.DisplayName = in.DisplayName
 		}
 		if in.Labels != nil {
-			cur.Labels = in.Labels
+			cur.Labels = cloneLabels(in.Labels)
 		}
 		return cur
 	}
@@ -92,14 +92,19 @@ func applyProjectUpdate(cur Project, in UpdateProjectInput) Project {
 		case "display_name":
 			cur.DisplayName = in.DisplayName
 		case "labels":
-			cur.Labels = in.Labels
+			cur.Labels = cloneLabels(in.Labels)
+		case "*":
+			// AIP-134 full replacement: apply every mutable field.
+			cur.DisplayName = in.DisplayName
+			cur.Labels = cloneLabels(in.Labels)
 		}
 	}
 	return cur
 }
 
 // validateUpdateMask rejects a field-mask path outside the mutable set. Both the
-// proto field name (display_name) and the JSON name (displayName) are accepted.
+// proto field name (display_name) and the JSON name (displayName) are accepted,
+// as is the AIP-134 `*` full-replacement path.
 func validateUpdateMask(mask []string) error {
 	for _, path := range mask {
 		if normalizeUpdatePath(path) == "" {
@@ -118,8 +123,23 @@ func normalizeUpdatePath(path string) string {
 		return "display_name"
 	case "labels":
 		return "labels"
+	case "*":
+		return "*"
 	}
 	return ""
+}
+
+// cloneLabels returns an isolated copy of m (nil stays nil), so a stored or
+// returned project never aliases a caller-supplied map.
+func cloneLabels(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // MoveProject reparents a project under destinationParent and returns it with
@@ -165,13 +185,23 @@ func (s *Service) MoveProject(ctx context.Context, project, destinationParent st
 	return p, op, nil
 }
 
-// isProjectParent reports whether parent is a well-formed org/folder reference.
+// isProjectParent reports whether parent is a well-formed org/folder reference
+// ("organizations/{numeric-id}" or "folders/{numeric-id}"). Real GCP requires a
+// numeric parent id; an extra path segment or a non-numeric id is rejected.
 func isProjectParent(parent string) bool {
-	parts := strings.SplitN(parent, "/", 2)
-	if len(parts) != 2 || parts[1] == "" {
+	parts := strings.Split(parent, "/")
+	if len(parts) != 2 || (parts[0] != "organizations" && parts[0] != "folders") {
 		return false
 	}
-	return parts[0] == "organizations" || parts[0] == "folders"
+	if parts[1] == "" {
+		return false
+	}
+	for i := 0; i < len(parts[1]); i++ {
+		if parts[1][i] < '0' || parts[1][i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // SearchProjects returns a cursor page of projects matching the v3 search query
