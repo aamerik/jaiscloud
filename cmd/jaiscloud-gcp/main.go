@@ -364,7 +364,13 @@ func startCmd() *cobra.Command {
 					funcCfg.CodeURL = lambdaCodeURL()
 				}
 				profile := functionsRuntimeProfile()
-				funcExec := container.NewExecutor(funcCfg, profile)
+				// Build the executor directly (not via container.NewExecutor) so
+				// the platform overlay reaches function containers/pods: a
+				// docker/k8s Functions deployment must receive the same TLS PEM
+				// bundle, extra volumes and env as the Cloud Run/Dataproc docker
+				// executors (FDF2). A platform load failure is non-fatal, as in
+				// that wiring.
+				funcExec := newFunctionsExecutor(funcCfg, profile)
 				defer funcExec.Close()
 				slog.Info("functions executor", "mode", functionsMode, "requested", funcMode, "source", funcModeSrc, "profile", profile.Name())
 				serviceOpts := []functionscore.Option{
@@ -2217,6 +2223,50 @@ func functionsUploadOrigin(port int) string {
 // functionsDockerPingTimeout bounds the daemon probe before selecting the docker
 // Functions executor.
 const functionsDockerPingTimeout = 5 * time.Second
+
+// functionsPlatformConfig loads the platform overlay (TLS PEM bundle, extra
+// volumes/env) for the Functions executor. It returns nil for the mock mode and
+// on a load error: the failure is non-fatal for both docker and k8s, matching
+// the Cloud Run/Dataproc docker wiring, so a bad overlay never blocks startup —
+// the executor simply runs without it.
+func functionsPlatformConfig(mode string) *platform.PlatformConfig {
+	if mode != "docker" && mode != "k8s" {
+		return nil
+	}
+	platformCfg, err := platform.LoadFromEnv()
+	if err != nil {
+		slog.Warn("functions: platform config failed; continuing without it", "err", err)
+		return nil
+	}
+	return platformCfg
+}
+
+// functions executor constructors, as package variables so a test can capture
+// the platform config without standing up a daemon or a cluster. Production
+// always uses the real container constructors.
+var (
+	newFunctionsDockerExecutor = func(cfg container.Config, profile container.Profile, plat *platform.PlatformConfig) container.Executor {
+		return container.NewDockerExecutor(cfg, profile, plat)
+	}
+	newFunctionsK8sExecutor = func(cfg container.Config, profile container.Profile, plat *platform.PlatformConfig) container.Executor {
+		return container.NewK8sExecutor(cfg, profile, plat)
+	}
+)
+
+// newFunctionsExecutor builds the Functions executor for the effective mode,
+// threading the platform overlay (TLS PEM bundle, extra volumes/env) into the
+// docker/k8s executors so function containers/pods receive it. Mock stays the
+// default for every other mode.
+func newFunctionsExecutor(cfg container.Config, profile container.Profile) container.Executor {
+	switch cfg.Mode {
+	case "docker":
+		return newFunctionsDockerExecutor(cfg, profile, functionsPlatformConfig(cfg.Mode))
+	case "k8s":
+		return newFunctionsK8sExecutor(cfg, profile, functionsPlatformConfig(cfg.Mode))
+	default:
+		return &container.MockExecutor{}
+	}
+}
 
 // effectiveFunctionsMode resolves the Functions executor actually used. A docker
 // mode with no reachable Docker daemon degrades to mock, matching the Cloud

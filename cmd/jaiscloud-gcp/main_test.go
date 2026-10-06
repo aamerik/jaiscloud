@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"jaiscloud/internal/executor/container"
+	"jaiscloud/internal/platform"
 )
 
 // TestLambdaCodeURL locks the K8s code-mount URL derivation: the admin base is
@@ -94,4 +97,105 @@ func TestEffectiveFunctionsMode(t *testing.T) {
 	if got := effectiveFunctionsMode("docker", counting); got != "docker" || probes != 1 {
 		t.Fatalf("docker mode did not probe exactly once (probes=%d, mode=%q)", probes, got)
 	}
+}
+
+// TestFunctionsPlatformConfig locks the platform-overlay wiring (FDF2): the
+// overlay is loaded only for docker/k8s (the backends whose containers/pods it
+// reaches) and never for mock, and a malformed platform config degrades to nil
+// (non-fatal) rather than failing startup.
+func TestFunctionsPlatformConfig(t *testing.T) {
+	clearPlatformEnv(t)
+
+	cases := []struct {
+		name    string
+		mode    string
+		wantNil bool
+	}{
+		{"mock mode skips the overlay", "mock", true},
+		{"empty mode skips the overlay", "", true},
+		{"docker mode loads the overlay", "docker", false},
+		{"k8s mode loads the overlay", "k8s", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := functionsPlatformConfig(tc.mode)
+			if (got == nil) != tc.wantNil {
+				t.Fatalf("functionsPlatformConfig(%q) nil=%v, want nil=%v", tc.mode, got == nil, tc.wantNil)
+			}
+		})
+	}
+
+	// A bad platform config is non-fatal: the docker executor runs without it.
+	t.Setenv("JAISCLOUD_PLATFORM_VOLUMES", "not-json")
+	if got := functionsPlatformConfig("docker"); got != nil {
+		t.Fatalf("functionsPlatformConfig(docker) with a malformed config = %+v, want nil", got)
+	}
+}
+
+// TestNewFunctionsExecutorWiring locks the mode → platform → constructor path
+// (FDF2): docker and k8s receive a loaded platform overlay, every other mode
+// stays mock and never reaches a platform-aware constructor.
+func TestNewFunctionsExecutorWiring(t *testing.T) {
+	clearPlatformEnv(t)
+
+	origDocker, origK8s := newFunctionsDockerExecutor, newFunctionsK8sExecutor
+	t.Cleanup(func() {
+		newFunctionsDockerExecutor, newFunctionsK8sExecutor = origDocker, origK8s
+	})
+
+	var dockerPlat, k8sPlat *platform.PlatformConfig
+	var dockerCalls, k8sCalls int
+	newFunctionsDockerExecutor = func(_ container.Config, _ container.Profile, p *platform.PlatformConfig) container.Executor {
+		dockerCalls++
+		dockerPlat = p
+		return &container.MockExecutor{}
+	}
+	newFunctionsK8sExecutor = func(_ container.Config, _ container.Profile, p *platform.PlatformConfig) container.Executor {
+		k8sCalls++
+		k8sPlat = p
+		return &container.MockExecutor{}
+	}
+
+	// docker: the docker constructor receives a loaded platform overlay.
+	newFunctionsExecutor(container.Config{Mode: "docker"}, nil)
+	if dockerCalls != 1 || k8sCalls != 0 {
+		t.Fatalf("docker mode calls: docker=%d k8s=%d, want 1/0", dockerCalls, k8sCalls)
+	}
+	if dockerPlat == nil {
+		t.Fatal("docker mode passed a nil platform overlay")
+	}
+
+	// k8s: the k8s constructor receives a loaded platform overlay.
+	newFunctionsExecutor(container.Config{Mode: "k8s"}, nil)
+	if k8sCalls != 1 || k8sPlat == nil {
+		t.Fatalf("k8s mode calls=%d plat=%v, want 1/non-nil", k8sCalls, k8sPlat)
+	}
+
+	// mock/unknown: stay mock and never reach a platform-aware constructor.
+	for _, mode := range []string{"mock", "", "native"} {
+		exec := newFunctionsExecutor(container.Config{Mode: mode}, nil)
+		if _, ok := exec.(*container.MockExecutor); !ok {
+			t.Fatalf("mode %q returned %T, want *container.MockExecutor", mode, exec)
+		}
+	}
+	if dockerCalls != 1 || k8sCalls != 1 {
+		t.Fatalf("non-platform modes called a constructor: docker=%d k8s=%d", dockerCalls, k8sCalls)
+	}
+}
+
+// clearPlatformEnv isolates tests from an ambient platform configuration so the
+// only overlay in play is the one the test sets.
+func clearPlatformEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{
+		"JAISCLOUD_PLATFORM_TLS_ENABLED",
+		"JAISCLOUD_PLATFORM_TLS_CA_SOURCES",
+		"JAISCLOUD_PLATFORM_TLS_CLIENT_CERT",
+		"JAISCLOUD_PLATFORM_VOLUMES",
+		"JAISCLOUD_PLATFORM_ENV",
+		"JAISCLOUD_PLATFORM_HOSTPATH_ALLOWLIST",
+	} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("JAISCLOUD_PLATFORM_TLS_ENABLED", "false")
 }
