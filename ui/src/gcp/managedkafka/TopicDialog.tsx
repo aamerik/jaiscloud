@@ -62,7 +62,13 @@ export function TopicDialog({ open, onClose, location, cluster, topic, onSaved }
 
   const handleSave = () => {
     if (editing) {
-      save.mutate({ configs: parseKV(configsText) })
+      // Kafka allows a topic to grow (never shrink); the core rejects a
+      // decrease. replicationFactor is immutable, so it is echoed unchanged.
+      save.mutate({
+        partitionCount: partitions,
+        replicationFactor: replication,
+        configs: parseKV(configsText),
+      })
       return
     }
     save.mutate({
@@ -98,7 +104,7 @@ export function TopicDialog({ open, onClose, location, cluster, topic, onSaved }
               type="number"
               value={partitions}
               onChange={(e) => setPartitions(Number(e.target.value))}
-              disabled={editing}
+              helperText={editing ? 'Can grow, never shrink' : undefined}
               fullWidth
             />
             <TextField

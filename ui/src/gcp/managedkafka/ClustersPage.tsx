@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Chip, IconButton, Link, Stack, Tooltip, Typography } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import { Link as RouterLink } from 'react-router-dom'
-import { listClusters, type ManagedKafkaCluster } from '../../api/gcp/managedkafka'
+import { getCluster, listClusters, type ManagedKafkaCluster } from '../../api/gcp/managedkafka'
 import { formatDate } from '../../lib/date'
 import { useAccount } from '../../context/AccountContext'
 import { ClusterDialog } from './ClusterDialog'
@@ -17,6 +17,7 @@ import { filterRows } from '../common/pagination'
 /** Managed Kafka clusters across every location, with create/edit. */
 export function ClustersPage() {
   const { accountId } = useAccount()
+  const queryClient = useQueryClient()
   const [filter, setFilter] = useState('')
   const [selected, setSelected] = useState<string[]>([])
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -26,8 +27,15 @@ export function ClustersPage() {
     setEditing(undefined)
     setDialogOpen(true)
   }
-  const openEdit = (cluster: ManagedKafkaCluster) => {
-    setEditing(cluster)
+  // The list row omits `config`, so fetch the full cluster before editing;
+  // otherwise the dialog would start from its default config and clobber the
+  // stored one on save.
+  const openEdit = async (row: ManagedKafkaCluster) => {
+    const full = await queryClient.fetchQuery({
+      queryKey: ['gcp', 'managedkafka', 'cluster', row.location, row.id, accountId],
+      queryFn: () => getCluster(row.location, row.id),
+    })
+    setEditing(full)
     setDialogOpen(true)
   }
 

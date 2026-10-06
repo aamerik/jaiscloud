@@ -22,6 +22,7 @@ import {
   deleteConsumerGroup,
   deleteTopic,
   getCluster,
+  getTopic,
   listAcls,
   listClusterTopics,
   listConsumerGroups,
@@ -182,6 +183,17 @@ function TopicsTab({ location, cluster, base }: { location: string; cluster: str
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'managedkafka'] }),
   })
 
+  // The list row omits `configs`, so fetch the full topic before editing;
+  // otherwise the dialog would clear every stored override on save.
+  const openEdit = async (row: ManagedKafkaTopic) => {
+    const full = await queryClient.fetchQuery({
+      queryKey: ['gcp', 'managedkafka', 'topic', location, cluster, row.id, accountId],
+      queryFn: () => getTopic(location, cluster, row.id),
+    })
+    setEditing(full)
+    setDialogOpen(true)
+  }
+
   const columns: GcpColumn<ManagedKafkaTopic>[] = [
     {
       key: 'id',
@@ -228,10 +240,7 @@ function TopicsTab({ location, cluster, base }: { location: string; cluster: str
               <IconButton
                 size="small"
                 aria-label={`Edit ${topic.id}`}
-                onClick={() => {
-                  setEditing(topic)
-                  setDialogOpen(true)
-                }}
+                onClick={() => void openEdit(topic)}
               >
                 <EditOutlinedIcon fontSize="small" />
               </IconButton>
