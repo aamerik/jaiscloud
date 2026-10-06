@@ -26,6 +26,11 @@ type Scenario struct {
 	Path        string
 	Body        string
 	ContentType string
+	// Host, when set, overrides the request's Host header. It is used for the
+	// services that disambiguate a shared canonical path by host token: GKE's
+	// container.* host, and the Managed Kafka / Dataproc Metastore operations
+	// family that shares locations/{location}/operations with Cloud Workflows.
+	Host string
 	// Save maps a variable name to a dotted path into the response JSON whose
 	// scalar value is captured for use by later scenarios (e.g. the ciphertext
 	// returned by KMS encrypt feeding KMS decrypt).
@@ -625,6 +630,43 @@ func Scenarios(suffix string) []Scenario {
 			Path: suBase + ":batchGet?names=" + url.PathEscape("projects/"+p+"/services/"+suEnabled) +
 				"&names=" + url.PathEscape("projects/"+p+"/services/"+suAbsent)},
 		Scenario{Service: "serviceusage", Method: "POST", Path: suBase + "/" + suEnabled + ":disable"},
+	)
+
+	// ─── Managed Kafka + Dataproc Metastore shared LRO operations ─────────────
+	// Both services share the bare /v1/projects/{p}/locations/{l}/operations
+	// path with Cloud Workflows on one origin, so the recorder addresses them
+	// under their own host token (managedkafka.localhost / metastore.localhost):
+	// the adapter's operationsHostService routes the operations family to the
+	// owning provider there, while the default host keeps it on Workflows. A
+	// cluster/service create returns an inline done operation whose name is read
+	// back through the owning service's own GetOperation, and the create's
+	// operation is listed through its ListOperations.
+	kafkaBase := "/v1/projects/" + p + "/locations/us-central1"
+	kafkaCluster := "conf-kafka-" + suffix
+	sc = append(sc,
+		Scenario{Service: "managedkafka", Method: "POST",
+			Path: kafkaBase + "/clusters?clusterId=" + kafkaCluster,
+			Save: map[string]string{"kafkaOp": "name"}, Host: "managedkafka.localhost:4588"},
+		Scenario{Service: "managedkafka", Method: "GET",
+			Path: "/v1/${kafkaOp}", Host: "managedkafka.localhost:4588"},
+		Scenario{Service: "managedkafka", Method: "GET",
+			Path: kafkaBase + "/operations", Host: "managedkafka.localhost:4588"},
+		Scenario{Service: "managedkafka", Method: "DELETE",
+			Path: kafkaBase + "/clusters/" + kafkaCluster, Host: "managedkafka.localhost:4588"},
+	)
+
+	msBase := "/v1/projects/" + p + "/locations/us-central1"
+	msSvc := "conf-ms-" + suffix
+	sc = append(sc,
+		Scenario{Service: "metastore", Method: "POST",
+			Path: msBase + "/services?serviceId=" + msSvc,
+			Save: map[string]string{"msOp": "name"}, Host: "metastore.localhost:4588"},
+		Scenario{Service: "metastore", Method: "GET",
+			Path: "/v1/${msOp}", Host: "metastore.localhost:4588"},
+		Scenario{Service: "metastore", Method: "GET",
+			Path: msBase + "/operations", Host: "metastore.localhost:4588"},
+		Scenario{Service: "metastore", Method: "DELETE",
+			Path: msBase + "/services/" + msSvc, Host: "metastore.localhost:4588"},
 	)
 
 	return sc

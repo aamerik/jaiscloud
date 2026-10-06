@@ -54,8 +54,8 @@ fails CI if the committed matrix drifts.
 
 | state | cells |
 | --- | ---: |
-| ga | 701 |
-| limited | 111 |
+| ga | 705 |
+| limited | 107 |
 | preview | 14 |
 | unsupported | 130 |
 | **total** | **956** |
@@ -64,7 +64,7 @@ fails CI if the committed matrix drifts.
 
 | transport | ga | limited | preview | unsupported |
 | --- | ---: | ---: | ---: | ---: |
-| REST (JSON, Discovery-backed) | 368 | 104 | 14 | 12 |
+| REST (JSON, Discovery-backed) | 372 | 100 | 14 | 12 |
 | gRPC (proto descriptors + official-client conformance) | 333 | 7 | 0 | 118 |
 
 gRPC-only services (no REST transport): **Firestore Admin, Operations (long-running)**.
@@ -302,7 +302,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `kafka_enable_authorization` is enabled, which is off by default; in k8s mode each cluster's
   broker Pod/Service live in a per-cluster namespace provisioned and torn down with the cluster
   through the shared `internal/k8shelpers` namespace seam, and the emulator falls back to the
-  process-wide `JAISCLOUD_K8S_NAMESPACE` when namespace RBAC is unavailable);
+  process-wide `JAISCLOUD_K8S_NAMESPACE` when namespace RBAC is unavailable; the
+  shared `locations/{location}/operations` LRO path is disambiguated by host — a
+  request whose first DNS label is `managedkafka` (as in `managedkafka.googleapis.com`)
+  serves the service's own `GetOperation`/`ListOperations`, while the default host
+  keeps that path on Cloud Workflows);
   Cloud Resource Manager serves the legacy v1 REST and v3 gRPC project surfaces over one core:
   a lightweight project registry persists created projects (create/get/list/delete/undelete,
   project IAM as metadata) while any uncreated id still synthesizes as ACTIVE, and project
@@ -320,6 +324,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   are explicit unsupported stubs. The gRPC control plane
   (Service/Backup/MetadataImport CRUD) is implemented over the official `DataprocMetastore`
   proto; the five deferred control-plane RPCs are explicit `unsupported` stubs (see below).
+  The same shared `locations/{location}/operations` LRO path is disambiguated by host
+  (the first DNS label is `metastore`, as in `metastore.googleapis.com`), so Metastore's
+  `GetOperation`/`ListOperations` are served under its canonical endpoint and the
+  default host keeps that path on Cloud Workflows.
 - **Cloud Monitoring alert evaluation** — the background worker evaluates
   `condition_threshold` and `condition_absent`. `condition_matched_log`, MQL, PromQL, and SQL
   conditions are stored but never evaluated (they never fire). For `condition_absent`, a metric

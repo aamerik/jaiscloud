@@ -154,6 +154,12 @@ func Record(jaiscloudHost string) (Transcript, error) {
 		if err != nil {
 			return tr, fmt.Errorf("%s %s: %w", sc.Method, path, err)
 		}
+		// A host-discriminated scenario (a service sharing a canonical path on
+		// one origin) sends its own Host header; the transport still dials
+		// jaiscloudHost.
+		if sc.Host != "" {
+			req.Host = sc.Host
+		}
 		if reqBody != "" {
 			ct := sc.ContentType
 			if ct == "" {

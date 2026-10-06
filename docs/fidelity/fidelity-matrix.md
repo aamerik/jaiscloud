@@ -12,8 +12,8 @@ Cells: **956**
 
 | state | count |
 | --- | --- |
-| ga | 701 |
-| limited | 111 |
+| ga | 705 |
+| limited | 107 |
 | preview | 14 |
 | unsupported | 130 |
 
@@ -21,7 +21,7 @@ Cells: **956**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 368 | 104 | 14 | 12 |
+| rest | 372 | 100 | 14 | 12 |
 | grpc | 333 | 7 | 0 | 118 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -670,7 +670,7 @@ _64 cell(s): ga=41 limited=1 preview=0 unsupported=22_
 
 ## managedkafka
 
-_44 cell(s): ga=42 limited=2 preview=0 unsupported=0_
+_44 cell(s): ga=44 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -701,12 +701,12 @@ _44 cell(s): ga=42 limited=2 preview=0 unsupported=0_
 | ManagedKafka.GetAcl | rest | ga | — |
 | ManagedKafka.GetCluster | rest | ga | — |
 | ManagedKafka.GetConsumerGroup | rest | ga | — |
-| ManagedKafka.GetOperation | rest | limited | the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true) |
+| ManagedKafka.GetOperation | rest | ga | — |
 | ManagedKafka.GetTopic | rest | ga | — |
 | ManagedKafka.ListAcls | rest | ga | — |
 | ManagedKafka.ListClusters | rest | ga | — |
 | ManagedKafka.ListConsumerGroups | rest | ga | — |
-| ManagedKafka.ListOperations | rest | limited | the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true) |
+| ManagedKafka.ListOperations | rest | ga | — |
 | ManagedKafka.ListTopics | rest | ga | — |
 | ManagedKafka.RemoveAclEntry | rest | ga | — |
 | ManagedKafka.UpdateAcl | rest | ga | — |
@@ -736,7 +736,7 @@ _8 cell(s): ga=0 limited=8 preview=0 unsupported=0_
 
 ## metastore
 
-_38 cell(s): ga=26 limited=2 preview=0 unsupported=10_
+_38 cell(s): ga=28 limited=0 preview=0 unsupported=10_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -762,11 +762,11 @@ _38 cell(s): ga=26 limited=2 preview=0 unsupported=10_
 | Metastore.ExportMetadata | rest | unsupported | explicit Unimplemented stub |
 | Metastore.GetBackup | rest | ga | — |
 | Metastore.GetMetadataImport | rest | ga | — |
-| Metastore.GetOperation | rest | limited | the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true) |
+| Metastore.GetOperation | rest | ga | — |
 | Metastore.GetService | rest | ga | — |
 | Metastore.ListBackups | rest | ga | — |
 | Metastore.ListMetadataImports | rest | ga | — |
-| Metastore.ListOperations | rest | limited | the locations/{location}/operations path is shared with Cloud Workflows and routes to workflows on the single emulator host; the handler is reachable only by direct dispatch (mutations return operations inline done:true) |
+| Metastore.ListOperations | rest | ga | — |
 | Metastore.ListServices | rest | ga | — |
 | Metastore.MoveTableToDatabase | rest | unsupported | explicit Unimplemented stub |
 | Metastore.QueryMetadata | rest | unsupported | explicit Unimplemented stub |
