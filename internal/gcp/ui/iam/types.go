@@ -1,8 +1,8 @@
 // Package iamui serves the IAM (service accounts) UI API. Handlers call the IAM
 // provider directly (in-process) and reshape its Discovery-shaped response maps
-// for the console. Scope is the service-account control plane plus its keys and
-// IAM policy; signBlob/signJwt and undelete are deferred (see the console-UI
-// wave plan).
+// for the console. Scope is the service-account control plane plus its keys,
+// signing (signBlob/signJwt) and IAM policy; undelete has no console surface (see
+// the console-UI wave plan for the rationale).
 package iamui
 
 import "jaiscloud/internal/gcp/ui/uihelper"
@@ -85,4 +85,30 @@ type TestIamPermissionsRequest struct {
 // TestIamPermissionsResponse is the response for testIamPermissions.
 type TestIamPermissionsResponse struct {
 	Permissions []string `json:"permissions"`
+}
+
+// SignBlobRequest is the body for POST /serviceAccounts/{email}/signBlob. The
+// payload is base64-encoded, matching IAM's bytesToSign field.
+type SignBlobRequest struct {
+	BytesToSign string `json:"bytesToSign"`
+}
+
+// SignBlobResponse mirrors IAM's SignBlobResponse. The provider emits the IAM
+// `signature` field (not the IAM Credentials `signedBlob`) because the UI calls
+// it in-process without a host.
+type SignBlobResponse struct {
+	KeyID     string `json:"keyId,omitempty"`
+	Signature string `json:"signature"`
+}
+
+// SignJwtRequest is the body for POST /serviceAccounts/{email}/signJwt. The
+// payload is a serialized JSON claims object.
+type SignJwtRequest struct {
+	Payload string `json:"payload"`
+}
+
+// SignJwtResponse mirrors IAM's SignJwtResponse.
+type SignJwtResponse struct {
+	KeyID     string `json:"keyId,omitempty"`
+	SignedJwt string `json:"signedJwt"`
 }

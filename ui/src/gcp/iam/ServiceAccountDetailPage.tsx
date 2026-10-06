@@ -44,6 +44,7 @@ import { useAccount } from '../../context/AccountContext'
 import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { IamPolicyPanel } from '../common/IamPolicyPanel'
 import { EditServiceAccountDialog } from './EditServiceAccountDialog'
+import { SignBlobDialog, SignJwtDialog } from './SignDialog'
 import { GcpPageTitle } from '../common/PageTitle'
 
 /** One IAM service account: metadata, keys and IAM policy. */
@@ -55,6 +56,8 @@ export function ServiceAccountDetailPage() {
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'iam'] })
   const [newKey, setNewKey] = useState<ServiceAccountKey | null>(null)
   const [editOpen, setEditOpen] = useState(false)
+  const [signBlobOpen, setSignBlobOpen] = useState(false)
+  const [signJwtOpen, setSignJwtOpen] = useState(false)
 
   const detail = useQuery({
     queryKey: ['gcp', 'iam', 'serviceAccount', email, accountId],
@@ -139,6 +142,12 @@ export function ServiceAccountDetailPage() {
         </Button>
         <Button variant="outlined" disabled={!detail.data} onClick={() => setEditOpen(true)}>
           Edit
+        </Button>
+        <Button variant="outlined" disabled={!detail.data} onClick={() => setSignBlobOpen(true)}>
+          Sign blob
+        </Button>
+        <Button variant="outlined" disabled={!detail.data} onClick={() => setSignJwtOpen(true)}>
+          Sign JWT
         </Button>
         <Button
           variant="outlined"
@@ -263,6 +272,8 @@ export function ServiceAccountDetailPage() {
         etag={detail.data?.etag}
         onClose={() => setEditOpen(false)}
       />
+      <SignBlobDialog open={signBlobOpen} email={email} onClose={() => setSignBlobOpen(false)} />
+      <SignJwtDialog open={signJwtOpen} email={email} onClose={() => setSignJwtOpen(false)} />
     </Box>
   )
 }
