@@ -453,6 +453,16 @@ jobs:
           GCP_EMULATOR_ENDPOINT_GRPC: localhost:8081
         run: go test -count=1 -v -timeout 180s ./...
 
+      # Cross-transport parity: drives each dual service's create/get/list/
+      # mutate/delete flow and reads every resource back over BOTH transports
+      # (REST :8080 + gRPC :8081), diffing the normalized bodies so a field one
+      # adapter drops cannot pass. Fails on any un-allowlisted divergence.
+      - name: Run REST↔gRPC cross-transport parity (official clients)
+        env:
+          GCP_EMULATOR_ENDPOINT_REST: http://localhost:8080
+          GCP_EMULATOR_ENDPOINT_GRPC: localhost:8081
+        run: go test -count=1 -tags gcp_conformance,gcp_differential,gcp_parity -v -timeout 300s ./tests/gcpparity/
+
       # Reporting suite: runs the real gcloud CLI (preinstalled on the runner)
       # against the already-running emulator. It skips cleanly if gcloud is not
       # on PATH and only fails on regressions in commands expected to pass —

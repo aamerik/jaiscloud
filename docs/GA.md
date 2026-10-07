@@ -151,7 +151,7 @@ The real jobs in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) and w
 | --- | --- |
 | `test-gcp-unit` | race-tested unit tests for `internal/gcp/...` plus the shared Spark/K8s/platform/executor packages (no services required) |
 | `test-gcp-integration` | builds and boots the binary (REST `:8080`, gRPC `:8081`), then runs the raw-HTTP integration suite and **18** official-SDK test modules |
-| `test-gcp-conformance` | records a fresh wire transcript, validates every response (and the error envelope) against the Discovery schemas — failing on any high-severity divergence — runs the gRPC message-level suite and the gcloud CLI suite, and fails if the fidelity matrix is stale |
+| `test-gcp-conformance` | records a fresh wire transcript, validates every response (and the error envelope) against the Discovery schemas — failing on any high-severity divergence — runs the gRPC message-level suite, the REST↔gRPC cross-transport parity suite, and the gcloud CLI suite, and fails if the fidelity matrix is stale |
 | `test-gcp-persistence` | with a Postgres service container, runs the `gcp_persistence` suite proving state survives process restarts |
 | `test-aws` | AWS + shared unit/integration tests (`internal/gcp/...` excluded — the GCP package must never import `internal/aws/`) |
 | `docker-build` | the shared `Dockerfile` builds for `linux/amd64` (no push) |
@@ -178,7 +178,8 @@ surface and durability.
   (gcloud 586.0.0). This includes `gcloud functions list` and `gcloud functions describe`,
   which speak the Cloud Functions **v2** API (see §7).
 - **Conformance harnesses** — REST wire-conformance (**clean: 0 divergences, 0 high-severity**),
-  gRPC message-level, gcloud CLI, and the fidelity-matrix drift check.
+  gRPC message-level, REST↔gRPC cross-transport parity (14 dual services; reads each resource over
+  both transports and diffs the normalized bodies), gcloud CLI, and the fidelity-matrix drift check.
 
 The REST wire harness now reports zero divergences. The BigQuery list methods emit the Discovery
 summary subsets (`datasets.list`/`tables.list`) and the `ListFormatJob` projection (`jobs.list`);
@@ -534,10 +535,10 @@ One aggregate gate — deterministic, offline plus client-conformance:
 make ga-check
 ```
 
-It runs `check-gcp-fidelity-matrix`, `test-gcp-wire-conformance`, `test-gcp-grpc-conformance`
-and `test-gcp-gcloud-conformance` (the two client suites build and self-start an ephemeral
-emulator; `gcloud` self-skips if it is not on `PATH`), then prints what the infrastructure-backed
-gates need.
+It runs `check-gcp-fidelity-matrix`, `test-gcp-wire-conformance`, `test-gcp-grpc-conformance`,
+`test-gcp-rest-grpc-parity` and `test-gcp-gcloud-conformance` (the client suites build and self-start
+an ephemeral emulator; `gcloud` self-skips if it is not on `PATH`), then prints what the
+infrastructure-backed gates need.
 
 For a GA release the following are also required (they need real clients, Docker,
 Postgres, or k3d, so they are not part of `ga-check`):

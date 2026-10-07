@@ -1,0 +1,16 @@
+{
+  "allowances": [
+    {
+      "service": "managedkafka",
+      "op": "GetCluster",
+      "path": "response.bootstrapAddress",
+      "reason": "Tracked gap AUD3-11: real GCP exposes Cluster.bootstrapAddress over BOTH transports, but the pinned cloud.google.com/go/managedkafka@v1.1.0 client proto defines no such field, so the emulator's gRPC surface cannot return it (internal/gcp/transport/grpc/managedkafka/transcode.go). Tolerated by this allowance until the proto is bumped; not a state divergence (both transports share one core)."
+    },
+    {
+      "service": "managedkafka",
+      "op": "ListClusters",
+      "path": "response.clusters[0].bootstrapAddress",
+      "reason": "Same tracked gap AUD3-11 as GetCluster: the pinned managedkafka proto has no Cluster.bootstrap_address, so the gRPC list omits the REST field. The list is scoped to the run suffix, so element [0] is this run's single cluster."
+    }
+  ]
+}

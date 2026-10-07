@@ -185,3 +185,40 @@ func TestKMSImportJobLifecycle(t *testing.T) {
 		t.Fatalf("ListImportJobs = %v, want [%s]", list.GetImportJobs(), wantName)
 	}
 }
+
+// TestCryptoKeyPrimaryHasCreateAndGenerateTime guards the AUD3 parity fix: the
+// REST adapter always renders primary.createTime/generateTime, and the proto
+// defines both, so cryptoKeyToProto must populate them too. A CryptoKey whose
+// primary version omitted them diverged from REST over the same core.
+func TestCryptoKeyPrimaryHasCreateAndGenerateTime(t *testing.T) {
+	client, _, cleanup := kmsTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createKeyRing(t, client, "kr-primary-times")
+
+	parent := "projects/test/locations/global/keyRings/kr-primary-times"
+	name := parent + "/cryptoKeys/sym"
+	if _, err := client.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
+		Parent:      parent,
+		CryptoKeyId: "sym",
+		CryptoKey:   &kmspb.CryptoKey{Purpose: kmspb.CryptoKey_ENCRYPT_DECRYPT},
+	}); err != nil {
+		t.Fatalf("CreateCryptoKey: %v", err)
+	}
+
+	ck, err := client.GetCryptoKey(ctx, &kmspb.GetCryptoKeyRequest{Name: name})
+	if err != nil {
+		t.Fatalf("GetCryptoKey: %v", err)
+	}
+	primary := ck.GetPrimary()
+	if primary.GetCreateTime() == nil {
+		t.Fatal("primary.createTime is unset; REST renders it, so gRPC must too")
+	}
+	if primary.GetGenerateTime() == nil {
+		t.Fatal("primary.generateTime is unset; REST renders it, so gRPC must too")
+	}
+	if !primary.GetCreateTime().AsTime().Equal(primary.GetGenerateTime().AsTime()) {
+		t.Fatalf("primary createTime (%v) != generateTime (%v) for software key material",
+			primary.GetCreateTime().AsTime(), primary.GetGenerateTime().AsTime())
+	}
+}

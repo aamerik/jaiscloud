@@ -1,0 +1,40 @@
+{
+  "exemptions": [
+    {
+      "service": "datastore",
+      "reason": "REST and gRPC expose different value/entity encodings (REST Entity vs the proto Value union). A full-body diff is not meaningful without a per-field logical projection, so Datastore has its own follow-up row (AUD3-2)."
+    },
+    {
+      "service": "firestore",
+      "reason": "Like Datastore, Firestore documents are Value unions, and the REST surface uses the recursive {+parent} document path. A like-for-like comparison needs a projection; tracked as AUD3-3."
+    },
+    {
+      "service": "storage",
+      "reason": "The object/bucket surface needs the media-upload flow, and the official Go client module does not export the storage v2 proto the emulator serves (the gRPC conformance suite uses the emulator's own storagepb), so a raw cross-transport body diff needs its own harness work. Tracked as AUD3-4."
+    },
+    {
+      "service": "resourcemanager",
+      "reason": "REST is the legacy v1 project shape while the proto is v3 (the deliberate v1/v3 alignment from the dual-protocol effort), so a full-body diff needs a logical projection. Tracked as AUD3-5."
+    },
+    {
+      "service": "iam",
+      "reason": "The gRPC surface is the shared google.iam.v1.IAMPolicy service while REST iam is service-account admin plus a resource policy; a like-for-like comparison needs a shared policy target. Tracked as AUD3-6."
+    },
+    {
+      "service": "iamcredentials",
+      "reason": "IAM Credentials exposes only GenerateAccessToken/GenerateIdToken (no resource lifecycle) and the tokens are volatile; a create/get/list/delete parity flow does not apply. Tracked as AUD3-7."
+    },
+    {
+      "service": "dataproc",
+      "reason": "Dataproc cluster/job resources carry a heavier model and region-scoped paths; the parity flow needs LRO handling plus a cluster fixture. Tracked as AUD3-8."
+    },
+    {
+      "service": "container",
+      "reason": "GKE cluster mutations return the container-specific google.container.v1.Operation (not google.longrunning), and a cluster fixture needs a node-pool model. Tracked as AUD3-9."
+    },
+    {
+      "service": "workflowexecutions",
+      "reason": "An execution requires a deployed Workflow prerequisite and an execution lifecycle; the flow needs REST prerequisite setup. Tracked as AUD3-10."
+    }
+  ]
+}
