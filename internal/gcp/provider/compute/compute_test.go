@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
@@ -157,6 +158,31 @@ func TestInstanceRoundTrip(t *testing.T) {
 	}
 	if _, err := p.InstancesGet(ctx, newNR(zonal("us-central1-a", map[string]any{"instance": "vm-a"}))); !isCode(err, "NotFound") {
 		t.Fatalf("expected NotFound after delete, got %v", err)
+	}
+}
+
+// TestInstanceMetadataFingerprintIsBase64 pins the wire format: Discovery
+// declares Metadata.fingerprint as format:byte, so the emulator must emit
+// base64-encoded bytes, not a variable-length hex digest.
+func TestInstanceMetadataFingerprintIsBase64(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	mustCreateInstance(t, p, "us-central1-a", "vm-fp")
+
+	got, err := p.InstancesGet(ctx, newNR(zonal("us-central1-a", map[string]any{"instance": "vm-fp"})))
+	if err != nil {
+		t.Fatalf("get instance: %v", err)
+	}
+	md, ok := got.Data["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata = %#v, want an object", got.Data["metadata"])
+	}
+	fp, _ := md["fingerprint"].(string)
+	if fp == "" {
+		t.Fatal("metadata.fingerprint is empty")
+	}
+	if _, err := base64.StdEncoding.DecodeString(fp); err != nil {
+		t.Fatalf("metadata.fingerprint %q is not valid base64 (format:byte): %v", fp, err)
 	}
 }
 

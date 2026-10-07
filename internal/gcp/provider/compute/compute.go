@@ -27,6 +27,7 @@ package compute
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1216,11 +1217,14 @@ func formatTimestamp(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
-// contentEtag derives a stable fingerprint from a resource name.
+// contentEtag derives a stable fingerprint from a resource name. Discovery
+// declares the fields it feeds (Metadata.fingerprint, Instance.fingerprint)
+// as format:byte, i.e. base64-encoded bytes, so the digest is base64-encoded
+// rather than rendered as hex.
 func contentEtag(seed string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(seed))
-	return strconv.FormatUint(h.Sum64(), 16)
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
 // numericID derives a stable decimal id from a string.
