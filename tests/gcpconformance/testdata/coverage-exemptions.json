@@ -1,0 +1,388 @@
+{
+  "exemptions": [
+    {
+      "operation": "BigQuery.CancelJob",
+      "reason": "BigQuery jobs are created by query/load with a server-assigned job id; dataset/table update is a full replace that needs a prior create with the reference sub-objects. The emulator serves these (the curated SQL/load scenarios exercise them); the generic path probe cannot stage them."
+    },
+    {
+      "operation": "BigQuery.DeleteJob",
+      "reason": "BigQuery jobs are created by query/load with a server-assigned job id; dataset/table update is a full replace that needs a prior create with the reference sub-objects. The emulator serves these (the curated SQL/load scenarios exercise them); the generic path probe cannot stage them."
+    },
+    {
+      "operation": "BigQuery.UpdateDataset",
+      "reason": "BigQuery jobs are created by query/load with a server-assigned job id; dataset/table update is a full replace that needs a prior create with the reference sub-objects. The emulator serves these (the curated SQL/load scenarios exercise them); the generic path probe cannot stage them."
+    },
+    {
+      "operation": "BigQuery.UpdateTable",
+      "reason": "BigQuery jobs are created by query/load with a server-assigned job id; dataset/table update is a full replace that needs a prior create with the reference sub-objects. The emulator serves these (the curated SQL/load scenarios exercise them); the generic path probe cannot stage them."
+    },
+    {
+      "operation": "CloudDNS.ChangeGet",
+      "reason": "DNS change ids are returned by the change create and record-set names are DNS names, so the Discovery-driven probe cannot reference the resource it would need to read/delete."
+    },
+    {
+      "operation": "CloudDNS.ResourceRecordSetDelete",
+      "reason": "DNS change ids are returned by the change create and record-set names are DNS names, so the Discovery-driven probe cannot reference the resource it would need to read/delete."
+    },
+    {
+      "operation": "CloudDNS.ResourceRecordSetGet",
+      "reason": "DNS change ids are returned by the change create and record-set names are DNS names, so the Discovery-driven probe cannot reference the resource it would need to read/delete."
+    },
+    {
+      "operation": "CloudSQL.OperationsGet",
+      "reason": "Cloud SQL operations are LROs with server-assigned names; users.delete/update address the user by a query/body name that must match a previously inserted user."
+    },
+    {
+      "operation": "CloudSQL.UsersDelete",
+      "reason": "Cloud SQL operations are LROs with server-assigned names; users.delete/update address the user by a query/body name that must match a previously inserted user."
+    },
+    {
+      "operation": "CloudSQL.UsersUpdate",
+      "reason": "Cloud SQL operations are LROs with server-assigned names; users.delete/update address the user by a query/body name that must match a previously inserted user."
+    },
+    {
+      "operation": "Compute.OperationsGet",
+      "reason": "Compute operations are LROs with server-assigned names; there is no create surface to stage one."
+    },
+    {
+      "operation": "Dataproc.CancelJob",
+      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
+    },
+    {
+      "operation": "Dataproc.DeleteJob",
+      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
+    },
+    {
+      "operation": "Dataproc.DiagnoseCluster",
+      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
+    },
+    {
+      "operation": "Dataproc.GetJob",
+      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
+    },
+    {
+      "operation": "Dataproc.GetOperation",
+      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
+    },
+    {
+      "operation": "Dataproc.UpdateWorkflowTemplate",
+      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
+    },
+    {
+      "operation": "Firestore.CreateDocument",
+      "reason": "Firestore REST document/index admin needs a (default) database and a staged collection; Firestore's primary surface is gRPC and the official-client gRPC conformance suite covers these methods."
+    },
+    {
+      "operation": "Firestore.CreateIndex",
+      "reason": "Firestore REST document/index admin needs a (default) database and a staged collection; Firestore's primary surface is gRPC and the official-client gRPC conformance suite covers these methods."
+    },
+    {
+      "operation": "Firestore.DeleteIndex",
+      "reason": "Firestore REST document/index admin needs a (default) database and a staged collection; Firestore's primary surface is gRPC and the official-client gRPC conformance suite covers these methods."
+    },
+    {
+      "operation": "Firestore.GetDocument",
+      "reason": "Firestore REST document/index admin needs a (default) database and a staged collection; Firestore's primary surface is gRPC and the official-client gRPC conformance suite covers these methods."
+    },
+    {
+      "operation": "Firestore.GetIndex",
+      "reason": "Firestore REST document/index admin needs a (default) database and a staged collection; Firestore's primary surface is gRPC and the official-client gRPC conformance suite covers these methods."
+    },
+    {
+      "operation": "Firestore.RunQuery",
+      "reason": "Firestore REST document/index admin needs a (default) database and a staged collection; Firestore's primary surface is gRPC and the official-client gRPC conformance suite covers these methods."
+    },
+    {
+      "operation": "Function.GetOperation",
+      "reason": "Cloud Functions operations are long-running operations with server-assigned names."
+    },
+    {
+      "operation": "Function.ListOperations",
+      "reason": "Cloud Functions operations are long-running operations with server-assigned names."
+    },
+    {
+      "operation": "IAM.ServiceAccountKeyDisable",
+      "reason": "Service-account keys have server-assigned ids returned by keys.create, so the probe cannot reference a created key."
+    },
+    {
+      "operation": "IAM.ServiceAccountKeyEnable",
+      "reason": "Service-account keys have server-assigned ids returned by keys.create, so the probe cannot reference a created key."
+    },
+    {
+      "operation": "IAM.ServiceAccountKeyGet",
+      "reason": "Service-account keys have server-assigned ids returned by keys.create, so the probe cannot reference a created key."
+    },
+    {
+      "operation": "IAMCredentials.GetAllowedLocations",
+      "reason": "IAMCredentials.getAllowedLocations needs a service account created through the IAM surface; the probe's cross-service create does not satisfy its store view."
+    },
+    {
+      "operation": "KMS.CryptoKeyDelete",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyUpdatePrimaryVersion",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyVersionAsymmetricDecrypt",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyVersionAsymmetricSign",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyVersionDecapsulate",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyVersionDelete",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyVersionDestroy",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyVersionExportTrusted",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyVersionGet",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyVersionGetPublicKey",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyVersionImport",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyVersionImportTrusted",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyVersionMacSign",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyVersionMacVerify",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyVersionRestore",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.CryptoKeyVersionUpdate",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "KMS.ImportJobGet",
+      "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
+    },
+    {
+      "operation": "Logging.BucketUpdate",
+      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+    },
+    {
+      "operation": "Logging.BucketUpdateAsync",
+      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+    },
+    {
+      "operation": "Logging.ExclusionPatch",
+      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+    },
+    {
+      "operation": "Logging.LogScopeUpdate",
+      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+    },
+    {
+      "operation": "Logging.SinkPatch",
+      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+    },
+    {
+      "operation": "Logging.SinkUpdate",
+      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+    },
+    {
+      "operation": "Logging.ViewGetIamPolicy",
+      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+    },
+    {
+      "operation": "Logging.ViewSetIamPolicy",
+      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+    },
+    {
+      "operation": "Logging.ViewTestIamPermissions",
+      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+    },
+    {
+      "operation": "Logging.ViewUpdate",
+      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+    },
+    {
+      "operation": "ManagedKafka.DeleteConsumerGroup",
+      "reason": "Managed Kafka consumer groups have no create surface (they are derived from server state) and ACL update requires the stored etag."
+    },
+    {
+      "operation": "ManagedKafka.GetConsumerGroup",
+      "reason": "Managed Kafka consumer groups have no create surface (they are derived from server state) and ACL update requires the stored etag."
+    },
+    {
+      "operation": "ManagedKafka.UpdateAcl",
+      "reason": "Managed Kafka consumer groups have no create surface (they are derived from server state) and ACL update requires the stored etag."
+    },
+    {
+      "operation": "ManagedKafka.UpdateConsumerGroup",
+      "reason": "Managed Kafka consumer groups have no create surface (they are derived from server state) and ACL update requires the stored etag."
+    },
+    {
+      "operation": "Metastore.AlterMetadataResourceLocation",
+      "reason": "Dataproc Metastore returns 501 Unimplemented for these metadata operations."
+    },
+    {
+      "operation": "Metastore.ExportMetadata",
+      "reason": "Dataproc Metastore returns 501 Unimplemented for these metadata operations."
+    },
+    {
+      "operation": "Metastore.MoveTableToDatabase",
+      "reason": "Dataproc Metastore returns 501 Unimplemented for these metadata operations."
+    },
+    {
+      "operation": "Metastore.QueryMetadata",
+      "reason": "Dataproc Metastore returns 501 Unimplemented for these metadata operations."
+    },
+    {
+      "operation": "Metastore.RestoreService",
+      "reason": "Dataproc Metastore returns 501 Unimplemented for these metadata operations."
+    },
+    {
+      "operation": "Monitoring.ListTimeSeries",
+      "reason": "TimeSeries is served on the projects surface only (the folders variant is unsupported), and service/SLO update returns 501 for the generic update mask."
+    },
+    {
+      "operation": "Monitoring.UpdateService",
+      "reason": "TimeSeries is served on the projects surface only (the folders variant is unsupported), and service/SLO update returns 501 for the generic update mask."
+    },
+    {
+      "operation": "Monitoring.UpdateServiceLevelObjective",
+      "reason": "TimeSeries is served on the projects surface only (the folders variant is unsupported), and service/SLO update returns 501 for the generic update mask."
+    },
+    {
+      "operation": "Run.DeleteOperation",
+      "reason": "Cloud Run operations are LROs with server-assigned names; there is no create surface to stage one."
+    },
+    {
+      "operation": "Scheduler.JobsResume",
+      "reason": "Cloud Scheduler resume requires a PAUSED job; the probe's freshly-created job is RUNNING."
+    },
+    {
+      "operation": "Storage.BucketACLInsert",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.BucketACLList",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.BucketsGetIamPolicy",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.BucketsGetStorageLayout",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.BucketsLockRetentionPolicy",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.BucketsSetIamPolicy",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.BucketsUpdate",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.NotificationsDelete",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.NotificationsGet",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.NotificationsInsert",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.NotificationsList",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.ObjectACLInsert",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.ObjectACLList",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.ObjectsCompose",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.ObjectsCopy",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.ObjectsGetIamPolicy",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.ObjectsMove",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.ObjectsPatch",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.ObjectsRestore",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.ObjectsRewrite",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.ObjectsSetIamPolicy",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Storage.ObjectsUpdate",
+      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
+    },
+    {
+      "operation": "Tasks.QueuesResume",
+      "reason": "Cloud Tasks resume requires a PAUSED queue; the probe's freshly-created queue is RUNNING."
+    },
+    {
+      "operation": "WorkflowExecution.CancelExecution",
+      "reason": "Workflow executions are created through the createExecution LRO and cancelled by a server-assigned execution id that the probe cannot stage from the WorkflowExecutions Discovery surface alone."
+    },
+    {
+      "operation": "WorkflowExecution.GetExecution",
+      "reason": "Workflow executions are created through the createExecution LRO and cancelled by a server-assigned execution id that the probe cannot stage from the WorkflowExecutions Discovery surface alone."
+    },
+    {
+      "operation": "Workflow.GetOperation",
+      "reason": "Cloud Workflows operations are LROs with server-assigned names."
+    }
+  ]
+}

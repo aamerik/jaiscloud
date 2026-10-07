@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 166 | 457 |
+| rest | 500 | 123 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -50,14 +50,14 @@ _25 cell(s): ga=0 limited=22 preview=0 unsupported=3_
 | BigQuery.GetDataset | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
 | BigQuery.GetJob | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
 | BigQuery.GetQueryResults | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
-| BigQuery.GetServiceAccount | rest | limited | no | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
+| BigQuery.GetServiceAccount | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
 | BigQuery.GetTable | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
 | BigQuery.InsertAll | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
 | BigQuery.InsertJob | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
 | BigQuery.InsertJobResumable | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
 | BigQuery.InsertJobResumableStart | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
 | BigQuery.ListDatasets | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
-| BigQuery.ListJobs | rest | limited | no | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
+| BigQuery.ListJobs | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
 | BigQuery.ListRows | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
 | BigQuery.ListTables | rest | limited | yes | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp-bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types (ORC, Parquet/Avro map/decimal shapes, and Avro unions with more than one non-null type fail loud) |
 | BigQuery.Models | rest | unsupported | no | models are not modelled; explicit Unimplemented (501) stub |
@@ -73,21 +73,21 @@ _16 cell(s): ga=0 limited=15 preview=0 unsupported=1_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
-| CloudDNS.ChangeCreate | rest | limited | no | metadata-only over ResourceStore (no private DNS resolution) |
+| CloudDNS.ChangeCreate | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ChangeGet | rest | limited | no | metadata-only over ResourceStore (no private DNS resolution) |
-| CloudDNS.ChangeList | rest | limited | no | metadata-only over ResourceStore (no private DNS resolution) |
+| CloudDNS.ChangeList | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZoneCreate | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZoneDelete | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZoneGet | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ManagedZoneList | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
-| CloudDNS.ManagedZonePatch | rest | limited | no | metadata-only over ResourceStore (no private DNS resolution) |
-| CloudDNS.ManagedZoneUpdate | rest | limited | no | metadata-only over ResourceStore (no private DNS resolution) |
+| CloudDNS.ManagedZonePatch | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
+| CloudDNS.ManagedZoneUpdate | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ProjectGet | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ResourceRecordSetCreate | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ResourceRecordSetDelete | rest | limited | no | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ResourceRecordSetGet | rest | limited | no | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.ResourceRecordSetList | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
-| CloudDNS.ResourceRecordSetPatch | rest | limited | no | metadata-only over ResourceStore (no private DNS resolution) |
+| CloudDNS.ResourceRecordSetPatch | rest | limited | yes | metadata-only over ResourceStore (no private DNS resolution) |
 | CloudDNS.Unimplemented | rest | unsupported | no | explicit Unimplemented stub |
 
 ## cloudsql
@@ -96,29 +96,29 @@ _24 cell(s): ga=0 limited=23 preview=0 unsupported=1_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
-| CloudSQL.ConnectGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.DatabasesDelete | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.DatabasesGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.DatabasesInsert | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.DatabasesList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.DatabasesPatch | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.DatabasesUpdate | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.FlagsList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.InstancesDelete | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.InstancesGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.InstancesInsert | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.InstancesList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.InstancesPatch | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.InstancesRestart | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.InstancesUpdate | rest | limited | no | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.ConnectGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.DatabasesDelete | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.DatabasesGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.DatabasesInsert | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.DatabasesList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.DatabasesPatch | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.DatabasesUpdate | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.FlagsList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.InstancesDelete | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.InstancesGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.InstancesInsert | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.InstancesList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.InstancesPatch | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.InstancesRestart | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.InstancesUpdate | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
 | CloudSQL.OperationsGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.OperationsList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.TiersList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.OperationsList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.TiersList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
 | CloudSQL.Unimplemented | rest | unsupported | no | explicit Unimplemented stub |
 | CloudSQL.UsersDelete | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.UsersGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.UsersInsert | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| CloudSQL.UsersList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.UsersGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.UsersInsert | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| CloudSQL.UsersList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
 | CloudSQL.UsersUpdate | rest | limited | no | metadata-only over ResourceStore (no control plane) |
 
 ## compute
@@ -127,39 +127,39 @@ _33 cell(s): ga=0 limited=32 preview=0 unsupported=1_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
-| Compute.DisksDelete | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.DisksGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.DisksInsert | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.DisksList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.FirewallsDelete | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.FirewallsGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.FirewallsInsert | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.FirewallsList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.InstancesAggregatedList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.InstancesDelete | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.InstancesGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.InstancesInsert | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.InstancesList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.InstancesReset | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.InstancesStart | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.InstancesStop | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.MachineTypesGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.MachineTypesList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.NetworksDelete | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.NetworksGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.NetworksInsert | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.NetworksList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
+| Compute.DisksDelete | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.DisksGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.DisksInsert | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.DisksList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.FirewallsDelete | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.FirewallsGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.FirewallsInsert | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.FirewallsList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.InstancesAggregatedList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.InstancesDelete | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.InstancesGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.InstancesInsert | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.InstancesList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.InstancesReset | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.InstancesStart | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.InstancesStop | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.MachineTypesGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.MachineTypesList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.NetworksDelete | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.NetworksGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.NetworksInsert | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.NetworksList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
 | Compute.OperationsGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.OperationsList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.RegionsGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.RegionsList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.SubnetworksDelete | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.SubnetworksGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.SubnetworksInsert | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.SubnetworksList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
+| Compute.OperationsList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.RegionsGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.RegionsList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.SubnetworksDelete | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.SubnetworksGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.SubnetworksInsert | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.SubnetworksList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
 | Compute.Unimplemented | rest | unsupported | no | explicit Unimplemented stub |
-| Compute.ZonesGet | rest | limited | no | metadata-only over ResourceStore (no control plane) |
-| Compute.ZonesList | rest | limited | no | metadata-only over ResourceStore (no control plane) |
+| Compute.ZonesGet | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
+| Compute.ZonesList | rest | limited | yes | metadata-only over ResourceStore (no control plane) |
 
 ## container
 
@@ -187,13 +187,13 @@ _66 cell(s): ga=58 limited=0 preview=0 unsupported=8_
 | Container.RollbackNodePoolUpgrade | rest | ga | yes | — |
 | Container.SetAddonsConfig | rest | ga | yes | — |
 | Container.SetLabels | rest | ga | yes | — |
-| Container.SetLegacyAbac | rest | ga | no | — |
-| Container.SetLocations | rest | ga | no | — |
+| Container.SetLegacyAbac | rest | ga | yes | — |
+| Container.SetLocations | rest | ga | yes | — |
 | Container.SetLoggingService | rest | ga | yes | — |
-| Container.SetMaintenancePolicy | rest | ga | no | — |
-| Container.SetMasterAuth | rest | ga | no | — |
-| Container.SetMonitoringService | rest | ga | no | — |
-| Container.SetNetworkPolicy | rest | ga | no | — |
+| Container.SetMaintenancePolicy | rest | ga | yes | — |
+| Container.SetMasterAuth | rest | ga | yes | — |
+| Container.SetMonitoringService | rest | ga | yes | — |
+| Container.SetNetworkPolicy | rest | ga | yes | — |
 | Container.SetNodePoolAutoscaling | rest | ga | yes | — |
 | Container.SetNodePoolManagement | rest | ga | yes | — |
 | Container.SetNodePoolSize | rest | ga | yes | — |
@@ -244,26 +244,26 @@ _44 cell(s): ga=42 limited=0 preview=0 unsupported=2_
 | CreateCluster | grpc | ga | yes | — |
 | CreateWorkflowTemplate | grpc | ga | yes | — |
 | Dataproc.CancelJob | rest | ga | no | — |
-| Dataproc.CreateCluster | rest | ga | no | — |
-| Dataproc.CreateWorkflowTemplate | rest | ga | no | — |
-| Dataproc.DeleteCluster | rest | ga | no | — |
+| Dataproc.CreateCluster | rest | ga | yes | — |
+| Dataproc.CreateWorkflowTemplate | rest | ga | yes | — |
+| Dataproc.DeleteCluster | rest | ga | yes | — |
 | Dataproc.DeleteJob | rest | ga | no | — |
-| Dataproc.DeleteWorkflowTemplate | rest | ga | no | — |
+| Dataproc.DeleteWorkflowTemplate | rest | ga | yes | — |
 | Dataproc.DiagnoseCluster | rest | unsupported | no | explicit Unimplemented stub |
-| Dataproc.GetCluster | rest | ga | no | — |
+| Dataproc.GetCluster | rest | ga | yes | — |
 | Dataproc.GetJob | rest | ga | no | — |
 | Dataproc.GetOperation | rest | ga | no | — |
-| Dataproc.GetWorkflowTemplate | rest | ga | no | — |
-| Dataproc.InstantiateInlineWorkflowTemplate | rest | ga | no | — |
-| Dataproc.InstantiateWorkflowTemplate | rest | ga | no | — |
-| Dataproc.ListClusters | rest | ga | no | — |
-| Dataproc.ListJobs | rest | ga | no | — |
-| Dataproc.ListWorkflowTemplates | rest | ga | no | — |
-| Dataproc.StartCluster | rest | ga | no | — |
-| Dataproc.StopCluster | rest | ga | no | — |
-| Dataproc.SubmitJob | rest | ga | no | covered by the k3d Lakehouse e2e (real Spark on Kubernetes, GKE virtualClusterConfig + driver output in GCS) |
-| Dataproc.SubmitJobAsOperation | rest | ga | no | — |
-| Dataproc.UpdateCluster | rest | ga | no | — |
+| Dataproc.GetWorkflowTemplate | rest | ga | yes | — |
+| Dataproc.InstantiateInlineWorkflowTemplate | rest | ga | yes | — |
+| Dataproc.InstantiateWorkflowTemplate | rest | ga | yes | — |
+| Dataproc.ListClusters | rest | ga | yes | — |
+| Dataproc.ListJobs | rest | ga | yes | — |
+| Dataproc.ListWorkflowTemplates | rest | ga | yes | — |
+| Dataproc.StartCluster | rest | ga | yes | — |
+| Dataproc.StopCluster | rest | ga | yes | — |
+| Dataproc.SubmitJob | rest | ga | yes | covered by the k3d Lakehouse e2e (real Spark on Kubernetes, GKE virtualClusterConfig + driver output in GCS) |
+| Dataproc.SubmitJobAsOperation | rest | ga | yes | — |
+| Dataproc.UpdateCluster | rest | ga | yes | — |
 | Dataproc.UpdateWorkflowTemplate | rest | ga | no | — |
 | DeleteCluster | grpc | ga | yes | — |
 | DeleteJob | grpc | ga | yes | — |
@@ -328,66 +328,66 @@ _99 cell(s): ga=99 limited=0 preview=0 unsupported=0_
 | DeleteMessageBus | grpc | ga | yes | — |
 | DeletePipeline | grpc | ga | yes | — |
 | DeleteTrigger | grpc | ga | yes | — |
-| Eventarc.ChannelConnectionGetIamPolicy | rest | ga | no | — |
-| Eventarc.ChannelConnectionSetIamPolicy | rest | ga | no | — |
-| Eventarc.ChannelConnectionTestIamPermissions | rest | ga | no | — |
-| Eventarc.ChannelGetIamPolicy | rest | ga | no | — |
-| Eventarc.ChannelSetIamPolicy | rest | ga | no | — |
-| Eventarc.ChannelTestIamPermissions | rest | ga | no | — |
-| Eventarc.CreateChannel | rest | ga | no | — |
-| Eventarc.CreateChannelConnection | rest | ga | no | — |
-| Eventarc.CreateEnrollment | rest | ga | no | — |
-| Eventarc.CreateGoogleApiSource | rest | ga | no | — |
-| Eventarc.CreateMessageBus | rest | ga | no | — |
-| Eventarc.CreatePipeline | rest | ga | no | — |
-| Eventarc.CreateTrigger | rest | ga | no | — |
-| Eventarc.DeleteChannel | rest | ga | no | — |
-| Eventarc.DeleteChannelConnection | rest | ga | no | — |
-| Eventarc.DeleteEnrollment | rest | ga | no | — |
-| Eventarc.DeleteGoogleApiSource | rest | ga | no | — |
-| Eventarc.DeleteMessageBus | rest | ga | no | — |
-| Eventarc.DeletePipeline | rest | ga | no | — |
-| Eventarc.DeleteTrigger | rest | ga | no | — |
-| Eventarc.EnrollmentGetIamPolicy | rest | ga | no | — |
-| Eventarc.EnrollmentSetIamPolicy | rest | ga | no | — |
-| Eventarc.EnrollmentTestIamPermissions | rest | ga | no | — |
-| Eventarc.GetChannel | rest | ga | no | — |
-| Eventarc.GetChannelConnection | rest | ga | no | — |
-| Eventarc.GetEnrollment | rest | ga | no | — |
-| Eventarc.GetGoogleApiSource | rest | ga | no | — |
-| Eventarc.GetGoogleChannelConfig | rest | ga | no | — |
-| Eventarc.GetMessageBus | rest | ga | no | — |
-| Eventarc.GetPipeline | rest | ga | no | — |
-| Eventarc.GetProvider | rest | ga | no | — |
-| Eventarc.GetTrigger | rest | ga | no | — |
-| Eventarc.GoogleApiSourceGetIamPolicy | rest | ga | no | — |
-| Eventarc.GoogleApiSourceSetIamPolicy | rest | ga | no | — |
-| Eventarc.GoogleApiSourceTestIamPermissions | rest | ga | no | — |
-| Eventarc.ListChannelConnections | rest | ga | no | — |
-| Eventarc.ListChannels | rest | ga | no | — |
-| Eventarc.ListEnrollments | rest | ga | no | — |
-| Eventarc.ListGoogleApiSources | rest | ga | no | — |
-| Eventarc.ListMessageBusEnrollments | rest | ga | no | — |
-| Eventarc.ListMessageBuses | rest | ga | no | — |
-| Eventarc.ListPipelines | rest | ga | no | — |
-| Eventarc.ListProviders | rest | ga | no | — |
-| Eventarc.ListTriggers | rest | ga | no | — |
-| Eventarc.MessageBusGetIamPolicy | rest | ga | no | — |
-| Eventarc.MessageBusSetIamPolicy | rest | ga | no | — |
-| Eventarc.MessageBusTestIamPermissions | rest | ga | no | — |
-| Eventarc.PipelineGetIamPolicy | rest | ga | no | — |
-| Eventarc.PipelineSetIamPolicy | rest | ga | no | — |
-| Eventarc.PipelineTestIamPermissions | rest | ga | no | — |
-| Eventarc.TriggerGetIamPolicy | rest | ga | no | — |
-| Eventarc.TriggerSetIamPolicy | rest | ga | no | — |
-| Eventarc.TriggerTestIamPermissions | rest | ga | no | — |
-| Eventarc.UpdateChannel | rest | ga | no | — |
-| Eventarc.UpdateEnrollment | rest | ga | no | — |
-| Eventarc.UpdateGoogleApiSource | rest | ga | no | — |
-| Eventarc.UpdateGoogleChannelConfig | rest | ga | no | — |
-| Eventarc.UpdateMessageBus | rest | ga | no | — |
-| Eventarc.UpdatePipeline | rest | ga | no | — |
-| Eventarc.UpdateTrigger | rest | ga | no | — |
+| Eventarc.ChannelConnectionGetIamPolicy | rest | ga | yes | — |
+| Eventarc.ChannelConnectionSetIamPolicy | rest | ga | yes | — |
+| Eventarc.ChannelConnectionTestIamPermissions | rest | ga | yes | — |
+| Eventarc.ChannelGetIamPolicy | rest | ga | yes | — |
+| Eventarc.ChannelSetIamPolicy | rest | ga | yes | — |
+| Eventarc.ChannelTestIamPermissions | rest | ga | yes | — |
+| Eventarc.CreateChannel | rest | ga | yes | — |
+| Eventarc.CreateChannelConnection | rest | ga | yes | — |
+| Eventarc.CreateEnrollment | rest | ga | yes | — |
+| Eventarc.CreateGoogleApiSource | rest | ga | yes | — |
+| Eventarc.CreateMessageBus | rest | ga | yes | — |
+| Eventarc.CreatePipeline | rest | ga | yes | — |
+| Eventarc.CreateTrigger | rest | ga | yes | — |
+| Eventarc.DeleteChannel | rest | ga | yes | — |
+| Eventarc.DeleteChannelConnection | rest | ga | yes | — |
+| Eventarc.DeleteEnrollment | rest | ga | yes | — |
+| Eventarc.DeleteGoogleApiSource | rest | ga | yes | — |
+| Eventarc.DeleteMessageBus | rest | ga | yes | — |
+| Eventarc.DeletePipeline | rest | ga | yes | — |
+| Eventarc.DeleteTrigger | rest | ga | yes | — |
+| Eventarc.EnrollmentGetIamPolicy | rest | ga | yes | — |
+| Eventarc.EnrollmentSetIamPolicy | rest | ga | yes | — |
+| Eventarc.EnrollmentTestIamPermissions | rest | ga | yes | — |
+| Eventarc.GetChannel | rest | ga | yes | — |
+| Eventarc.GetChannelConnection | rest | ga | yes | — |
+| Eventarc.GetEnrollment | rest | ga | yes | — |
+| Eventarc.GetGoogleApiSource | rest | ga | yes | — |
+| Eventarc.GetGoogleChannelConfig | rest | ga | yes | — |
+| Eventarc.GetMessageBus | rest | ga | yes | — |
+| Eventarc.GetPipeline | rest | ga | yes | — |
+| Eventarc.GetProvider | rest | ga | yes | — |
+| Eventarc.GetTrigger | rest | ga | yes | — |
+| Eventarc.GoogleApiSourceGetIamPolicy | rest | ga | yes | — |
+| Eventarc.GoogleApiSourceSetIamPolicy | rest | ga | yes | — |
+| Eventarc.GoogleApiSourceTestIamPermissions | rest | ga | yes | — |
+| Eventarc.ListChannelConnections | rest | ga | yes | — |
+| Eventarc.ListChannels | rest | ga | yes | — |
+| Eventarc.ListEnrollments | rest | ga | yes | — |
+| Eventarc.ListGoogleApiSources | rest | ga | yes | — |
+| Eventarc.ListMessageBusEnrollments | rest | ga | yes | — |
+| Eventarc.ListMessageBuses | rest | ga | yes | — |
+| Eventarc.ListPipelines | rest | ga | yes | — |
+| Eventarc.ListProviders | rest | ga | yes | — |
+| Eventarc.ListTriggers | rest | ga | yes | — |
+| Eventarc.MessageBusGetIamPolicy | rest | ga | yes | — |
+| Eventarc.MessageBusSetIamPolicy | rest | ga | yes | — |
+| Eventarc.MessageBusTestIamPermissions | rest | ga | yes | — |
+| Eventarc.PipelineGetIamPolicy | rest | ga | yes | — |
+| Eventarc.PipelineSetIamPolicy | rest | ga | yes | — |
+| Eventarc.PipelineTestIamPermissions | rest | ga | yes | — |
+| Eventarc.TriggerGetIamPolicy | rest | ga | yes | — |
+| Eventarc.TriggerSetIamPolicy | rest | ga | yes | — |
+| Eventarc.TriggerTestIamPermissions | rest | ga | yes | — |
+| Eventarc.UpdateChannel | rest | ga | yes | — |
+| Eventarc.UpdateEnrollment | rest | ga | yes | — |
+| Eventarc.UpdateGoogleApiSource | rest | ga | yes | — |
+| Eventarc.UpdateGoogleChannelConfig | rest | ga | yes | — |
+| Eventarc.UpdateMessageBus | rest | ga | yes | — |
+| Eventarc.UpdatePipeline | rest | ga | yes | — |
+| Eventarc.UpdateTrigger | rest | ga | yes | — |
 | GetChannel | grpc | ga | yes | — |
 | GetChannelConnection | grpc | ga | yes | — |
 | GetEnrollment | grpc | ga | yes | — |
@@ -427,21 +427,21 @@ _33 cell(s): ga=33 limited=0 preview=0 unsupported=0_
 | CreateDocument | grpc | ga | yes | — |
 | DeleteDocument | grpc | ga | yes | — |
 | ExecutePipeline | grpc | ga | yes | — |
-| Firestore.BatchGet | rest | ga | no | — |
-| Firestore.BatchWrite | rest | ga | no | — |
-| Firestore.BeginTransaction | rest | ga | no | — |
-| Firestore.Commit | rest | ga | no | — |
+| Firestore.BatchGet | rest | ga | yes | — |
+| Firestore.BatchWrite | rest | ga | yes | — |
+| Firestore.BeginTransaction | rest | ga | yes | — |
+| Firestore.Commit | rest | ga | yes | — |
 | Firestore.CreateDocument | rest | ga | no | — |
 | Firestore.CreateIndex | rest | ga | no | — |
-| Firestore.DeleteDocument | rest | ga | no | — |
+| Firestore.DeleteDocument | rest | ga | yes | — |
 | Firestore.DeleteIndex | rest | ga | no | — |
 | Firestore.GetDocument | rest | ga | no | — |
 | Firestore.GetIndex | rest | ga | no | — |
-| Firestore.ListCollectionIds | rest | ga | no | — |
-| Firestore.ListDocuments | rest | ga | no | — |
-| Firestore.ListIndexes | rest | ga | no | — |
-| Firestore.PatchDocument | rest | ga | no | — |
-| Firestore.Rollback | rest | ga | no | — |
+| Firestore.ListCollectionIds | rest | ga | yes | — |
+| Firestore.ListDocuments | rest | ga | yes | — |
+| Firestore.ListIndexes | rest | ga | yes | — |
+| Firestore.PatchDocument | rest | ga | yes | — |
+| Firestore.Rollback | rest | ga | yes | — |
 | Firestore.RunQuery | rest | ga | no | — |
 | GetDocument | grpc | ga | yes | — |
 | ListCollectionIds | grpc | ga | yes | — |
@@ -503,31 +503,31 @@ _39 cell(s): ga=39 limited=0 preview=0 unsupported=0_
 | CreateFunction | grpc | ga | yes | — |
 | DeleteFunction | grpc | ga | yes | — |
 | Function.AbortFunctionUpgrade | rest | ga | yes | — |
-| Function.CallFunction | rest | ga | no | — |
+| Function.CallFunction | rest | ga | yes | — |
 | Function.CancelOperation | rest | ga | no | shared google.longrunning.Operations.CancelOperation common API; not enumerated in the service Discovery document, but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:cancel) and wire-tested |
 | Function.CommitFunctionUpgrade | rest | ga | yes | — |
 | Function.CommitFunctionUpgradeAsGen2 | rest | ga | yes | — |
-| Function.CreateFunction | rest | ga | no | — |
-| Function.DeleteFunction | rest | ga | no | — |
+| Function.CreateFunction | rest | ga | yes | — |
+| Function.DeleteFunction | rest | ga | yes | — |
 | Function.DeleteOperation | rest | ga | no | shared google.longrunning.Operations.DeleteOperation common API; not enumerated in the service Discovery document, but served (DELETE /v2/projects/{p}/locations/{l}/operations/{id}) and wire-tested |
 | Function.DetachFunction | rest | ga | yes | — |
-| Function.FunctionGetIamPolicy | rest | ga | no | — |
-| Function.FunctionSetIamPolicy | rest | ga | no | — |
-| Function.FunctionTestIamPermissions | rest | ga | no | — |
-| Function.GenerateDownloadUrl | rest | ga | no | — |
-| Function.GenerateUploadUrl | rest | ga | no | — |
-| Function.GetFunction | rest | ga | no | — |
+| Function.FunctionGetIamPolicy | rest | ga | yes | — |
+| Function.FunctionSetIamPolicy | rest | ga | yes | — |
+| Function.FunctionTestIamPermissions | rest | ga | yes | — |
+| Function.GenerateDownloadUrl | rest | ga | yes | — |
+| Function.GenerateUploadUrl | rest | ga | yes | — |
+| Function.GetFunction | rest | ga | yes | — |
 | Function.GetLocation | rest | ga | no | shared google.cloud.location.Locations.GetLocation common API; not enumerated in the service Discovery document, but served (GET /v1/projects/{p}/locations/{l}) and wire-tested |
 | Function.GetOperation | rest | ga | no | — |
 | Function.InvokeTrigger | rest | ga | no | deployed function's HTTPS-trigger URL (a function URL host, not a Discovery method); served at {location}-{project}.cloudfunctions.net/{functionId} and wire-tested |
-| Function.ListFunctions | rest | ga | no | — |
-| Function.ListLocations | rest | ga | no | — |
+| Function.ListFunctions | rest | ga | yes | — |
+| Function.ListLocations | rest | ga | yes | — |
 | Function.ListOperations | rest | ga | no | — |
 | Function.ListRuntimes | rest | ga | yes | — |
 | Function.RedirectFunctionUpgradeTraffic | rest | ga | yes | — |
 | Function.RollbackFunctionUpgradeTraffic | rest | ga | yes | — |
 | Function.SetupFunctionUpgradeConfig | rest | ga | yes | — |
-| Function.UpdateFunction | rest | ga | no | — |
+| Function.UpdateFunction | rest | ga | yes | — |
 | Function.WaitOperation | rest | ga | no | google.longrunning.Operations.WaitOperation common API (gRPC-only in the canonical proto — no HTTP annotation); the emulator additionally serves it at POST /v2/projects/{p}/locations/{l}/operations/{id}:wait and wire-tests it |
 | GenerateDownloadUrl | grpc | ga | yes | — |
 | GenerateUploadUrl | grpc | ga | yes | — |
@@ -548,10 +548,10 @@ _23 cell(s): ga=23 limited=0 preview=0 unsupported=0_
 | GetIamPolicy | grpc | ga | yes | — |
 | IAM.ServiceAccountCreate | rest | ga | yes | — |
 | IAM.ServiceAccountDelete | rest | ga | yes | — |
-| IAM.ServiceAccountDisable | rest | ga | no | — |
-| IAM.ServiceAccountEnable | rest | ga | no | — |
+| IAM.ServiceAccountDisable | rest | ga | yes | — |
+| IAM.ServiceAccountEnable | rest | ga | yes | — |
 | IAM.ServiceAccountGet | rest | ga | yes | — |
-| IAM.ServiceAccountGetIamPolicy | rest | ga | no | — |
+| IAM.ServiceAccountGetIamPolicy | rest | ga | yes | — |
 | IAM.ServiceAccountKeyCreate | rest | ga | yes | — |
 | IAM.ServiceAccountKeyDelete | rest | ga | yes | — |
 | IAM.ServiceAccountKeyDisable | rest | ga | no | — |
@@ -559,13 +559,13 @@ _23 cell(s): ga=23 limited=0 preview=0 unsupported=0_
 | IAM.ServiceAccountKeyGet | rest | ga | no | — |
 | IAM.ServiceAccountKeyList | rest | ga | yes | — |
 | IAM.ServiceAccountList | rest | ga | yes | — |
-| IAM.ServiceAccountPatch | rest | ga | no | — |
-| IAM.ServiceAccountSetIamPolicy | rest | ga | no | — |
+| IAM.ServiceAccountPatch | rest | ga | yes | — |
+| IAM.ServiceAccountSetIamPolicy | rest | ga | yes | — |
 | IAM.ServiceAccountSignBlob | rest | ga | yes | — |
-| IAM.ServiceAccountSignJwt | rest | ga | no | — |
-| IAM.ServiceAccountTestIamPermissions | rest | ga | no | — |
-| IAM.ServiceAccountUndelete | rest | ga | no | — |
-| IAM.ServiceAccountUpdate | rest | ga | no | — |
+| IAM.ServiceAccountSignJwt | rest | ga | yes | — |
+| IAM.ServiceAccountTestIamPermissions | rest | ga | yes | — |
+| IAM.ServiceAccountUndelete | rest | ga | yes | — |
+| IAM.ServiceAccountUpdate | rest | ga | yes | — |
 | SetIamPolicy | grpc | ga | yes | — |
 | TestIamPermissions | grpc | ga | yes | — |
 
@@ -637,14 +637,14 @@ _70 cell(s): ga=70 limited=0 preview=0 unsupported=0_
 | KMS.CryptoKeyDelete | rest | ga | no | — |
 | KMS.CryptoKeyEncrypt | rest | ga | yes | — |
 | KMS.CryptoKeyGet | rest | ga | yes | — |
-| KMS.CryptoKeyGetIamPolicy | rest | ga | no | — |
+| KMS.CryptoKeyGetIamPolicy | rest | ga | yes | — |
 | KMS.CryptoKeyList | rest | ga | yes | — |
-| KMS.CryptoKeySetIamPolicy | rest | ga | no | — |
-| KMS.CryptoKeyTestIamPermissions | rest | ga | no | — |
+| KMS.CryptoKeySetIamPolicy | rest | ga | yes | — |
+| KMS.CryptoKeyTestIamPermissions | rest | ga | yes | — |
 | KMS.CryptoKeyUpdatePrimaryVersion | rest | ga | no | — |
 | KMS.CryptoKeyVersionAsymmetricDecrypt | rest | ga | no | — |
 | KMS.CryptoKeyVersionAsymmetricSign | rest | ga | no | — |
-| KMS.CryptoKeyVersionCreate | rest | ga | no | — |
+| KMS.CryptoKeyVersionCreate | rest | ga | yes | — |
 | KMS.CryptoKeyVersionDecapsulate | rest | ga | no | — |
 | KMS.CryptoKeyVersionDelete | rest | ga | no | — |
 | KMS.CryptoKeyVersionDestroy | rest | ga | no | — |
@@ -653,20 +653,20 @@ _70 cell(s): ga=70 limited=0 preview=0 unsupported=0_
 | KMS.CryptoKeyVersionGetPublicKey | rest | ga | no | — |
 | KMS.CryptoKeyVersionImport | rest | ga | no | — |
 | KMS.CryptoKeyVersionImportTrusted | rest | ga | no | — |
-| KMS.CryptoKeyVersionList | rest | ga | no | — |
+| KMS.CryptoKeyVersionList | rest | ga | yes | — |
 | KMS.CryptoKeyVersionMacSign | rest | ga | no | — |
 | KMS.CryptoKeyVersionMacVerify | rest | ga | no | — |
 | KMS.CryptoKeyVersionRestore | rest | ga | no | — |
 | KMS.CryptoKeyVersionUpdate | rest | ga | no | — |
-| KMS.ImportJobCreate | rest | ga | no | — |
+| KMS.ImportJobCreate | rest | ga | yes | — |
 | KMS.ImportJobGet | rest | ga | no | — |
-| KMS.ImportJobList | rest | ga | no | — |
+| KMS.ImportJobList | rest | ga | yes | — |
 | KMS.KeyRingCreate | rest | ga | yes | — |
 | KMS.KeyRingGet | rest | ga | yes | — |
 | KMS.KeyRingGetIamPolicy | rest | ga | yes | — |
 | KMS.KeyRingList | rest | ga | yes | — |
-| KMS.KeyRingSetIamPolicy | rest | ga | no | — |
-| KMS.KeyRingTestIamPermissions | rest | ga | no | — |
+| KMS.KeyRingSetIamPolicy | rest | ga | yes | — |
+| KMS.KeyRingTestIamPermissions | rest | ga | yes | — |
 | ListCryptoKeyVersions | grpc | ga | yes | — |
 | ListCryptoKeys | grpc | ga | yes | — |
 | ListImportJobs | grpc | ga | yes | — |
@@ -719,33 +719,33 @@ _93 cell(s): ga=91 limited=1 preview=0 unsupported=1_
 | ListMonitoredResourceDescriptors | grpc | ga | yes | — |
 | ListSinks | grpc | ga | yes | — |
 | ListViews | grpc | ga | yes | — |
-| Logging.BucketCreate | rest | ga | no | — |
-| Logging.BucketCreateAsync | rest | ga | no | — |
-| Logging.BucketDelete | rest | ga | no | — |
-| Logging.BucketGet | rest | ga | no | — |
-| Logging.BucketList | rest | ga | no | — |
-| Logging.BucketUndelete | rest | ga | no | — |
+| Logging.BucketCreate | rest | ga | yes | — |
+| Logging.BucketCreateAsync | rest | ga | yes | — |
+| Logging.BucketDelete | rest | ga | yes | — |
+| Logging.BucketGet | rest | ga | yes | — |
+| Logging.BucketList | rest | ga | yes | — |
+| Logging.BucketUndelete | rest | ga | yes | — |
 | Logging.BucketUpdate | rest | ga | no | — |
 | Logging.BucketUpdateAsync | rest | ga | no | — |
 | Logging.CmekGet | rest | ga | yes | — |
-| Logging.CmekUpdate | rest | ga | no | — |
+| Logging.CmekUpdate | rest | ga | yes | — |
 | Logging.EntryList | rest | ga | yes | — |
 | Logging.EntryWrite | rest | ga | yes | — |
-| Logging.ExclusionCreate | rest | ga | no | — |
-| Logging.ExclusionDelete | rest | ga | no | — |
-| Logging.ExclusionGet | rest | ga | no | — |
-| Logging.ExclusionList | rest | ga | no | — |
+| Logging.ExclusionCreate | rest | ga | yes | — |
+| Logging.ExclusionDelete | rest | ga | yes | — |
+| Logging.ExclusionGet | rest | ga | yes | — |
+| Logging.ExclusionList | rest | ga | yes | — |
 | Logging.ExclusionPatch | rest | ga | no | — |
-| Logging.LinkCreate | rest | ga | no | — |
-| Logging.LinkDelete | rest | ga | no | — |
-| Logging.LinkGet | rest | ga | no | — |
-| Logging.LinkList | rest | ga | no | — |
-| Logging.LogDelete | rest | ga | no | — |
-| Logging.LogList | rest | ga | no | — |
-| Logging.LogScopeCreate | rest | ga | no | — |
-| Logging.LogScopeDelete | rest | ga | no | — |
-| Logging.LogScopeGet | rest | ga | no | — |
-| Logging.LogScopeList | rest | ga | no | — |
+| Logging.LinkCreate | rest | ga | yes | — |
+| Logging.LinkDelete | rest | ga | yes | — |
+| Logging.LinkGet | rest | ga | yes | — |
+| Logging.LinkList | rest | ga | yes | — |
+| Logging.LogDelete | rest | ga | yes | — |
+| Logging.LogList | rest | ga | yes | — |
+| Logging.LogScopeCreate | rest | ga | yes | — |
+| Logging.LogScopeDelete | rest | ga | yes | — |
+| Logging.LogScopeGet | rest | ga | yes | — |
+| Logging.LogScopeList | rest | ga | yes | — |
 | Logging.LogScopeUpdate | rest | ga | no | — |
 | Logging.MetricCreate | rest | ga | yes | — |
 | Logging.MetricDelete | rest | ga | yes | — |
@@ -754,18 +754,18 @@ _93 cell(s): ga=91 limited=1 preview=0 unsupported=1_
 | Logging.MetricUpdate | rest | ga | yes | — |
 | Logging.MonitoredResourceDescriptorList | rest | ga | yes | — |
 | Logging.SettingsGet | rest | ga | yes | — |
-| Logging.SettingsUpdate | rest | ga | no | — |
-| Logging.SinkCreate | rest | ga | no | — |
-| Logging.SinkDelete | rest | ga | no | — |
-| Logging.SinkGet | rest | ga | no | — |
-| Logging.SinkList | rest | ga | no | — |
+| Logging.SettingsUpdate | rest | ga | yes | — |
+| Logging.SinkCreate | rest | ga | yes | — |
+| Logging.SinkDelete | rest | ga | yes | — |
+| Logging.SinkGet | rest | ga | yes | — |
+| Logging.SinkList | rest | ga | yes | — |
 | Logging.SinkPatch | rest | ga | no | — |
 | Logging.SinkUpdate | rest | ga | no | — |
-| Logging.ViewCreate | rest | ga | no | — |
-| Logging.ViewDelete | rest | ga | no | — |
-| Logging.ViewGet | rest | ga | no | — |
+| Logging.ViewCreate | rest | ga | yes | — |
+| Logging.ViewDelete | rest | ga | yes | — |
+| Logging.ViewGet | rest | ga | yes | — |
 | Logging.ViewGetIamPolicy | rest | ga | no | — |
-| Logging.ViewList | rest | ga | no | — |
+| Logging.ViewList | rest | ga | yes | — |
 | Logging.ViewSetIamPolicy | rest | ga | no | — |
 | Logging.ViewTestIamPermissions | rest | ga | no | — |
 | Logging.ViewUpdate | rest | ga | no | — |
@@ -803,29 +803,29 @@ _44 cell(s): ga=44 limited=0 preview=0 unsupported=0_
 | ListClusters | grpc | ga | yes | — |
 | ListConsumerGroups | grpc | ga | yes | — |
 | ListTopics | grpc | ga | yes | — |
-| ManagedKafka.AddAclEntry | rest | ga | no | — |
-| ManagedKafka.CreateAcl | rest | ga | no | — |
+| ManagedKafka.AddAclEntry | rest | ga | yes | — |
+| ManagedKafka.CreateAcl | rest | ga | yes | — |
 | ManagedKafka.CreateCluster | rest | ga | yes | — |
-| ManagedKafka.CreateTopic | rest | ga | no | — |
-| ManagedKafka.DeleteAcl | rest | ga | no | — |
+| ManagedKafka.CreateTopic | rest | ga | yes | — |
+| ManagedKafka.DeleteAcl | rest | ga | yes | — |
 | ManagedKafka.DeleteCluster | rest | ga | yes | — |
 | ManagedKafka.DeleteConsumerGroup | rest | ga | no | — |
-| ManagedKafka.DeleteTopic | rest | ga | no | — |
-| ManagedKafka.GetAcl | rest | ga | no | — |
-| ManagedKafka.GetCluster | rest | ga | no | — |
+| ManagedKafka.DeleteTopic | rest | ga | yes | — |
+| ManagedKafka.GetAcl | rest | ga | yes | — |
+| ManagedKafka.GetCluster | rest | ga | yes | — |
 | ManagedKafka.GetConsumerGroup | rest | ga | no | — |
 | ManagedKafka.GetOperation | rest | ga | yes | — |
-| ManagedKafka.GetTopic | rest | ga | no | — |
-| ManagedKafka.ListAcls | rest | ga | no | — |
-| ManagedKafka.ListClusters | rest | ga | no | — |
-| ManagedKafka.ListConsumerGroups | rest | ga | no | — |
+| ManagedKafka.GetTopic | rest | ga | yes | — |
+| ManagedKafka.ListAcls | rest | ga | yes | — |
+| ManagedKafka.ListClusters | rest | ga | yes | — |
+| ManagedKafka.ListConsumerGroups | rest | ga | yes | — |
 | ManagedKafka.ListOperations | rest | ga | yes | — |
-| ManagedKafka.ListTopics | rest | ga | no | — |
-| ManagedKafka.RemoveAclEntry | rest | ga | no | — |
+| ManagedKafka.ListTopics | rest | ga | yes | — |
+| ManagedKafka.RemoveAclEntry | rest | ga | yes | — |
 | ManagedKafka.UpdateAcl | rest | ga | no | — |
-| ManagedKafka.UpdateCluster | rest | ga | no | — |
+| ManagedKafka.UpdateCluster | rest | ga | yes | — |
 | ManagedKafka.UpdateConsumerGroup | rest | ga | no | — |
-| ManagedKafka.UpdateTopic | rest | ga | no | — |
+| ManagedKafka.UpdateTopic | rest | ga | yes | — |
 | RemoveAclEntry | grpc | ga | yes | — |
 | UpdateAcl | grpc | ga | yes | — |
 | UpdateCluster | grpc | ga | yes | — |
@@ -838,14 +838,14 @@ _8 cell(s): ga=0 limited=8 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
-| Memorystore.CreateInstance | rest | limited | no | metadata-only over ResourceStore (no data plane) |
-| Memorystore.DeleteInstance | rest | limited | no | metadata-only over ResourceStore (no data plane) |
-| Memorystore.GetInstance | rest | limited | no | metadata-only over ResourceStore (no data plane) |
-| Memorystore.GetLocation | rest | limited | no | metadata-only over ResourceStore (no data plane) |
-| Memorystore.ListInstances | rest | limited | no | metadata-only over ResourceStore (no data plane) |
-| Memorystore.ListLocations | rest | limited | no | metadata-only over ResourceStore (no data plane) |
-| Memorystore.UpdateInstance | rest | limited | no | metadata-only over ResourceStore (no data plane) |
-| Memorystore.UpgradeInstance | rest | limited | no | metadata-only over ResourceStore (no data plane) |
+| Memorystore.CreateInstance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
+| Memorystore.DeleteInstance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
+| Memorystore.GetInstance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
+| Memorystore.GetLocation | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
+| Memorystore.ListInstances | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
+| Memorystore.ListLocations | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
+| Memorystore.UpdateInstance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
+| Memorystore.UpgradeInstance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
 
 ## metastore
 
@@ -871,42 +871,42 @@ _60 cell(s): ga=50 limited=0 preview=0 unsupported=10_
 | ListMetadataImports | grpc | ga | yes | — |
 | ListServices | grpc | ga | yes | — |
 | Metastore.AlterMetadataResourceLocation | rest | unsupported | no | explicit Unimplemented stub |
-| Metastore.BackupGetIamPolicy | rest | ga | no | — |
-| Metastore.BackupSetIamPolicy | rest | ga | no | — |
-| Metastore.CreateBackup | rest | ga | no | — |
-| Metastore.CreateFederation | rest | ga | no | — |
-| Metastore.CreateMetadataImport | rest | ga | no | — |
+| Metastore.BackupGetIamPolicy | rest | ga | yes | — |
+| Metastore.BackupSetIamPolicy | rest | ga | yes | — |
+| Metastore.CreateBackup | rest | ga | yes | — |
+| Metastore.CreateFederation | rest | ga | yes | — |
+| Metastore.CreateMetadataImport | rest | ga | yes | — |
 | Metastore.CreateService | rest | ga | yes | — |
-| Metastore.DatabaseGetIamPolicy | rest | ga | no | — |
-| Metastore.DatabaseSetIamPolicy | rest | ga | no | — |
-| Metastore.DeleteBackup | rest | ga | no | — |
-| Metastore.DeleteFederation | rest | ga | no | — |
+| Metastore.DatabaseGetIamPolicy | rest | ga | yes | — |
+| Metastore.DatabaseSetIamPolicy | rest | ga | yes | — |
+| Metastore.DeleteBackup | rest | ga | yes | — |
+| Metastore.DeleteFederation | rest | ga | yes | — |
 | Metastore.DeleteService | rest | ga | yes | — |
 | Metastore.ExportMetadata | rest | unsupported | no | explicit Unimplemented stub |
-| Metastore.FederationGetIamPolicy | rest | ga | no | — |
-| Metastore.FederationSetIamPolicy | rest | ga | no | — |
-| Metastore.FederationTestIamPermissions | rest | ga | no | — |
-| Metastore.GetBackup | rest | ga | no | — |
-| Metastore.GetFederation | rest | ga | no | — |
-| Metastore.GetMetadataImport | rest | ga | no | — |
+| Metastore.FederationGetIamPolicy | rest | ga | yes | — |
+| Metastore.FederationSetIamPolicy | rest | ga | yes | — |
+| Metastore.FederationTestIamPermissions | rest | ga | yes | — |
+| Metastore.GetBackup | rest | ga | yes | — |
+| Metastore.GetFederation | rest | ga | yes | — |
+| Metastore.GetMetadataImport | rest | ga | yes | — |
 | Metastore.GetOperation | rest | ga | yes | — |
-| Metastore.GetService | rest | ga | no | — |
-| Metastore.ListBackups | rest | ga | no | — |
-| Metastore.ListFederations | rest | ga | no | — |
-| Metastore.ListMetadataImports | rest | ga | no | — |
+| Metastore.GetService | rest | ga | yes | — |
+| Metastore.ListBackups | rest | ga | yes | — |
+| Metastore.ListFederations | rest | ga | yes | — |
+| Metastore.ListMetadataImports | rest | ga | yes | — |
 | Metastore.ListOperations | rest | ga | yes | — |
-| Metastore.ListServices | rest | ga | no | — |
+| Metastore.ListServices | rest | ga | yes | — |
 | Metastore.MoveTableToDatabase | rest | unsupported | no | explicit Unimplemented stub |
 | Metastore.QueryMetadata | rest | unsupported | no | explicit Unimplemented stub |
 | Metastore.RestoreService | rest | unsupported | no | explicit Unimplemented stub |
-| Metastore.ServiceGetIamPolicy | rest | ga | no | — |
-| Metastore.ServiceSetIamPolicy | rest | ga | no | — |
-| Metastore.ServiceTestIamPermissions | rest | ga | no | — |
-| Metastore.TableGetIamPolicy | rest | ga | no | — |
-| Metastore.TableSetIamPolicy | rest | ga | no | — |
-| Metastore.UpdateFederation | rest | ga | no | — |
-| Metastore.UpdateMetadataImport | rest | ga | no | — |
-| Metastore.UpdateService | rest | ga | no | — |
+| Metastore.ServiceGetIamPolicy | rest | ga | yes | — |
+| Metastore.ServiceSetIamPolicy | rest | ga | yes | — |
+| Metastore.ServiceTestIamPermissions | rest | ga | yes | — |
+| Metastore.TableGetIamPolicy | rest | ga | yes | — |
+| Metastore.TableSetIamPolicy | rest | ga | yes | — |
+| Metastore.UpdateFederation | rest | ga | yes | — |
+| Metastore.UpdateMetadataImport | rest | ga | yes | — |
+| Metastore.UpdateService | rest | ga | yes | — |
 | MoveTableToDatabase | grpc | unsupported | no | the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub |
 | QueryMetadata | grpc | unsupported | no | the gRPC metadata query plane is not modelled; explicit Unimplemented stub |
 | RestoreService | grpc | unsupported | no | Hive Thrift metadata restore is not modelled; explicit Unimplemented stub |
@@ -951,30 +951,30 @@ _68 cell(s): ga=68 limited=0 preview=0 unsupported=0_
 | Monitoring.CreateAlertPolicy | rest | ga | yes | — |
 | Monitoring.CreateMetricDescriptor | rest | ga | yes | — |
 | Monitoring.CreateNotificationChannel | rest | ga | yes | — |
-| Monitoring.CreateService | rest | ga | no | — |
-| Monitoring.CreateServiceLevelObjective | rest | ga | no | — |
+| Monitoring.CreateService | rest | ga | yes | — |
+| Monitoring.CreateServiceLevelObjective | rest | ga | yes | — |
 | Monitoring.CreateServiceTimeSeries | rest | ga | yes | — |
 | Monitoring.CreateTimeSeries | rest | ga | yes | — |
 | Monitoring.DeleteAlertPolicy | rest | ga | yes | — |
 | Monitoring.DeleteMetricDescriptor | rest | ga | yes | — |
 | Monitoring.DeleteNotificationChannel | rest | ga | yes | — |
-| Monitoring.DeleteService | rest | ga | no | — |
-| Monitoring.DeleteServiceLevelObjective | rest | ga | no | — |
+| Monitoring.DeleteService | rest | ga | yes | — |
+| Monitoring.DeleteServiceLevelObjective | rest | ga | yes | — |
 | Monitoring.GetAlertPolicy | rest | ga | yes | — |
 | Monitoring.GetMetricDescriptor | rest | ga | yes | — |
 | Monitoring.GetMonitoredResourceDescriptor | rest | ga | yes | — |
 | Monitoring.GetNotificationChannel | rest | ga | yes | — |
 | Monitoring.GetNotificationChannelDescriptor | rest | ga | yes | — |
 | Monitoring.GetNotificationChannelVerificationCode | rest | ga | yes | — |
-| Monitoring.GetService | rest | ga | no | — |
-| Monitoring.GetServiceLevelObjective | rest | ga | no | — |
+| Monitoring.GetService | rest | ga | yes | — |
+| Monitoring.GetServiceLevelObjective | rest | ga | yes | — |
 | Monitoring.ListAlertPolicies | rest | ga | yes | — |
 | Monitoring.ListMetricDescriptors | rest | ga | yes | — |
 | Monitoring.ListMonitoredResourceDescriptors | rest | ga | yes | — |
 | Monitoring.ListNotificationChannelDescriptors | rest | ga | yes | — |
 | Monitoring.ListNotificationChannels | rest | ga | yes | — |
-| Monitoring.ListServiceLevelObjectives | rest | ga | no | — |
-| Monitoring.ListServices | rest | ga | no | — |
+| Monitoring.ListServiceLevelObjectives | rest | ga | yes | — |
+| Monitoring.ListServices | rest | ga | yes | — |
 | Monitoring.ListTimeSeries | rest | ga | no | — |
 | Monitoring.SendNotificationChannelVerificationCode | rest | ga | yes | — |
 | Monitoring.UpdateAlertPolicy | rest | ga | yes | — |
@@ -1025,26 +1025,26 @@ _45 cell(s): ga=45 limited=0 preview=0 unsupported=0_
 | ListTopics | grpc | ga | yes | — |
 | ModifyAckDeadline | grpc | ga | yes | — |
 | ModifyPushConfig | grpc | ga | yes | — |
-| PubSub.SubscriptionAcknowledge | rest | ga | no | — |
+| PubSub.SubscriptionAcknowledge | rest | ga | yes | — |
 | PubSub.SubscriptionCreate | rest | ga | yes | — |
 | PubSub.SubscriptionDelete | rest | ga | yes | — |
-| PubSub.SubscriptionDetach | rest | ga | no | — |
+| PubSub.SubscriptionDetach | rest | ga | yes | — |
 | PubSub.SubscriptionGet | rest | ga | yes | — |
-| PubSub.SubscriptionGetIamPolicy | rest | ga | no | — |
+| PubSub.SubscriptionGetIamPolicy | rest | ga | yes | — |
 | PubSub.SubscriptionList | rest | ga | yes | — |
-| PubSub.SubscriptionModifyAckDeadline | rest | ga | no | — |
+| PubSub.SubscriptionModifyAckDeadline | rest | ga | yes | — |
 | PubSub.SubscriptionPull | rest | ga | yes | — |
-| PubSub.SubscriptionSetIamPolicy | rest | ga | no | — |
-| PubSub.SubscriptionTestIamPermissions | rest | ga | no | — |
-| PubSub.SubscriptionUpdate | rest | ga | no | — |
+| PubSub.SubscriptionSetIamPolicy | rest | ga | yes | — |
+| PubSub.SubscriptionTestIamPermissions | rest | ga | yes | — |
+| PubSub.SubscriptionUpdate | rest | ga | yes | — |
 | PubSub.TopicCreate | rest | ga | yes | — |
 | PubSub.TopicDelete | rest | ga | yes | — |
 | PubSub.TopicGet | rest | ga | yes | — |
-| PubSub.TopicGetIamPolicy | rest | ga | no | — |
+| PubSub.TopicGetIamPolicy | rest | ga | yes | — |
 | PubSub.TopicList | rest | ga | yes | — |
 | PubSub.TopicPublish | rest | ga | yes | — |
-| PubSub.TopicSetIamPolicy | rest | ga | no | — |
-| PubSub.TopicTestIamPermissions | rest | ga | no | — |
+| PubSub.TopicSetIamPolicy | rest | ga | yes | — |
+| PubSub.TopicTestIamPermissions | rest | ga | yes | — |
 | Publish | grpc | ga | yes | — |
 | Pull | grpc | ga | yes | — |
 | Seek | grpc | ga | yes | — |
@@ -1065,15 +1065,15 @@ _20 cell(s): ga=20 limited=0 preview=0 unsupported=0_
 | GetProject | grpc | ga | yes | — |
 | ListProjects | grpc | ga | yes | — |
 | MoveProject | grpc | ga | yes | — |
-| ResourceManager.ProjectCreate | rest | ga | no | — |
-| ResourceManager.ProjectDelete | rest | ga | no | — |
-| ResourceManager.ProjectGet | rest | ga | no | — |
-| ResourceManager.ProjectGetIamPolicy | rest | ga | no | — |
-| ResourceManager.ProjectList | rest | ga | no | — |
-| ResourceManager.ProjectSetIamPolicy | rest | ga | no | — |
-| ResourceManager.ProjectTestIamPermissions | rest | ga | no | — |
-| ResourceManager.ProjectUndelete | rest | ga | no | — |
-| ResourceManager.ProjectUpdate | rest | ga | no | — |
+| ResourceManager.ProjectCreate | rest | ga | yes | — |
+| ResourceManager.ProjectDelete | rest | ga | yes | — |
+| ResourceManager.ProjectGet | rest | ga | yes | — |
+| ResourceManager.ProjectGetIamPolicy | rest | ga | yes | — |
+| ResourceManager.ProjectList | rest | ga | yes | — |
+| ResourceManager.ProjectSetIamPolicy | rest | ga | yes | — |
+| ResourceManager.ProjectTestIamPermissions | rest | ga | yes | — |
+| ResourceManager.ProjectUndelete | rest | ga | yes | — |
+| ResourceManager.ProjectUpdate | rest | ga | yes | — |
 | SearchProjects | grpc | ga | yes | — |
 | SetIamPolicy | grpc | ga | yes | — |
 | TestIamPermissions | grpc | ga | yes | — |
@@ -1104,7 +1104,7 @@ _28 cell(s): ga=28 limited=0 preview=0 unsupported=0_
 | Run.GetRevision | rest | ga | yes | — |
 | Run.GetService | rest | ga | yes | — |
 | Run.Invoke | rest | ga | no | Cloud Run data-plane invocation (the synthesized {service}-{token}.{location}.run.app host, or the legacy /run/v2/.../services/{svc}/<subpath> path form), not a Discovery method; served by the InvocationCodec/runtime seam and wire/unit-tested (mock resolves 503, the docker/k8s executor proxies to the revision) |
-| Run.ListOperations | rest | ga | no | — |
+| Run.ListOperations | rest | ga | yes | — |
 | Run.ListRevisions | rest | ga | yes | — |
 | Run.ListServices | rest | ga | yes | — |
 | Run.SetIamPolicy | rest | ga | yes | — |
@@ -1128,14 +1128,14 @@ _16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
 | PauseJob | grpc | ga | yes | — |
 | ResumeJob | grpc | ga | yes | — |
 | RunJob | grpc | ga | yes | — |
-| Scheduler.JobsCreate | rest | ga | no | — |
-| Scheduler.JobsDelete | rest | ga | no | — |
-| Scheduler.JobsGet | rest | ga | no | — |
-| Scheduler.JobsList | rest | ga | no | — |
-| Scheduler.JobsPatch | rest | ga | no | — |
-| Scheduler.JobsPause | rest | ga | no | — |
+| Scheduler.JobsCreate | rest | ga | yes | — |
+| Scheduler.JobsDelete | rest | ga | yes | — |
+| Scheduler.JobsGet | rest | ga | yes | — |
+| Scheduler.JobsList | rest | ga | yes | — |
+| Scheduler.JobsPatch | rest | ga | yes | — |
+| Scheduler.JobsPause | rest | ga | yes | — |
 | Scheduler.JobsResume | rest | ga | no | — |
-| Scheduler.JobsRun | rest | ga | no | — |
+| Scheduler.JobsRun | rest | ga | yes | — |
 | UpdateJob | grpc | ga | yes | — |
 
 ## secretmanager
@@ -1158,23 +1158,23 @@ _34 cell(s): ga=34 limited=0 preview=0 unsupported=0_
 | ListSecretVersions | grpc | ga | yes | — |
 | ListSecrets | grpc | ga | yes | — |
 | RotateSecret | grpc | ga | yes | — |
-| Secret.Access | rest | ga | no | — |
-| Secret.AddVersion | rest | ga | no | — |
-| Secret.Create | rest | ga | no | — |
-| Secret.Delete | rest | ga | no | — |
-| Secret.DestroyVersion | rest | ga | no | — |
-| Secret.DisableVersion | rest | ga | no | — |
-| Secret.EnableManagedRotation | rest | ga | no | — |
-| Secret.EnableVersion | rest | ga | no | — |
-| Secret.Get | rest | ga | no | — |
-| Secret.GetIamPolicy | rest | ga | no | — |
-| Secret.GetVersion | rest | ga | no | — |
-| Secret.List | rest | ga | no | — |
-| Secret.ListVersions | rest | ga | no | — |
-| Secret.RotateSecret | rest | ga | no | — |
-| Secret.SetIamPolicy | rest | ga | no | — |
-| Secret.TestIamPermissions | rest | ga | no | — |
-| Secret.Update | rest | ga | no | — |
+| Secret.Access | rest | ga | yes | — |
+| Secret.AddVersion | rest | ga | yes | — |
+| Secret.Create | rest | ga | yes | — |
+| Secret.Delete | rest | ga | yes | — |
+| Secret.DestroyVersion | rest | ga | yes | — |
+| Secret.DisableVersion | rest | ga | yes | — |
+| Secret.EnableManagedRotation | rest | ga | yes | — |
+| Secret.EnableVersion | rest | ga | yes | — |
+| Secret.Get | rest | ga | yes | — |
+| Secret.GetIamPolicy | rest | ga | yes | — |
+| Secret.GetVersion | rest | ga | yes | — |
+| Secret.List | rest | ga | yes | — |
+| Secret.ListVersions | rest | ga | yes | — |
+| Secret.RotateSecret | rest | ga | yes | — |
+| Secret.SetIamPolicy | rest | ga | yes | — |
+| Secret.TestIamPermissions | rest | ga | yes | — |
+| Secret.Update | rest | ga | yes | — |
 | SetIamPolicy | grpc | ga | yes | — |
 | TestIamPermissions | grpc | ga | yes | — |
 | UpdateSecret | grpc | ga | yes | — |
@@ -1191,7 +1191,7 @@ _12 cell(s): ga=12 limited=0 preview=0 unsupported=0_
 | EnableService | grpc | ga | yes | — |
 | GetService | grpc | ga | yes | — |
 | ListServices | grpc | ga | yes | — |
-| ServiceUsage.ServicesBatchEnable | rest | ga | no | — |
+| ServiceUsage.ServicesBatchEnable | rest | ga | yes | — |
 | ServiceUsage.ServicesBatchGet | rest | ga | yes | — |
 | ServiceUsage.ServicesDisable | rest | ga | yes | — |
 | ServiceUsage.ServicesEnable | rest | ga | yes | — |
@@ -1282,24 +1282,24 @@ _34 cell(s): ga=34 limited=0 preview=0 unsupported=0_
 | ResumeQueue | grpc | ga | yes | — |
 | RunTask | grpc | ga | yes | — |
 | SetIamPolicy | grpc | ga | yes | — |
-| Tasks.QueuesCreate | rest | ga | no | — |
-| Tasks.QueuesDelete | rest | ga | no | — |
-| Tasks.QueuesGet | rest | ga | no | — |
-| Tasks.QueuesGetIamPolicy | rest | ga | no | — |
-| Tasks.QueuesList | rest | ga | no | — |
-| Tasks.QueuesPatch | rest | ga | no | — |
-| Tasks.QueuesPause | rest | ga | no | — |
-| Tasks.QueuesPurge | rest | ga | no | — |
+| Tasks.QueuesCreate | rest | ga | yes | — |
+| Tasks.QueuesDelete | rest | ga | yes | — |
+| Tasks.QueuesGet | rest | ga | yes | — |
+| Tasks.QueuesGetIamPolicy | rest | ga | yes | — |
+| Tasks.QueuesList | rest | ga | yes | — |
+| Tasks.QueuesPatch | rest | ga | yes | — |
+| Tasks.QueuesPause | rest | ga | yes | — |
+| Tasks.QueuesPurge | rest | ga | yes | — |
 | Tasks.QueuesResume | rest | ga | no | — |
-| Tasks.QueuesSetIamPolicy | rest | ga | no | — |
-| Tasks.QueuesTestIamPermissions | rest | ga | no | — |
-| Tasks.TasksBatchCreate | rest | ga | no | — |
-| Tasks.TasksBatchDelete | rest | ga | no | — |
-| Tasks.TasksCreate | rest | ga | no | — |
-| Tasks.TasksDelete | rest | ga | no | — |
-| Tasks.TasksGet | rest | ga | no | — |
-| Tasks.TasksList | rest | ga | no | — |
-| Tasks.TasksRun | rest | ga | no | — |
+| Tasks.QueuesSetIamPolicy | rest | ga | yes | — |
+| Tasks.QueuesTestIamPermissions | rest | ga | yes | — |
+| Tasks.TasksBatchCreate | rest | ga | yes | — |
+| Tasks.TasksBatchDelete | rest | ga | yes | — |
+| Tasks.TasksCreate | rest | ga | yes | — |
+| Tasks.TasksDelete | rest | ga | yes | — |
+| Tasks.TasksGet | rest | ga | yes | — |
+| Tasks.TasksList | rest | ga | yes | — |
+| Tasks.TasksRun | rest | ga | yes | — |
 | TestIamPermissions | grpc | ga | yes | — |
 | UpdateQueue | grpc | ga | yes | — |
 
@@ -1314,9 +1314,9 @@ _8 cell(s): ga=8 limited=0 preview=0 unsupported=0_
 | GetExecution | grpc | ga | yes | — |
 | ListExecutions | grpc | ga | yes | — |
 | WorkflowExecution.CancelExecution | rest | ga | no | — |
-| WorkflowExecution.CreateExecution | rest | ga | no | — |
+| WorkflowExecution.CreateExecution | rest | ga | yes | — |
 | WorkflowExecution.GetExecution | rest | ga | no | — |
-| WorkflowExecution.ListExecutions | rest | ga | no | — |
+| WorkflowExecution.ListExecutions | rest | ga | yes | — |
 
 ## workflows
 
@@ -1335,5 +1335,5 @@ _13 cell(s): ga=13 limited=0 preview=0 unsupported=0_
 | Workflow.GetOperation | rest | ga | no | — |
 | Workflow.GetWorkflow | rest | ga | yes | — |
 | Workflow.ListWorkflowRevisions | rest | ga | yes | — |
-| Workflow.ListWorkflows | rest | ga | no | — |
+| Workflow.ListWorkflows | rest | ga | yes | — |
 | Workflow.UpdateWorkflow | rest | ga | yes | — |

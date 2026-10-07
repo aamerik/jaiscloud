@@ -142,7 +142,7 @@ func (c *JSONCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReque
 
 	nr.Action = deriveAction(resourceType, isCollection, name, r.Method, custom, apiVersion)
 	if nr.Action == "" {
-		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
+		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 501)
 	}
 	return nr, nil
 }

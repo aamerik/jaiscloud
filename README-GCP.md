@@ -50,7 +50,11 @@ Every operation (per transport) is classified **ga / limited / preview / unsuppo
 cell also carries a **`verified`** signal — whether real recorded evidence backs it (a
 schema-validated committed transcript response for REST, a passing official-client check for
 gRPC). `ga` without `verified` is a registration claim, not a response guarantee; run
-`make gcp-status-evidence` for the REST gaps. The matrix is *derived* — from the emulator's
+`make gcp-status-evidence` for the REST gaps. The coverage is gated: the conformance harness
+synthesizes a probe for every Discovery-mapped operation and fails on any that has neither a
+validated response nor a reasoned entry in
+[`tests/gcpconformance/testdata/coverage-exemptions.json`](tests/gcpconformance/testdata/coverage-exemptions.json).
+The matrix is *derived* — from the emulator's
 operation registry, the official Discovery schemas, and the wire-conformance harness — so it
 can't drift from the code:
 
