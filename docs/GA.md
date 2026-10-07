@@ -54,8 +54,8 @@ fails CI if the committed matrix drifts.
 
 | state | cells |
 | --- | ---: |
-| ga | 939 |
-| limited | 101 |
+| ga | 935 |
+| limited | 105 |
 | preview | 14 |
 | unsupported | 32 |
 | **total** | **1086** |
@@ -64,7 +64,7 @@ fails CI if the committed matrix drifts.
 
 | transport | ga | limited | preview | unsupported |
 | --- | ---: | ---: | ---: | ---: |
-| REST (JSON, Discovery-backed) | 497 | 100 | 14 | 12 |
+| REST (JSON, Discovery-backed) | 493 | 104 | 14 | 12 |
 | gRPC (proto descriptors + official-client conformance) | 442 | 1 | 0 | 20 |
 
 gRPC-only services (no REST transport): **Firestore Admin, Operations (long-running)**.
@@ -79,8 +79,10 @@ gRPC-only services (no REST transport): **Firestore Admin, Operations (long-runn
 | **unsupported** | not implemented — explicit `Unimplemented` stub |
 
 Part of the gRPC surface is `ga` today — the cells the official `cloud.google.com/go`
-conformance suite verifies against a live emulator (see §5); the rest remain `limited`,
-verified against the proto descriptors only (see §7).
+conformance suite verifies against a live emulator (see §5); a single cell
+(Logging `TailLogEntries`) remains `limited`, verified against the proto
+descriptors only, and the explicit `Unimplemented` stubs are `unsupported` (see
+§7).
 
 ### Recorded evidence (`verified`)
 
@@ -221,7 +223,7 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 
 ## 7. Explicitly non-GA at launch
 
-- **BigQuery** — 20 cells `limited` + 3 `unsupported`. `jobs.query`/`jobs.insert` (query
+- **BigQuery** — 22 cells `limited` + 3 `unsupported`. `jobs.query`/`jobs.insert` (query
   configuration) evaluate a documented Standard SQL subset — `SELECT` plus DDL/DML — on an
   in-process pure-Go SQLite engine in both memory and `--dsn` modes
   (`docs/gcp-bigquery-sql-engine.md`); `jobs.insert` also runs `configuration.load` jobs from
@@ -235,6 +237,15 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 - **Metadata-only services** — `limited` REST cells: **Cloud SQL** (23 + 1 `unsupported` stub),
   **Compute Engine** (32 + 1), **Cloud DNS** (15 + 1), **Memorystore** (8). No control plane,
   VM/disk/network data plane, authoritative DNS server, or Redis data plane.
+- **Partial REST update masks** — the REST Logging `buckets.patch`/`buckets:updateAsync`
+  (no `restrictedFields`) and `sinks.patch`/`sinks.update` (no
+  `bigqueryOptions`/`interceptChildren`/`outputVersionFormat`) verbs merge only a
+  subset of each resource's writable fields; an unmapped field path returns
+  `501 UNIMPLEMENTED`. Those 4 cells are graded `limited` (AUD5 reconciliation).
+  The other REST Logging/Monitoring update verbs merge every writable field, so
+  they stay `ga`; the conformance probe's `updateMask=labels` (a field none of
+  these resources has) makes them look unserved, which is a probe artifact, not a
+  fidelity gap (`AUD5-2`).
 - **BigLake Iceberg REST catalog** — 14 cells `preview` (no official Discovery document).
 - **Cloud Functions** — **v1 and v2 surfaces**. gcloud 586 (and current client SDKs) speak the
   v2 API, so `/v2/projects/{p}/locations/{loc}/functions` (and `operations`) route to the
@@ -261,10 +272,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   transports: by default it runs the **GCP Functions Framework** contract (`POST /` on `$PORT`,
   source mounted at `/workspace`, `FUNCTION_TARGET`/`FUNCTION_SIGNATURE_TYPE`/`LOG_EXECUTION_ID`
   injected), and `JAISCLOUD_FUNCTIONS_EXECUTOR=lambda` selects the legacy Lambda-RIE contract.
-- **gRPC** — **1** of **458** cells remains `limited`: verified against proto descriptors only.
-  The other **437** are `ga` and **20** are explicit `unsupported` stubs (see the `Unimplemented`
+- **gRPC** — **1** of **463** cells remains `limited`: verified against proto descriptors only.
+  The other **442** are `ga` and **20** are explicit `unsupported` stubs (see the `Unimplemented`
   list below), verified with the official `cloud.google.com/go` clients against a live emulator.
-  The conformance harness exercises **475** checks over those `ga` proto methods (Cloud Run 15,
+  The conformance harness exercises **483** checks over those `ga` proto methods (Cloud Run 15,
   Container 30, Dataproc 26,
   Datastore 15, Eventarc 39, Firestore 18, Firestore Admin 27, Functions 20, IAM 9, KMS 35, Logging 21,
   Managed Kafka 21, Metastore 13, Monitoring 34, Operations 9, Pub/Sub 25, Resource Manager 11,
@@ -276,12 +287,12 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   apply it to (see README-GCP "Known Limitations"). Managed Kafka consumer groups are `ga`: with the opt-in broker mode the list/get/
   update/delete surface reads the live broker's group coordinator, so the hermetic harness asserts
   the no-broker shape (`NOT_FOUND` for an absent group) and the real-Kafka data plane is covered by
-  the k3d gate (`tests/persistent_mode/gcp/managedkafka-broker`). Logging's gRPC `ConfigServiceV2` serves sinks + exclusions and
+  the k3d gate (`tests/persistent_mode/gcp/managedkafka-broker`). Logging's gRPC `ConfigServiceV2` serves sinks, exclusions, buckets, views, links, log scopes and the CMEK/settings records, and
   `MetricsServiceV2` serves logs-based metrics (create/get/list/update/delete, with the descriptor
   `name`/`type`/`description` synthesized from the metric id/description and `metric_kind`/`value_type`
-  immutable across updates); its
-  log-bucket/view/link, CMEK/settings, and `CopyLogEntries` RPCs are explicit `unsupported`
-  `Unimplemented` stubs (the emulator has no bucket/view storage plane).
+  immutable across updates); only `CopyLogEntries` remains an explicit `unsupported`
+  `Unimplemented` stub (a cross-project log copy needs a per-bucket entry data plane the emulator
+  does not model).
 - **Other documented caveats** (functional, not cell states — see
   [README-GCP Known Limitations](../README-GCP.md#known-limitations)): Firestore `ExecutePipeline` implements the read-only
   relational subset (`collection`/`collection_group`/`database`/`documents`/`literals` sources

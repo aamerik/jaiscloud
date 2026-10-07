@@ -12,8 +12,8 @@ Cells: **1086**
 
 | state | count |
 | --- | --- |
-| ga | 939 |
-| limited | 101 |
+| ga | 935 |
+| limited | 105 |
 | preview | 14 |
 | unsupported | 32 |
 
@@ -21,7 +21,7 @@ Cells: **1086**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 497 | 100 | 14 | 12 |
+| rest | 493 | 104 | 14 | 12 |
 | grpc | 442 | 1 | 0 | 20 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -683,7 +683,7 @@ _70 cell(s): ga=70 limited=0 preview=0 unsupported=0_
 
 ## logging
 
-_93 cell(s): ga=91 limited=1 preview=0 unsupported=1_
+_93 cell(s): ga=87 limited=5 preview=0 unsupported=1_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -725,8 +725,8 @@ _93 cell(s): ga=91 limited=1 preview=0 unsupported=1_
 | Logging.BucketGet | rest | ga | yes | — |
 | Logging.BucketList | rest | ga | yes | — |
 | Logging.BucketUndelete | rest | ga | yes | — |
-| Logging.BucketUpdate | rest | ga | no | — |
-| Logging.BucketUpdateAsync | rest | ga | no | — |
+| Logging.BucketUpdate | rest | limited | no | REST `buckets.patch` cannot update a LogBucket's writable `restrictedFields` (the merge supports description/retentionDays/analyticsEnabled/indexConfigs/cmekSettings); other fields including `restrictedFields` are rejected with 501 UNIMPLEMENTED |
+| Logging.BucketUpdateAsync | rest | limited | no | REST `buckets:updateAsync` cannot update a LogBucket's writable `restrictedFields` (the merge supports description/retentionDays/analyticsEnabled/indexConfigs/cmekSettings); other fields including `restrictedFields` are rejected with 501 UNIMPLEMENTED |
 | Logging.CmekGet | rest | ga | yes | — |
 | Logging.CmekUpdate | rest | ga | yes | — |
 | Logging.EntryList | rest | ga | yes | — |
@@ -759,8 +759,8 @@ _93 cell(s): ga=91 limited=1 preview=0 unsupported=1_
 | Logging.SinkDelete | rest | ga | yes | — |
 | Logging.SinkGet | rest | ga | yes | — |
 | Logging.SinkList | rest | ga | yes | — |
-| Logging.SinkPatch | rest | ga | no | — |
-| Logging.SinkUpdate | rest | ga | no | — |
+| Logging.SinkPatch | rest | limited | no | REST `sinks.patch` cannot update a LogSink's writable `bigqueryOptions`/`interceptChildren`/`outputVersionFormat` (the merge supports destination/filter/description/disabled/exclusions/includeChildren); other fields are rejected with 501 UNIMPLEMENTED |
+| Logging.SinkUpdate | rest | limited | no | REST `sinks.update` cannot update a LogSink's writable `bigqueryOptions`/`interceptChildren`/`outputVersionFormat` (the merge supports destination/filter/description/disabled/exclusions/includeChildren); other fields are rejected with 501 UNIMPLEMENTED |
 | Logging.ViewCreate | rest | ga | yes | — |
 | Logging.ViewDelete | rest | ga | yes | — |
 | Logging.ViewGet | rest | ga | yes | — |
