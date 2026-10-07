@@ -424,6 +424,43 @@ var formatters = map[string]func(project, name string) string{
 		svc, id := svcSLO(n)
 		return fmt.Sprintf("projects/%s/services/%s/serviceLevelObjectives/%s", p, svc, id)
 	},
+	// Firestore Admin control plane (google.firestore.admin.v1).
+	// A database name is "projects/{p}/databases/{db}" (callers pass the
+	// database id).
+	"firestore-database": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/databases/%s", p, n)
+	},
+	// A collection-group field nests under the database: callers pass
+	// "database/collectionGroup/fieldPath" (the field path may contain dots but
+	// never slashes).
+	"firestore-field": func(p, n string) string {
+		parts := strings.SplitN(n, "/", 3)
+		if len(parts) < 3 {
+			return n
+		}
+		return fmt.Sprintf("projects/%s/databases/%s/collectionGroups/%s/fields/%s", p, parts[0], parts[1], parts[2])
+	},
+	// A user creds resource: callers pass "database/userCredsId".
+	"firestore-user-creds": func(p, n string) string {
+		db, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/databases/%s/userCreds/%s", p, db, id)
+	},
+	// A backup schedule: callers pass "database/scheduleId".
+	"firestore-backup-schedule": func(p, n string) string {
+		db, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/databases/%s/backupSchedules/%s", p, db, id)
+	},
+	// A backup is location-scoped: callers pass "location/backupId".
+	"firestore-backup": func(p, n string) string {
+		loc, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/backups/%s", p, loc, id)
+	},
+	// A Firestore Admin long-running operation is database-scoped: callers pass
+	// "database/operationId".
+	"firestore-operation": func(p, n string) string {
+		db, op := wfLoc(n)
+		return fmt.Sprintf("projects/%s/databases/%s/operations/%s", p, db, op)
+	},
 }
 
 // ProjectNumber returns a synthesized, stable 12-digit decimal project number
