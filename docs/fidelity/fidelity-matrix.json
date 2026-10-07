@@ -129,11 +129,11 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 501
+        "rest": 512
       },
       "unverified": {
         "grpc": 21,
-        "rest": 122
+        "rest": 111
       }
     },
     "grpc_only_services": [
@@ -4745,12 +4745,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "firestore.projects.databases.documents.createDocument",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=firestore.projects.databases.documents.createDocument",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 7 transcript entries)"
       ]
     },
     {
@@ -4801,11 +4801,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "firestore.projects.databases.documents.get",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=firestore.projects.databases.documents.get",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -8012,12 +8012,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "logging.billingAccounts.locations.buckets.patch",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=logging.billingAccounts.locations.buckets.patch",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -8026,12 +8026,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "logging.billingAccounts.locations.buckets.updateAsync",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=logging.billingAccounts.locations.buckets.updateAsync",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -8147,12 +8147,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "logging.billingAccounts.exclusions.patch",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=logging.billingAccounts.exclusions.patch",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -8296,12 +8296,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "logging.folders.locations.logScopes.patch",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=logging.folders.locations.logScopes.patch",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -8409,7 +8409,7 @@
         "discovery=logging.updateSettings",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -8472,12 +8472,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "logging.billingAccounts.sinks.patch",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=logging.billingAccounts.sinks.patch",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -8486,12 +8486,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "logging.billingAccounts.sinks.update",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=logging.billingAccounts.sinks.update",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -8594,12 +8594,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "logging.billingAccounts.locations.buckets.views.patch",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=logging.billingAccounts.locations.buckets.views.patch",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -11083,12 +11083,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "monitoring.services.patch",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=monitoring.services.patch",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -11097,12 +11097,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "monitoring.services.serviceLevelObjectives.patch",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=monitoring.services.serviceLevelObjectives.patch",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
