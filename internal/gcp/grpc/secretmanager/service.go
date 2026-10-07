@@ -218,7 +218,13 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 		}
 		if selected("rotation") {
 			if r := proto.GetRotation(); r != nil {
-				cur.Rotation = rotationFromProto(r)
+				nr := rotationFromProto(r)
+				// managed_rotation_status is output-only: keep the stored
+				// config/status across a schedule update that doesn't carry it.
+				if cur.Rotation != nil {
+					nr.ManagedRotation = cur.Rotation.ManagedRotation
+				}
+				cur.Rotation = nr
 			}
 		}
 		if selected("version_aliases") {
@@ -433,6 +439,140 @@ func (s *Service) setVersionState(ctx context.Context, name, state string) (*sec
 	return versionToProto(project, v), nil
 }
 
+// ─── Cloud SQL managed rotation ──────────────────────────────────────────────
+
+// managedRotationConfigured reports whether Cloud SQL managed rotation has been
+// enabled for sec. The API allows enabling it only once, so the enable
+// precondition keys on presence (not on the ACTIVE state).
+func managedRotationConfigured(sec secretmanagerstore.Secret) bool {
+	return sec.Rotation != nil && sec.Rotation.ManagedRotation != nil
+}
+
+// managedRotationEnabled reports whether sec has ACTIVE Cloud SQL managed
+// rotation.
+func managedRotationEnabled(sec secretmanagerstore.Secret) bool {
+	return sec.Rotation != nil && sec.Rotation.ManagedRotation != nil &&
+		sec.Rotation.ManagedRotation.State == "ACTIVE"
+}
+
+func managedRotationErr(msg string) error {
+	return mapError(&model.ProviderError{
+		Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION", Message: msg,
+	})
+}
+
+// EnableManagedRotation enables Cloud SQL managed rotation for a secret: it
+// validates the Cloud SQL single-user credentials, records them, and stores a
+// password (the supplied one, else a generated one) as a new ENABLED version.
+// The emulator has no Cloud SQL data plane, so the password is not applied to a
+// database user (GA7-D1).
+func (s *Service) EnableManagedRotation(ctx context.Context, req *secretmanagerpb.EnableManagedRotationRequest) (*secretmanagerpb.SecretVersion, error) {
+	project, id, _, ok := splitSecretResource(req.GetParent())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid parent resource name", 400))
+	}
+	creds := req.GetCloudSqlSingleUserCredentials()
+	if creds == nil {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "cloud_sql_single_user_credentials is required", 400))
+	}
+	if creds.GetInstanceId() == "" || creds.GetUsername() == "" {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "cloud_sql_single_user_credentials requires instance_id and username", 400))
+	}
+	sec, err := s.secrets.GetSecret(ctx, project, id)
+	if err != nil {
+		return nil, mapSecretErr(err)
+	}
+	if managedRotationConfigured(sec) {
+		return nil, managedRotationErr("managed rotation is already enabled for secret " + id)
+	}
+	password := creds.GetPassword()
+	if password == "" {
+		if password, err = secretmanagerstore.GeneratePassword(); err != nil {
+			return nil, mapError(err)
+		}
+	}
+	cfg := &secretmanagerstore.ManagedRotation{State: "ACTIVE", InstanceID: creds.GetInstanceId(), Username: creds.GetUsername()}
+	return s.appendManagedVersion(ctx, project, id, []byte(password), cfg)
+}
+
+// RotateSecret performs a managed rotation for a secret whose managed rotation
+// is already enabled: it stores a freshly generated password as a new ENABLED
+// version. Without a Cloud SQL data plane the password is not applied to the
+// linked database user (GA7-D1).
+func (s *Service) RotateSecret(ctx context.Context, req *secretmanagerpb.RotateSecretRequest) (*secretmanagerpb.SecretVersion, error) {
+	project, id, _, ok := splitSecretResource(req.GetParent())
+	if !ok {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid parent resource name", 400))
+	}
+	sec, err := s.secrets.GetSecret(ctx, project, id)
+	if err != nil {
+		return nil, mapSecretErr(err)
+	}
+	if !managedRotationEnabled(sec) {
+		return nil, managedRotationErr("managed rotation is not enabled for secret " + id)
+	}
+	password, err := secretmanagerstore.GeneratePassword()
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return s.appendManagedVersion(ctx, project, id, []byte(password), nil)
+}
+
+// appendManagedVersion stores data as a new ENABLED version. When cfg is
+// non-nil it also records the managed-rotation config and allocates the version
+// number in one locked read-modify-write, so a concurrent AddVersion cannot
+// roll the counter back and managed rotation cannot be enabled twice. The
+// payload is encrypted before the locked write, so a crypto failure cannot leave
+// the secret one-shot-enabled with no version.
+func (s *Service) appendManagedVersion(ctx context.Context, project, id string, data []byte, cfg *secretmanagerstore.ManagedRotation) (*secretmanagerpb.SecretVersion, error) {
+	sec, err := s.secrets.GetSecret(ctx, project, id)
+	if err != nil {
+		return nil, mapSecretErr(err)
+	}
+	rawDEK, wrappedDEK, err := s.encryptor.Wrap(ctx, project, sec.KmsKeyName)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	encrypted, err := kmsstore.EncryptData(rawDEK, data, nil)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	var ver int
+	if _, err := s.secrets.UpdateSecretAtomic(ctx, project, id, func(cur secretmanagerstore.Secret) (secretmanagerstore.Secret, error) {
+		if cfg != nil && managedRotationConfigured(cur) {
+			return secretmanagerstore.Secret{}, secretmanagerstore.ErrManagedRotationEnabled
+		}
+		ver = cur.NextVer
+		cur.NextVer++
+		if cfg != nil {
+			// Copy the Rotation before setting the new field: GetSecret returns
+			// a struct whose *Rotation aliases the store's map entry, so an
+			// in-place field write would race a concurrent reader.
+			rot := secretmanagerstore.Rotation{}
+			if cur.Rotation != nil {
+				rot = *cur.Rotation
+			}
+			rot.ManagedRotation = cfg
+			cur.Rotation = &rot
+		}
+		return cur, nil
+	}); err != nil {
+		if errors.Is(err, secretmanagerstore.ErrManagedRotationEnabled) {
+			return nil, managedRotationErr("managed rotation is already enabled for secret " + id)
+		}
+		return nil, mapSecretErr(err)
+	}
+	stv := secretmanagerstore.Version{
+		SecretID: id, VersionID: strconv.Itoa(ver), State: "ENABLED",
+		CreateTime: clock.Now(), Data: base64.StdEncoding.EncodeToString(encrypted),
+		KmsKeyName: sec.KmsKeyName, WrappedDEK: wrappedDEK,
+	}
+	if err := s.secrets.CreateVersion(ctx, project, stv); err != nil {
+		return nil, mapError(err)
+	}
+	return versionToProto(project, stv), nil
+}
+
 // maybeRotate advances a secret's rotation schedule when it is due: it creates
 // an empty version and advances nextRotationTime by rotationPeriod. This is
 // GCP's automatic-rotation behavior, evaluated lazily on read (mirrors the
@@ -595,7 +735,23 @@ func rotationToProto(r *secretmanagerstore.Rotation) *secretmanagerpb.Rotation {
 			out.RotationPeriod = durationpb.New(d)
 		}
 	}
+	if r.ManagedRotation != nil {
+		out.ManagedRotationStatus = &secretmanagerpb.Rotation_ManagedRotationStatus{
+			State: managedStateToProto(r.ManagedRotation.State),
+		}
+	}
 	return out
+}
+
+// managedStateToProto maps the stored managed-rotation state to its proto enum.
+func managedStateToProto(state string) secretmanagerpb.Rotation_ManagedRotationStatus_State {
+	switch state {
+	case "ACTIVE":
+		return secretmanagerpb.Rotation_ManagedRotationStatus_ACTIVE
+	case "INACTIVE":
+		return secretmanagerpb.Rotation_ManagedRotationStatus_INACTIVE
+	}
+	return secretmanagerpb.Rotation_ManagedRotationStatus_STATE_UNSPECIFIED
 }
 
 // kmsKeyNameFromSecret extracts the CMEK key name from the secret's

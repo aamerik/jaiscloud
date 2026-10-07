@@ -38,21 +38,23 @@ func New(secrets secretmanagerstore.Store, resources store.ResourceStore, encryp
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"Secret.Create":             p.Create,
-		"Secret.List":               p.List,
-		"Secret.Get":                p.Get,
-		"Secret.Update":             p.Update,
-		"Secret.Delete":             p.Delete,
-		"Secret.AddVersion":         p.AddVersion,
-		"Secret.Access":             p.Access,
-		"Secret.ListVersions":       p.ListVersions,
-		"Secret.GetVersion":         p.GetVersion,
-		"Secret.DestroyVersion":     p.DestroyVersion,
-		"Secret.DisableVersion":     p.DisableVersion,
-		"Secret.EnableVersion":      p.EnableVersion,
-		"Secret.GetIamPolicy":       p.GetIamPolicy,
-		"Secret.SetIamPolicy":       p.SetIamPolicy,
-		"Secret.TestIamPermissions": p.TestIamPermissions,
+		"Secret.Create":                p.Create,
+		"Secret.List":                  p.List,
+		"Secret.Get":                   p.Get,
+		"Secret.Update":                p.Update,
+		"Secret.Delete":                p.Delete,
+		"Secret.AddVersion":            p.AddVersion,
+		"Secret.Access":                p.Access,
+		"Secret.ListVersions":          p.ListVersions,
+		"Secret.GetVersion":            p.GetVersion,
+		"Secret.DestroyVersion":        p.DestroyVersion,
+		"Secret.DisableVersion":        p.DisableVersion,
+		"Secret.EnableVersion":         p.EnableVersion,
+		"Secret.EnableManagedRotation": p.EnableManagedRotation,
+		"Secret.RotateSecret":          p.RotateSecret,
+		"Secret.GetIamPolicy":          p.GetIamPolicy,
+		"Secret.SetIamPolicy":          p.SetIamPolicy,
+		"Secret.TestIamPermissions":    p.TestIamPermissions,
 	}
 }
 
@@ -334,6 +336,11 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 				m.Annotations = annotations
 			}
 			if r := rotationFromBody(body); r != nil {
+				// managedRotationStatus is output-only: keep the stored
+				// config/status across a schedule update that doesn't carry it.
+				if m.Rotation != nil {
+					r.ManagedRotation = m.Rotation.ManagedRotation
+				}
 				m.Rotation = r
 			}
 			if va := versionAliasesFromBody(body); va != nil {
@@ -480,6 +487,154 @@ func (p *Provider) AddVersion(ctx context.Context, nr *model.NormalizedRequest) 
 		return nil, err
 	}
 	return provider.OK(versionToMap(v)), nil
+}
+
+// ─── Cloud SQL managed rotation ──────────────────────────────────────────────
+
+// managedRotationConfigured reports whether Cloud SQL managed rotation has been
+// enabled for s. The API allows enabling it only once, so the enable
+// precondition keys on presence (not on the ACTIVE state).
+func managedRotationConfigured(s secretmanagerstore.Secret) bool {
+	return s.Rotation != nil && s.Rotation.ManagedRotation != nil
+}
+
+// managedRotationEnabled reports whether s has ACTIVE Cloud SQL managed
+// rotation.
+func managedRotationEnabled(s secretmanagerstore.Secret) bool {
+	return s.Rotation != nil && s.Rotation.ManagedRotation != nil && s.Rotation.ManagedRotation.State == "ACTIVE"
+}
+
+func managedRotationErr(msg string) error {
+	return &model.ProviderError{Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION", Message: msg}
+}
+
+// EnableManagedRotation (secrets:enableManagedRotation) validates the Cloud SQL
+// single-user credentials, records them, and stores a password (the supplied
+// one, else a generated one) as a new ENABLED version. The emulator has no Cloud
+// SQL data plane, so the password is not applied to a database user (GA7-D1).
+func (p *Provider) EnableManagedRotation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	id := secretID(name)
+	body, _ := nr.Params["body"].(map[string]any)
+	creds, _ := body["cloudSqlSingleUserCredentials"].(map[string]any)
+	if creds == nil {
+		return nil, model.NewProviderError("InvalidRequest", "cloudSqlSingleUserCredentials is required", 400)
+	}
+	instanceID, _ := creds["instanceId"].(string)
+	username, _ := creds["username"].(string)
+	if instanceID == "" || username == "" {
+		return nil, model.NewProviderError("InvalidRequest", "cloudSqlSingleUserCredentials requires instanceId and username", 400)
+	}
+	sec, err := p.secrets.GetSecret(ctx, nr.AccountID, id)
+	if err != nil {
+		return nil, mapSecretErr(err)
+	}
+	if managedRotationConfigured(sec) {
+		return nil, managedRotationErr("managed rotation is already enabled for secret " + id)
+	}
+	password, _ := creds["password"].(string)
+	if password == "" {
+		if password, err = secretmanagerstore.GeneratePassword(); err != nil {
+			return nil, err
+		}
+	}
+	cfg := &secretmanagerstore.ManagedRotation{State: "ACTIVE", InstanceID: instanceID, Username: username}
+	v, err := p.appendManagedVersion(ctx, nr, id, []byte(password), cfg)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(versionToMap(v)), nil
+}
+
+// RotateSecret (secrets:rotateSecret) rotates a secret whose managed rotation is
+// already enabled, storing a freshly generated password as a new ENABLED
+// version. Without a Cloud SQL data plane the password is not applied to the
+// linked database user (GA7-D1).
+func (p *Provider) RotateSecret(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	id := secretID(name)
+	sec, err := p.secrets.GetSecret(ctx, nr.AccountID, id)
+	if err != nil {
+		return nil, mapSecretErr(err)
+	}
+	if !managedRotationEnabled(sec) {
+		return nil, managedRotationErr("managed rotation is not enabled for secret " + id)
+	}
+	password, err := secretmanagerstore.GeneratePassword()
+	if err != nil {
+		return nil, err
+	}
+	v, err := p.appendManagedVersion(ctx, nr, id, []byte(password), nil)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(versionToMap(v)), nil
+}
+
+// appendManagedVersion stores data as a new ENABLED version, encrypting it with
+// the secret's CMEK. When cfg is non-nil it records the managed-rotation config
+// and allocates the version number in one locked read-modify-write, so managed
+// rotation cannot be enabled twice and a concurrent AddVersion cannot roll the
+// counter back. The payload is encrypted before the locked write, so a crypto
+// failure cannot leave the secret one-shot-enabled with no version.
+func (p *Provider) appendManagedVersion(ctx context.Context, nr *model.NormalizedRequest, id string, data []byte, cfg *secretmanagerstore.ManagedRotation) (versionMeta, error) {
+	sec, err := p.secrets.GetSecret(ctx, nr.AccountID, id)
+	if err != nil {
+		return versionMeta{}, mapSecretErr(err)
+	}
+	rawDEK, wrappedDEK, err := p.encryptor.Wrap(ctx, nr.AccountID, sec.KmsKeyName)
+	if err != nil {
+		return versionMeta{}, err
+	}
+	encrypted, err := kms.EncryptData(rawDEK, data, nil)
+	if err != nil {
+		return versionMeta{}, err
+	}
+	var ver int
+	if _, err := p.secrets.UpdateSecretAtomic(ctx, nr.AccountID, id, func(cur secretmanagerstore.Secret) (secretmanagerstore.Secret, error) {
+		if cfg != nil && managedRotationConfigured(cur) {
+			return secretmanagerstore.Secret{}, secretmanagerstore.ErrManagedRotationEnabled
+		}
+		ver = cur.NextVer
+		cur.NextVer++
+		if cfg != nil {
+			// Copy the Rotation before setting the new field: GetSecret returns
+			// a struct whose *Rotation aliases the store's map entry, so an
+			// in-place field write would race a concurrent reader.
+			rot := secretmanagerstore.Rotation{}
+			if cur.Rotation != nil {
+				rot = *cur.Rotation
+			}
+			rot.ManagedRotation = cfg
+			cur.Rotation = &rot
+		}
+		return cur, nil
+	}); err != nil {
+		if errors.Is(err, secretmanagerstore.ErrManagedRotationEnabled) {
+			return versionMeta{}, managedRotationErr("managed rotation is already enabled for secret " + id)
+		}
+		return versionMeta{}, mapSecretErr(err)
+	}
+	v := versionMeta{
+		Name:       nr.ResourceID("secret", id) + "/versions/" + strconv.Itoa(ver),
+		State:      "ENABLED",
+		CreateTime: clock.Now().UTC().Format(time.RFC3339Nano),
+		Data:       base64.StdEncoding.EncodeToString(encrypted),
+	}
+	if err := p.secrets.CreateVersion(ctx, nr.AccountID, secretmanagerstore.Version{
+		SecretID: id, VersionID: strconv.Itoa(ver), State: "ENABLED",
+		CreateTime: mustParse(v.CreateTime), Data: v.Data,
+		KmsKeyName: sec.KmsKeyName, WrappedDEK: wrappedDEK,
+	}); err != nil {
+		return versionMeta{}, err
+	}
+	return v, nil
 }
 
 func (p *Provider) Access(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -738,9 +893,18 @@ func secretToMap(m secretMeta) map[string]any {
 		out["annotations"] = m.Annotations
 	}
 	if m.Rotation != nil {
-		out["rotation"] = map[string]any{
-			"nextRotationTime": m.Rotation.NextRotationTime,
-			"rotationPeriod":   m.Rotation.RotationPeriod,
+		rot := map[string]any{}
+		if m.Rotation.NextRotationTime != "" {
+			rot["nextRotationTime"] = m.Rotation.NextRotationTime
+		}
+		if m.Rotation.RotationPeriod != "" {
+			rot["rotationPeriod"] = m.Rotation.RotationPeriod
+		}
+		if m.Rotation.ManagedRotation != nil {
+			rot["managedRotationStatus"] = map[string]any{"state": m.Rotation.ManagedRotation.State}
+		}
+		if len(rot) > 0 {
+			out["rotation"] = rot
 		}
 	}
 	if m.VersionAliases != nil {

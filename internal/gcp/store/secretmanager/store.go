@@ -5,6 +5,8 @@ package secretmanager
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"time"
 )
@@ -13,13 +15,41 @@ var (
 	ErrNoSuchSecret  = errors.New("NoSuchSecret")
 	ErrNoSuchVersion = errors.New("NoSuchVersion")
 	ErrAlreadyExists = errors.New("AlreadyExists")
+	// ErrManagedRotationEnabled is returned by a rotation helper when Cloud SQL
+	// managed rotation is already ACTIVE for a secret: the API allows enabling
+	// it only once (subsequent rotations go through RotateSecret).
+	ErrManagedRotationEnabled = errors.New("managed rotation already enabled")
 )
 
 // Rotation is a secret's automatic-rotation schedule. NextRotationTime is an
 // RFC3339 timestamp; RotationPeriod is a duration string (e.g. "3600s").
+// ManagedRotation carries the Cloud SQL managed-rotation config/status, nil
+// until EnableManagedRotation has been called.
 type Rotation struct {
-	NextRotationTime string `json:"nextRotationTime"`
-	RotationPeriod   string `json:"rotationPeriod"`
+	NextRotationTime string           `json:"nextRotationTime"`
+	RotationPeriod   string           `json:"rotationPeriod"`
+	ManagedRotation  *ManagedRotation `json:"managedRotation,omitempty"`
+}
+
+// ManagedRotation is the Cloud SQL managed-rotation state for a secret (GCP's
+// typed-secret managed rotation). State is "ACTIVE"/"INACTIVE"; InstanceID and
+// Username are the linked Cloud SQL single-user credentials.
+type ManagedRotation struct {
+	State      string `json:"state"`
+	InstanceID string `json:"instanceId,omitempty"`
+	Username   string `json:"username,omitempty"`
+}
+
+// GeneratePassword returns a fresh random password for Cloud SQL managed
+// rotation. The API only specifies "a random password will be generated", so
+// the alphabet is an implementation detail: 24 CSPRNG bytes, base64-encoded
+// (32 printable characters).
+func GeneratePassword() (string, error) {
+	var b [24]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(b[:]), nil
 }
 
 // Secret is Secret Manager secret metadata.

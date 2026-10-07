@@ -384,6 +384,10 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "DisableVersion"
 			case "enable":
 				return "EnableVersion"
+			case "enableManagedRotation":
+				return "EnableManagedRotation"
+			case "rotateSecret":
+				return "RotateSecret"
 			case "getIamPolicy":
 				return "GetIamPolicy"
 			case "setIamPolicy":
