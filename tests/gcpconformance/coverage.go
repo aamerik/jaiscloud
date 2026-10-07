@@ -143,6 +143,17 @@ var actionOverrides = map[string]string{
 	"Logging.SettingsUpdate": "logging.projects.updateSettings",
 	"Logging.CmekGet":        "logging.projects.getCmekSettings",
 	"Logging.CmekUpdate":     "logging.projects.updateCmekSettings",
+
+	// GKE (container) setter custom methods nest under clusters / nodePools and
+	// several use a different Discovery verb than the registry action name.
+	"Container.SetAddonsConfig":         "container.projects.locations.clusters.setAddons",
+	"Container.SetLabels":               "container.projects.locations.clusters.setResourceLabels",
+	"Container.SetLoggingService":       "container.projects.locations.clusters.setLogging",
+	"Container.SetMonitoringService":    "container.projects.locations.clusters.setMonitoring",
+	"Container.SetNodePoolAutoscaling":  "container.projects.locations.clusters.nodePools.setAutoscaling",
+	"Container.SetNodePoolSize":         "container.projects.locations.clusters.nodePools.setSize",
+	"Container.SetNodePoolManagement":   "container.projects.locations.clusters.nodePools.setManagement",
+	"Container.RollbackNodePoolUpgrade": "container.projects.locations.clusters.nodePools.rollback",
 }
 
 // ActionResolver maps emulator registry actions to Discovery method ids within
