@@ -9,6 +9,7 @@
 //	GET    /v1/projects/{p}/locations/{l}/workflows                     workflows.list
 //	POST   /v1/projects/{p}/locations/{l}/workflows?workflowId=…        workflows.create
 //	GET    /v1/projects/{p}/locations/{l}/workflows/{w}                 workflows.get
+//	GET    /v1/projects/{p}/locations/{l}/workflows/{w}:listRevisions   workflows.listRevisions
 //	PATCH  /v1/projects/{p}/locations/{l}/workflows/{w}?updateMask=…    workflows.update
 //	DELETE /v1/projects/{p}/locations/{l}/workflows/{w}                 workflows.delete
 //	GET    /v1/projects/{p}/locations/{l}/operations/{id}               operations.get
@@ -69,12 +70,13 @@ func (p *Provider) SetOperationResolvers(rs ...OperationResolver) {
 // Routes maps "Workflow.<Action>" keys to their handlers.
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"Workflow.ListWorkflows":  p.ListWorkflows,
-		"Workflow.GetWorkflow":    p.GetWorkflow,
-		"Workflow.CreateWorkflow": p.CreateWorkflow,
-		"Workflow.UpdateWorkflow": p.UpdateWorkflow,
-		"Workflow.DeleteWorkflow": p.DeleteWorkflow,
-		"Workflow.GetOperation":   p.GetOperation,
+		"Workflow.ListWorkflows":         p.ListWorkflows,
+		"Workflow.ListWorkflowRevisions": p.ListWorkflowRevisions,
+		"Workflow.GetWorkflow":           p.GetWorkflow,
+		"Workflow.CreateWorkflow":        p.CreateWorkflow,
+		"Workflow.UpdateWorkflow":        p.UpdateWorkflow,
+		"Workflow.DeleteWorkflow":        p.DeleteWorkflow,
+		"Workflow.GetOperation":          p.GetOperation,
 	}
 }
 
@@ -115,11 +117,37 @@ func (p *Provider) GetWorkflow(ctx context.Context, nr *model.NormalizedRequest)
 	if location == "" {
 		location = core.LocationFromName(name)
 	}
-	w, err := p.core.GetWorkflow(ctx, project, location, core.WorkflowIDFromName(name))
+	r, err := p.core.GetWorkflowRevision(ctx, project, location, core.WorkflowIDFromName(name),
+		strParam(nr, "revisionId"))
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(core.WorkflowJSON(w, project)), nil
+	return provider.OK(core.RevisionJSON(r, project)), nil
+}
+
+// ListWorkflowRevisions serves GET …/workflows/{w}:listRevisions. A pageSize of
+// 20 (max 100) and the newest-first ordering are the Discovery contract.
+func (p *Provider) ListWorkflowRevisions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	name := strParam(nr, "name")
+	location := strParam(nr, "location")
+	if location == "" {
+		location = core.LocationFromName(name)
+	}
+	page, next, err := p.core.ListWorkflowRevisions(ctx, project, location, core.WorkflowIDFromName(name),
+		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]any, 0, len(page))
+	for _, r := range page {
+		items = append(items, core.RevisionJSON(r, project))
+	}
+	out := map[string]any{"workflows": items}
+	if next != "" {
+		out["nextPageToken"] = next
+	}
+	return provider.OK(out), nil
 }
 
 func (p *Provider) CreateWorkflow(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

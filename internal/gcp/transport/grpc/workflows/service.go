@@ -11,8 +11,8 @@
 // generated client's Wait observes it without polling; in the opt-in async mode
 // it is returned in flight and the client's poll resolves it through
 // ResolveOperation (registered with the shared google.longrunning.Operations
-// service in main.go). ListWorkflowRevisions is not implemented (Unimplemented),
-// matching the emulator's control-plane scope.
+// service in main.go). ListWorkflowRevisions serves the workflow revision
+// history, and GetWorkflow's optional revision_id selects one revision.
 package workflows
 
 import (
@@ -69,11 +69,26 @@ func (s *Service) ListWorkflows(ctx context.Context, req *workflowspb.ListWorkfl
 
 func (s *Service) GetWorkflow(ctx context.Context, req *workflowspb.GetWorkflowRequest) (*workflowspb.Workflow, error) {
 	project := s.projectFor(ctx, req.GetName())
-	w, err := s.core.GetWorkflow(ctx, project, core.LocationFromName(req.GetName()), core.WorkflowIDFromName(req.GetName()))
+	r, err := s.core.GetWorkflowRevision(ctx, project, core.LocationFromName(req.GetName()),
+		core.WorkflowIDFromName(req.GetName()), req.GetRevisionId())
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return workflowToProto(w, project), nil
+	return revisionToProto(r, project), nil
+}
+
+func (s *Service) ListWorkflowRevisions(ctx context.Context, req *workflowspb.ListWorkflowRevisionsRequest) (*workflowspb.ListWorkflowRevisionsResponse, error) {
+	project := s.projectFor(ctx, req.GetName())
+	page, next, err := s.core.ListWorkflowRevisions(ctx, project, core.LocationFromName(req.GetName()),
+		core.WorkflowIDFromName(req.GetName()), int(req.GetPageSize()), req.GetPageToken())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	out := &workflowspb.ListWorkflowRevisionsResponse{NextPageToken: next}
+	for _, r := range page {
+		out.Workflows = append(out.Workflows, revisionToProto(r, project))
+	}
+	return out, nil
 }
 
 func (s *Service) CreateWorkflow(ctx context.Context, req *workflowspb.CreateWorkflowRequest) (*longrunningpb.Operation, error) {

@@ -139,15 +139,21 @@ func TestJSONCodecDecode(t *testing.T) {
 	}
 }
 
-func TestWorkflowsListRevisionsUnsupported(t *testing.T) {
-	// Workflow revision history is not modelled: the REST path must fail loud
-	// (404) rather than fall through to GetWorkflow and return the workflow.
+func TestWorkflowsListRevisions(t *testing.T) {
+	// The GET :listRevisions custom method routes to ListWorkflowRevisions; a
+	// non-GET request is not a real method and must fail loud (404) rather than
+	// fall through to GetWorkflow and return the workflow.
 	codec := &JSONCodec{Service: "workflows"}
-	for _, method := range []string{"GET", "POST"} {
-		path := "/v1/projects/p/locations/us-central1/workflows/w:listRevisions"
-		if _, err := codec.Decode(httptest.NewRequest(method, path, nil), nil); err == nil {
-			t.Errorf("%s %s: expected unsupported (404)", method, path)
-		}
+	path := "/v1/projects/p/locations/us-central1/workflows/w:listRevisions"
+	nr, err := codec.Decode(httptest.NewRequest("GET", path, nil), nil)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	if nr.Action != "ListWorkflowRevisions" {
+		t.Errorf("GET action = %q, want ListWorkflowRevisions", nr.Action)
+	}
+	if _, err := codec.Decode(httptest.NewRequest("POST", path, nil), nil); err == nil {
+		t.Errorf("POST %s: expected unsupported (404)", path)
 	}
 }
 

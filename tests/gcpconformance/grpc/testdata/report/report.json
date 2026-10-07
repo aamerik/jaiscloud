@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 377,
-  "passed": 377,
+  "total": 378,
+  "passed": 378,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 377,
-    "passed": 377,
+    "checks": 378,
+    "passed": 378,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -184,8 +184,8 @@
     },
     {
       "service": "workflows",
-      "total": 5,
-      "passed": 5,
+      "total": 6,
+      "passed": 6,
       "failed": 0,
       "unimplemented": 0
     }
@@ -1674,6 +1674,13 @@
       "method": "DeleteWorkflow",
       "status": "pass",
       "key_field": "LRO done + subsequent get NotFound"
+    },
+    {
+      "service": "workflows",
+      "rpc": "ListWorkflowRevisions",
+      "method": "ListWorkflowRevisions",
+      "status": "pass",
+      "key_field": "one revision on create, second on source update (newest first)"
     },
     {
       "service": "serviceusage",

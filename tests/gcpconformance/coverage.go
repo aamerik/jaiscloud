@@ -77,6 +77,7 @@ var actionOverrides = map[string]string{
 	"Dataproc.InstantiateWorkflowTemplate":       "dataproc.projects.regions.workflowTemplates.instantiate",
 	"Dataproc.InstantiateInlineWorkflowTemplate": "dataproc.projects.regions.workflowTemplates.instantiateInline",
 	"Metastore.AlterMetadataResourceLocation":    "metastore.projects.locations.services.alterLocation",
+	"Workflow.ListWorkflowRevisions":             "workflows.projects.locations.workflows.listRevisions",
 
 	// BigQuery's tabledata/jobs/projects surfaces use different method names
 	// than the emulator's registry actions.

@@ -677,6 +677,28 @@ func Scenarios(suffix string) []Scenario {
 			Path: msBase + "/services/" + msSvc, Host: "metastore.localhost:4588"},
 	)
 
+	// ─── Cloud Workflows management + revision history ────────────────────────
+	// A workflow is created (its create LRO response carries the first
+	// revisionId), read, its revisions listed, its source updated (minting a
+	// second revision), its revisions listed again, the first revision fetched
+	// by revisionId, a missing workflow proven NotFound, then deleted.
+	wfID := "conf-wf-" + suffix
+	wfBase := "/v1/projects/" + p + "/locations/us-central1/workflows"
+	wfName := wfBase + "/" + wfID
+	sc = append(sc,
+		Scenario{Service: "workflows", Method: "POST", Path: wfBase + "?workflowId=" + wfID,
+			Body: `{"description":"conformance","sourceContents":"main:\n  steps:\n    - r:\n        return: 1\n"}`,
+			Save: map[string]string{"wfRev": "response.revisionId"}},
+		Scenario{Service: "workflows", Method: "GET", Path: wfName},
+		Scenario{Service: "workflows", Method: "GET", Path: wfName + ":listRevisions"},
+		Scenario{Service: "workflows", Method: "PATCH", Path: wfName + "?updateMask=sourceContents",
+			Body: `{"sourceContents":"main:\n  steps:\n    - r:\n        return: 2\n"}`},
+		Scenario{Service: "workflows", Method: "GET", Path: wfName + ":listRevisions"},
+		Scenario{Service: "workflows", Method: "GET", Path: wfName + "?revisionId=${wfRev}"},
+		Scenario{Service: "workflows", Method: "GET", Path: wfBase + "/missing-" + suffix},
+		Scenario{Service: "workflows", Method: "DELETE", Path: wfName},
+	)
+
 	return sc
 }
 

@@ -566,12 +566,12 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "UpgradeInstance"
 			}
 		case "workflows":
-			// Workflow revision history (listRevisions) is not modelled: fail
-			// loud (404) rather than falling through to the GetWorkflow case and
-			// returning a plausible but wrong resource body.
+			// Workflow revision history: GET …/workflows/{w}:listRevisions.
 			switch custom {
 			case "listRevisions":
-				return ""
+				if method == http.MethodGet {
+					return "ListWorkflowRevisions"
+				}
 			}
 		}
 	}

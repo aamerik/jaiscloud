@@ -61,6 +61,10 @@ func callLogLevelToProto(s string) workflowspb.Workflow_CallLogLevel {
 // service account is reported as the project default, matching real GCP (and
 // the REST transport).
 func workflowToProto(w workflowsstore.Workflow, project string) *workflowspb.Workflow {
+	revisionCreateTime := w.RevisionCreateTime
+	if revisionCreateTime.IsZero() {
+		revisionCreateTime = w.UpdateTime
+	}
 	out := &workflowspb.Workflow{
 		Name:               core.WorkflowName(project, w.Location, w.ID),
 		Description:        w.Description,
@@ -68,7 +72,7 @@ func workflowToProto(w workflowsstore.Workflow, project string) *workflowspb.Wor
 		RevisionId:         w.RevisionID,
 		CreateTime:         timestamppb.New(w.CreateTime),
 		UpdateTime:         timestamppb.New(w.UpdateTime),
-		RevisionCreateTime: timestamppb.New(w.UpdateTime),
+		RevisionCreateTime: timestamppb.New(revisionCreateTime),
 		Labels:             w.Labels,
 		UserEnvVars:        w.UserEnvVars,
 		Tags:               w.Tags,
@@ -79,6 +83,30 @@ func workflowToProto(w workflowsstore.Workflow, project string) *workflowspb.Wor
 	}
 	if w.ServiceAccount != "" {
 		out.ServiceAccount = w.ServiceAccount
+	} else {
+		out.ServiceAccount = core.DefaultServiceAccount(project)
+	}
+	return out
+}
+
+// revisionToProto renders a core revision as the proto Workflow. The
+// workflow-wide fields come from workflowToProto (the live workflow); the
+// revision-scoped fields are overridden. For the live revision the result is
+// identical to workflowToProto.
+func revisionToProto(r core.Revision, project string) *workflowspb.Workflow {
+	out := workflowToProto(r.Workflow, project)
+	out.State = stateToProto(r.State)
+	out.RevisionId = r.RevisionID
+	out.RevisionCreateTime = timestamppb.New(r.RevisionCreateTime)
+	if r.SourceContents != "" {
+		out.SourceCode = &workflowspb.Workflow_SourceContents{SourceContents: r.SourceContents}
+	} else {
+		out.SourceCode = nil
+	}
+	out.UserEnvVars = r.UserEnvVars
+	out.CallLogLevel = callLogLevelToProto(r.CallLogLevel)
+	if r.ServiceAccount != "" {
+		out.ServiceAccount = r.ServiceAccount
 	} else {
 		out.ServiceAccount = core.DefaultServiceAccount(project)
 	}
