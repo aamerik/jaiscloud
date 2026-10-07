@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/gcp/resource"
 	schedstore "jaiscloud/internal/gcp/store/scheduler"
 	"jaiscloud/internal/model"
 )
@@ -271,7 +272,7 @@ func jobToJSON(j schedstore.Job) map[string]any {
 }
 
 func jobResourceName(j schedstore.Job) string {
-	return "projects/" + j.ProjectID + "/locations/" + j.Location + "/jobs/" + j.Name
+	return resource.ResourceID(j.ProjectID)("scheduler-job", j.Location+"/"+j.Name)
 }
 
 func httpTargetToJSON(t *schedstore.HttpTarget) map[string]any {

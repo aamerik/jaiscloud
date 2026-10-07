@@ -34,6 +34,7 @@ import (
 	storagepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
 	"jaiscloud/internal/gcp/policy"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
+	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/gcp/store/gcs"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -135,7 +136,9 @@ func mapError(err error) error { return grpcutil.GRPCStatus(err) }
 
 // ─── resource-name helpers ───────────────────────────────────────────────────
 
-func bucketResourceName(bucket string) string { return "projects/_/buckets/" + bucket }
+func bucketResourceName(bucket string) string {
+	return resource.ResourceID("")("gcs-bucket-resource", bucket)
+}
 
 // parseBucketName returns the bucket name from a full resource name
 // ("projects/_/buckets/{bucket}" → "{bucket}") or a bare name.

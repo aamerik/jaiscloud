@@ -21,6 +21,9 @@ var formatters = map[string]func(project, name string) string{
 	"gcs-object": func(_, n string) string { return n },
 	// GCS bucket IAM policy resourceId uses a fixed "_" project placeholder.
 	"gcs-bucket-policy": func(_, n string) string { return "projects/_/buckets/" + n },
+	// Canonical GCS bucket resource name (Storage gRPC Bucket.name), same
+	// "projects/_/buckets/{bucket}" form as the IAM policy resourceId.
+	"gcs-bucket-resource": func(_, n string) string { return "projects/_/buckets/" + n },
 	// GCS notification-config resource name used by the `notificationConfig`
 	// event attribute: projects/_/buckets/{bucket}/notificationConfigs/{id}
 	// (callers pass "bucket/notificationConfigs/id").

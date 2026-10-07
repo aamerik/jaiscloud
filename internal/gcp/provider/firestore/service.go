@@ -13,6 +13,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/resource"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -80,7 +81,7 @@ func (s *Service) Reset(_ context.Context) {
 
 // docName builds the full document resource name.
 func docName(project, database, path string) string {
-	return "projects/" + project + "/databases/" + database + "/documents/" + path
+	return resource.ResourceID(project)("firestore-document", "databases/"+database+"/documents/"+path)
 }
 
 // subcollectionIDUnder reports whether a document at relative path relDocPath
@@ -508,7 +509,7 @@ func (s *Service) RunQuery(ctx context.Context, project, database, path string, 
 	if err := s.requireActive(transaction); err != nil {
 		return nil, err
 	}
-	parent := "projects/" + project + "/databases/" + database + "/documents"
+	parent := resource.ResourceID(project)("firestore-document", "databases/"+database+"/documents")
 	if path != "" {
 		parent += "/" + path
 	}
@@ -916,7 +917,7 @@ func (s *Service) CreateIndexDef(ctx context.Context, project, database, cg stri
 	}
 	// The operation name is the google.longrunning.Operation the index creation
 	// is wrapped in (done=true); both transports complete it synchronously.
-	opName := "projects/" + project + "/databases/" + database + "/operations/" + randomHex(12)
+	opName := resource.ResourceID(project)("firestore-operation", database+"/"+randomHex(12))
 	return idx, opName, nil
 }
 

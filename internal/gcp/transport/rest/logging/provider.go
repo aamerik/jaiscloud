@@ -6,6 +6,7 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 
+	"jaiscloud/internal/gcp/resource"
 	core "jaiscloud/internal/gcp/service/logging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
 )
@@ -150,7 +151,7 @@ func (p *Provider) EntryList(ctx context.Context, nr *model.NormalizedRequest) (
 	// projectIds is the legacy request field; the proto specifies it is added to
 	// resourceNames, so both spellings resolve to the same scope set.
 	for _, pid := range strListFrom(body["projectIds"]) {
-		resourceNames = append(resourceNames, "projects/"+pid)
+		resourceNames = append(resourceNames, resource.ResourceID(pid)("project", ""))
 	}
 
 	res, err := p.core.ListEntries(ctx, &core.ListEntriesRequest{

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/gcp/resource"
 	tasksstore "jaiscloud/internal/gcp/store/tasks"
 	"jaiscloud/internal/model"
 )
@@ -325,7 +326,7 @@ func queueToJSON(q tasksstore.Queue) map[string]any {
 }
 
 func queueResourceName(q tasksstore.Queue) string {
-	return "projects/" + q.ProjectID + "/locations/" + q.Location + "/queues/" + q.Name
+	return resource.ResourceID(q.ProjectID)("tasks-queue", q.Location+"/"+q.Name)
 }
 
 func taskToJSON(t tasksstore.Task) map[string]any {
@@ -365,7 +366,7 @@ func taskToJSON(t tasksstore.Task) map[string]any {
 }
 
 func taskResourceName(t tasksstore.Task) string {
-	return "projects/" + t.ProjectID + "/locations/" + t.Location + "/queues/" + t.Queue + "/tasks/" + t.Name
+	return resource.ResourceID(t.ProjectID)("tasks-task", t.Location+"/"+t.Queue+"/"+t.Name)
 }
 
 func httpRequestToJSON(r *tasksstore.HttpRequest) map[string]any {

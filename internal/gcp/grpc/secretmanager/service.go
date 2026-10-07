@@ -22,6 +22,7 @@ import (
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
+	"jaiscloud/internal/gcp/resource"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	"jaiscloud/internal/model"
@@ -73,7 +74,7 @@ func mapVersionErr(err error) error {
 // ─── resource-name parsing ────────────────────────────────────────────────────
 
 func secretName(project, id string) string {
-	return "projects/" + project + "/secrets/" + id
+	return resource.ResourceID(project)("secret", id)
 }
 
 func versionName(project, id, ver string) string {
