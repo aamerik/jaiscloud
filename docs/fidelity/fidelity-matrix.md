@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **999**
+Cells: **1022**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 779 |
+| ga | 825 |
 | limited | 101 |
 | preview | 14 |
-| unsupported | 105 |
+| unsupported | 82 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 415 | 100 | 14 | 12 |
-| grpc | 364 | 1 | 0 | 93 |
+| rest | 438 | 100 | 14 | 12 |
+| grpc | 387 | 1 | 0 | 70 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -154,53 +154,76 @@ _33 cell(s): ga=0 limited=32 preview=0 unsupported=1_
 
 ## container
 
-_43 cell(s): ga=12 limited=0 preview=0 unsupported=31_
+_66 cell(s): ga=58 limited=0 preview=0 unsupported=8_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| CancelOperation | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
+| CancelOperation | grpc | ga | — |
 | CheckAutopilotCompatibility | grpc | unsupported | Autopilot is not modelled; explicit Unimplemented stub |
-| CompleteControlPlaneUpgrade | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| CompleteIPRotation | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| CompleteNodePoolUpgrade | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
+| CompleteControlPlaneUpgrade | grpc | unsupported | no real control-plane upgrade lifecycle to complete; explicit Unimplemented stub |
+| CompleteIPRotation | grpc | ga | — |
+| CompleteNodePoolUpgrade | grpc | unsupported | no real node-pool upgrade lifecycle to complete; explicit Unimplemented stub |
+| Container.CancelOperation | rest | ga | — |
+| Container.CompleteIPRotation | rest | ga | — |
 | Container.CreateCluster | rest | ga | — |
+| Container.CreateNodePool | rest | ga | — |
 | Container.DeleteCluster | rest | ga | — |
+| Container.DeleteNodePool | rest | ga | — |
 | Container.GetCluster | rest | ga | — |
+| Container.GetNodePool | rest | ga | — |
 | Container.GetOperation | rest | ga | — |
 | Container.ListClusters | rest | ga | — |
+| Container.ListNodePools | rest | ga | — |
 | Container.ListOperations | rest | ga | — |
+| Container.RollbackNodePoolUpgrade | rest | ga | — |
+| Container.SetAddonsConfig | rest | ga | — |
+| Container.SetLabels | rest | ga | — |
+| Container.SetLegacyAbac | rest | ga | — |
+| Container.SetLocations | rest | ga | — |
+| Container.SetLoggingService | rest | ga | — |
+| Container.SetMaintenancePolicy | rest | ga | — |
+| Container.SetMasterAuth | rest | ga | — |
+| Container.SetMonitoringService | rest | ga | — |
+| Container.SetNetworkPolicy | rest | ga | — |
+| Container.SetNodePoolAutoscaling | rest | ga | — |
+| Container.SetNodePoolManagement | rest | ga | — |
+| Container.SetNodePoolSize | rest | ga | — |
+| Container.StartIPRotation | rest | ga | — |
+| Container.UpdateCluster | rest | ga | — |
+| Container.UpdateMaster | rest | ga | — |
+| Container.UpdateNodePool | rest | ga | — |
 | CreateCluster | grpc | ga | — |
-| CreateNodePool | grpc | unsupported | node pools are stored records only; explicit Unimplemented stub |
+| CreateNodePool | grpc | ga | — |
 | DeleteCluster | grpc | ga | — |
-| DeleteNodePool | grpc | unsupported | node pools are stored records only; explicit Unimplemented stub |
-| FetchClusterUpgradeInfo | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| FetchNodePoolUpgradeInfo | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
+| DeleteNodePool | grpc | ga | — |
+| FetchClusterUpgradeInfo | grpc | unsupported | no real control-plane upgrade info source; explicit Unimplemented stub |
+| FetchNodePoolUpgradeInfo | grpc | unsupported | no real node-pool upgrade info source; explicit Unimplemented stub |
 | GetCluster | grpc | ga | — |
-| GetJSONWebKeys | grpc | unsupported | cluster JWKS are not modelled; explicit Unimplemented stub |
-| GetNodePool | grpc | unsupported | node pools are stored records only; explicit Unimplemented stub |
+| GetJSONWebKeys | grpc | unsupported | cluster signing JWKS are not modelled; explicit Unimplemented stub |
+| GetNodePool | grpc | ga | — |
 | GetOperation | grpc | ga | — |
-| GetServerConfig | grpc | unsupported | server config is not modelled; explicit Unimplemented stub |
+| GetServerConfig | grpc | unsupported | server config (valid versions/channels) is not modelled; explicit Unimplemented stub |
 | ListClusters | grpc | ga | — |
-| ListNodePools | grpc | unsupported | node pools are stored records only; explicit Unimplemented stub |
+| ListNodePools | grpc | ga | — |
 | ListOperations | grpc | ga | — |
-| ListUsableSubnetworks | grpc | unsupported | usable-subnetwork discovery is not modelled; explicit Unimplemented stub |
-| RollbackNodePoolUpgrade | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| SetAddonsConfig | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| SetLabels | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| SetLegacyAbac | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| SetLocations | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| SetLoggingService | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| SetMaintenancePolicy | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| SetMasterAuth | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| SetMonitoringService | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| SetNetworkPolicy | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| SetNodePoolAutoscaling | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| SetNodePoolManagement | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| SetNodePoolSize | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| StartIPRotation | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| UpdateCluster | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| UpdateMaster | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
-| UpdateNodePool | grpc | unsupported | GKE control-plane setters/updates and node-pool management are not modelled; explicit Unimplemented stub |
+| ListUsableSubnetworks | grpc | unsupported | usable-subnetwork discovery requires a Compute subnet catalog; explicit Unimplemented stub |
+| RollbackNodePoolUpgrade | grpc | ga | — |
+| SetAddonsConfig | grpc | ga | — |
+| SetLabels | grpc | ga | — |
+| SetLegacyAbac | grpc | ga | — |
+| SetLocations | grpc | ga | — |
+| SetLoggingService | grpc | ga | — |
+| SetMaintenancePolicy | grpc | ga | — |
+| SetMasterAuth | grpc | ga | — |
+| SetMonitoringService | grpc | ga | — |
+| SetNetworkPolicy | grpc | ga | — |
+| SetNodePoolAutoscaling | grpc | ga | — |
+| SetNodePoolManagement | grpc | ga | — |
+| SetNodePoolSize | grpc | ga | — |
+| StartIPRotation | grpc | ga | — |
+| UpdateCluster | grpc | ga | — |
+| UpdateMaster | grpc | ga | — |
+| UpdateNodePool | grpc | ga | — |
 
 ## dataproc
 

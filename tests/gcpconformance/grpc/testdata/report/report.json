@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 399,
-  "passed": 399,
+  "total": 422,
+  "passed": 422,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 399,
-    "passed": 399,
+    "checks": 422,
+    "passed": 422,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -16,8 +16,8 @@
   "services": [
     {
       "service": "container",
-      "total": 7,
-      "passed": 7,
+      "total": 30,
+      "passed": 30,
       "failed": 0,
       "unimplemented": 0
     },
@@ -2689,6 +2689,167 @@
       "method": "DeleteCluster",
       "status": "pass",
       "key_field": "DELETE_CLUSTER DONE + NotFound after"
+    },
+    {
+      "service": "container",
+      "rpc": "CreateNodePool",
+      "method": "CreateNodePool",
+      "status": "pass",
+      "key_field": "CREATE_NODE_POOL operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "GetNodePool",
+      "method": "GetNodePool",
+      "status": "pass",
+      "key_field": "node pool name/status round-trip"
+    },
+    {
+      "service": "container",
+      "rpc": "ListNodePools",
+      "method": "ListNodePools",
+      "status": "pass",
+      "key_field": "created node pool present"
+    },
+    {
+      "service": "container",
+      "rpc": "DeleteNodePool",
+      "method": "DeleteNodePool",
+      "status": "pass",
+      "key_field": "DELETE_NODE_POOL DONE + NotFound after"
+    },
+    {
+      "service": "container",
+      "rpc": "UpdateNodePool",
+      "method": "UpdateNodePool",
+      "status": "pass",
+      "key_field": "UPGRADE_NODES DONE + version applied"
+    },
+    {
+      "service": "container",
+      "rpc": "SetNodePoolAutoscaling",
+      "method": "SetNodePoolAutoscaling",
+      "status": "pass",
+      "key_field": "operation DONE + autoscaling applied"
+    },
+    {
+      "service": "container",
+      "rpc": "SetNodePoolManagement",
+      "method": "SetNodePoolManagement",
+      "status": "pass",
+      "key_field": "SET_NODE_POOL_MANAGEMENT DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "SetNodePoolSize",
+      "method": "SetNodePoolSize",
+      "status": "pass",
+      "key_field": "SET_NODE_POOL_SIZE DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "RollbackNodePoolUpgrade",
+      "method": "RollbackNodePoolUpgrade",
+      "status": "pass",
+      "key_field": "operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "SetAddonsConfig",
+      "method": "SetAddonsConfig",
+      "status": "pass",
+      "key_field": "operation DONE + addons applied"
+    },
+    {
+      "service": "container",
+      "rpc": "SetLegacyAbac",
+      "method": "SetLegacyAbac",
+      "status": "pass",
+      "key_field": "operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "SetLocations",
+      "method": "SetLocations",
+      "status": "pass",
+      "key_field": "operation DONE + locations applied"
+    },
+    {
+      "service": "container",
+      "rpc": "SetLoggingService",
+      "method": "SetLoggingService",
+      "status": "pass",
+      "key_field": "operation DONE + logging applied"
+    },
+    {
+      "service": "container",
+      "rpc": "SetMonitoringService",
+      "method": "SetMonitoringService",
+      "status": "pass",
+      "key_field": "operation DONE + monitoring applied"
+    },
+    {
+      "service": "container",
+      "rpc": "SetNetworkPolicy",
+      "method": "SetNetworkPolicy",
+      "status": "pass",
+      "key_field": "operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "SetMaintenancePolicy",
+      "method": "SetMaintenancePolicy",
+      "status": "pass",
+      "key_field": "operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "SetMasterAuth",
+      "method": "SetMasterAuth",
+      "status": "pass",
+      "key_field": "operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "SetLabels",
+      "method": "SetLabels",
+      "status": "pass",
+      "key_field": "operation DONE + labels applied"
+    },
+    {
+      "service": "container",
+      "rpc": "UpdateCluster",
+      "method": "UpdateCluster",
+      "status": "pass",
+      "key_field": "UPDATE_CLUSTER DONE + field applied"
+    },
+    {
+      "service": "container",
+      "rpc": "UpdateMaster",
+      "method": "UpdateMaster",
+      "status": "pass",
+      "key_field": "UPGRADE_MASTER DONE + version applied"
+    },
+    {
+      "service": "container",
+      "rpc": "StartIPRotation",
+      "method": "StartIPRotation",
+      "status": "pass",
+      "key_field": "operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "CompleteIPRotation",
+      "method": "CompleteIPRotation",
+      "status": "pass",
+      "key_field": "operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "CancelOperation",
+      "method": "CancelOperation",
+      "status": "pass",
+      "key_field": "cancel of an existing operation succeeds"
     },
     {
       "service": "run",

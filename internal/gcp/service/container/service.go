@@ -191,14 +191,20 @@ func invalidArgument(msg string) error {
 	return model.NewProviderError("InvalidArgument", msg, 400)
 }
 
+func modelNotFound(msg string) error {
+	return model.NewProviderError("NotFound", msg, 404)
+}
+
 func mapStoreErr(err error) error {
 	switch {
 	case errors.Is(err, containerstore.ErrNoSuchCluster):
 		return model.NewProviderError("NotFound", "cluster not found", 404)
+	case errors.Is(err, containerstore.ErrNoSuchNodePool):
+		return model.NewProviderError("NotFound", "node pool not found", 404)
 	case errors.Is(err, containerstore.ErrNoSuchOperation):
 		return model.NewProviderError("NotFound", "operation not found", 404)
 	case errors.Is(err, containerstore.ErrAlreadyExists):
-		return model.NewProviderError("AlreadyExists", "cluster already exists", 409)
+		return model.NewProviderError("AlreadyExists", "already exists", 409)
 	default:
 		return err
 	}

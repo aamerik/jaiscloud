@@ -363,6 +363,17 @@ var formatters = map[string]func(project, name string) string{
 		loc, op := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
 	},
+	// A GKE node pool nests under its cluster:
+	// "projects/{project}/locations/{location}/clusters/{cluster}/nodePools/{pool}"
+	// (callers pass "location/cluster/pool").
+	"container-node-pool": func(p, n string) string {
+		loc, rest := wfLoc(n)
+		cluster, pool := rest, ""
+		if i := strings.IndexByte(rest, '/'); i >= 0 {
+			cluster, pool = rest[:i], rest[i+1:]
+		}
+		return fmt.Sprintf("projects/%s/locations/%s/clusters/%s/nodePools/%s", p, loc, cluster, pool)
+	},
 	// Cloud Tasks v2 — a queue is
 	// "projects/{project}/locations/{location}/queues/{queue}" (callers pass
 	// "location/queue") and a task nests under it (callers pass

@@ -72,6 +72,24 @@ func (s *MemoryStore) ListClusters(_ context.Context, projectID, location string
 	return result, nil
 }
 
+func (s *MemoryStore) MutateCluster(_ context.Context, projectID, location, cluster string, fn func(*Cluster) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scope(projectID, location)
+	c, ok := s.clusters[key][cluster]
+	if !ok {
+		return ErrNoSuchCluster
+	}
+	if err := fn(&c); err != nil {
+		return err
+	}
+	c.ProjectID = projectID
+	c.Location = location
+	c.Name = cluster
+	s.clusters[key][cluster] = c
+	return nil
+}
+
 func (s *MemoryStore) CreateOperation(_ context.Context, projectID, location string, op Operation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

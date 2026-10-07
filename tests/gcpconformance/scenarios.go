@@ -597,8 +597,11 @@ func Scenarios(suffix string) []Scenario {
 	// is fetched and listed, then it is deleted (DELETE_CLUSTER Operation) and a
 	// post-delete read proves the NotFound error envelope.
 	gkeCluster := "conf-gke-" + suffix
+	gkePool := "conf-gke-pool-" + suffix
 	gkeBase := "/container/v1/projects/" + p + "/locations/us-central1"
 	gkeClusterName := gkeBase + "/clusters/" + gkeCluster
+	gkePoolsBase := gkeClusterName + "/nodePools"
+	gkePoolName := gkePoolsBase + "/" + gkePool
 	sc = append(sc,
 		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/clusters",
 			Body: fmt.Sprintf(`{"cluster":{"name":%q,"initialNodeCount":1}}`, gkeCluster),
@@ -607,6 +610,39 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "container", Method: "GET", Path: gkeBase + "/clusters"},
 		Scenario{Service: "container", Method: "GET", Path: gkeBase + "/operations/${gkeOp}"},
 		Scenario{Service: "container", Method: "GET", Path: gkeBase + "/operations"},
+		// Node-pool CRUD: create, list, get, a version update, the size/
+		// autoscaling/management setters, a rollback, then delete and a
+		// post-delete read proving the NotFound envelope.
+		Scenario{Service: "container", Method: "POST", Path: gkePoolsBase,
+			Body: fmt.Sprintf(`{"nodePool":{"name":%q,"initialNodeCount":1}}`, gkePool)},
+		Scenario{Service: "container", Method: "GET", Path: gkePoolsBase},
+		Scenario{Service: "container", Method: "GET", Path: gkePoolName},
+		Scenario{Service: "container", Method: "PUT", Path: gkePoolName,
+			Body: `{"nodeVersion":"1.31.0-gke.100"}`},
+		Scenario{Service: "container", Method: "POST", Path: gkePoolName + ":setSize",
+			Body: `{"nodeCount":2}`},
+		Scenario{Service: "container", Method: "POST", Path: gkePoolName + ":setAutoscaling",
+			Body: `{"autoscaling":{"enabled":true,"minNodeCount":1,"maxNodeCount":3}}`},
+		Scenario{Service: "container", Method: "POST", Path: gkePoolName + ":setManagement",
+			Body: `{"management":{"autoUpgrade":true,"autoRepair":true}}`},
+		Scenario{Service: "container", Method: "POST", Path: gkePoolName + ":rollback"},
+		Scenario{Service: "container", Method: "DELETE", Path: gkePoolName},
+		Scenario{Service: "container", Method: "GET", Path: gkePoolName},
+		// Cluster setters: labels, addons, a ClusterUpdate, master version and
+		// the IP-rotation pair.
+		Scenario{Service: "container", Method: "POST", Path: gkeClusterName + ":setResourceLabels",
+			Body: `{"resourceLabels":{"team":"platform"}}`},
+		Scenario{Service: "container", Method: "POST", Path: gkeClusterName + ":setAddons",
+			Body: `{"addonsConfig":{"httpLoadBalancing":{"disabled":true}}}`},
+		Scenario{Service: "container", Method: "POST", Path: gkeClusterName + ":setLogging",
+			Body: `{"loggingService":"logging.googleapis.com/kubernetes"}`},
+		Scenario{Service: "container", Method: "PUT", Path: gkeClusterName,
+			Body: `{"update":{"desiredMonitoringService":"monitoring.googleapis.com/kubernetes"}}`},
+		Scenario{Service: "container", Method: "POST", Path: gkeClusterName + ":updateMaster",
+			Body: `{"masterVersion":"1.31.0-gke.100"}`},
+		Scenario{Service: "container", Method: "POST", Path: gkeClusterName + ":startIpRotation"},
+		Scenario{Service: "container", Method: "POST", Path: gkeClusterName + ":completeIpRotation"},
+		Scenario{Service: "container", Method: "POST", Path: gkeBase + "/operations/${gkeOp}:cancel"},
 		Scenario{Service: "container", Method: "DELETE", Path: gkeClusterName},
 		Scenario{Service: "container", Method: "GET", Path: gkeClusterName},
 	)

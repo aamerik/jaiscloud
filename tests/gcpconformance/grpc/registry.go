@@ -89,6 +89,7 @@ func Registry() []Check {
 	checks = append(checks, eventarcChecks()...)
 	checks = append(checks, dataprocChecks()...)
 	checks = append(checks, containerChecks()...)
+	checks = append(checks, containerNodePoolChecks()...)
 	checks = append(checks, runChecks()...)
 	checks = append(checks, functionsChecks()...)
 	checks = append(checks, iamChecks()...)

@@ -95,6 +95,49 @@ func (s *PostgresStore) GetCluster(ctx context.Context, projectID, location, nam
 	return c, nil
 }
 
+// MutateCluster locks the cluster row, decodes it, applies fn, and writes it
+// back in a single transaction so concurrent mutations cannot lose an update
+// (the memory store serializes the same way under its mutex).
+func (s *PostgresStore) MutateCluster(ctx context.Context, projectID, location, cluster string, fn func(*Cluster) error) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var data []byte
+	err = tx.QueryRow(ctx, `
+		SELECT data FROM jc_container_clusters
+		WHERE project_id=$1 AND location=$2 AND cluster_name=$3
+		FOR UPDATE
+	`, projectID, location, cluster).Scan(&data)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNoSuchCluster
+	}
+	if err != nil {
+		return err
+	}
+	c, err := decodeCluster(data)
+	if err != nil {
+		return err
+	}
+	c.Name = cluster
+	if err := fn(&c); err != nil {
+		return err
+	}
+	encoded, err := encodeCluster(c)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE jc_container_clusters SET data=$4
+		WHERE project_id=$1 AND location=$2 AND cluster_name=$3
+	`, projectID, location, cluster, encoded); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *PostgresStore) DeleteCluster(ctx context.Context, projectID, location, name string) error {
 	tag, err := s.pool.Exec(ctx, `
 		DELETE FROM jc_container_clusters
