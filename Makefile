@@ -154,6 +154,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         _check-lakehouse-k3d-prereq _check-gcp-samples-prereq _check-dataproc-streaming-k8s-prereq _check-dataproc-namespace-k8s-prereq _check-managedkafka-broker-k8s-prereq _refresh-gcp-image \
         test-gcp-wire-conformance record-gcp-wire-conformance test-gcp-grpc-conformance \
         test-gcp-routing \
+        test-gcp-error-mapping \
         test-gcp-rest-grpc-parity \
         test-gcp-gcloud-conformance test-gcp-python-conformance \
         test-gcp-differential record-gcp-differential \
@@ -748,6 +749,16 @@ test-gcp-wire-conformance: ## Offline GCP wire-conformance harness (Discovery sn
 test-gcp-routing: ## Offline REST routing matrix: every registered op routes to its owning provider (tag: gcp_conformance)
 	go test -count=1 -tags gcp_conformance -run TestRESTRoutingMatrix -v ./tests/gcpconformance/
 
+# The offline error-mapping audit (AUD8): every registered REST codec's
+# EncodeError is driven through the canonical provider-error matrix and its
+# envelope checked against the shared gRPC mapping, and every NewProviderError /
+# model.ProviderError literal under internal/gcp is asserted to resolve to a
+# canonical google.rpc status valid for its HTTP status. The live dual-transport
+# half rides test-gcp-rest-grpc-parity (tests/gcpparity/errors_test.go).
+test-gcp-error-mapping: ## Offline error-envelope ↔ gRPC-status mapping audit (codec matrix + code-universe scan)
+	go test -count=1 -run 'TestCanonicalErrorMapping|TestDatastoreProtoErrorMapping|TestErrorCode' -v ./internal/gcp/adapter/
+	go test -count=1 -run 'TestResolve|TestGRPCCodeForStatus|TestStatusForHTTP|TestHTTPForStatus' -v ./internal/gcp/gcperr/
+
 record-gcp-wire-conformance: ## Record a fresh transcript against an ephemeral emulator, then stop it
 	@echo "Building jaiscloud-gcp..."
 	@go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
@@ -964,7 +975,7 @@ gcp-status-finalize: ## Finalize a completed plan doc: PLAN=plan_docs/<doc>.md I
 # One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/GA.md.
 # The gRPC and gcloud targets each build + boot an ephemeral emulator on :8080/:8081 and stop it;
 # gcloud self-skips when it is not on PATH. Persistence/e2e are intentionally excluded.
-ga-check: check-gcp-fidelity-matrix test-gcp-wire-conformance test-gcp-grpc-conformance test-gcp-rest-grpc-parity test-gcp-gcloud-conformance ## One aggregate GA gate: fidelity drift + REST/gRPC/gcloud client conformance (no Docker/Postgres/k8s)
+ga-check: check-gcp-fidelity-matrix test-gcp-wire-conformance test-gcp-grpc-conformance test-gcp-error-mapping test-gcp-rest-grpc-parity test-gcp-gcloud-conformance ## One aggregate GA gate: fidelity drift + REST/gRPC/gcloud client conformance (no Docker/Postgres/k8s)
 	@echo ""
 	@echo "GA gate: offline + client conformance passed"
 	@echo "  (grpc/gcloud targets build + boot an ephemeral emulator; this can take a few minutes)"
