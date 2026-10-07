@@ -54,8 +54,19 @@ type LogSink struct {
 	Exclusions      []LogExclusion `json:"exclusions,omitempty"`
 	WriterIdentity  string         `json:"writerIdentity,omitempty"`
 	IncludeChildren bool           `json:"includeChildren,omitempty"`
-	CreateTime      time.Time      `json:"createTime,omitempty"`
-	UpdateTime      time.Time      `json:"updateTime,omitempty"`
+	// InterceptChildren is the organization/folder-only legacy flag (REST-only:
+	// the pinned gRPC proto dropped `intercept_children`).
+	InterceptChildren   bool                `json:"interceptChildren,omitempty"`
+	OutputVersionFormat string              `json:"outputVersionFormat,omitempty"` // deprecated: "V2" | "V1"
+	BigQueryOptions     *LogBigQueryOptions `json:"bigqueryOptions,omitempty"`
+	CreateTime          time.Time           `json:"createTime,omitempty"`
+	UpdateTime          time.Time           `json:"updateTime,omitempty"`
+}
+
+// LogBigQueryOptions is a sink's BigQuery destination options.
+type LogBigQueryOptions struct {
+	UsePartitionedTables            bool `json:"usePartitionedTables,omitempty"`
+	UsesTimestampColumnPartitioning bool `json:"usesTimestampColumnPartitioning,omitempty"`
 }
 
 // LogExclusion is a stored Cloud Logging exclusion. For a resource-level

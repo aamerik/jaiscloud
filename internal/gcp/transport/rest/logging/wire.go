@@ -284,12 +284,21 @@ func splitComma(s string) []string {
 // (resourceName, writerIdentity, createTime, updateTime) are ignored.
 func sinkFromWire(v map[string]any) loggingstore.LogSink {
 	s := loggingstore.LogSink{
-		Name:            strFrom(v["name"]),
-		Destination:     strFrom(v["destination"]),
-		Filter:          strFrom(v["filter"]),
-		Description:     strFrom(v["description"]),
-		Disabled:        boolFrom(v["disabled"]),
-		IncludeChildren: boolFrom(v["includeChildren"]),
+		Name:                strFrom(v["name"]),
+		Destination:         strFrom(v["destination"]),
+		Filter:              strFrom(v["filter"]),
+		Description:         strFrom(v["description"]),
+		Disabled:            boolFrom(v["disabled"]),
+		IncludeChildren:     boolFrom(v["includeChildren"]),
+		InterceptChildren:   boolFrom(v["interceptChildren"]),
+		OutputVersionFormat: versionFormatFromWire(strFrom(v["outputVersionFormat"])),
+	}
+	if bo, ok := v["bigqueryOptions"].(map[string]any); ok {
+		// Only `usePartitionedTables` is writable; `usesTimestampColumnPartitioning`
+		// is output-only and is never taken from the request.
+		s.BigQueryOptions = &loggingstore.LogBigQueryOptions{
+			UsePartitionedTables: boolFrom(bo["usePartitionedTables"]),
+		}
 	}
 	if arr, ok := v["exclusions"].([]any); ok {
 		for _, e := range arr {
@@ -299,6 +308,16 @@ func sinkFromWire(v map[string]any) loggingstore.LogSink {
 		}
 	}
 	return s
+}
+
+// versionFormatFromWire maps the Deprecated LogSink.outputVersionFormat enum
+// string to the stored form: the unspecified zero value becomes "" (as gRPC's
+// enum 0 does), while the two documented versions pass through.
+func versionFormatFromWire(v string) string {
+	if v == "VERSION_FORMAT_UNSPECIFIED" {
+		return ""
+	}
+	return v
 }
 
 // sinkToWire encodes a stored sink as the Discovery LogSink JSON. fullName is
@@ -336,6 +355,22 @@ func sinkToWire(s loggingstore.LogSink, fullName string) map[string]any {
 	}
 	if s.IncludeChildren {
 		out["includeChildren"] = true
+	}
+	if s.InterceptChildren {
+		out["interceptChildren"] = true
+	}
+	if s.OutputVersionFormat != "" {
+		out["outputVersionFormat"] = s.OutputVersionFormat
+	}
+	if s.BigQueryOptions != nil {
+		bo := map[string]any{}
+		if s.BigQueryOptions.UsePartitionedTables {
+			bo["usePartitionedTables"] = true
+		}
+		if s.BigQueryOptions.UsesTimestampColumnPartitioning {
+			bo["usesTimestampColumnPartitioning"] = true
+		}
+		out["bigqueryOptions"] = bo
 	}
 	if !s.CreateTime.IsZero() {
 		out["createTime"] = s.CreateTime.UTC().Format(time.RFC3339Nano)

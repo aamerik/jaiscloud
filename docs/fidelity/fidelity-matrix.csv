@@ -578,8 +578,8 @@ logging,Logging.BucketDelete,rest,ga,true,
 logging,Logging.BucketGet,rest,ga,true,
 logging,Logging.BucketList,rest,ga,true,
 logging,Logging.BucketUndelete,rest,ga,true,
-logging,Logging.BucketUpdate,rest,limited,false,REST `buckets.patch` cannot update a LogBucket's writable `restrictedFields` (the merge supports description/retentionDays/analyticsEnabled/indexConfigs/cmekSettings); other fields including `restrictedFields` are rejected with 501 UNIMPLEMENTED
-logging,Logging.BucketUpdateAsync,rest,limited,false,REST `buckets:updateAsync` cannot update a LogBucket's writable `restrictedFields` (the merge supports description/retentionDays/analyticsEnabled/indexConfigs/cmekSettings); other fields including `restrictedFields` are rejected with 501 UNIMPLEMENTED
+logging,Logging.BucketUpdate,rest,ga,false,
+logging,Logging.BucketUpdateAsync,rest,ga,false,
 logging,Logging.CmekGet,rest,ga,true,
 logging,Logging.CmekUpdate,rest,ga,true,
 logging,Logging.EntryList,rest,ga,true,
@@ -612,8 +612,8 @@ logging,Logging.SinkCreate,rest,ga,true,
 logging,Logging.SinkDelete,rest,ga,true,
 logging,Logging.SinkGet,rest,ga,true,
 logging,Logging.SinkList,rest,ga,true,
-logging,Logging.SinkPatch,rest,limited,false,REST `sinks.patch` cannot update a LogSink's writable `bigqueryOptions`/`interceptChildren`/`outputVersionFormat` (the merge supports destination/filter/description/disabled/exclusions/includeChildren); other fields are rejected with 501 UNIMPLEMENTED
-logging,Logging.SinkUpdate,rest,limited,false,REST `sinks.update` cannot update a LogSink's writable `bigqueryOptions`/`interceptChildren`/`outputVersionFormat` (the merge supports destination/filter/description/disabled/exclusions/includeChildren); other fields are rejected with 501 UNIMPLEMENTED
+logging,Logging.SinkPatch,rest,ga,false,
+logging,Logging.SinkUpdate,rest,ga,false,
 logging,Logging.ViewCreate,rest,ga,true,
 logging,Logging.ViewDelete,rest,ga,true,
 logging,Logging.ViewGet,rest,ga,true,

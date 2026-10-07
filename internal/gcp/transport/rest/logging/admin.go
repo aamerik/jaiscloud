@@ -587,6 +587,13 @@ func bucketFromWire(v any) loggingstore.LogBucket {
 		LifecycleState:   strFrom(m["lifecycleState"]),
 		AnalyticsEnabled: boolFrom(m["analyticsEnabled"]),
 	}
+	if arr, ok := m["restrictedFields"].([]any); ok {
+		for _, e := range arr {
+			if s, ok := e.(string); ok {
+				b.RestrictedFields = append(b.RestrictedFields, s)
+			}
+		}
+	}
 	if arr, ok := m["indexConfigs"].([]any); ok {
 		for _, e := range arr {
 			em, _ := e.(map[string]any)
@@ -622,6 +629,13 @@ func bucketToWire(locationParent string, b loggingstore.LogBucket) map[string]an
 	}
 	if b.AnalyticsEnabled {
 		out["analyticsEnabled"] = true
+	}
+	if len(b.RestrictedFields) > 0 {
+		fields := make([]any, 0, len(b.RestrictedFields))
+		for _, f := range b.RestrictedFields {
+			fields = append(fields, f)
+		}
+		out["restrictedFields"] = fields
 	}
 	if len(b.IndexConfigs) > 0 {
 		list := make([]any, 0, len(b.IndexConfigs))

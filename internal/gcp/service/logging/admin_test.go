@@ -2,9 +2,11 @@ package logging
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	"jaiscloud/internal/model"
 	store "jaiscloud/internal/store"
 )
 
@@ -70,6 +72,34 @@ func TestBucketLifecycle(t *testing.T) {
 	b, _ = s.GetBucket(ctx, testBucketName)
 	if b.LifecycleState != "ACTIVE" {
 		t.Fatalf("after undelete state = %q", b.LifecycleState)
+	}
+}
+
+func TestBucketUpdateRestrictedFieldsAndInvalidMask(t *testing.T) {
+	ctx := context.Background()
+	s := newAdminService()
+	seedBucket(t, s)
+
+	upd, err := s.UpdateBucket(ctx, testBucketName,
+		loggingstore.LogBucket{RestrictedFields: []string{"jsonPayload.secret", "labels"}},
+		[]string{"restrictedFields"})
+	if err != nil {
+		t.Fatalf("UpdateBucket: %v", err)
+	}
+	if len(upd.RestrictedFields) != 2 || upd.RestrictedFields[0] != "jsonPayload.secret" {
+		t.Fatalf("restrictedFields = %v", upd.RestrictedFields)
+	}
+
+	locked, err := s.UpdateBucket(ctx, testBucketName, loggingstore.LogBucket{Locked: true}, []string{"locked"})
+	if err != nil || !locked.Locked {
+		t.Fatalf("UpdateBucket locked: %+v, %v", locked, err)
+	}
+
+	// A path that names no bucket field is a client error, not Unimplemented.
+	_, err = s.UpdateBucket(ctx, testBucketName, loggingstore.LogBucket{}, []string{"labels"})
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("invalid mask = %v, want InvalidArgument/400", err)
 	}
 }
 

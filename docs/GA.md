@@ -54,8 +54,8 @@ fails CI if the committed matrix drifts.
 
 | state | cells |
 | --- | ---: |
-| ga | 935 |
-| limited | 105 |
+| ga | 939 |
+| limited | 101 |
 | preview | 14 |
 | unsupported | 32 |
 | **total** | **1086** |
@@ -64,7 +64,7 @@ fails CI if the committed matrix drifts.
 
 | transport | ga | limited | preview | unsupported |
 | --- | ---: | ---: | ---: | ---: |
-| REST (JSON, Discovery-backed) | 493 | 104 | 14 | 12 |
+| REST (JSON, Discovery-backed) | 497 | 100 | 14 | 12 |
 | gRPC (proto descriptors + official-client conformance) | 442 | 1 | 0 | 20 |
 
 gRPC-only services (no REST transport): **Firestore Admin, Operations (long-running)**.
@@ -237,15 +237,6 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 - **Metadata-only services** — `limited` REST cells: **Cloud SQL** (23 + 1 `unsupported` stub),
   **Compute Engine** (32 + 1), **Cloud DNS** (15 + 1), **Memorystore** (8). No control plane,
   VM/disk/network data plane, authoritative DNS server, or Redis data plane.
-- **Partial REST update masks** — the REST Logging `buckets.patch`/`buckets:updateAsync`
-  (no `restrictedFields`) and `sinks.patch`/`sinks.update` (no
-  `bigqueryOptions`/`interceptChildren`/`outputVersionFormat`) verbs merge only a
-  subset of each resource's writable fields; an unmapped field path returns
-  `501 UNIMPLEMENTED`. Those 4 cells are graded `limited` (AUD5 reconciliation).
-  The other REST Logging/Monitoring update verbs merge every writable field, so
-  they stay `ga`; the conformance probe's `updateMask=labels` (a field none of
-  these resources has) makes them look unserved, which is a probe artifact, not a
-  fidelity gap (`AUD5-2`).
 - **BigLake Iceberg REST catalog** — 14 cells `preview` (no official Discovery document).
 - **Cloud Functions** — **v1 and v2 surfaces**. gcloud 586 (and current client SDKs) speak the
   v2 API, so `/v2/projects/{p}/locations/{loc}/functions` (and `operations`) route to the

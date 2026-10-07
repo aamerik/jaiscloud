@@ -85,6 +85,7 @@ type LogBucket struct {
 	Locked           bool             `json:"locked,omitempty"`
 	LifecycleState   string           `json:"lifecycleState,omitempty"`
 	AnalyticsEnabled bool             `json:"analyticsEnabled,omitempty"`
+	RestrictedFields []string         `json:"restrictedFields,omitempty"`
 	IndexConfigs     []LogIndexConfig `json:"indexConfigs,omitempty"`
 	Cmek             *LogCmekSettings `json:"cmek,omitempty"`
 	CreateTime       int64            `json:"createTime,omitempty"`

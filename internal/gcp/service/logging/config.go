@@ -192,6 +192,22 @@ func validateSink(in loggingstore.LogSink) error {
 	if _, err := CompileFilter(in.Filter); err != nil {
 		return invalidArgument("invalid sink filter: " + err.Error())
 	}
+	switch in.OutputVersionFormat {
+	case "", "V1", "V2":
+	default:
+		return invalidArgument("invalid output_version_format: " + in.OutputVersionFormat)
+	}
+	// The Discovery document restricts intercept_children to a sink whose
+	// destination is a Cloud project and that also sets include_children; a
+	// violation is an invalid client request, as it is on real GCP.
+	if in.InterceptChildren {
+		if !in.IncludeChildren {
+			return invalidArgument("intercept_children requires include_children")
+		}
+		if !strings.HasPrefix(in.Destination, "logging.googleapis.com/projects/") {
+			return invalidArgument("intercept_children requires a Cloud project destination")
+		}
+	}
 	for _, ex := range in.Exclusions {
 		if err := validateExclusion(ex); err != nil {
 			return err
@@ -341,11 +357,31 @@ func applySinkMask(stored, incoming loggingstore.LogSink, updateMask []string) (
 			stored.Exclusions = incoming.Exclusions
 		case "include_children":
 			stored.IncludeChildren = incoming.IncludeChildren
+		case "intercept_children":
+			stored.InterceptChildren = incoming.InterceptChildren
+		case "output_version_format":
+			stored.OutputVersionFormat = incoming.OutputVersionFormat
+		case "bigquery_options":
+			stored.BigQueryOptions = mergeBigQueryOptions(stored.BigQueryOptions, incoming.BigQueryOptions)
 		default:
-			return stored, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+raw, 501)
+			return stored, invalidMaskPath(raw)
 		}
 	}
 	return stored, nil
+}
+
+// mergeBigQueryOptions applies the writable `use_partitioned_tables` subfield and
+// preserves the output-only `uses_timestamp_column_partitioning`, which a client
+// cannot set (the Discovery schema marks it readOnly).
+func mergeBigQueryOptions(stored, incoming *loggingstore.LogBigQueryOptions) *loggingstore.LogBigQueryOptions {
+	if incoming == nil {
+		return nil
+	}
+	out := &loggingstore.LogBigQueryOptions{UsePartitionedTables: incoming.UsePartitionedTables}
+	if stored != nil {
+		out.UsesTimestampColumnPartitioning = stored.UsesTimestampColumnPartitioning
+	}
+	return out
 }
 
 // ─── exclusions ───────────────────────────────────────────────────────────────
@@ -453,7 +489,7 @@ func applyExclusionMask(stored, incoming loggingstore.LogExclusion, updateMask [
 		case "disabled":
 			stored.Disabled = incoming.Disabled
 		default:
-			return stored, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+raw, 501)
+			return stored, invalidMaskPath(raw)
 		}
 	}
 	return stored, nil

@@ -113,6 +113,57 @@ func TestRESTSinkRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRESTSinkWritableMaskFields(t *testing.T) {
+	c, p := newTestProvider(t)
+
+	if _, err := call(t, c, p, http.MethodPost, "/v2/projects/test/sinks", map[string]any{
+		"name":            "bq",
+		"destination":     "logging.googleapis.com/projects/test",
+		"includeChildren": true,
+	}); err != nil {
+		t.Fatalf("create sink: %v", err)
+	}
+
+	// The legacy / destination-dependent writable fields merge.
+	patched, err := call(t, c, p, http.MethodPatch,
+		"/v2/projects/test/sinks/bq?updateMask=interceptChildren,outputVersionFormat,bigqueryOptions",
+		map[string]any{
+			"interceptChildren":   true,
+			"outputVersionFormat": "V1",
+			"bigqueryOptions":     map[string]any{"usePartitionedTables": true},
+		})
+	if err != nil {
+		t.Fatalf("patch sink fields: %v", err)
+	}
+	pd := wireData(t, patched)
+	if pd["interceptChildren"] != true || pd["outputVersionFormat"] != "V1" {
+		t.Fatalf("patch fields = %v", pd)
+	}
+	if bo, _ := pd["bigqueryOptions"].(map[string]any); bo == nil || bo["usePartitionedTables"] != true {
+		t.Fatalf("bigqueryOptions = %v", pd["bigqueryOptions"])
+	}
+	// The output-only sibling is never taken from the request.
+	if bo, _ := pd["bigqueryOptions"].(map[string]any); bo["usesTimestampColumnPartitioning"] == true {
+		t.Fatalf("output-only subfield was accepted: %v", pd["bigqueryOptions"])
+	}
+
+	// interceptChildren without include_children is an invalid request.
+	if _, err := call(t, c, p, http.MethodPatch, "/v2/projects/test/sinks/bq?updateMask=includeChildren",
+		map[string]any{"includeChildren": false}); err == nil {
+		t.Fatal("intercept_children without include_children = nil error")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidArgument" {
+		t.Fatalf("intercept_children constraint = %v, want InvalidArgument", err)
+	}
+
+	// An update_mask path that names no sink field is InvalidArgument (400),
+	// not an unimplemented operation (AIP-134).
+	if _, err := call(t, c, p, http.MethodPatch, "/v2/projects/test/sinks/bq?updateMask=labels", map[string]any{}); err == nil {
+		t.Fatal("invalid mask = nil error, want InvalidArgument")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("invalid mask = %v, want InvalidArgument/400", err)
+	}
+}
+
 func TestRESTExclusionRoundTrip(t *testing.T) {
 	c, p := newTestProvider(t)
 

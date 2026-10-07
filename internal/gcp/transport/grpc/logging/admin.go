@@ -291,6 +291,7 @@ func bucketFromProto(p *loggingpb.LogBucket) loggingstore.LogBucket {
 		Locked:           p.GetLocked(),
 		LifecycleState:   lifecycleName(p.GetLifecycleState()),
 		AnalyticsEnabled: p.GetAnalyticsEnabled(),
+		RestrictedFields: append([]string(nil), p.GetRestrictedFields()...),
 	}
 	for _, ic := range p.GetIndexConfigs() {
 		b.IndexConfigs = append(b.IndexConfigs, loggingstore.LogIndexConfig{
@@ -313,6 +314,7 @@ func bucketToProto(parent string, b loggingstore.LogBucket) *loggingpb.LogBucket
 		Locked:           b.Locked,
 		LifecycleState:   lifecycleValue(b.LifecycleState),
 		AnalyticsEnabled: b.AnalyticsEnabled,
+		RestrictedFields: append([]string(nil), b.RestrictedFields...),
 	}
 	for _, ic := range b.IndexConfigs {
 		out.IndexConfigs = append(out.IndexConfigs, &loggingpb.IndexConfig{

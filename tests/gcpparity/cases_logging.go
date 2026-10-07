@@ -9,6 +9,7 @@ import (
 	logging "cloud.google.com/go/logging/apiv2"
 	"cloud.google.com/go/logging/apiv2/loggingpb"
 	"google.golang.org/api/iterator"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // loggingScenario compares the Cloud Logging Admin v2 log-bucket surface over
@@ -85,6 +86,25 @@ func loggingScenario() Scenario {
 			Op: "UpdateBucket (REST)",
 			Mutate: func(ctx context.Context, e *Env) error {
 				_, err := e.Rest(ctx, "PATCH", "/v2/"+name(e)+"?updateMask=description", `{"description":"parity updated"}`)
+				return err
+			},
+		},
+		{
+			Op: "UpdateBucketRestrictedFields (gRPC)",
+			Mutate: func(ctx context.Context, e *Env) error {
+				c, err := newClient(ctx, e)
+				if err != nil {
+					return err
+				}
+				defer c.Close()
+				_, err = c.UpdateBucket(ctx, &loggingpb.UpdateBucketRequest{
+					Name: name(e),
+					Bucket: &loggingpb.LogBucket{
+						RetentionDays:    45,
+						RestrictedFields: []string{"jsonPayload.secret", "labels"},
+					},
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"retention_days", "restricted_fields"}},
+				})
 				return err
 			},
 		},
