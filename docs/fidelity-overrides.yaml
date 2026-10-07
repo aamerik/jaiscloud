@@ -30,12 +30,6 @@ defaults:
   iceberg:
     state: preview
     reason: "BigLake Iceberg REST catalog; no official Discovery document"
-  # Firestore Admin gRPC: only composite-index CRUD is implemented; every other
-  # RPC (Databases, Backups, User Creds, Schedules, Fields, Export/Import) is
-  # inherited from UnimplementedFirestoreAdminServer and fails loud.
-  firestoreadmin:
-    state: unsupported
-    reason: "explicit Unimplemented stub (no Admin surface beyond composite-index CRUD)"
 
 operations:
   - service: dataproc
@@ -44,30 +38,39 @@ operations:
     allow_upgrade: true
     reason: "covered by the k3d Lakehouse e2e (real Spark on Kubernetes, GKE virtualClusterConfig + driver output in GCS)"
 
-  # Firestore Admin composite-index CRUD: verified end-to-end by the official
-  # cloud.google.com/go/firestore/apiv1/admin client conformance suite.
-  - service: firestoreadmin
-    operation: CreateIndex
-    state: ga
-    allow_upgrade: true
-    reason: "covered by the official admin-client gRPC conformance suite"
-  - service: firestoreadmin
-    operation: GetIndex
-    state: ga
-    allow_upgrade: true
-    reason: "covered by the official admin-client gRPC conformance suite"
-  - service: firestoreadmin
-    operation: ListIndexes
-    state: ga
-    allow_upgrade: true
-    reason: "covered by the official admin-client gRPC conformance suite"
-  - service: firestoreadmin
-    operation: DeleteIndex
-    state: ga
-    allow_upgrade: true
-    reason: "covered by the official admin-client gRPC conformance suite"
+  # Firestore Admin: composite-index CRUD and the control plane (databases,
+  # collection-group fields, backup schedules, backups, user creds) are verified
+  # end-to-end by the official cloud.google.com/go/firestore/apiv1/admin client
+  # conformance suite, so their cells derive `ga` with no override. The
+  # data-plane / disaster-recovery RPCs remain explicit Unimplemented stubs
+  # (recorded as debt in the GA-fidelity wave plan, GA12-D1..D5).
 
   # Explicit Unimplemented stubs: enumerated but not implemented.
+  # Firestore Admin data-plane / disaster-recovery RPCs. ExportDocuments and
+  # ImportDocuments need a Cloud Storage bucket plus Firestore's opaque export
+  # format; RestoreDatabase/CloneDatabase need a real backup snapshot and a
+  # second database; BulkDeleteDocuments needs a real data-plane delete. The
+  # emulator fails loud rather than fabricate a result (GA12-D1..D5).
+  - service: firestoreadmin
+    operation: ExportDocuments
+    state: unsupported
+    reason: "requires a GCS bucket + Firestore export format; explicit Unimplemented stub"
+  - service: firestoreadmin
+    operation: ImportDocuments
+    state: unsupported
+    reason: "requires a GCS bucket + Firestore export format; explicit Unimplemented stub"
+  - service: firestoreadmin
+    operation: RestoreDatabase
+    state: unsupported
+    reason: "requires a real backup snapshot; explicit Unimplemented stub"
+  - service: firestoreadmin
+    operation: CloneDatabase
+    state: unsupported
+    reason: "requires a real data-plane copy; explicit Unimplemented stub"
+  - service: firestoreadmin
+    operation: BulkDeleteDocuments
+    state: unsupported
+    reason: "requires a real data-plane delete; explicit Unimplemented stub"
   - service: clouddns
     operation: CloudDNS.Unimplemented
     state: unsupported

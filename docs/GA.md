@@ -54,10 +54,10 @@ fails CI if the committed matrix drifts.
 
 | state | cells |
 | --- | ---: |
-| ga | 825 |
+| ga | 848 |
 | limited | 101 |
 | preview | 14 |
-| unsupported | 82 |
+| unsupported | 59 |
 | **total** | **1022** |
 
 ### By transport
@@ -65,7 +65,7 @@ fails CI if the committed matrix drifts.
 | transport | ga | limited | preview | unsupported |
 | --- | ---: | ---: | ---: | ---: |
 | REST (JSON, Discovery-backed) | 438 | 100 | 14 | 12 |
-| gRPC (proto descriptors + official-client conformance) | 387 | 1 | 0 | 70 |
+| gRPC (proto descriptors + official-client conformance) | 410 | 1 | 0 | 47 |
 
 gRPC-only services (no REST transport): **Firestore Admin, Operations (long-running)**.
 
@@ -150,8 +150,8 @@ surface and durability.
   GCS REST, generic REST, Workflows, Dataproc, Firestore (gRPC),
   Monitoring (gRPC), Datastore (gRPC), Logging (gRPC), GCS gRPC v2, Managed Kafka, BigQuery,
   Metastore, Iceberg, Eventarc, Cloud DNS, Memorystore, Cloud SQL, Compute.
-- **gRPC** — official `cloud.google.com/go` clients: **377/377 checks pass** (Dataproc 26,
-  Datastore 15, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 20, IAM 6, IAM Credentials 4, KMS 35, Logging 21,
+- **gRPC** — official `cloud.google.com/go` clients: **445/445 checks pass** (Dataproc 26,
+  Datastore 15, Eventarc 12, Firestore 18, Firestore Admin 27, Functions 20, IAM 6, IAM Credentials 4, KMS 35, Logging 21,
   Managed Kafka 21, Metastore 13, Monitoring 34, Operations 9, Pub/Sub 25, Resource Manager 11,
   Scheduler 8, Secret Manager 18, Service Usage 6, Storage 24, Tasks 16, Workflow Executions 4, Workflows 5) against `:8081`. The IAM probes
   include Eventarc trigger IAM (GetIamPolicy/SetIamPolicy/TestIamPermissions), which the shared
@@ -243,11 +243,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   source mounted at `/workspace`, `FUNCTION_TARGET`/`FUNCTION_SIGNATURE_TYPE`/`LOG_EXECUTION_ID`
   injected), and `JAISCLOUD_FUNCTIONS_EXECUTOR=lambda` selects the legacy Lambda-RIE contract.
 - **gRPC** — **1** of **458** cells remains `limited`: verified against proto descriptors only.
-  The other **387** are `ga` and **70** are explicit `unsupported` stubs (see the `Unimplemented`
+  The other **410** are `ga` and **47** are explicit `unsupported` stubs (see the `Unimplemented`
   list below), verified with the official `cloud.google.com/go` clients against a live emulator.
-  The conformance harness exercises **422** checks over those `ga` proto methods (Cloud Run 15,
+  The conformance harness exercises **445** checks over those `ga` proto methods (Cloud Run 15,
   Container 30, Dataproc 26,
-  Datastore 15, Eventarc 12, Firestore 18, Firestore Admin 4, Functions 20, IAM 6, KMS 35, Logging 21,
+  Datastore 15, Eventarc 12, Firestore 18, Firestore Admin 27, Functions 20, IAM 6, KMS 35, Logging 21,
   Managed Kafka 21, Metastore 13, Monitoring 34, Operations 9, Pub/Sub 25, Resource Manager 11,
   Scheduler 8, Secret Manager 18, Service Usage 6, Storage 24, Tasks 16, Workflow Executions 4, Workflows 5, the rest one
   per method). The remaining `limited` cell is Logging `TailLogEntries` (a bounded store-poll with
@@ -436,9 +436,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   diagnostic bundle would be fabricated);
   Eventarc `ChannelConnection`/`GoogleChannelConfig`/`MessageBus`/`Enrollment`/
   `Pipeline`/`GoogleApiSource` RPCs (no event-delivery engine is modelled — trigger/channel/
-  provider CRUD is the whole implemented surface); Firestore Admin `Databases`/`Backups`/
-  `UserCreds`/`Schedules`/`Fields`/`Export`/`Import` RPCs (the gRPC surface is composite-index CRUD
-  only).
+  provider CRUD is the whole implemented surface); Firestore Admin `ExportDocuments`/
+  `ImportDocuments`/`RestoreDatabase`/`CloneDatabase`/`BulkDeleteDocuments` (data-plane / disaster
+  recovery: they need a GCS export format or a real backup snapshot, so any result would be
+  fabricated — the composite-index CRUD and the control plane over databases/fields/backup
+  schedules/backups/user creds are served and verified).
   These fail loud
   with an explicit `Unimplemented` error rather than a plausible empty response.
 - **Approximated, not modelled** — Cloud Workflows executes synchronously, ignores
@@ -545,8 +547,9 @@ generated.
   **26 services / 716 operation/transport cells** — `ga` 498, `limited` 100, `preview` 37,
   `unsupported` 81; gRPC conformance **262/262**.
 - **Firestore Admin gRPC.** New `google.firestore.admin.v1.FirestoreAdmin` composite-index CRUD
-  (Create/Get/List/Delete index, 4 `ga` cells) over the shared core; Databases/Backups/UserCreds/
-  Schedules/Fields/Export/Import remain explicit `Unimplemented` stubs.
+  (Create/Get/List/Delete index, 4 `ga` cells) over the shared core; at v1.1.0 the other Admin RPCs
+  (Databases/Backups/UserCreds/Schedules/Fields/Export/Import) were still explicit `Unimplemented`
+  stubs — the control plane landed later in the GA-fidelity wave (GA12).
 - **KMS `cryptoKeyVersion` alignment.** The five non-standard REST cryptoKeyVersion cells (version
   `:disable`/`:enable` and version-level IAM) were dropped and replaced by the standard
   `cryptoKeyVersions.patch` (`CryptoKeyVersionUpdate`) cell; KMS version-level IAM is no longer

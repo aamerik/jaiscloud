@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 422,
-  "passed": 422,
+  "total": 445,
+  "passed": 445,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 422,
-    "passed": 422,
+    "checks": 445,
+    "passed": 445,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -51,8 +51,8 @@
     },
     {
       "service": "firestoreadmin",
-      "total": 4,
-      "passed": 4,
+      "total": 27,
+      "passed": 27,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1058,6 +1058,167 @@
       "method": "DeleteIndex",
       "status": "pass",
       "key_field": "index absent after delete"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "CreateDatabase",
+      "method": "CreateDatabase",
+      "status": "pass",
+      "key_field": "operation done=true; database name"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "GetDatabase",
+      "method": "GetDatabase",
+      "status": "pass",
+      "key_field": "database name/uid"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "ListDatabases",
+      "method": "ListDatabases",
+      "status": "pass",
+      "key_field": "created database present + (default)"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "UpdateDatabase",
+      "method": "UpdateDatabase",
+      "status": "pass",
+      "key_field": "concurrency_mode updated under mask"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "DeleteDatabase",
+      "method": "DeleteDatabase",
+      "status": "pass",
+      "key_field": "database absent after delete"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "UpdateField",
+      "method": "UpdateField",
+      "status": "pass",
+      "key_field": "operation done=true; index_config"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "GetField",
+      "method": "GetField",
+      "status": "pass",
+      "key_field": "index_config round-trip"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "ListFields",
+      "method": "ListFields",
+      "status": "pass",
+      "key_field": "field present under wildcard group"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "CreateUserCreds",
+      "method": "CreateUserCreds",
+      "status": "pass",
+      "key_field": "secure_password returned once"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "GetUserCreds",
+      "method": "GetUserCreds",
+      "status": "pass",
+      "key_field": "name; no secure_password"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "ListUserCreds",
+      "method": "ListUserCreds",
+      "status": "pass",
+      "key_field": "user creds present"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "DisableUserCreds",
+      "method": "DisableUserCreds",
+      "status": "pass",
+      "key_field": "state DISABLED"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "EnableUserCreds",
+      "method": "EnableUserCreds",
+      "status": "pass",
+      "key_field": "state ENABLED"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "ResetUserPassword",
+      "method": "ResetUserPassword",
+      "status": "pass",
+      "key_field": "new secure_password"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "DeleteUserCreds",
+      "method": "DeleteUserCreds",
+      "status": "pass",
+      "key_field": "user creds absent after delete"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "CreateBackupSchedule",
+      "method": "CreateBackupSchedule",
+      "status": "pass",
+      "key_field": "schedule name/retention"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "GetBackupSchedule",
+      "method": "GetBackupSchedule",
+      "status": "pass",
+      "key_field": "retention round-trip"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "ListBackupSchedules",
+      "method": "ListBackupSchedules",
+      "status": "pass",
+      "key_field": "schedule present"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "UpdateBackupSchedule",
+      "method": "UpdateBackupSchedule",
+      "status": "pass",
+      "key_field": "retention updated under mask"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "DeleteBackupSchedule",
+      "method": "DeleteBackupSchedule",
+      "status": "pass",
+      "key_field": "schedule absent after delete"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "ListBackups",
+      "method": "ListBackups",
+      "status": "pass",
+      "key_field": "empty list (no create path)"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "GetBackup",
+      "method": "GetBackup",
+      "status": "pass",
+      "key_field": "missing backup -\u003e NotFound"
+    },
+    {
+      "service": "firestoreadmin",
+      "rpc": "DeleteBackup",
+      "method": "DeleteBackup",
+      "status": "pass",
+      "key_field": "missing backup -\u003e NotFound"
     },
     {
       "service": "datastore",

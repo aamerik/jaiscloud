@@ -12,17 +12,17 @@ Cells: **1022**
 
 | state | count |
 | --- | --- |
-| ga | 825 |
+| ga | 848 |
 | limited | 101 |
 | preview | 14 |
-| unsupported | 82 |
+| unsupported | 59 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
 | rest | 438 | 100 | 14 | 12 |
-| grpc | 387 | 1 | 0 | 70 |
+| grpc | 410 | 1 | 0 | 47 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -405,42 +405,42 @@ _33 cell(s): ga=33 limited=0 preview=0 unsupported=0_
 
 ## firestoreadmin
 
-_32 cell(s): ga=4 limited=0 preview=0 unsupported=28_
+_32 cell(s): ga=27 limited=0 preview=0 unsupported=5_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
-| BulkDeleteDocuments | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| CloneDatabase | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| CreateBackupSchedule | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| CreateDatabase | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| CreateIndex | grpc | ga | covered by the official admin-client gRPC conformance suite |
-| CreateUserCreds | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| DeleteBackup | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| DeleteBackupSchedule | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| DeleteDatabase | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| DeleteIndex | grpc | ga | covered by the official admin-client gRPC conformance suite |
-| DeleteUserCreds | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| DisableUserCreds | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| EnableUserCreds | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| ExportDocuments | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| GetBackup | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| GetBackupSchedule | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| GetDatabase | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| GetField | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| GetIndex | grpc | ga | covered by the official admin-client gRPC conformance suite |
-| GetUserCreds | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| ImportDocuments | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| ListBackupSchedules | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| ListBackups | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| ListDatabases | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| ListFields | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| ListIndexes | grpc | ga | covered by the official admin-client gRPC conformance suite |
-| ListUserCreds | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| ResetUserPassword | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| RestoreDatabase | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| UpdateBackupSchedule | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| UpdateDatabase | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
-| UpdateField | grpc | unsupported | explicit Unimplemented stub (no Admin surface beyond composite-index CRUD) |
+| BulkDeleteDocuments | grpc | unsupported | requires a real data-plane delete; explicit Unimplemented stub |
+| CloneDatabase | grpc | unsupported | requires a real data-plane copy; explicit Unimplemented stub |
+| CreateBackupSchedule | grpc | ga | — |
+| CreateDatabase | grpc | ga | — |
+| CreateIndex | grpc | ga | — |
+| CreateUserCreds | grpc | ga | — |
+| DeleteBackup | grpc | ga | — |
+| DeleteBackupSchedule | grpc | ga | — |
+| DeleteDatabase | grpc | ga | — |
+| DeleteIndex | grpc | ga | — |
+| DeleteUserCreds | grpc | ga | — |
+| DisableUserCreds | grpc | ga | — |
+| EnableUserCreds | grpc | ga | — |
+| ExportDocuments | grpc | unsupported | requires a GCS bucket + Firestore export format; explicit Unimplemented stub |
+| GetBackup | grpc | ga | — |
+| GetBackupSchedule | grpc | ga | — |
+| GetDatabase | grpc | ga | — |
+| GetField | grpc | ga | — |
+| GetIndex | grpc | ga | — |
+| GetUserCreds | grpc | ga | — |
+| ImportDocuments | grpc | unsupported | requires a GCS bucket + Firestore export format; explicit Unimplemented stub |
+| ListBackupSchedules | grpc | ga | — |
+| ListBackups | grpc | ga | — |
+| ListDatabases | grpc | ga | — |
+| ListFields | grpc | ga | — |
+| ListIndexes | grpc | ga | — |
+| ListUserCreds | grpc | ga | — |
+| ResetUserPassword | grpc | ga | — |
+| RestoreDatabase | grpc | unsupported | requires a real backup snapshot; explicit Unimplemented stub |
+| UpdateBackupSchedule | grpc | ga | — |
+| UpdateDatabase | grpc | ga | — |
+| UpdateField | grpc | ga | — |
 
 ## functions
 
