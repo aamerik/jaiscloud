@@ -129,11 +129,11 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 500
+        "rest": 501
       },
       "unverified": {
         "grpc": 21,
-        "rest": 123
+        "rest": 122
       }
     },
     "grpc_only_services": [
@@ -2618,10 +2618,10 @@
       "operation": "Dataproc.GetOperation",
       "transport": "rest",
       "state": "ga",
-      "discovery": "dataproc.projects.locations.operations.get",
+      "discovery": "dataproc.projects.regions.operations.get",
       "verified": false,
       "evidence": [
-        "discovery=dataproc.projects.locations.operations.get",
+        "discovery=dataproc.projects.regions.operations.get",
         "postgres=yes",
         "verified=false (rest, no validated transcript response)"
       ]
@@ -6349,11 +6349,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "iamcredentials.projects.serviceAccounts.getAllowedLocations",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=iamcredentials.projects.serviceAccounts.getAllowedLocations",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -12959,7 +12959,7 @@
         "discovery=secretmanager.projects.locations.secrets.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 15 transcript entries)"
+        "verified=true (rest, 16 transcript entries)"
       ]
     },
     {
@@ -13036,12 +13036,12 @@
       "operation": "Secret.Get",
       "transport": "rest",
       "state": "ga",
-      "discovery": "secretmanager.projects.locations.get",
+      "discovery": "secretmanager.projects.secrets.get",
       "verified": true,
       "evidence": [
-        "discovery=secretmanager.projects.locations.get",
+        "discovery=secretmanager.projects.secrets.get",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {
@@ -13075,12 +13075,12 @@
       "operation": "Secret.List",
       "transport": "rest",
       "state": "ga",
-      "discovery": "secretmanager.projects.locations.list",
+      "discovery": "secretmanager.projects.secrets.list",
       "verified": true,
       "evidence": [
-        "discovery=secretmanager.projects.locations.list",
+        "discovery=secretmanager.projects.secrets.list",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {

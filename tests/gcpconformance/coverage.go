@@ -71,6 +71,18 @@ var actionOverrides = map[string]string{
 	"KMS.CryptoKeyVersionDelete":        "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.delete",
 	"KMS.CryptoKeyDelete":               "cloudkms.projects.locations.keyRings.cryptoKeys.delete",
 
+	// Secret Manager's bare Get/List are the secret get/list methods, not the
+	// (unimplemented) project-level locations.get/locations.list that the
+	// CamelCase heuristic otherwise picks first (".list" suffix tie broken
+	// alphabetically by locations.* before secrets.*).
+	"Secret.Get":  "secretmanager.projects.secrets.get",
+	"Secret.List": "secretmanager.projects.secrets.list",
+
+	// Dataproc serves its operations under regions/{region} (the emulator's
+	// REST surface); the Discovery document also declares a locations/{location}
+	// variant, which the heuristic otherwise picks first (locations < regions).
+	"Dataproc.GetOperation": "dataproc.projects.regions.operations.get",
+
 	// Remaining resource/verb naming differences across services.
 	"CloudSQL.ConnectGet":                        "sql.connect.get",
 	"Compute.OperationsGet":                      "compute.globalOperations.get",
