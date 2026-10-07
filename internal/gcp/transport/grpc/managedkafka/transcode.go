@@ -23,10 +23,14 @@ var protojsonOpts = protojson.UnmarshalOptions{DiscardUnknown: true}
 // clusterToProto renders a stored cluster as the proto Cluster.
 //
 // It cannot populate bootstrapAddress: the pinned
-// cloud.google.com/go/managedkafka proto does not define
-// Cluster.bootstrap_address, so a gRPC caller does not see the field the REST
-// transport renders in core.ClusterJSON. That is an upstream-proto gap, not a
-// state divergence — both transports share the same core.
+// cloud.google.com/go/managedkafka proto (v1.1.0; v1.2.0, the latest tagged
+// release, is field-identical, and googleapis / google-cloud-go main matches)
+// does not define Cluster.bootstrap_address, so a gRPC caller does not see the
+// field the REST transport renders in core.ClusterJSON. Tracked as J55 /
+// AUD3-11 and closed as "no fix": it is an upstream-proto gap, not a state
+// divergence — both transports share the same core.
+// TestPinnedProtoLacksBootstrapAddress is the canary that fires when a
+// published proto gains the field.
 func clusterToProto(c mkstore.Cluster, project string) *managedkafkapb.Cluster {
 	out := &managedkafkapb.Cluster{}
 	if len(c.Config) > 0 {
