@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **969**
+Cells: **970**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 727 |
+| ga | 729 |
 | limited | 101 |
 | preview | 14 |
-| unsupported | 127 |
+| unsupported | 126 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 385 | 100 | 14 | 12 |
-| grpc | 342 | 1 | 0 | 115 |
+| rest | 386 | 100 | 14 | 12 |
+| grpc | 343 | 1 | 0 | 114 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -1195,19 +1195,20 @@ _8 cell(s): ga=8 limited=0 preview=0 unsupported=0_
 
 ## workflows
 
-_12 cell(s): ga=11 limited=0 preview=0 unsupported=1_
+_13 cell(s): ga=13 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | CreateWorkflow | grpc | ga | — |
 | DeleteWorkflow | grpc | ga | — |
 | GetWorkflow | grpc | ga | — |
-| ListWorkflowRevisions | grpc | unsupported | workflow revision history is not modelled; explicit Unimplemented stub |
+| ListWorkflowRevisions | grpc | ga | — |
 | ListWorkflows | grpc | ga | — |
 | UpdateWorkflow | grpc | ga | — |
 | Workflow.CreateWorkflow | rest | ga | — |
 | Workflow.DeleteWorkflow | rest | ga | — |
 | Workflow.GetOperation | rest | ga | — |
 | Workflow.GetWorkflow | rest | ga | — |
+| Workflow.ListWorkflowRevisions | rest | ga | — |
 | Workflow.ListWorkflows | rest | ga | — |
 | Workflow.UpdateWorkflow | rest | ga | — |

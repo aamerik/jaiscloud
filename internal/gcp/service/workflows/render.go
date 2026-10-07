@@ -25,7 +25,7 @@ func WorkflowJSON(w workflowsstore.Workflow, project string) map[string]any {
 		"name":               WorkflowName(project, w.Location, w.ID),
 		"state":              w.State,
 		"revisionId":         w.RevisionID,
-		"revisionCreateTime": w.UpdateTime.Format(time.RFC3339Nano),
+		"revisionCreateTime": liveRevisionCreateTime(w).Format(time.RFC3339Nano),
 		"createTime":         w.CreateTime.Format(time.RFC3339Nano),
 		"updateTime":         w.UpdateTime.Format(time.RFC3339Nano),
 	}
@@ -54,6 +54,49 @@ func WorkflowJSON(w workflowsstore.Workflow, project string) map[string]any {
 	}
 	if w.CallLogLevel != "" {
 		out["callLogLevel"] = w.CallLogLevel
+	}
+	return out
+}
+
+// liveRevisionCreateTime returns the workflow's revision creation time, falling
+// back to UpdateTime for a legacy record that predates the stored field.
+func liveRevisionCreateTime(w workflowsstore.Workflow) time.Time {
+	if !w.RevisionCreateTime.IsZero() {
+		return w.RevisionCreateTime
+	}
+	return w.UpdateTime
+}
+
+// RevisionJSON renders a workflow revision as the workflows.v1.Workflow wire
+// map: the workflow-wide fields (name, description, labels, create/update time,
+// tags) come from the live workflow, while state, revisionId,
+// revisionCreateTime, sourceContents, serviceAccount, userEnvVars and
+// callLogLevel come from the revision. For the live revision the output is
+// byte-for-byte WorkflowJSON.
+func RevisionJSON(r Revision, project string) map[string]any {
+	out := WorkflowJSON(r.Workflow, project)
+	out["state"] = r.State
+	out["revisionId"] = r.RevisionID
+	out["revisionCreateTime"] = r.RevisionCreateTime.Format(time.RFC3339Nano)
+	if r.SourceContents != "" {
+		out["sourceContents"] = r.SourceContents
+	} else {
+		delete(out, "sourceContents")
+	}
+	if r.UserEnvVars != nil {
+		out["userEnvVars"] = stringMapToAny(r.UserEnvVars)
+	} else {
+		delete(out, "userEnvVars")
+	}
+	if r.ServiceAccount != "" {
+		out["serviceAccount"] = r.ServiceAccount
+	} else {
+		out["serviceAccount"] = DefaultServiceAccount(project)
+	}
+	if r.CallLogLevel != "" {
+		out["callLogLevel"] = r.CallLogLevel
+	} else {
+		delete(out, "callLogLevel")
 	}
 	return out
 }

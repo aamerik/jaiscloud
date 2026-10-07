@@ -438,7 +438,7 @@ A `Secret`'s `rotation` schedule (`nextRotationTime` + `rotationPeriod`) is pers
 
 ### Cloud Workflows: synchronous execution, no filter/orderBy
 
-Cloud Workflows is implemented over a real YAML expression engine: workflow definitions and executions are stored, and `executions.create` runs the workflow synchronously and returns it already in a terminal state (there is no asynchronous execution queue). List `filter`/`orderBy` are ignored; a `switch` with no matching condition fails the execution loudly; `http.*` auth is not modelled; `retry.predicate` fails loud; and subworkflows, `listRevisions`, IAM, and CMEK are not implemented.
+Cloud Workflows is implemented over a real YAML expression engine: workflow definitions and executions are stored, and `executions.create` runs the workflow synchronously and returns it already in a terminal state (there is no asynchronous execution queue). List `filter`/`orderBy` are ignored; a `switch` with no matching condition fails the execution loudly; `http.*` auth is not modelled; `retry.predicate` fails loud; and subworkflows, IAM, and CMEK are not implemented.
 
 ### Dataproc workload placement: one Kubernetes namespace per cluster
 

@@ -171,13 +171,6 @@ operations:
     state: ga
     allow_upgrade: true
     reason: "Cloud Run data-plane invocation (the synthesized {service}-{token}.{location}.run.app host, or the legacy /run/v2/.../services/{svc}/<subpath> path form), not a Discovery method; served by the InvocationCodec/runtime seam and wire/unit-tested (mock resolves 503, the docker/k8s executor proxies to the revision)"
-  # Cloud Workflows gRPC is control-plane only: ListWorkflowRevisions has no
-  # emulator implementation (workflow revision history is not modelled), so it
-  # is an explicit Unimplemented stub.
-  - service: workflows
-    operation: ListWorkflowRevisions
-    state: unsupported
-    reason: "workflow revision history is not modelled; explicit Unimplemented stub"
   # Cloud Resource Manager v3 gRPC serves the whole Projects surface — the
   # lifecycle (GetProject / CreateProject / ListProjects / DeleteProject /
   # UndeleteProject), project administration (SearchProjects / UpdateProject /

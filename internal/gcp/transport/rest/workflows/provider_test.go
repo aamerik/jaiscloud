@@ -120,6 +120,77 @@ func TestProviderRoundTrip(t *testing.T) {
 	}
 }
 
+const source2 = "main:\n  steps:\n    - r:\n        return: 2\n"
+
+// TestProviderListWorkflowRevisions exercises the :listRevisions handler and
+// the revisionId-scoped GetWorkflow over the shared core.
+func TestProviderListWorkflowRevisions(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+
+	create := nr(map[string]any{
+		"project": "proj", "location": "us-central1", "workflowId": "wf1",
+		"body": map[string]any{"sourceContents": source},
+	})
+	cresp, err := p.CreateWorkflow(ctx, create)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	first, _ := cresp.Data["response"].(map[string]any)
+	firstRev, _ := first["revisionId"].(string)
+	if firstRev == "" {
+		t.Fatalf("create response missing revisionId: %v", first)
+	}
+
+	upd := nr(map[string]any{
+		"project": "proj", "location": "us-central1", "name": "locations/us-central1/workflows/wf1",
+		"updateMask": "sourceContents",
+		"body":       map[string]any{"sourceContents": source2},
+	})
+	if _, err := p.UpdateWorkflow(ctx, upd); err != nil {
+		t.Fatalf("update source: %v", err)
+	}
+
+	list := nr(map[string]any{"project": "proj", "location": "us-central1",
+		"name": "locations/us-central1/workflows/wf1"})
+	lresp, err := p.ListWorkflowRevisions(ctx, list)
+	if err != nil {
+		t.Fatalf("listRevisions: %v", err)
+	}
+	items, _ := lresp.Data["workflows"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("revisions = %d, want 2", len(items))
+	}
+	newest, _ := items[0].(map[string]any)
+	oldest, _ := items[1].(map[string]any)
+	if newest["revisionId"] == firstRev {
+		t.Fatalf("newest revision = oldest %q", newest["revisionId"])
+	}
+	if newest["sourceContents"] != source2 {
+		t.Fatalf("newest source = %v, want updated", newest["sourceContents"])
+	}
+	if oldest["sourceContents"] != source {
+		t.Fatalf("oldest source = %v, want original preserved", oldest["sourceContents"])
+	}
+
+	// revisionId selects the historical revision.
+	get := nr(map[string]any{"project": "proj", "location": "us-central1",
+		"name": "locations/us-central1/workflows/wf1", "revisionId": firstRev})
+	gresp, err := p.GetWorkflow(ctx, get)
+	if err != nil {
+		t.Fatalf("get revision: %v", err)
+	}
+	if gresp.Data["sourceContents"] != source || gresp.Data["revisionId"] != firstRev {
+		t.Fatalf("get revision data = %v", gresp.Data)
+	}
+
+	// An unknown revision is NotFound.
+	get.Params["revisionId"] = "000999-zzz"
+	if _, err := p.GetWorkflow(ctx, get); err == nil || !core.IsNotFound(err) {
+		t.Fatalf("expected NotFound for unknown revision, got %v", err)
+	}
+}
+
 // TestProviderUsesDefaultProjectWhenAbsent verifies the configured default is
 // used when neither the path nor the account scope names a project.
 func TestProviderUsesDefaultProjectWhenAbsent(t *testing.T) {

@@ -427,7 +427,6 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   the Hive Thrift `alter_table` path; see the README Known Limitations);
   Dataproc `DiagnoseCluster` (no cluster node/agent/log plane to collect from — the
   diagnostic bundle would be fabricated);
-  Workflows `ListWorkflowRevisions` (workflow revision history is not modelled);
   Eventarc `ChannelConnection`/`GoogleChannelConfig`/`MessageBus`/`Enrollment`/
   `Pipeline`/`GoogleApiSource` RPCs (no event-delivery engine is modelled — trigger/channel/
   provider CRUD is the whole implemented surface); Firestore Admin `Databases`/`Backups`/
@@ -437,7 +436,7 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   with an explicit `Unimplemented` error rather than a plausible empty response.
 - **Approximated, not modelled** — Cloud Workflows executes synchronously, ignores
   `filter`/`orderBy`, fails loud on a `switch` with no matching condition and on `retry.predicate`,
-  and has no subworkflows/`listRevisions`/IAM/CMEK; Dataproc Serverless (Batch) is not implemented;
+  and has no subworkflows/IAM/CMEK; Dataproc Serverless (Batch) is not implemented;
   a GKE-backed cluster's `virtualClusterConfig` is still a metadata-only GKE control plane (no GKE
   API or node-pool CRUD), but in K8s executor mode each Dataproc cluster runs in its own Kubernetes
   workload namespace — the caller's `kubernetesClusterConfig.kubernetesNamespace` when supplied,

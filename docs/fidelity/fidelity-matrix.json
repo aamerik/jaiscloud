@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 969,
+    "total": 970,
     "by_state": {
-      "ga": 727,
+      "ga": 729,
       "limited": 101,
       "preview": 14,
-      "unsupported": 127
+      "unsupported": 126
     },
     "by_transport": {
       "grpc": {
-        "ga": 342,
+        "ga": 343,
         "limited": 1,
-        "unsupported": 115
+        "unsupported": 114
       },
       "rest": {
-        "ga": 385,
+        "ga": 386,
         "limited": 100,
         "preview": 14,
         "unsupported": 12
@@ -124,8 +124,7 @@
         "ga": 8
       },
       "workflows": {
-        "ga": 11,
-        "unsupported": 1
+        "ga": 13
       }
     },
     "grpc_only_services": [
@@ -10412,11 +10411,10 @@
       "service": "workflows",
       "operation": "ListWorkflowRevisions",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "workflow revision history is not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -10479,6 +10477,16 @@
       "state": "ga",
       "evidence": [
         "discovery=workflows.projects.locations.workflows.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "workflows",
+      "operation": "Workflow.ListWorkflowRevisions",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=workflows.projects.locations.workflows.listRevisions",
         "postgres=yes"
       ]
     },

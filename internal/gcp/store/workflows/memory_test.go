@@ -165,6 +165,65 @@ func TestMemoryStoreOperations(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreRevisions(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+
+	base := Workflow{ID: "a", State: "ACTIVE", SourceContents: "s1", RevisionID: "000001-aaa"}
+	if err := s.CreateWorkflow(ctx, "proj", "us-central1", "a", base); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	revs, err := s.ListRevisions(ctx, "proj", "us-central1", "a")
+	if err != nil {
+		t.Fatalf("list revisions: %v", err)
+	}
+	if len(revs) != 1 || revs[0].RevisionID != "000001-aaa" || revs[0].SourceContents != "s1" {
+		t.Fatalf("after create: %+v", revs)
+	}
+
+	// A non-revision update (same revision id) must not append.
+	upd := base
+	upd.Description = "d"
+	if err := s.UpdateWorkflow(ctx, "proj", "us-central1", "a", upd); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if revs, _ = s.ListRevisions(ctx, "proj", "us-central1", "a"); len(revs) != 1 {
+		t.Fatalf("non-revision update appended: %+v", revs)
+	}
+
+	// A revision-changing atomic update appends, newest first.
+	if _, err := s.UpdateWorkflowAtomic(ctx, "proj", "us-central1", "a", func(w Workflow) (Workflow, error) {
+		w.RevisionID = "000002-bbb"
+		w.SourceContents = "s2"
+		return w, nil
+	}); err != nil {
+		t.Fatalf("atomic update: %v", err)
+	}
+	revs, _ = s.ListRevisions(ctx, "proj", "us-central1", "a")
+	if len(revs) != 2 || revs[0].RevisionID != "000002-bbb" || revs[1].RevisionID != "000001-aaa" {
+		t.Fatalf("after revision update: %+v", revs)
+	}
+
+	got, err := s.GetRevision(ctx, "proj", "us-central1", "a", "000001-aaa")
+	if err != nil {
+		t.Fatalf("get revision: %v", err)
+	}
+	if got.SourceContents != "s1" {
+		t.Fatalf("historical source = %q, want s1", got.SourceContents)
+	}
+	if _, err := s.GetRevision(ctx, "proj", "us-central1", "a", "missing"); err != ErrNoSuchRevision {
+		t.Fatalf("expected ErrNoSuchRevision, got %v", err)
+	}
+
+	// Deleting the workflow cascades its revisions.
+	if err := s.DeleteWorkflow(ctx, "proj", "us-central1", "a"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if revs, _ = s.ListRevisions(ctx, "proj", "us-central1", "a"); len(revs) != 0 {
+		t.Fatalf("revisions survived delete: %+v", revs)
+	}
+}
+
 func TestMemoryStoreReset(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()
