@@ -24,6 +24,13 @@ func MetadataImportName(project, location, service, imp string) string {
 	return resource.ResourceID(project)("metastore-metadata-import", location+"/"+service+"/"+imp)
 }
 
+// FederationName is the Dataproc Metastore federation resource name
+// (projects/{p}/locations/{l}/federations/{f}). A federation is
+// location-scoped, not nested under a service.
+func FederationName(project, location, federation string) string {
+	return resource.ResourceID(project)("metastore-federation", location+"/"+federation)
+}
+
 // OperationName is the Dataproc Metastore long-running operation resource name
 // (projects/{p}/locations/{l}/operations/{id}). It shares the
 // google.longrunning.Operations name shape with Cloud Workflows.
@@ -48,6 +55,9 @@ type ResourceName struct {
 	Service        string
 	Backup         string
 	MetadataImport string
+	Federation     string
+	Database       string
+	Table          string
 	Operation      string
 }
 
@@ -86,6 +96,21 @@ func ParseName(name string) ResourceName {
 		case "metadataImports":
 			if i+1 < len(segs) {
 				out.MetadataImport = segs[i+1]
+				i++
+			}
+		case "federations":
+			if i+1 < len(segs) {
+				out.Federation = segs[i+1]
+				i++
+			}
+		case "databases":
+			if i+1 < len(segs) {
+				out.Database = segs[i+1]
+				i++
+			}
+		case "tables":
+			if i+1 < len(segs) {
+				out.Table = segs[i+1]
 				i++
 			}
 		case "operations":

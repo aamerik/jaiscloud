@@ -105,6 +105,7 @@ SQL_INSTANCE="$(out sql_instance_name)"
 SQL_DB="$(out sql_database_name)"
 SQL_USER="$(out sql_user_name)"
 ENABLED_SERVICE="$(out enabled_service)"
+FED_NAME="$(out metastore_federation_name)"
 
 echo "== spot checks"
 check "GCS bucket created" "$ENDPOINT/storage/v1/b/jaiscloud-tf-bucket" \
@@ -161,6 +162,11 @@ check "Cloud SQL database created" \
 check "Cloud SQL user created" \
   "$ENDPOINT/sql/v1beta4/projects/$PROJECT/instances/$SQL_INSTANCE/users/$SQL_USER" \
   '"kind":"sql#user"'
+check "Dataproc Metastore federation created" \
+  "$ENDPOINT/v1/$FED_NAME" 'jaiscloud-tf-federation' '"state":"ACTIVE"'
+check "Dataproc Metastore database IAM grant" \
+  "$ENDPOINT/v1/projects/$PROJECT/locations/$REGION/services/jaiscloud-tf-metastore/databases/default:getIamPolicy" \
+  'roles/metastore.admin' 'jaiscloud-tf-sa@'
 
 echo "== destroy"
 destroy

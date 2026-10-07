@@ -559,21 +559,23 @@ func detectMemorystoreResourceType(seg []string) string {
 }
 
 // detectMetastoreResourceType returns "services" when the segments after
-// projects/{project} form locations/{location}/services, else "". The
-// "services" segment is unique to Dataproc Metastore among the emulator's
+// projects/{project} form locations/{location}/services, or "federations" for
+// locations/{location}/federations, else "". The "services" and "federations"
+// segments are unique to Dataproc Metastore among the emulator's
 // /v1/projects/{project}/locations/{location}/... services (workflows uses
 // "workflows", functions uses "functions", KMS uses "keyRings", Managed Kafka
-// uses "clusters"). The shared locations/{location}/operations/{id} LRO path is
-// intentionally NOT claimed here — it is path-ambiguous with Workflows'
-// operations surface on a single host, so it remains routed to workflows (the
-// service's own host token routes it to Metastore instead; see
-// operationsHostService).
+// uses "clusters", Cloud Scheduler uses "jobs"). The shared
+// locations/{location}/operations/{id} LRO path is intentionally NOT claimed
+// here — it is path-ambiguous with Workflows' operations surface on a single
+// host, so it remains routed to workflows (the service's own host token routes
+// it to Metastore instead; see operationsHostService).
 func detectMetastoreResourceType(seg []string) string {
 	if len(seg) < 3 || seg[0] != "locations" {
 		return ""
 	}
-	if seg[2] == "services" {
-		return "services"
+	switch seg[2] {
+	case "services", "federations":
+		return seg[2]
 	}
 	return ""
 }

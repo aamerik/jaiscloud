@@ -20,10 +20,14 @@
 // Thrift plane in internal/gcp/hms is separate). Deferred operations
 // (ExportMetadata, RestoreService, QueryMetadata, MoveTableToDatabase,
 // AlterMetadataResourceLocation) are not modelled here; each transport reports
-// them Unimplemented. The pinned proto defines no getIamPolicy/setIamPolicy/
-// testIamPermissions rpcs; the REST Discovery documents those verbs but the
-// emulator models no metastore IAM plane, so they fall through to an
-// unsupported-operation 404 rather than being served.
+// them Unimplemented.
+//
+// Federations (google.cloud.metastore.v1.DataprocMetastoreFederation) are
+// modelled here too (see federation.go). The google.iam.v1.IAMPolicy mixin is
+// served at the service/backup/database/table/federation levels over the shared
+// policy store (see iam.go); the pinned proto defines no IAM RPCs, so gRPC
+// serves it through the shared IAMPolicy router and REST through the
+// :getIamPolicy/:setIamPolicy/:testIamPermissions verbs.
 package metastore
 
 import (
@@ -38,11 +42,16 @@ import (
 	"jaiscloud/internal/gcp/paging"
 	metastorestore "jaiscloud/internal/gcp/store/metastore"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/store"
 )
 
 // Service is the transport-neutral Dataproc Metastore v1 service.
 type Service struct {
 	store metastorestore.Store
+	// resources is the shared control-plane store backing the metadata-only IAM
+	// policy plane (the getIamPolicy/setIamPolicy/testIamPermissions mixin served
+	// at the service/backup/database/table/federation levels). Nil disables IAM.
+	resources store.ResourceStore
 	// lroMode controls operation timing. The zero value is synchronous: every
 	// operation is stored done=true inline, matching the v1.1.0 contract. An
 	// enabled mode stores operations done=false and settles them lazily on read.
@@ -530,6 +539,8 @@ func mapErr(err error) error {
 		return model.NewProviderError("NotFound", "backup not found", 404)
 	case errors.Is(err, metastorestore.ErrNoSuchMetadataImport):
 		return model.NewProviderError("NotFound", "metadata import not found", 404)
+	case errors.Is(err, metastorestore.ErrNoSuchFederation):
+		return model.NewProviderError("NotFound", "federation not found", 404)
 	case errors.Is(err, metastorestore.ErrNoSuchOperation):
 		return model.NewProviderError("NotFound", "operation not found", 404)
 	case errors.Is(err, metastorestore.ErrAlreadyExists):
@@ -575,11 +586,19 @@ var metastoreNestedBlocks = map[string]string{
 }
 
 // maskJSONRoot translates an updateMask field path to the top-level JSON key in
-// the stored body. Single-word top-level fields (labels, tier, network, port)
-// and already-camelCase roots pass through unchanged; snake_case nested config
-// blocks are translated via metastoreNestedBlocks. A snake_case root that is
-// not a known nested block returns ok=false so the caller fails loud.
+// the stored body for a service. Single-word top-level fields (labels, tier,
+// network, port) and already-camelCase roots pass through unchanged; snake_case
+// nested config blocks are translated via metastoreNestedBlocks. A snake_case
+// root that is not a known nested block returns ok=false so the caller fails
+// loud.
 func maskJSONRoot(path string) (root string, ok bool) {
+	return maskJSONRootIn(path, metastoreNestedBlocks)
+}
+
+// maskJSONRootIn is the shared implementation of maskJSONRoot for any
+// nested-block table (services use metastoreNestedBlocks, federations their
+// own). Callers pass the snake_case→camelCase table for the resource.
+func maskJSONRootIn(path string, blocks map[string]string) (root string, ok bool) {
 	root = path
 	if i := strings.IndexByte(path, '.'); i >= 0 {
 		root = path[:i]
@@ -587,7 +606,7 @@ func maskJSONRoot(path string) (root string, ok bool) {
 	if !strings.Contains(root, "_") {
 		return root, true
 	}
-	camel, known := metastoreNestedBlocks[root]
+	camel, known := blocks[root]
 	if !known {
 		return "", false
 	}

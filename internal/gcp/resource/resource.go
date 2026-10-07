@@ -186,6 +186,12 @@ var formatters = map[string]func(project, name string) string{
 		loc, op := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
 	},
+	// A federation is location-scoped (not nested under a service); callers pass
+	// "location/federation".
+	"metastore-federation": func(p, n string) string {
+		loc, f := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/federations/%s", p, loc, f)
+	},
 	// Eventarc — names embed the location; callers pass "location/trigger",
 	// "location/channel", "location/provider", and "location/operation".
 	"eventarc-trigger": func(p, n string) string {

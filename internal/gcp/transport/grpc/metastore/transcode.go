@@ -56,6 +56,14 @@ func metadataImportToProto(mi metastorestore.MetadataImport, project string) *me
 	return out
 }
 
+// federationToProto renders a stored federation as the proto Federation, driven
+// by the core's FederationJSON map so the REST and gRPC renders cannot drift.
+func federationToProto(f metastorestore.Federation, project string) *metastorepb.Federation {
+	out := &metastorepb.Federation{}
+	unmarshalProtoJSON(core.FederationJSON(f, project), out)
+	return out
+}
+
 // operationToProto renders a stored operation as the proto
 // google.longrunning.Operation, packing the typed metadata and the
 // caller-supplied response message (a Service/Backup/MetadataImport, or Empty
@@ -112,6 +120,8 @@ func operationResponse(op metastorestore.Operation) proto.Message {
 		out = &metastorepb.Backup{}
 	case core.MetadataImportTypeURL:
 		out = &metastorepb.MetadataImport{}
+	case core.FederationTypeURL:
+		out = &metastorepb.Federation{}
 	default:
 		return emptyResponse()
 	}

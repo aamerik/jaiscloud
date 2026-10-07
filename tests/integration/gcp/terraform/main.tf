@@ -146,6 +146,33 @@ resource "google_sql_user" "compat" {
   password = "jaiscloud-tf-password"
 }
 
+# ── Dataproc Metastore — federation + database IAM ────────────────────────────
+# google_dataproc_metastore_federation exercises the separate
+# DataprocMetastoreFederation surface (create/get/update/delete + LRO), and
+# google_dataproc_metastore_database_iam_member exercises the IAM mixin at the
+# database level (metadata-only: the emulator keys the policy by resource name).
+resource "google_dataproc_metastore_federation" "compat" {
+  federation_id = "jaiscloud-tf-federation"
+  location      = var.region
+  project       = var.project
+  version       = "3.1.2"
+
+  backend_metastores {
+    name           = "projects/${var.project}/locations/${var.region}/services/jaiscloud-tf-metastore"
+    metastore_type = "DATAPROC_METASTORE"
+    rank           = "0"
+  }
+}
+
+resource "google_dataproc_metastore_database_iam_member" "compat" {
+  project     = var.project
+  location    = var.region
+  service_id  = "jaiscloud-tf-metastore"
+  database    = "default"
+  role        = "roles/metastore.admin"
+  member      = "serviceAccount:${google_service_account.compat.email}"
+}
+
 # ── Outputs (consumed by run.sh spot checks) ──────────────────────────────────
 output "bucket_name" {
   value = google_storage_bucket.compat.name
@@ -193,4 +220,8 @@ output "sql_user_name" {
 
 output "enabled_service" {
   value = google_project_service.run_api.service
+}
+
+output "metastore_federation_name" {
+  value = google_dataproc_metastore_federation.compat.name
 }

@@ -23,6 +23,7 @@ const (
 	serviceTypeURL        = "type.googleapis.com/google.cloud.metastore.v1.Service"
 	backupTypeURL         = "type.googleapis.com/google.cloud.metastore.v1.Backup"
 	metadataImportTypeURL = "type.googleapis.com/google.cloud.metastore.v1.MetadataImport"
+	federationTypeURL     = "type.googleapis.com/google.cloud.metastore.v1.Federation"
 )
 
 // Exported aliases of the Any type URLs above. The gRPC transport reads the
@@ -32,6 +33,7 @@ const (
 	ServiceTypeURL        = serviceTypeURL
 	BackupTypeURL         = backupTypeURL
 	MetadataImportTypeURL = metadataImportTypeURL
+	FederationTypeURL     = federationTypeURL
 )
 
 // randomHex returns n random hexadecimal characters. It is used only for
@@ -113,6 +115,36 @@ func ServiceJSON(svc metastorestore.Service, project string) map[string]any {
 	}
 	if svc.Labels != nil {
 		out["labels"] = svc.Labels
+	}
+	return out
+}
+
+// FederationJSON renders a stored federation as the metastore.v1.Federation
+// wire map. The stored request body is echoed verbatim, then
+// name/state/times/uid/endpointUri are overlaid (output-only). It is the single
+// source of truth for the derived fields: the gRPC transport drives its proto
+// rendering from this map (via protojson), so the two transports cannot drift.
+//
+// The endpointUri is synthesized against the single global Hive Metastore
+// Thrift plane (`:9083`, see internal/gcp/hms): the emulator models no
+// per-federation catalog, so the URI is cosmetic (documented divergence MP4).
+func FederationJSON(f metastorestore.Federation, project string) map[string]any {
+	var out map[string]any
+	if len(f.Config) > 0 {
+		_ = json.Unmarshal(f.Config, &out)
+	}
+	if out == nil {
+		out = map[string]any{}
+	}
+	name := FederationName(project, f.Location, f.Name)
+	out["name"] = name
+	out["createTime"] = formatTimestamp(f.CreateTime)
+	out["updateTime"] = formatTimestamp(f.UpdateTime)
+	out["state"] = f.State
+	out["endpointUri"] = endpointURI(f.Name, f.Location)
+	out["uid"] = serviceUID(name)
+	if f.Labels != nil {
+		out["labels"] = f.Labels
 	}
 	return out
 }

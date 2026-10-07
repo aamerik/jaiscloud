@@ -82,41 +82,42 @@ type GRPCService struct {
 // they are standard gRPC infrastructure, not GCP API surface, and would not
 // belong in the fidelity matrix.
 var grpcWireService = map[string]string{
-	"google.cloud.dataproc.v1.ClusterController":         "dataproc",
-	"google.cloud.dataproc.v1.JobController":             "dataproc",
-	"google.cloud.dataproc.v1.WorkflowTemplateService":   "dataproc",
-	"google.container.v1.ClusterManager":                 "container",
-	"google.cloud.functions.v1.CloudFunctionsService":    "functions",
-	"google.cloud.functions.v2.FunctionService":          "functions",
-	"google.storage.v2.Storage":                          "storage",
-	"google.firestore.v1.Firestore":                      "firestore",
-	"google.firestore.admin.v1.FirestoreAdmin":           "firestoreadmin",
-	"google.datastore.v1.Datastore":                      "datastore",
-	"google.pubsub.v1.Publisher":                         "pubsub",
-	"google.pubsub.v1.Subscriber":                        "pubsub",
-	"google.cloud.kms.v1.KeyManagementService":           "kms",
-	"google.logging.v2.LoggingServiceV2":                 "logging",
-	"google.logging.v2.ConfigServiceV2":                  "logging",
-	"google.logging.v2.MetricsServiceV2":                 "logging",
-	"google.monitoring.v3.MetricService":                 "monitoring",
-	"google.monitoring.v3.AlertPolicyService":            "monitoring",
-	"google.monitoring.v3.NotificationChannelService":    "monitoring",
-	"google.monitoring.v3.ServiceMonitoringService":      "monitoring",
-	"google.cloud.secretmanager.v1.SecretManagerService": "secretmanager",
-	"google.cloud.workflows.executions.v1.Executions":    "workflowexecutions",
-	"google.cloud.workflows.v1.Workflows":                "workflows",
-	"google.cloud.managedkafka.v1.ManagedKafka":          "managedkafka",
-	"google.cloud.metastore.v1.DataprocMetastore":        "metastore",
-	"google.cloud.eventarc.v1.Eventarc":                  "eventarc",
-	"google.api.serviceusage.v1.ServiceUsage":            "serviceusage",
-	"google.cloud.resourcemanager.v3.Projects":           "resourcemanager",
-	"google.cloud.run.v2.Services":                       "run",
-	"google.cloud.run.v2.Revisions":                      "run",
-	"google.cloud.scheduler.v1.CloudScheduler":           "scheduler",
-	"google.cloud.tasks.v2.CloudTasks":                   "tasks",
-	"google.iam.v1.IAMPolicy":                            "iam",
-	"google.iam.credentials.v1.IAMCredentials":           "iamcredentials",
-	"google.longrunning.Operations":                      "operations",
+	"google.cloud.dataproc.v1.ClusterController":            "dataproc",
+	"google.cloud.dataproc.v1.JobController":                "dataproc",
+	"google.cloud.dataproc.v1.WorkflowTemplateService":      "dataproc",
+	"google.container.v1.ClusterManager":                    "container",
+	"google.cloud.functions.v1.CloudFunctionsService":       "functions",
+	"google.cloud.functions.v2.FunctionService":             "functions",
+	"google.storage.v2.Storage":                             "storage",
+	"google.firestore.v1.Firestore":                         "firestore",
+	"google.firestore.admin.v1.FirestoreAdmin":              "firestoreadmin",
+	"google.datastore.v1.Datastore":                         "datastore",
+	"google.pubsub.v1.Publisher":                            "pubsub",
+	"google.pubsub.v1.Subscriber":                           "pubsub",
+	"google.cloud.kms.v1.KeyManagementService":              "kms",
+	"google.logging.v2.LoggingServiceV2":                    "logging",
+	"google.logging.v2.ConfigServiceV2":                     "logging",
+	"google.logging.v2.MetricsServiceV2":                    "logging",
+	"google.monitoring.v3.MetricService":                    "monitoring",
+	"google.monitoring.v3.AlertPolicyService":               "monitoring",
+	"google.monitoring.v3.NotificationChannelService":       "monitoring",
+	"google.monitoring.v3.ServiceMonitoringService":         "monitoring",
+	"google.cloud.secretmanager.v1.SecretManagerService":    "secretmanager",
+	"google.cloud.workflows.executions.v1.Executions":       "workflowexecutions",
+	"google.cloud.workflows.v1.Workflows":                   "workflows",
+	"google.cloud.managedkafka.v1.ManagedKafka":             "managedkafka",
+	"google.cloud.metastore.v1.DataprocMetastore":           "metastore",
+	"google.cloud.metastore.v1.DataprocMetastoreFederation": "metastore",
+	"google.cloud.eventarc.v1.Eventarc":                     "eventarc",
+	"google.api.serviceusage.v1.ServiceUsage":               "serviceusage",
+	"google.cloud.resourcemanager.v3.Projects":              "resourcemanager",
+	"google.cloud.run.v2.Services":                          "run",
+	"google.cloud.run.v2.Revisions":                         "run",
+	"google.cloud.scheduler.v1.CloudScheduler":              "scheduler",
+	"google.cloud.tasks.v2.CloudTasks":                      "tasks",
+	"google.iam.v1.IAMPolicy":                               "iam",
+	"google.iam.credentials.v1.IAMCredentials":              "iamcredentials",
+	"google.longrunning.Operations":                         "operations",
 }
 
 // EnumerateGRPC returns the emulator's gRPC surface without any network I/O.
@@ -156,6 +157,7 @@ func EnumerateGRPC() []GRPCService {
 	workflowspb.RegisterWorkflowsServer(reg, &grpcworkflows.Service{})
 	managedkafkapb.RegisterManagedKafkaServer(reg, &grpcmanagedkafka.Service{})
 	metastorepb.RegisterDataprocMetastoreServer(reg, &grpcmetastore.Service{})
+	metastorepb.RegisterDataprocMetastoreFederationServer(reg, &grpcmetastore.Service{})
 	eventarcpb.RegisterEventarcServer(reg, &grpceventarc.Service{})
 	serviceusagepb.RegisterServiceUsageServer(reg, &grpcserviceusage.Service{})
 	resourcemanagerpb.RegisterProjectsServer(reg, &grpcresourcemanager.Service{})
@@ -172,7 +174,7 @@ func EnumerateGRPC() []GRPCService {
 	apiv2functionspb.RegisterFunctionServiceServer(reg, &grpcfunctions.ServiceV2{})
 	credentialspb.RegisterIAMCredentialsServer(reg, &grpciamcredentials.Service{})
 	// Pub/Sub, KMS and Eventarc share one google.iam.v1.IAMPolicy registration.
-	iampb.RegisterIAMPolicyServer(reg, grpcserver.NewIAMRouter(&grpcpubsub.Service{}, &grpckms.Service{}, &grpceventarc.Service{}))
+	iampb.RegisterIAMPolicyServer(reg, grpcserver.NewIAMRouter(&grpcpubsub.Service{}, &grpckms.Service{}, &grpceventarc.Service{}, &grpcmetastore.Service{}))
 	longrunningpb.RegisterOperationsServer(reg, grpcoperations.New())
 
 	info := reg.GetServiceInfo()

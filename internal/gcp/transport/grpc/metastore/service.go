@@ -13,8 +13,9 @@
 // deferred control-plane RPCs (ExportMetadata,
 // RestoreService, QueryMetadata, MoveTableToDatabase,
 // AlterMetadataResourceLocation) fail loud with codes.Unimplemented. The
-// separate google.cloud.metastore.v1.DataprocMetastoreFederation service is not
-// registered.
+// separate google.cloud.metastore.v1.DataprocMetastoreFederation service is
+// implemented here too (see federation.go), and the google.iam.v1.IAMPolicy
+// mixin is served through the shared IAMPolicy router (see iam.go).
 package metastore
 
 import (

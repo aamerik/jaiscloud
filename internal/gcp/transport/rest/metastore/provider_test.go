@@ -8,6 +8,7 @@ import (
 	metastorecore "jaiscloud/internal/gcp/service/metastore"
 	metastorestore "jaiscloud/internal/gcp/store/metastore"
 	"jaiscloud/internal/model"
+	"jaiscloud/internal/store"
 )
 
 func newNR(params map[string]any) *model.NormalizedRequest {
@@ -372,6 +373,13 @@ func TestRoutes_AllHandlersRegistered(t *testing.T) {
 		"Metastore.CreateBackup", "Metastore.GetBackup", "Metastore.ListBackups", "Metastore.DeleteBackup",
 		"Metastore.CreateMetadataImport", "Metastore.GetMetadataImport", "Metastore.ListMetadataImports",
 		"Metastore.UpdateMetadataImport",
+		"Metastore.CreateFederation", "Metastore.GetFederation", "Metastore.ListFederations",
+		"Metastore.UpdateFederation", "Metastore.DeleteFederation",
+		"Metastore.ServiceGetIamPolicy", "Metastore.ServiceSetIamPolicy", "Metastore.ServiceTestIamPermissions",
+		"Metastore.BackupGetIamPolicy", "Metastore.BackupSetIamPolicy",
+		"Metastore.DatabaseGetIamPolicy", "Metastore.DatabaseSetIamPolicy",
+		"Metastore.TableGetIamPolicy", "Metastore.TableSetIamPolicy",
+		"Metastore.FederationGetIamPolicy", "Metastore.FederationSetIamPolicy", "Metastore.FederationTestIamPermissions",
 		"Metastore.GetOperation", "Metastore.ListOperations",
 		"Metastore.ExportMetadata", "Metastore.RestoreService", "Metastore.QueryMetadata",
 		"Metastore.MoveTableToDatabase", "Metastore.AlterMetadataResourceLocation",
@@ -514,5 +522,104 @@ func TestCreateServiceEndpointProtocol(t *testing.T) {
 	}
 	if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidArgument" {
 		t.Fatalf("expected InvalidArgument for invalid value, got %v", err)
+	}
+}
+
+func newProviderWithResources() *Provider {
+	return NewProvider(metastorecore.NewService(metastorestore.NewMemoryStore(), metastorecore.WithResources(store.NewMemoryResourceStore())), "proj")
+}
+
+func TestFederationCRUDHandlers(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+
+	resp, err := p.CreateFederation(ctx, newNR(map[string]any{
+		"location": "us-central1", "federationId": "fed",
+		"body": map[string]any{"version": "3.1.2"},
+	}))
+	if err != nil {
+		t.Fatalf("CreateFederation: %v", err)
+	}
+	if resp.Data["done"] != true {
+		t.Fatalf("expected done=true, got %v", resp.Data["done"])
+	}
+	created, _ := resp.Data["response"].(map[string]any)
+	if created["@type"] != "type.googleapis.com/google.cloud.metastore.v1.Federation" {
+		t.Errorf("LRO response @type = %v", created["@type"])
+	}
+	if created["name"] != "projects/proj/locations/us-central1/federations/fed" {
+		t.Errorf("federation name = %v", created["name"])
+	}
+	if created["endpointUri"] == nil {
+		t.Errorf("endpointUri missing: %+v", created)
+	}
+
+	got, err := p.GetFederation(ctx, newNR(map[string]any{"location": "us-central1", "federationId": "fed"}))
+	if err != nil || got.Data["version"] != "3.1.2" {
+		t.Fatalf("GetFederation: %v %+v", err, got.Data)
+	}
+
+	list, err := p.ListFederations(ctx, newNR(map[string]any{"location": "us-central1"}))
+	if err != nil {
+		t.Fatalf("ListFederations: %v", err)
+	}
+	if items, _ := list.Data["federations"].([]any); len(items) != 1 {
+		t.Fatalf("federations = %v", list.Data["federations"])
+	}
+
+	if _, err := p.DeleteFederation(ctx, newNR(map[string]any{"location": "us-central1", "federationId": "fed"})); err != nil {
+		t.Fatalf("DeleteFederation: %v", err)
+	}
+	if _, err := p.GetFederation(ctx, newNR(map[string]any{"location": "us-central1", "federationId": "fed"})); err == nil {
+		t.Fatal("expected NotFound after delete")
+	}
+}
+
+func TestIAMHandlers(t *testing.T) {
+	ctx := context.Background()
+	p := newProviderWithResources()
+
+	if _, err := p.CreateService(ctx, newNR(createServiceParams("us-central1", "svc", nil))); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	svcName := "projects/proj/locations/us-central1/services/svc"
+
+	// getIamPolicy on a fresh service returns the default empty policy.
+	resp, err := p.getIamPolicy(ctx, newNR(map[string]any{"iamName": svcName}))
+	if err != nil {
+		t.Fatalf("getIamPolicy: %v", err)
+	}
+	if bindings, _ := resp.Data["bindings"].([]any); len(bindings) != 0 {
+		t.Fatalf("expected empty bindings, got %v", resp.Data["bindings"])
+	}
+
+	setResp, err := p.setIamPolicy(ctx, newNR(map[string]any{
+		"iamName": svcName,
+		"body": map[string]any{"bindings": []any{
+			map[string]any{"role": "roles/owner", "members": []any{"user:a@example.com"}},
+		}},
+	}))
+	if err != nil {
+		t.Fatalf("setIamPolicy: %v", err)
+	}
+	if etag, _ := setResp.Data["etag"].(string); etag == "" {
+		t.Fatalf("expected a fresh etag, got %v", setResp.Data["etag"])
+	}
+
+	testResp, err := p.testIamPermissions(ctx, newNR(map[string]any{
+		"iamName": svcName,
+		"body":    map[string]any{"permissions": []any{"metastore.services.get"}},
+	}))
+	if err != nil {
+		t.Fatalf("testIamPermissions: %v", err)
+	}
+	if perms, _ := testResp.Data["permissions"].([]string); len(perms) != 1 {
+		t.Fatalf("permissions = %v", testResp.Data["permissions"])
+	}
+
+	// IAM is keyed by name: a database-level policy is served without the
+	// database existing (metadata-only).
+	if _, err := p.getIamPolicy(ctx, newNR(map[string]any{"iamName": svcName + "/databases/db"})); err != nil {
+		t.Fatalf("database getIamPolicy: %v", err)
 	}
 }
