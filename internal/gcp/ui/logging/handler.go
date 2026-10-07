@@ -6,6 +6,7 @@ import (
 	"net/url"
 
 	"jaiscloud/internal/config"
+	"jaiscloud/internal/gcp/resource"
 	"jaiscloud/internal/gcp/ui/uihelper"
 )
 
@@ -34,7 +35,7 @@ func (h *Handler) account(r *http.Request) string {
 
 // scope returns the project scope parent ("projects/{p}") for a request.
 func (h *Handler) scope(r *http.Request) string {
-	return "projects/" + h.account(r)
+	return resource.ResourceID(h.account(r))("project", "")
 }
 
 // metricName builds "projects/{p}/metrics/{id}", percent-encoding an id that may

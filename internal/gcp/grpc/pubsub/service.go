@@ -27,6 +27,7 @@ import (
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/pubsubfilter"
+	"jaiscloud/internal/gcp/resource"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	"jaiscloud/internal/model"
@@ -115,11 +116,11 @@ func mapError(err error) error { return grpcutil.GRPCStatus(err) }
 // ─── resource-name parsing ────────────────────────────────────────────────────
 
 func topicName(project, id string) string {
-	return "projects/" + project + "/topics/" + id
+	return resource.ResourceID(project)("pubsub-topic", id)
 }
 
 func subscriptionName(project, id string) string {
-	return "projects/" + project + "/subscriptions/" + id
+	return resource.ResourceID(project)("pubsub-subscription", id)
 }
 
 func snapshotName(project, id string) string {

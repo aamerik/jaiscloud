@@ -11,6 +11,7 @@ import (
 
 	"jaiscloud/internal/executor/container"
 	"jaiscloud/internal/gcp/eventing"
+	"jaiscloud/internal/gcp/resource"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 )
 
@@ -426,7 +427,7 @@ func subscriptionResource(rec functionsstore.Delivery, subscription string) stri
 	if subscription == "" {
 		subscription = eventing.EventarcSubscriptionID(rec.Location, eventing.FunctionTriggerID(rec.FunctionID))
 	}
-	return "projects/" + rec.Project + "/subscriptions/" + subscription
+	return resource.ResourceID(rec.Project)("pubsub-subscription", subscription)
 }
 
 // backoffFor returns the exponential backoff before retry attempt n (1-based).

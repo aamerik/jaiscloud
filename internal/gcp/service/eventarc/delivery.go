@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/gcp/eventing"
+	"jaiscloud/internal/gcp/resource"
 
 	"github.com/google/uuid"
 )
@@ -306,7 +307,7 @@ func (s *Service) deliverCloudRun(project string, target cloudRunTarget, headers
 // subscription is the emulator's own provisioned id
 // (eventarc-{location}-{triggerId}), which is what subscriptions.list returns.
 func buildPubSubCloudEvent(project, location, triggerID string, ev eventing.Event) ([]byte, map[string]string) {
-	sub := "projects/" + project + "/subscriptions/" + eventing.EventarcSubscriptionID(location, triggerID)
+	sub := resource.ResourceID(project)("pubsub-subscription", eventing.EventarcSubscriptionID(location, triggerID))
 	body := eventing.PubSubMessagePublished(ev.EventID, ev.OccurredAt, ev.Data, ev.Attributes, sub)
 	headers := map[string]string{
 		"Content-Type":   "application/json",

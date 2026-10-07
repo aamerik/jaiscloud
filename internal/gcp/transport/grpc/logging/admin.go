@@ -7,6 +7,7 @@ import (
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
+	"jaiscloud/internal/gcp/resource"
 	core "jaiscloud/internal/gcp/service/logging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
 	"jaiscloud/internal/model"
@@ -40,7 +41,7 @@ func (s *ConfigService) settingsName(ctx context.Context, name string) string {
 	if name != "" {
 		return name
 	}
-	return "projects/" + grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
+	return resource.ResourceID(grpcutil.ProjectFromMetadata(ctx, s.defaultProj))("project", "")
 }
 
 // doneOperation wraps a typed response in a terminal google.longrunning.Operation.

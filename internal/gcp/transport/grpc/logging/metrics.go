@@ -6,6 +6,7 @@ import (
 	loggingpb "cloud.google.com/go/logging/apiv2/loggingpb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
+	"jaiscloud/internal/gcp/resource"
 	core "jaiscloud/internal/gcp/service/logging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
 
@@ -39,7 +40,7 @@ func (s *MetricsService) metricsParent(ctx context.Context, parent string) strin
 	if parent != "" {
 		return parent
 	}
-	return "projects/" + grpcutil.ProjectFromMetadata(ctx, s.defaultProj)
+	return resource.ResourceID(grpcutil.ProjectFromMetadata(ctx, s.defaultProj))("project", "")
 }
 
 func (s *MetricsService) ListLogMetrics(ctx context.Context, req *loggingpb.ListLogMetricsRequest) (*loggingpb.ListLogMetricsResponse, error) {

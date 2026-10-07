@@ -126,7 +126,7 @@ IMAGE             := jaiscloud-aws
 # (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
 JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
 
-.PHONY: lint lint-pagination help build build-all build-ui build-ui-gcp docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools clean \
+.PHONY: lint lint-gcp lint-pagination help build build-all build-ui build-ui-gcp docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools clean \
         server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         server-ui server-ui-gcp stop-server up-docker down-docker up-k8s down-k8s \
@@ -239,9 +239,15 @@ docker-gcp-samples: ## Build+push the Spring Cloud GCP sample images (pin: GCP_S
 clean: ## Remove compiled binaries
 	rm -f jaiscloud-aws jaiscloud-azure jaiscloud-gcp
 
-lint: ## Run ARN lint guard + go vet
-	@bash scripts/check_no_hardcoded_arn.sh
-	@go vet ./...
+lint: ## Run ARN lint guard + GCP convention lint + go vet
+	@rc=0; \
+	bash scripts/check_no_hardcoded_arn.sh || rc=1; \
+	go run ./tools/lint/gcplint ./internal/gcp/... ./cmd/jaiscloud-gcp || rc=1; \
+	go vet ./... || rc=1; \
+	exit $$rc
+
+lint-gcp: ## GCP convention lint (clock, resource formatters, store sentinels, unsafe assertions, Reset registration)
+	@go run ./tools/lint/gcplint ./internal/gcp/... ./cmd/jaiscloud-gcp
 
 lint-pagination: ## Heuristic check that List*/Describe* provider methods use pagination
 	@go run tools/lint/paginationcheck/main.go ./internal/aws/provider/... ./internal/gcp/provider/...

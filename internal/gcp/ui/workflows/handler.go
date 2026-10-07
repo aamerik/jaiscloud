@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/config"
+	"jaiscloud/internal/gcp/resource"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 	"jaiscloud/internal/gcp/ui/uihelper"
 )
@@ -42,7 +43,7 @@ func formatTime(t time.Time) string {
 
 // workflowName is the canonical Cloud Workflows resource name.
 func workflowName(project, location, id string) string {
-	return "projects/" + project + "/locations/" + location + "/workflows/" + id
+	return resource.ResourceID(project)("workflow", location+"/"+id)
 }
 
 // executionName is the canonical Workflow Executions resource name.
