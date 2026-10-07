@@ -80,6 +80,21 @@ func createBucket(t *testing.T, client storagepb.StorageClient, name, location s
 	}
 }
 
+// TestCreateBucketRejectsInvalidName pins the shared GCS naming rule on the gRPC
+// surface too: an invalid (uppercase) bucket id is INVALID_ARGUMENT.
+func TestCreateBucketRejectsInvalidName(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	_, err := client.CreateBucket(context.Background(), &storagepb.CreateBucketRequest{
+		Parent:   "projects/_",
+		BucketId: "INVALID_BUCKET_NAME",
+		Bucket:   &storagepb.Bucket{Project: "projects/test-project"},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("CreateBucket(invalid) err = %v, want InvalidArgument", err)
+	}
+}
+
 func TestBucketCRUD(t *testing.T) {
 	client, cleanup := storageTestService(t)
 	defer cleanup()

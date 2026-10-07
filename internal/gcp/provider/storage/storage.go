@@ -721,6 +721,9 @@ func (p *Provider) BucketsInsert(ctx context.Context, nr *model.NormalizedReques
 	if name == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing bucket name", 400)
 	}
+	if !resource.ValidBucketName(name) {
+		return nil, model.NewProviderError("InvalidRequest", "Invalid bucket name: "+name, 400)
+	}
 	b := bucketMeta{Name: name}
 	if loc, _ := body["location"].(string); loc != "" {
 		b.Location = loc

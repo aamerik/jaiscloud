@@ -1,19 +1,26 @@
 {
   "version": 1,
   "project": "<project>",
-  "ops": 85,
+  "ops": 112,
   "services": [
     "bigquery",
     "compute",
+    "container",
+    "dataproc",
+    "datastore",
     "dns",
     "firestore",
     "iam",
     "kms",
+    "logging",
+    "monitoring",
     "pubsub",
     "redis",
     "secretmanager",
+    "serviceusage",
     "sqladmin",
     "storage",
+    "workflowexecutions",
     "workflows"
   ],
   "files": [
@@ -60,472 +67,634 @@
       "status": 404
     },
     {
-      "file": "007-storage-object_delete.json",
+      "file": "007-storage-bucket_create_dup.json",
+      "op": "bucket_create_dup",
+      "sha256": "ccff32d26c2f42a3a39752e91a71ba6f88315b6286e9bd2135b05f88cd78dbb7",
+      "status": 409
+    },
+    {
+      "file": "008-storage-bucket_create_invalid.json",
+      "op": "bucket_create_invalid",
+      "sha256": "095b1aace6934e5883e6f5b001bad106ddebfdccc9203f9c182c5be3ade86078",
+      "status": 400
+    },
+    {
+      "file": "009-storage-object_delete.json",
       "op": "object_delete",
-      "sha256": "10dbda86f29bded1cbd72de367284d9f55e72fc1b19ed99a6e6c21c518a2f672",
+      "sha256": "2c1009f0e1ee9ebd3b00b9988e3a8d70c690af3a44e2be7044353e11bb661a34",
       "status": 204
     },
     {
-      "file": "008-storage-bucket_delete.json",
+      "file": "010-storage-bucket_delete.json",
       "op": "bucket_delete",
-      "sha256": "06ccc5fd8001d8e96befe24cd7dae8c65536ce23c7c99a5bc01ff7b4f9a433d8",
+      "sha256": "4876618b69e5ee572f99088674dac49a2365fa76de46538f466f6574734bf635",
       "status": 204
     },
     {
-      "file": "009-storage-bucket_get_deleted.json",
+      "file": "011-storage-bucket_get_deleted.json",
       "op": "bucket_get_deleted",
-      "sha256": "1611f3ecbcb3792d12eff44a186ea9bc93e1bbffb4a9219f73fd1d0128becf27",
+      "sha256": "feca2ddec4425bbf4c4a23177285921d46883863cb7fa0d44fab4d0e998c1579",
       "status": 404
     },
     {
-      "file": "010-pubsub-topic_create.json",
+      "file": "012-pubsub-topic_create.json",
       "op": "topic_create",
-      "sha256": "4da3c0fc60e1fbab64f68d768b19dd43b420984b29da080ec27777b9fa8503b7",
+      "sha256": "2adcbad976b5122c7bcc3a883d0a88b8ca6d2d88abb9401427ff1f79ccd8c4ba",
       "status": 200
     },
     {
-      "file": "011-pubsub-topic_get.json",
+      "file": "013-pubsub-topic_get.json",
       "op": "topic_get",
-      "sha256": "7e20512722cf359be4ce49235499f85ef22e8fe85d14286553170dc34fbc5592",
+      "sha256": "ab5957f4990d00b802aa2cb4a9ef2cc61542448dff8bf2cc58e067b8a11fb867",
       "status": 200
     },
     {
-      "file": "012-pubsub-topics_list.json",
+      "file": "014-pubsub-topics_list.json",
       "op": "topics_list",
-      "sha256": "ce581c0e5163ca46e77f89d9d92a906e942f077fcd40ddcad67519b23ac0a6e2",
+      "sha256": "50aa40a254cd48bfa5464aff6126cff3231d81ba7245a75916862245f39903ae",
       "status": 200
     },
     {
-      "file": "013-pubsub-topic_get_missing.json",
+      "file": "015-pubsub-topic_get_missing.json",
       "op": "topic_get_missing",
-      "sha256": "f147b5f2696b60b133985cf3c0482a4bb782b6a6385582e64e878c8c7bda306c",
+      "sha256": "eda7748d6440422832eafca015af78be2ebe53e7653048935aefbde02c024426",
       "status": 404
     },
     {
-      "file": "014-pubsub-sub_create.json",
+      "file": "016-pubsub-topic_create_dup.json",
+      "op": "topic_create_dup",
+      "sha256": "482041283c26b0d60ce033112b8f85b9b6369a0eadc234d9f8478a22f22a2222",
+      "status": 409
+    },
+    {
+      "file": "017-pubsub-sub_create.json",
       "op": "sub_create",
-      "sha256": "7c1d95bb99e0a6e21329775b6e1a94add1c56657dce8d834091c9a4c7a468a41",
+      "sha256": "4bdac7a729dc03c7d1e3311b43d596df3f5a99b71755b85090e83e37bccd8528",
       "status": 200
     },
     {
-      "file": "015-pubsub-sub_get.json",
+      "file": "018-pubsub-sub_get.json",
       "op": "sub_get",
-      "sha256": "1c8c68d14a7be39de965a2ceceed05d6e03a3eab00f8367dcee688385aebdad5",
+      "sha256": "44dceef408f8366fb2fb6930a8d809185c4e554be0ac9aec1876d788cf1a0de9",
       "status": 200
     },
     {
-      "file": "016-pubsub-subs_list.json",
+      "file": "019-pubsub-subs_list.json",
       "op": "subs_list",
-      "sha256": "461cf13fc245e12bc0282b798f5ca523601b7ceca92047ea0854032d989a2815",
+      "sha256": "27de005cee919dadbb9f40323d1f250c6f00ca02e2171dd926fee9f133b7f5b9",
       "status": 200
     },
     {
-      "file": "017-pubsub-topic_publish.json",
+      "file": "020-pubsub-topic_publish.json",
       "op": "topic_publish",
-      "sha256": "a04d6819a089e9a18494c903cbdc5f126160abf554b281fb176af945b6b465d5",
+      "sha256": "a725215c67d0221675fab582983efa9ee8ed2467cd4ffc0e3749a87ad3fa7614",
       "status": 200
     },
     {
-      "file": "018-pubsub-sub_pull.json",
+      "file": "021-pubsub-topic_publish_empty.json",
+      "op": "topic_publish_empty",
+      "sha256": "f7ef1c9168edfa78b21b16da72a1de51fd6f6f768e7fcb7dc51165a41e8efb3d",
+      "status": 400
+    },
+    {
+      "file": "022-pubsub-sub_pull.json",
       "op": "sub_pull",
-      "sha256": "5e30174a61e4334801bbab7f7190f7f751364a6aea4444635efc18d4e8b95bfd",
+      "sha256": "7db6810e412024a9794bb40bdd2c8a32c928d366f8fc6554f9c2ac88671d9921",
       "status": 200
     },
     {
-      "file": "019-pubsub-sub_delete.json",
+      "file": "023-pubsub-sub_delete.json",
       "op": "sub_delete",
-      "sha256": "a20c70c514508ede0c6c3d733e64e56fe7711f2b9efe2fd692f1ac5d022e366d",
+      "sha256": "82ba119583195c4531592ddfe5112d168a5c19e33bbdc4400ac440734b81b1f7",
       "status": 200
     },
     {
-      "file": "020-pubsub-topic_delete.json",
+      "file": "024-pubsub-topic_delete.json",
       "op": "topic_delete",
-      "sha256": "4d3518bc7fdee545f5c532791f0f989714e512c4118d046836c55bee83e33fe3",
+      "sha256": "31c507d98b74d29e435299c13160cc90ec4a249ae06a263cc7438af7dcab087a",
       "status": 200
     },
     {
-      "file": "021-pubsub-sub_get_missing.json",
+      "file": "025-pubsub-sub_get_missing.json",
       "op": "sub_get_missing",
-      "sha256": "46cf5febeb88e392fb9e54f38d4ddc389610ff3dee36971ae4904a49779c13e4",
+      "sha256": "88fcb5c8eeafb2930a7b5e3a716dda662bdb21b194c4fdb9c149901b8ce4b43e",
       "status": 404
     },
     {
-      "file": "022-secretmanager-secret_create.json",
+      "file": "026-secretmanager-secret_create.json",
       "op": "secret_create",
-      "sha256": "494f745c26fda14e7a65aee2b3f2a35dbd7ae457d06b479c9e0159fbcd870829",
+      "sha256": "9dbb443ed5d1d5d67a37e15dcf76fff2e082f2e62694f7115528c042d62df631",
       "status": 200
     },
     {
-      "file": "023-secretmanager-secret_get.json",
+      "file": "027-secretmanager-secret_get.json",
       "op": "secret_get",
-      "sha256": "7fd92d017c4296deb141defc5617760e4fd119aee8bcc4415e33da220689a62c",
+      "sha256": "ea633b07a68911c658d55d7a718903b618e407eacc18f8605ca6ef4b9bd30d35",
       "status": 200
     },
     {
-      "file": "024-secretmanager-secrets_list.json",
+      "file": "028-secretmanager-secrets_list.json",
       "op": "secrets_list",
-      "sha256": "3766272f1a14be671869df4cc6e8fa5723ae2bfe10df14902da48f769eaa08ab",
+      "sha256": "0ff363860f835ff97a48fdc9bdb5fbc493f08a367929ff0dbb35f9ef4a11ed64",
       "status": 200
     },
     {
-      "file": "025-secretmanager-secret_add_version.json",
+      "file": "029-secretmanager-secret_create_dup.json",
+      "op": "secret_create_dup",
+      "sha256": "419efa1d3cf68b8c50088fa63e7081b44532474c68bff8797f12568c1efde35e",
+      "status": 409
+    },
+    {
+      "file": "030-secretmanager-secret_create_missing_id.json",
+      "op": "secret_create_missing_id",
+      "sha256": "f12056d26f769505dbec2d0aefb748b373ad4f8d5ccd0889066ebd9d7e19635b",
+      "status": 400
+    },
+    {
+      "file": "031-secretmanager-secret_add_version.json",
       "op": "secret_add_version",
-      "sha256": "3ace66364465815210f545427455e10de200f39cec34f689b36b92f0b27ded71",
+      "sha256": "295fb9dda42f9f4972be0c16b5aea7781e4fd3d6697b8ceba99031911dd110bd",
       "status": 200
     },
     {
-      "file": "026-secretmanager-secret_access_version.json",
+      "file": "032-secretmanager-secret_access_version.json",
       "op": "secret_access_version",
-      "sha256": "19a5f49ddd4cf78ae6eee1a28c4958e9cfe75ec60973918b6ac79ea7843250e6",
+      "sha256": "456da902e10b379001b8bfea1541e6bb251407c96c9d3939297c950a7da1eff1",
       "status": 200
     },
     {
-      "file": "027-secretmanager-secret_versions_list.json",
+      "file": "033-secretmanager-secret_versions_list.json",
       "op": "secret_versions_list",
-      "sha256": "2588023ebeb9102e5d5937b89274ed6263977eb003651a01a0f0171d3b37dffe",
+      "sha256": "b3939083b35f4e9b49d9f80971c49bd570949df231e44462fdc6276e12662e8b",
       "status": 200
     },
     {
-      "file": "028-secretmanager-secret_get_missing.json",
+      "file": "034-secretmanager-secret_get_missing.json",
       "op": "secret_get_missing",
-      "sha256": "c1d6381860c09639e438ca6e8c2fc58b5a71ceb4db2aca1e0f3cab9dc632d88b",
+      "sha256": "70bb86e4b28f72bdd635614b65223253f1634ad7500a2ab48d2f74de56cb2e4c",
       "status": 404
     },
     {
-      "file": "029-secretmanager-secret_delete.json",
+      "file": "035-secretmanager-secret_delete.json",
       "op": "secret_delete",
-      "sha256": "13788dddee1cde5f7bfd2b8baf41231d0e37877116e01faa1fab2cada738e5f8",
+      "sha256": "b11fd813764f93e894416455eae1eedd7fdf13ba84c9ebce0a1cff1c690b1958",
       "status": 200
     },
     {
-      "file": "030-kms-keyring_get.json",
+      "file": "036-kms-keyring_get.json",
       "op": "keyring_get",
-      "sha256": "ba03d7eb29cf02a03e89787973aca7eb2132ce52e21a5154db8d625a069d2f41",
+      "sha256": "1baf0a2b9063399b8e5e687bd4a890b068e2bf15f6862be552aa49511a22ae7d",
       "status": 200
     },
     {
-      "file": "031-kms-keyrings_list.json",
+      "file": "037-kms-keyrings_list.json",
       "op": "keyrings_list",
-      "sha256": "5a88a67a75b56d2318e1d573b595b6349327fdfff2d63eef36b691dd48d7583d",
+      "sha256": "c4382f64ce2aba4f670c00d23494bad08d4f426ff6680f352d0579704a550502",
       "status": 200
     },
     {
-      "file": "032-kms-cryptokey_get.json",
+      "file": "038-kms-keyring_create_dup.json",
+      "op": "keyring_create_dup",
+      "sha256": "d94da58b83f3c1de451166a233017fa92adf5561bb58f7bf85ac178c016dc004",
+      "status": 409
+    },
+    {
+      "file": "039-kms-cryptokey_get.json",
       "op": "cryptokey_get",
-      "sha256": "d7a371df63699aebed67d0b21bd66fd83c912736418197ab641103896fcc90cf",
+      "sha256": "a42d1604d6b9e293ebbe08f6604f057afa418cfd4cd2e8119e4207f9711487f1",
       "status": 200
     },
     {
-      "file": "033-kms-cryptokeys_list.json",
+      "file": "040-kms-cryptokeys_list.json",
       "op": "cryptokeys_list",
-      "sha256": "f6cfbfbb1c761abf34929f3535e472e8cabf12d91982b76a870f87b535c4b84d",
+      "sha256": "2e1539f8b4d8344fc14473912e7779a7cb3e4720b8715ce732f553e625cd5974",
       "status": 200
     },
     {
-      "file": "034-kms-cryptokey_encrypt.json",
+      "file": "041-kms-cryptokey_encrypt.json",
       "op": "cryptokey_encrypt",
-      "sha256": "8f591472f630ba814ff31e91df3ba41e86af1b3ce139bb333ea84ebd6324f73e",
+      "sha256": "f60005b99a77314f6aa1a4073e069350fc4d4bc0a8886b55fdfdcd0a05c715ee",
       "status": 200
     },
     {
-      "file": "035-kms-cryptokey_decrypt.json",
+      "file": "042-kms-cryptokey_decrypt.json",
       "op": "cryptokey_decrypt",
-      "sha256": "64ffe098f985181385cb6bfbde0788404286bd94a5991d5e3202f54b8b84792d",
+      "sha256": "d15fb7cf89544f241e3cd500a99822996b38940631223b1cd67fb86300b66d25",
       "status": 200
     },
     {
-      "file": "036-kms-keyring_iam_get.json",
+      "file": "043-kms-keyring_iam_get.json",
       "op": "keyring_iam_get",
-      "sha256": "a79570ef0466c5b0e8be1b164124d7f797d58f7aa0a71fd03bbcee3ec19f2514",
+      "sha256": "34e844b5c523efb19b275ee6ca5ebe6997dfe4d58f697d50aeb830bc1ea4c61e",
       "status": 200
     },
     {
-      "file": "037-kms-cryptokey_get_missing.json",
+      "file": "044-kms-cryptokey_get_missing.json",
       "op": "cryptokey_get_missing",
-      "sha256": "4fc4859c1341d18d8f8e27d9bd0943938a2371d075b6c4335836be677e99fc51",
+      "sha256": "b37c6a0b09c107ab500cb5ba14627c05466189a8a54b0d2ca5efc8743ccb4b7c",
       "status": 404
     },
     {
-      "file": "038-bigquery-dataset_create.json",
+      "file": "045-bigquery-dataset_create.json",
       "op": "dataset_create",
-      "sha256": "04646932f3dac9f396e0d72f0b09dff515a1f74d5b63fefa16e42bef9ee70980",
+      "sha256": "b88d3f4ae5c6285016be46fa0cfa5e68592f4b2eac679fdc1d42ea8ef818f7e7",
       "status": 200
     },
     {
-      "file": "039-bigquery-dataset_get.json",
+      "file": "046-bigquery-dataset_get.json",
       "op": "dataset_get",
-      "sha256": "2f27f39ce746aaf75269ae161d4eb9824a66da5584a0e2ae0af00a6f8aa419c4",
+      "sha256": "b2a538751e86cba268c4212e898223b4e2a0c6606916959f447add97c676a501",
       "status": 200
     },
     {
-      "file": "040-bigquery-datasets_list.json",
+      "file": "047-bigquery-datasets_list.json",
       "op": "datasets_list",
-      "sha256": "95b1ecbf779eb26dda5ce8faf7456d69aed669275b005942f7731aaacc358281",
+      "sha256": "fb49dfcae0f6a50938d428040eb866c79039589113b7c6eb3a8e70e50c5c1d88",
       "status": 200
     },
     {
-      "file": "041-bigquery-table_create.json",
+      "file": "048-bigquery-dataset_create_dup.json",
+      "op": "dataset_create_dup",
+      "sha256": "2f51456f045db54edaa788fd988992ae11ec3679b3906013306fbb191c1236e3",
+      "status": 409
+    },
+    {
+      "file": "049-bigquery-table_create.json",
       "op": "table_create",
-      "sha256": "9a7202e39eeb500bc7dc2557e5de59f5e25d39b493badbbeb4ff82140f20e3e5",
+      "sha256": "a6e07eb8b5172a107d22482db1bc7b1cef5280dd01507ecbafd1ec3b94487173",
       "status": 200
     },
     {
-      "file": "042-bigquery-table_get.json",
+      "file": "050-bigquery-table_get.json",
       "op": "table_get",
-      "sha256": "2d677ab1134aa37c5972af62f08abbb6db75372709a18eac5766795970d38fa6",
+      "sha256": "54610c1dc812e82e6487aedfe49ebd783fecb5fd9e019c8fd6a44488301df1c9",
       "status": 200
     },
     {
-      "file": "043-bigquery-tables_list.json",
+      "file": "051-bigquery-tables_list.json",
       "op": "tables_list",
-      "sha256": "469fd8feb5645ea826c19c80bf7ebc7b265ee6fc7059c91a4a5a4fd36c9e3b41",
+      "sha256": "46a08f0612932514f2390c4f3b7a5215ed4084b238be0d1b7098ecf6fcfd89e0",
       "status": 200
     },
     {
-      "file": "044-bigquery-tabledata_insert_all.json",
+      "file": "052-bigquery-tabledata_insert_all.json",
       "op": "tabledata_insert_all",
-      "sha256": "30ad7303bbfd2a0c30d75a025203c1bc0c50cce783e174c7af0dad0701440586",
+      "sha256": "404788743e563b6a943d88f3a6ebdbe586d02627bb17d387ff97fffbfc752053",
       "status": 200
     },
     {
-      "file": "045-bigquery-tabledata_list.json",
+      "file": "053-bigquery-tabledata_list.json",
       "op": "tabledata_list",
-      "sha256": "6558734749d9c31bb9121f0257fa6d79335c4142cbb775c480e728fa6bcb72db",
+      "sha256": "8d079a0cd81e53b2d1e22ae81018aa0e745a0bf00e8b46ec9596aadbb23fbba1",
       "status": 200
     },
     {
-      "file": "046-bigquery-query.json",
+      "file": "054-bigquery-query_bad_sql.json",
+      "op": "query_bad_sql",
+      "sha256": "9fbcf167e80974130bdcba19c321119bc09a1ac79726d8c6fb989e215db78011",
+      "status": 400
+    },
+    {
+      "file": "055-bigquery-query.json",
       "op": "query",
-      "sha256": "0e5ed9d409efe5ad3d50217fd4adbfc18efee54d94805a2c91303c73cbabdd79",
+      "sha256": "977ed4f98c4716b753ba2d41c169cedb7540c32c313fefa8879f01c3be4e961a",
       "status": 200
     },
     {
-      "file": "047-bigquery-dataset_get_missing.json",
+      "file": "056-bigquery-dataset_get_missing.json",
       "op": "dataset_get_missing",
-      "sha256": "8563bb8c298e70a108e500d7a4e407b5c93a1347c5ca27ce194c3038dac6d9ad",
+      "sha256": "b6c3ef17de4885e71894a5f03c85b8c33267405faae2596d3fb67ce600ede7fe",
       "status": 404
     },
     {
-      "file": "048-bigquery-table_delete.json",
+      "file": "057-bigquery-table_delete.json",
       "op": "table_delete",
-      "sha256": "03fd6584c9260600b60f23ff6b2f1e3f6d169649184a5cc31ac03f5b48f60557",
+      "sha256": "9dea332bf96d03fe9192caf5d6c810539729b0e6ee48b8f5d3d88ce343447e29",
       "status": 204
     },
     {
-      "file": "049-bigquery-dataset_delete.json",
+      "file": "058-bigquery-dataset_delete.json",
       "op": "dataset_delete",
-      "sha256": "a3306554886d1cc3da194fcdb1ee36cb8be1e596dde2f76a60a9cf4f3027b631",
+      "sha256": "239650281dcc718b09ab66ad501a63b9c37b11a3a246e8c995ccbf5f03977152",
       "status": 204
     },
     {
-      "file": "050-dns-zone_create.json",
+      "file": "059-dns-zone_create.json",
       "op": "zone_create",
-      "sha256": "0fff50b71186d2d102be46c39441c4912b44f2e9342a1ef7650d9cef027e6ee3",
+      "sha256": "4c2bee2a427523c0edc4f510b775dc4409cae8f7d33f100be6b05fa68275e1e8",
       "status": 200
     },
     {
-      "file": "051-dns-zone_get.json",
+      "file": "060-dns-zone_create_dup.json",
+      "op": "zone_create_dup",
+      "sha256": "0dda59fbec178f47085617bd633a74b5d783f65ec7d80d150e6fd8125f09eb05",
+      "status": 409
+    },
+    {
+      "file": "061-dns-zone_create_invalid.json",
+      "op": "zone_create_invalid",
+      "sha256": "e8489fb6aa3ad95c321210d96dbeba9c9bd7db0259dfd75f491da2103ce60c28",
+      "status": 400
+    },
+    {
+      "file": "062-dns-zone_get.json",
       "op": "zone_get",
-      "sha256": "b222287ed0785414e8570b2fa0d03603c1f38888ee729a079d4f46dbaef79677",
+      "sha256": "bcce8f8af918c74ff8bf3f8c1c9ac88cd024a6894ef56a21936eb064f8f7bd1c",
       "status": 200
     },
     {
-      "file": "052-dns-zones_list.json",
+      "file": "063-dns-zones_list.json",
       "op": "zones_list",
-      "sha256": "2e1a45f501cb2117d31dc8a839cffdf342e45c1996c100d15e385dd1afddf8bc",
+      "sha256": "5e752d1075a1dc9c7b2431a888dbf89c4a208a96568add99addd5f92c7934e61",
       "status": 200
     },
     {
-      "file": "053-dns-change_create.json",
+      "file": "064-dns-change_create.json",
       "op": "change_create",
-      "sha256": "27ef7537d659335fd5f9e857798df26662a80050afb20d55281d1073a2a91452",
+      "sha256": "946972cabb8f1db94cfcf0cdfa7122c79fdb3876862df0389fcae2dbcad6a8c6",
       "status": 200
     },
     {
-      "file": "054-dns-change_get.json",
+      "file": "065-dns-change_get.json",
       "op": "change_get",
-      "sha256": "cbca3274aeb32446a5d28e5e9c1c9b56746b4c9cdb801bd2120d800f1a3c45b6",
+      "sha256": "f261591125fbceafecb41d7aaa8b2106a5e103a7e28276020f4a360c585cb990",
       "status": 200
     },
     {
-      "file": "055-dns-rrsets_list.json",
+      "file": "066-dns-rrsets_list.json",
       "op": "rrsets_list",
-      "sha256": "2e439f0ec80c9ff0fcc09678f4f8b10fb3eaf862b97ead06c5a9cd3ea843e990",
+      "sha256": "3fb3184cc2c0653eee4d817b6f906978e176742a9a1d980e14b7e4a8fc6cd44a",
       "status": 200
     },
     {
-      "file": "056-dns-rrset_get.json",
+      "file": "067-dns-rrset_get.json",
       "op": "rrset_get",
-      "sha256": "f7d688c74699a8f461430f5c9f8478a017bae11667be48635ea870d04fd12197",
+      "sha256": "61e68269d648abb77ce6d66c1f716ca167617dc17a7672f02e68bdbb8d3d467b",
       "status": 200
     },
     {
-      "file": "057-dns-zone_get_missing.json",
+      "file": "068-dns-zone_get_missing.json",
       "op": "zone_get_missing",
-      "sha256": "af49a18db120ea6d6c0cda67abe40dd9165d5acff5e2150e15e5706825a636a7",
+      "sha256": "014b3241fad30a10667bf14d97b2725b0342ae13fe83f315f41d998d73325383",
       "status": 404
     },
     {
-      "file": "058-workflows-workflow_create.json",
+      "file": "069-workflows-workflow_create.json",
       "op": "workflow_create",
-      "sha256": "370951acbd6da72c123dbb21179f4ca22f4e35bb5c4210b8a8f7218893bbc936",
+      "sha256": "4f5589a84d2f53876141d0f7ec69c027ae16ea70c2ae8fded9d32f7e8a2b822b",
       "status": 200
     },
     {
-      "file": "059-workflows-workflow_wait.json",
+      "file": "070-workflows-workflow_wait.json",
       "op": "workflow_wait",
-      "sha256": "3fe3aa585b14604df1413a1e29d3a37d4d85e6d28ae534f3f5002a2d9aa05681",
+      "sha256": "e32411e08ae63d3a5b242918ab59f5f61ec87984a6c7f064c54070866505989c",
       "status": 200
     },
     {
-      "file": "060-workflows-workflow_get.json",
+      "file": "071-workflows-workflow_get.json",
       "op": "workflow_get",
-      "sha256": "29c6fd0773912a6f03b595df1fd098acb633699fb44a5f9d3edf38261ddd9756",
+      "sha256": "fa4c16ac726b1ffb89798e976409c70d0110a1829edcbbade8cdef1dc336ae05",
       "status": 200
     },
     {
-      "file": "061-workflows-workflows_list.json",
+      "file": "072-workflows-workflows_list.json",
       "op": "workflows_list",
-      "sha256": "a54aa17bfab453ba609596d8b7bb387637980ab6e2ea8c5f8ea2021f48d3d2fc",
+      "sha256": "49581d59e5c05f8f1883fa4c4797839284bd8bcbe226f240a803be32f0e65f46",
       "status": 200
     },
     {
-      "file": "062-workflows-workflow_get_missing.json",
+      "file": "073-workflowexecutions-wfexec_executions_list.json",
+      "op": "wfexec_executions_list",
+      "sha256": "f6074b2e16db5faebd62857e5925fdd99ca75cf56d71c4ab8acfec36283b3baa",
+      "status": 200
+    },
+    {
+      "file": "074-workflowexecutions-wfexec_execution_get_missing.json",
+      "op": "wfexec_execution_get_missing",
+      "sha256": "999c884d6eba191e301a11ef513b5d8945dbcc378abd910cbacc9a2412a4614e",
+      "status": 404
+    },
+    {
+      "file": "075-workflows-workflow_get_missing.json",
       "op": "workflow_get_missing",
-      "sha256": "4fc525b6f75292cb22fd426d81f5fa263b0d364b5072b8336568a0f99b94b6b0",
+      "sha256": "ddf67edcccbc3f305f2e9cf04d5fcd09011cabd344ce99ea24b606907121b1c8",
       "status": 404
     },
     {
-      "file": "063-workflows-workflow_delete.json",
+      "file": "076-workflows-workflow_delete.json",
       "op": "workflow_delete",
-      "sha256": "b0e4fe2d5142a392bc410211a43de14b1e6043fe269ede661da161391158cd25",
+      "sha256": "e9432ab863391796b30faca51e5fc597745604697b272994cfcba394a9bf0493",
       "status": 200
     },
     {
-      "file": "064-iam-sa_create.json",
+      "file": "077-iam-sa_create.json",
       "op": "sa_create",
-      "sha256": "a2b8af960c09d231153238eeadc511f3e519b8930e278e07b14008c3388f869e",
+      "sha256": "824e50f6f502050fe3e4fc5945bb816b394da3134deaa5401b2a3acec172e8e5",
       "status": 200
     },
     {
-      "file": "065-iam-sa_get.json",
+      "file": "078-iam-sa_create_dup.json",
+      "op": "sa_create_dup",
+      "sha256": "fe3a5debbfa6568d4a30626cd77186e372d4b397e1f6e51c605b17adbdca6076",
+      "status": 409
+    },
+    {
+      "file": "079-iam-sa_create_invalid.json",
+      "op": "sa_create_invalid",
+      "sha256": "966051ec6a0231ca8af0ebf1b834cbc921ff90d8e38f3c0dd5f989dd459938f0",
+      "status": 400
+    },
+    {
+      "file": "080-iam-sa_get.json",
       "op": "sa_get",
-      "sha256": "317dbed0facf6fd8af24676f4f8fb4b62ed08060683feff82ee2ca59090f9741",
+      "sha256": "61d8d1408a6066e121aa27eeabefe7be7ee2c5709661cfc025d31df072ab654e",
       "status": 200
     },
     {
-      "file": "066-iam-sas_list.json",
+      "file": "081-iam-sas_list.json",
       "op": "sas_list",
-      "sha256": "e093eb3222dc6dca2d83e1f12aea426d45fafea57a62a18500a809e202e2bd98",
+      "sha256": "ee795b46a8fc3a99acdb6e931af7cf6ef4562d35757c7ee710aabe690b9b00a7",
       "status": 200
     },
     {
-      "file": "067-iam-sa_iam_get.json",
+      "file": "082-iam-sa_iam_get.json",
       "op": "sa_iam_get",
-      "sha256": "796f8e2488d3ce0b78a37adc4e84c25cdad80ca4f20ae86b872466e4f331637d",
+      "sha256": "a48f14e62f91a723d993985a05059de27a69c77ba841c412e3178e6f3fbf9cf7",
       "status": 200
     },
     {
-      "file": "068-iam-sa_get_missing.json",
+      "file": "083-iam-sa_get_missing.json",
       "op": "sa_get_missing",
-      "sha256": "819917c321404ce2e3334891f3a256898bb03288120b1d210119e79ff54e5411",
+      "sha256": "f79d84b572ff31f06d6cab7c58a15eaee990364fabd0ee2800d3b67ad8541217",
       "status": 404
     },
     {
-      "file": "069-iam-sa_delete.json",
+      "file": "084-iam-sa_delete.json",
       "op": "sa_delete",
-      "sha256": "31b0e64c2934df908697ffc0df54a4d6c6eb57e0c86629f996a000ab86a86dd6",
+      "sha256": "ba88d4ba50dc7062e73d20b52fe5130415d907c953b3bb09c19eda4c9a6a9f5e",
       "status": 200
     },
     {
-      "file": "070-firestore-fs_doc_create.json",
+      "file": "085-firestore-fs_doc_create.json",
       "op": "fs_doc_create",
-      "sha256": "66c6772a997dd32bf3d2f1def7963ca81a4f9b7cd4ce85581dbcae9d9c762afc",
+      "sha256": "dbb275c8d549a1c8bf378443c8ef620e12c07c7359649f3368515e69b25945f5",
       "status": 200
     },
     {
-      "file": "071-firestore-fs_doc_get.json",
+      "file": "086-firestore-fs_doc_create_dup.json",
+      "op": "fs_doc_create_dup",
+      "sha256": "2f976e6d16cf2d865bf2c5b0382bf7b6251fa22b3b90c8845a42e655b0dac369",
+      "status": 409
+    },
+    {
+      "file": "087-firestore-fs_doc_get.json",
       "op": "fs_doc_get",
-      "sha256": "7a694608db001eb18bf400f0e759ccb4d3d8f0392ed56710008ee6873e0af2fc",
+      "sha256": "7feab2acfa7077aaf38b94cc85d8fa3bc7347fd840a0ac8dfb1c70c5b827ae22",
       "status": 200
     },
     {
-      "file": "072-firestore-fs_docs_list.json",
+      "file": "088-firestore-fs_docs_list.json",
       "op": "fs_docs_list",
-      "sha256": "e956ac5ac4936f6f42ac31cad43b3c669678972e3ee13903974cac0e5ee931ed",
+      "sha256": "0137139afa4362d74f1b52db46f3aa98f569fdb8e812cfb965f324c7f6327ee1",
       "status": 200
     },
     {
-      "file": "073-firestore-fs_doc_get_missing.json",
+      "file": "089-firestore-fs_doc_get_missing.json",
       "op": "fs_doc_get_missing",
-      "sha256": "f623d47c2ea813459af90fc4f41e37b8ff02368546c27e1b8760a0354159e8eb",
+      "sha256": "846ea5dcee256ea7455be8c615422f00bb44631fbd8f684ffa3371fcd9ea9b27",
       "status": 404
     },
     {
-      "file": "074-firestore-fs_doc_delete.json",
+      "file": "090-firestore-fs_doc_delete.json",
       "op": "fs_doc_delete",
-      "sha256": "4193d621c27c5ec2a0fc4ed43374e5746d9d803e9e9a69b01a12257db14f6196",
+      "sha256": "78d4d6eed6babace486d286192fecd604ffc3318a2832bb76d7d41e98a581a6e",
       "status": 200
     },
     {
-      "file": "075-compute-compute_instances_list.json",
+      "file": "091-compute-compute_instances_list.json",
       "op": "compute_instances_list",
-      "sha256": "ac0cc21f1f29ca65b80a3b695224b2b60ffdb1ad1b158d4e05534d90882eff79",
+      "sha256": "273d3ee0a72d16dfefd148ed8e05057183f21577fbb6ad3074a3d020e223cf3d",
       "status": 200
     },
     {
-      "file": "076-compute-compute_instance_get_missing.json",
+      "file": "092-compute-compute_instance_get_missing.json",
       "op": "compute_instance_get_missing",
-      "sha256": "70fdeb624f804c2c6e76bc68d7a5d158d395d4235c68162373fe8fe88fd9b8c1",
+      "sha256": "c068a5e0578c04ad39f02d01fc7ba2310489dd6e826f9d1cd657c040eda39f88",
       "status": 404
     },
     {
-      "file": "077-sqladmin-sql_instances_list.json",
+      "file": "093-sqladmin-sql_instances_list.json",
       "op": "sql_instances_list",
-      "sha256": "d1c2aaf4e0784c3e2443d0465febaa392ba32f05a799e93371c94f0dc11a992f",
+      "sha256": "38688e3cffa587555668be505ced39dc9034705c4515f194dcfefc8eeffe22a0",
       "status": 200
     },
     {
-      "file": "078-sqladmin-sql_instance_get_missing.json",
+      "file": "094-sqladmin-sql_instance_get_missing.json",
       "op": "sql_instance_get_missing",
-      "sha256": "78dabb6196ab0136cd3cf9288bf4493196fc778ce128b6a38b6204038ac4a821",
+      "sha256": "ee78c9a193e85062be4cd9d770ad74af7851e8cf44d9ef22664c39b3496ee04a",
       "status": 404
     },
     {
-      "file": "079-redis-redis_instances_list.json",
+      "file": "095-redis-redis_instances_list.json",
       "op": "redis_instances_list",
-      "sha256": "bc1b9a0ca7e4f8bbdb093f8f896860b5baa95ddd3b5b2c0fdd4259a1ae5237e6",
+      "sha256": "af75b60f5fd89a15a4deef6995fe507626b03d4190eaf827a969bfe5ba0bddae",
       "status": 200
     },
     {
-      "file": "080-redis-redis_instance_get_missing.json",
+      "file": "096-redis-redis_instance_get_missing.json",
       "op": "redis_instance_get_missing",
-      "sha256": "a151911fb0f081062e467fd2c72ce5cfd9a12a429013f96e8eba82da455f2a1f",
+      "sha256": "a041ce556c02105192353cf45bf0bd9f3d13ee9d726a2175fb1cad1fd91b7ec4",
       "status": 404
     },
     {
-      "file": "081-storage-storage_buckets_list_noauth.json",
+      "file": "097-container-container_clusters_list.json",
+      "op": "container_clusters_list",
+      "sha256": "528978659c7e7a417b4e57e5576c050e5a7e1e578a0febf629a74073fedb50f6",
+      "status": 200
+    },
+    {
+      "file": "098-container-container_cluster_get_missing.json",
+      "op": "container_cluster_get_missing",
+      "sha256": "d258ceffe2a999131afea8932d428309cfe34f99a4706d6d8a61b0c5633df03b",
+      "status": 404
+    },
+    {
+      "file": "099-dataproc-dataproc_clusters_list.json",
+      "op": "dataproc_clusters_list",
+      "sha256": "50af101ecc6ea28ba584cc99aa52da95281a03887489bde785d95b16847c9dc3",
+      "status": 200
+    },
+    {
+      "file": "100-dataproc-dataproc_cluster_get_missing.json",
+      "op": "dataproc_cluster_get_missing",
+      "sha256": "9272c7b193abba1692fbb8bb314a00af9bc173ee4ab71d1f9fc6a667e529a8dc",
+      "status": 404
+    },
+    {
+      "file": "101-monitoring-monitoring_metricdescriptors_list.json",
+      "op": "monitoring_metricdescriptors_list",
+      "sha256": "743204ead4352dfd7149f7f2fb867507cd612b8bba97ea21ee126123e47a34fe",
+      "status": 200
+    },
+    {
+      "file": "102-monitoring-monitoring_metricdescriptor_get_missing.json",
+      "op": "monitoring_metricdescriptor_get_missing",
+      "sha256": "c0acff587fbb8e56e96482e78f3febeb4121296d427880ce6ee99071fa6b18a6",
+      "status": 404
+    },
+    {
+      "file": "103-logging-log_entry_write.json",
+      "op": "log_entry_write",
+      "sha256": "e48aaf81bb505adff8df35a41d4cba91daa1a491ec8952ee3ee5631fdd1a2162",
+      "status": 200
+    },
+    {
+      "file": "104-logging-log_names_list.json",
+      "op": "log_names_list",
+      "sha256": "fa77ce52b6caf7ec63f7dc8b91d6cf6fff676d497f9faa04d00d9bbdbc78c68e",
+      "status": 200
+    },
+    {
+      "file": "105-datastore-ds_lookup_missing.json",
+      "op": "ds_lookup_missing",
+      "sha256": "26cb7ff59c02a9bdb0a6edaed04ffbcdcb7abbc0431e4c51995ac02448fa8fd3",
+      "status": 200
+    },
+    {
+      "file": "106-storage-storage_buckets_list_noauth.json",
       "op": "storage_buckets_list_noauth",
-      "sha256": "b6eb395d8405bb95ffe70b83d42db98e2df1ec64c9ba3d951b682ec44e8a7a2b",
+      "sha256": "871fa77c8d91d31f3b4674a488afaae5e5b644dd612d757273c4f8625d1b2d55",
       "status": 401
     },
     {
-      "file": "082-compute-compute_instances_list_noauth.json",
+      "file": "107-compute-compute_instances_list_noauth.json",
       "op": "compute_instances_list_noauth",
-      "sha256": "4c610e116dba560b347d9536e1f9ef13ed8bd9381e542f8a5ed416fa41c35594",
+      "sha256": "23af4b8866fc22c9fc4dd8592f495375b3f8560936b327fe1ffe8e31c3b43f53",
       "status": 401
     },
     {
-      "file": "083-sqladmin-sql_instances_list_noauth.json",
+      "file": "108-sqladmin-sql_instances_list_noauth.json",
       "op": "sql_instances_list_noauth",
-      "sha256": "66a180e08b56b7db2b2ffea00eefe157116cd31781964642dbac34bafd4aa18b",
+      "sha256": "5b13c12fccb22cd127ac813e71cb9d3493f991f891fbd5143d42c16ff82c0d11",
       "status": 401
     },
     {
-      "file": "084-redis-redis_instances_list_noauth.json",
+      "file": "109-redis-redis_instances_list_noauth.json",
       "op": "redis_instances_list_noauth",
-      "sha256": "aac982731e697c75d447a29736a4f98efc3f07d86d4abb5137fe8cb398defa5f",
+      "sha256": "4e1c58e7d6097e72de7ec4bcf6ef61d3b7fbada91f3f1129607d8b9516df4f4d",
       "status": 401
+    },
+    {
+      "file": "110-container-container_clusters_list_noauth.json",
+      "op": "container_clusters_list_noauth",
+      "sha256": "918c04a46d15eee44bdda89d73075ec8458535221dfd7667c71b6638cba21389",
+      "status": 401
+    },
+    {
+      "file": "111-serviceusage-su_service_get_unknown.json",
+      "op": "su_service_get_unknown",
+      "sha256": "37e429bf5753a95f23ad25fd559f224bdd8502e9ad8d77e58c974db8c7f91486",
+      "status": 403
     }
   ]
 }

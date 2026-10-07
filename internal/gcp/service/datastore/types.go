@@ -137,6 +137,9 @@ type EntityResult struct {
 type LookupResult struct {
 	Found   []EntityResult
 	Missing []Key
+	// ReadTime is the timestamp at which the lookup was served. Both the REST
+	// and gRPC responses carry it (real Datastore returns it on every lookup).
+	ReadTime time.Time
 }
 
 // MoreResults mirrors Datastore's QueryResultBatch.MoreResults for the two

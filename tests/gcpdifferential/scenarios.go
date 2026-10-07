@@ -11,15 +11,18 @@
 // local emulator and requires no credentials.
 //
 // Scope: the recorded set covers the REST services both real GCP and the
-// emulator expose (storage, pubsub, secretmanager, kms, bigquery). The curated
-// Scenarios list may also contain operations that have not been recorded yet:
-// a scenario with no committed golden is reported as "pending recording" and
-// skipped by TestReplay, so new breadth can land in the tree without breaking
-// the offline gate before the next real-GCP capture. Once the user records,
-// every scenario gains a golden and starts being diffed.
+// emulator expose — the original twelve (storage, pubsub, secretmanager, kms,
+// bigquery, dns, workflows, iam, firestore, compute, sqladmin, redis) plus the
+// AUD6 breadth services (container, dataproc, monitoring, logging, datastore,
+// workflowexecutions, serviceusage). The curated Scenarios list may also
+// contain operations that have not been recorded yet: a scenario with no
+// committed golden is reported as "pending recording" and skipped by
+// TestReplay, so new breadth can land in the tree without breaking the offline
+// gate before the next real-GCP capture. Once the user records, every scenario
+// gains a golden and starts being diffed.
 //
-// gRPC-only surfaces (Firestore, Datastore, Logging, Monitoring, Operations)
-// are out of scope for this REST differential.
+// gRPC-only surfaces are out of scope for this REST differential; datastore and
+// logging are covered here over REST only.
 package gcpdifferential
 
 import (
@@ -118,6 +121,17 @@ var serviceBaseURL = map[string]string{
 	"compute":  "https://compute.googleapis.com",
 	"sqladmin": "https://sqladmin.googleapis.com",
 	"redis":    "https://redis.googleapis.com",
+	// AUD6 breadth: control-plane / data-plane services added on top of the
+	// original twelve. Each already has a REST adapter in
+	// internal/gcp/adapter/services.go (or a REST transport package) and its
+	// API is enabled on the parity project.
+	"serviceusage":       "https://serviceusage.googleapis.com",
+	"dataproc":           "https://dataproc.googleapis.com",
+	"container":          "https://container.googleapis.com",
+	"logging":            "https://logging.googleapis.com",
+	"monitoring":         "https://monitoring.googleapis.com",
+	"datastore":          "https://datastore.googleapis.com",
+	"workflowexecutions": "https://workflowexecutions.googleapis.com",
 }
 
 // runSuffix returns a per-run unique, resource-name-safe suffix. Record and
@@ -155,6 +169,13 @@ type ResourceNames struct {
 	ComputeInstance string
 	SQLInstance     string
 	RedisInstance   string
+	// AUD6: read-only control-plane probes for GKE and Dataproc (never created),
+	// a run-suffixed custom logging log name, and a nonexistent custom metric
+	// type. All fold to placeholders so goldens stay stable.
+	ContainerCluster string
+	DataprocCluster  string
+	LogName          string
+	MetricType       string
 }
 
 // Names derives the run's resource identifiers from suffix.
@@ -180,20 +201,24 @@ func Names(suffix string) ResourceNames {
 		ComputeInstance: "conf-vm-" + suffix,
 		SQLInstance:     "conf-sql-" + suffix,
 		RedisInstance:   "conf-redis-" + suffix,
+
+		ContainerCluster: "conf-gke-" + suffix,
+		DataprocCluster:  "conf-dp-" + suffix,
+		LogName:          "conf-log-" + suffix,
+		MetricType:       "custom.googleapis.com/jaiscloud_nonexistent_" + suffix,
 	}
 }
 
 // Scenarios returns the curated request list for the given project and run
-// suffix. The recorded (golden-backed) services are storage, pubsub,
-// secretmanager, kms and bigquery. It additionally carries Cloud DNS and Cloud
-// Workflows scenarios that have not been recorded yet; those stay "pending
-// recording" (skipped by TestReplay) until a real-GCP capture folds them into
-// goldens. datastore, logging and monitoring are gRPC-only in the emulator
-// (see internal/gcp/adapter), so they are out of scope for this REST
-// differential and documented as such.
+// suffix: the original twelve REST services plus the AUD6 breadth services
+// (container, dataproc, monitoring, logging, datastore, workflowexecutions,
+// serviceusage). It also carries negative/error-envelope cases (404 / 409 /
+// 400 / 401 authz) alongside the happy paths.
 //
 // The list is ordered so resources exist before they are read and are deleted
-// at the end; error (404) responses are included deliberately.
+// at the end; error responses are included deliberately. Any scenario without a
+// committed golden stays "pending recording" (skipped by TestReplay) until a
+// real-GCP capture folds it into a golden.
 func Scenarios(project, suffix string) []Scenario {
 	n := Names(suffix)
 
@@ -215,6 +240,13 @@ func Scenarios(project, suffix string) []Scenario {
 		Scenario{Op: "object_get", Service: "storage", Method: "GET", Path: "/storage/v1/b/" + n.Bucket + "/o/hello.txt"},
 		Scenario{Op: "objects_list", Service: "storage", Method: "GET", Path: "/storage/v1/b/" + n.Bucket + "/o"},
 		Scenario{Op: "object_get_missing", Service: "storage", Method: "GET", Path: "/storage/v1/b/" + n.Bucket + "/o/missing-" + suffix},
+		// Negative envelopes: creating the bucket again is ALREADY_EXISTS (409),
+		// and an uppercase/underscore name is invalid (400). Both run while the
+		// bucket exists (before delete).
+		Scenario{Op: "bucket_create_dup", Service: "storage", Method: "POST", Path: "/storage/v1/b?project=" + project,
+			Body: fmt.Sprintf(`{"name":%q}`, n.Bucket)},
+		Scenario{Op: "bucket_create_invalid", Service: "storage", Method: "POST", Path: "/storage/v1/b?project=" + project,
+			Body: `{"name":"INVALID_BUCKET_NAME"}`},
 		Scenario{Op: "object_delete", Service: "storage", Method: "DELETE", Path: "/storage/v1/b/" + n.Bucket + "/o/hello.txt"},
 		Scenario{Op: "bucket_delete", Service: "storage", Method: "DELETE", Path: "/storage/v1/b/" + n.Bucket},
 		Scenario{Op: "bucket_get_deleted", Service: "storage", Method: "GET", Path: "/storage/v1/b/" + n.Bucket},
@@ -227,12 +259,18 @@ func Scenarios(project, suffix string) []Scenario {
 		Scenario{Op: "topic_get", Service: "pubsub", Method: "GET", Path: "/v1/projects/" + project + "/topics/" + n.Topic},
 		Scenario{Op: "topics_list", Service: "pubsub", Method: "GET", Path: "/v1/projects/" + project + "/topics"},
 		Scenario{Op: "topic_get_missing", Service: "pubsub", Method: "GET", Path: "/v1/projects/" + project + "/topics/missing-" + suffix},
+		// Negative envelopes: a duplicate topic is ALREADY_EXISTS (409); an empty
+		// publish payload is INVALID_ARGUMENT (400).
+		Scenario{Op: "topic_create_dup", Service: "pubsub", Method: "PUT", Path: "/v1/projects/" + project + "/topics/" + n.Topic,
+			Body: fmt.Sprintf(`{"name":%q}`, topicName)},
 		Scenario{Op: "sub_create", Service: "pubsub", Method: "PUT", Path: "/v1/projects/" + project + "/subscriptions/" + n.Sub,
 			Body: fmt.Sprintf(`{"name":%q,"topic":%q,"ackDeadlineSeconds":10}`, subName, topicName)},
 		Scenario{Op: "sub_get", Service: "pubsub", Method: "GET", Path: "/v1/projects/" + project + "/subscriptions/" + n.Sub},
 		Scenario{Op: "subs_list", Service: "pubsub", Method: "GET", Path: "/v1/projects/" + project + "/subscriptions"},
 		Scenario{Op: "topic_publish", Service: "pubsub", Method: "POST", Path: "/v1/projects/" + project + "/topics/" + n.Topic + ":publish",
 			Body: `{"messages":[{"data":"aGVsbG8="}]}`},
+		Scenario{Op: "topic_publish_empty", Service: "pubsub", Method: "POST", Path: "/v1/projects/" + project + "/topics/" + n.Topic + ":publish",
+			Body: `{"messages":[]}`},
 		Scenario{Op: "sub_pull", Service: "pubsub", Method: "POST", Path: "/v1/projects/" + project + "/subscriptions/" + n.Sub + ":pull",
 			Body: `{"maxMessages":10}`},
 		Scenario{Op: "sub_delete", Service: "pubsub", Method: "DELETE", Path: "/v1/projects/" + project + "/subscriptions/" + n.Sub},
@@ -247,6 +285,14 @@ func Scenarios(project, suffix string) []Scenario {
 			Body: `{"replication":{"automatic":{}}}`},
 		Scenario{Op: "secret_get", Service: "secretmanager", Method: "GET", Path: "/v1/projects/" + project + "/secrets/" + n.Secret},
 		Scenario{Op: "secrets_list", Service: "secretmanager", Method: "GET", Path: "/v1/projects/" + project + "/secrets"},
+		// Negative envelopes: a duplicate secret is ALREADY_EXISTS (409); a
+		// create with no secretId is INVALID_ARGUMENT (400).
+		Scenario{Op: "secret_create_dup", Service: "secretmanager", Method: "POST",
+			Path: "/v1/projects/" + project + "/secrets?secretId=" + n.Secret,
+			Body: `{"replication":{"automatic":{}}}`},
+		Scenario{Op: "secret_create_missing_id", Service: "secretmanager", Method: "POST",
+			Path: "/v1/projects/" + project + "/secrets",
+			Body: `{"replication":{"automatic":{}}}`},
 		Scenario{Op: "secret_add_version", Service: "secretmanager", Method: "POST",
 			Path: "/v1/projects/" + project + "/secrets/" + n.Secret + ":addVersion",
 			Body: `{"payload":{"data":"c2VjcmV0"}}`},
@@ -265,6 +311,10 @@ func Scenarios(project, suffix string) []Scenario {
 	sc = append(sc,
 		Scenario{Op: "keyring_get", Service: "kms", Method: "GET", Path: ringPath},
 		Scenario{Op: "keyrings_list", Service: "kms", Method: "GET", Path: kmsBase},
+		// Negative envelope: creating the fixed keyring again is ALREADY_EXISTS
+		// (409). EnsureKMS relies on this same idempotency.
+		Scenario{Op: "keyring_create_dup", Service: "kms", Method: "POST",
+			Path: kmsBase + "?keyRingId=" + FixedKMSKeyRing, Body: `{}`},
 		Scenario{Op: "cryptokey_get", Service: "kms", Method: "GET", Path: keyPath},
 		Scenario{Op: "cryptokeys_list", Service: "kms", Method: "GET", Path: ringPath + "/cryptoKeys"},
 		Scenario{Op: "cryptokey_encrypt", Service: "kms", Method: "POST", Path: keyPath + ":encrypt",
@@ -282,6 +332,9 @@ func Scenarios(project, suffix string) []Scenario {
 			Body: fmt.Sprintf(`{"datasetReference":{"projectId":%q,"datasetId":%q}}`, project, n.DS)},
 		Scenario{Op: "dataset_get", Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + n.DS},
 		Scenario{Op: "datasets_list", Service: "bigquery", Method: "GET", Path: bqBase + "/datasets"},
+		// Negative envelope: a duplicate dataset is ALREADY_EXISTS (409).
+		Scenario{Op: "dataset_create_dup", Service: "bigquery", Method: "POST", Path: bqBase + "/datasets",
+			Body: fmt.Sprintf(`{"datasetReference":{"projectId":%q,"datasetId":%q}}`, project, n.DS)},
 		Scenario{Op: "table_create", Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + n.DS + "/tables",
 			Body: fmt.Sprintf(`{"tableReference":{"projectId":%q,"datasetId":%q,"tableId":%q},"schema":{"fields":[{"name":"id","type":"INTEGER","mode":"REQUIRED"}]}}`, project, n.DS, n.Table)},
 		Scenario{Op: "table_get", Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + n.DS + "/tables/" + n.Table},
@@ -289,6 +342,7 @@ func Scenarios(project, suffix string) []Scenario {
 		Scenario{Op: "tabledata_insert_all", Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + n.DS + "/tables/" + n.Table + "/insertAll",
 			Body: `{"rows":[{"insertId":"1","json":{"id":"1"}}]}`},
 		Scenario{Op: "tabledata_list", Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + n.DS + "/tables/" + n.Table + "/data"},
+		Scenario{Op: "query_bad_sql", Service: "bigquery", Method: "POST", Path: bqBase + "/queries", Body: `{"query":"SELECT FROM"}`},
 		Scenario{Op: "query", Service: "bigquery", Method: "POST", Path: bqBase + "/queries", Body: `{"query":"SELECT 1"}`},
 		Scenario{Op: "dataset_get_missing", Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/missing_" + suffix},
 		Scenario{Op: "table_delete", Service: "bigquery", Method: "DELETE", Path: bqBase + "/datasets/" + n.DS + "/tables/" + n.Table},
@@ -305,6 +359,12 @@ func Scenarios(project, suffix string) []Scenario {
 	sc = append(sc,
 		Scenario{Op: "zone_create", Service: "dns", Method: "POST", Path: dnsBase,
 			Body: fmt.Sprintf(`{"name":%q,"dnsName":%q,"description":"jaiscloud differential"}`, dnsZone, n.DNSName)},
+		// Negative envelopes: a duplicate managed zone is ALREADY_EXISTS (409);
+		// a create with no dnsName is INVALID_ARGUMENT (400).
+		Scenario{Op: "zone_create_dup", Service: "dns", Method: "POST", Path: dnsBase,
+			Body: fmt.Sprintf(`{"name":%q,"dnsName":%q,"description":"jaiscloud differential"}`, dnsZone, n.DNSName)},
+		Scenario{Op: "zone_create_invalid", Service: "dns", Method: "POST", Path: dnsBase,
+			Body: fmt.Sprintf(`{"name":%q}`, "conf-invalid-"+suffix)},
 		Scenario{Op: "zone_get", Service: "dns", Method: "GET", Path: dnsBase + "/" + dnsZone},
 		Scenario{Op: "zones_list", Service: "dns", Method: "GET", Path: dnsBase},
 		Scenario{Op: "change_create", Service: "dns", Method: "POST", Path: dnsBase + "/" + dnsZone + "/changes",
@@ -333,6 +393,14 @@ func Scenarios(project, suffix string) []Scenario {
 			Path: "/v1/${wfOp}", Wait: &WaitSpec{Field: "done", Interval: time.Second, Timeout: 120 * time.Second}},
 		Scenario{Op: "workflow_get", Service: "workflows", Method: "GET", Path: wfBase + "/" + n.Workflow},
 		Scenario{Op: "workflows_list", Service: "workflows", Method: "GET", Path: wfBase},
+		// Cloud Workflow Executions (AUD6): the executions list is empty for a
+		// freshly deployed workflow; the missing-execution probe captures the
+		// 404 envelope. Scoped to the workflow created above, before it is
+		// deleted.
+		Scenario{Op: "wfexec_executions_list", Service: "workflowexecutions", Method: "GET",
+			Path: wfBase + "/" + n.Workflow + "/executions"},
+		Scenario{Op: "wfexec_execution_get_missing", Service: "workflowexecutions", Method: "GET",
+			Path: wfBase + "/" + n.Workflow + "/executions/missing-" + suffix},
 		Scenario{Op: "workflow_get_missing", Service: "workflows", Method: "GET", Path: wfBase + "/missing-" + suffix},
 		Scenario{Op: "workflow_delete", Service: "workflows", Method: "DELETE", Path: wfBase + "/" + n.Workflow},
 	)
@@ -347,6 +415,14 @@ func Scenarios(project, suffix string) []Scenario {
 	sc = append(sc,
 		Scenario{Op: "sa_create", Service: "iam", Method: "POST",
 			Path: saBase + "?accountId=" + n.ServiceAccount,
+			Body: `{"serviceAccount":{"displayName":"jaiscloud differential"}}`},
+		// Negative envelopes: a duplicate service account is ALREADY_EXISTS
+		// (409); an accountId with uppercase/underscores is INVALID_ARGUMENT.
+		Scenario{Op: "sa_create_dup", Service: "iam", Method: "POST",
+			Path: saBase + "?accountId=" + n.ServiceAccount,
+			Body: `{"serviceAccount":{"displayName":"jaiscloud differential"}}`},
+		Scenario{Op: "sa_create_invalid", Service: "iam", Method: "POST",
+			Path: saBase + "?accountId=Invalid_Account_ID",
 			Body: `{"serviceAccount":{"displayName":"jaiscloud differential"}}`},
 		Scenario{Op: "sa_get", Service: "iam", Method: "GET", Path: saBase + "/" + saEmail,
 			Wait: &WaitSpec{Field: "email", Interval: time.Second, Timeout: 60 * time.Second}},
@@ -366,6 +442,10 @@ func Scenarios(project, suffix string) []Scenario {
 	fsDoc := fsBase + "/" + n.FSDoc
 	sc = append(sc,
 		Scenario{Op: "fs_doc_create", Service: "firestore", Method: "POST",
+			Path: fsBase + "?documentId=" + n.FSDoc,
+			Body: `{"fields":{"greeting":{"stringValue":"hello"},"count":{"integerValue":"1"}}}`},
+		// Negative envelope: re-creating the document is ALREADY_EXISTS (409).
+		Scenario{Op: "fs_doc_create_dup", Service: "firestore", Method: "POST",
 			Path: fsBase + "?documentId=" + n.FSDoc,
 			Body: `{"fields":{"greeting":{"stringValue":"hello"},"count":{"integerValue":"1"}}}`},
 		Scenario{Op: "fs_doc_get", Service: "firestore", Method: "GET", Path: fsDoc},
@@ -400,6 +480,62 @@ func Scenarios(project, suffix string) []Scenario {
 			Path: "/v1/projects/" + project + "/locations/us-central1/instances/" + n.RedisInstance},
 	)
 
+	// ─── AUD6 breadth: control planes added on top of the original twelve ────
+	// Each follows the read-only smoke contract of the metadata-only services
+	// above: validate routing, the empty-list shape and the 404 error envelope,
+	// never a data plane. The APIs are enabled on the parity project; nothing is
+	// created, so no cleanup is needed.
+
+	// Google Kubernetes Engine (container.googleapis.com REST metadata surface).
+	sc = append(sc,
+		Scenario{Op: "container_clusters_list", Service: "container", Method: "GET",
+			Path: "/v1/projects/" + project + "/locations/us-central1/clusters"},
+		Scenario{Op: "container_cluster_get_missing", Service: "container", Method: "GET",
+			Path: "/v1/projects/" + project + "/locations/us-central1/clusters/" + n.ContainerCluster},
+	)
+
+	// Cloud Dataproc (dataproc.googleapis.com); region-scoped, never created.
+	sc = append(sc,
+		Scenario{Op: "dataproc_clusters_list", Service: "dataproc", Method: "GET",
+			Path: "/v1/projects/" + project + "/regions/us-central1/clusters"},
+		Scenario{Op: "dataproc_cluster_get_missing", Service: "dataproc", Method: "GET",
+			Path: "/v1/projects/" + project + "/regions/us-central1/clusters/" + n.DataprocCluster},
+	)
+
+	// Cloud Monitoring (monitoring.googleapis.com): a descriptor list filtered
+	// to a nonexistent custom metric type, so the golden is not polluted by the
+	// real project's built-in descriptors, plus a 404 descriptor get.
+	sc = append(sc,
+		Scenario{Op: "monitoring_metricdescriptors_list", Service: "monitoring", Method: "GET",
+			Path: "/v3/projects/" + project + "/metricDescriptors?filter=metric.type%3D%22" + n.MetricType + "%22"},
+		Scenario{Op: "monitoring_metricdescriptor_get_missing", Service: "monitoring", Method: "GET",
+			Path: "/v3/projects/" + project + "/metricDescriptors/" + n.MetricType},
+	)
+
+	// Cloud Logging (logging.googleapis.com) data plane: write one entry to a
+	// run-suffixed custom log, then list the project's log names (scoped to that
+	// log). Log entries expire on their own, so no cleanup is needed.
+	sc = append(sc,
+		Scenario{Op: "log_entry_write", Service: "logging", Method: "POST", Path: "/v2/entries:write",
+			Body: fmt.Sprintf(`{"entries":[{"logName":%q,"resource":{"type":"global"},"severity":"INFO","textPayload":"hello jaiscloud"}]}`,
+				"projects/"+project+"/logs/"+n.LogName)},
+		Scenario{Op: "log_names_list", Service: "logging", Method: "GET",
+			Path: "/v2/projects/" + project + "/logs?resourceNames=projects%2F" + project,
+			// The project log-name index is eventually consistent on real GCP
+			// (a just-written custom log is not listed immediately); poll until
+			// this run's log appears so the golden is stable.
+			Wait: &WaitSpec{Field: "logNames", Contains: n.LogName, Interval: time.Second, Timeout: 60 * time.Second}},
+	)
+
+	// Cloud Datastore (datastore.googleapis.com) read-only: a lookup of an
+	// always-absent key captures routing plus the entity-key shape. The REST
+	// Entity/value-union projection a full data-plane flow needs is deferred
+	// (AUD3-2).
+	sc = append(sc,
+		Scenario{Op: "ds_lookup_missing", Service: "datastore", Method: "POST", Path: "/v1/projects/" + project + ":lookup",
+			Body: fmt.Sprintf(`{"keys":[{"path":[{"kind":"conf_kind","name":%q}]}]}`, "missing_"+suffix)},
+	)
+
 	// ─── Authz paths (G6 / G1) ────────────────────────────────────────────────
 	// The recorder authenticates as the parity-project owner, so a low-privilege
 	// principal is unavailable; the only authz differential it can capture is an
@@ -416,6 +552,15 @@ func Scenarios(project, suffix string) []Scenario {
 			Path: "/sql/v1beta4/projects/" + project + "/instances", NoAuth: true},
 		Scenario{Op: "redis_instances_list_noauth", Service: "redis", Method: "GET",
 			Path: "/v1/projects/" + project + "/locations/us-central1/instances", NoAuth: true},
+		// AUD6: extend the authz-gap record to one of the newly covered
+		// services, and capture a real PERMISSION_DENIED (403) envelope — Service
+		// Usage rejects an unknown service the parity project cannot see, while
+		// the emulator (which does not maintain the Service Usage catalog) serves
+		// a synthesized DISABLED service. Both are accepted as documented gaps.
+		Scenario{Op: "container_clusters_list_noauth", Service: "container", Method: "GET",
+			Path: "/v1/projects/" + project + "/locations/us-central1/clusters", NoAuth: true},
+		Scenario{Op: "su_service_get_unknown", Service: "serviceusage", Method: "GET",
+			Path: "/v1/projects/" + project + "/services/unknown.googleapis.com"},
 	)
 
 	return sc

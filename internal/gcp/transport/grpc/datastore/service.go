@@ -132,6 +132,9 @@ func (s *Service) Lookup(ctx context.Context, req *datastorepb.LookupRequest) (*
 			Version: 1,
 		})
 	}
+	if !resp.ReadTime.IsZero() {
+		out.ReadTime = timestamppb.New(resp.ReadTime)
+	}
 	return out, nil
 }
 

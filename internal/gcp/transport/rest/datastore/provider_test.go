@@ -59,6 +59,23 @@ func newTestProvider(t *testing.T) (*Codec, *Provider) {
 	return c, p
 }
 
+// TestRESTLookupSetsReadTime pins the LookupResponse.readTime field that real
+// Datastore returns on every lookup and the differential harness found missing.
+func TestRESTLookupSetsReadTime(t *testing.T) {
+	c, p := newTestProvider(t)
+	resp, err := call(t, c, p, "test", "lookup", map[string]any{"keys": []any{nameKey("Task", "missing")}})
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	rt, _ := resp.Data["readTime"].(string)
+	if rt == "" {
+		t.Fatalf("readTime missing from lookup response: %v", resp.Data)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, rt); err != nil {
+		t.Fatalf("readTime %q is not RFC3339: %v", rt, err)
+	}
+}
+
 func upsert(t *testing.T, c *Codec, p *Provider, kind, name string, n int) {
 	t.Helper()
 	body := map[string]any{

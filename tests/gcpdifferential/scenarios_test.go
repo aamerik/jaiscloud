@@ -25,7 +25,7 @@ func TestScenariosValid(t *testing.T) {
 	}
 
 	seen := map[string]bool{}
-	var haveDNS, haveWorkflows, haveIAM, haveFirestore bool
+	have := map[string]bool{}
 	for _, sc := range scenarios {
 		if sc.Service == "" || sc.Op == "" || sc.Method == "" || sc.Path == "" {
 			t.Errorf("scenario %+v has an empty required field", sc)
@@ -38,28 +38,18 @@ func TestScenariosValid(t *testing.T) {
 			t.Errorf("duplicate (Service, Op): %s/%s", sc.Service, sc.Op)
 		}
 		seen[k] = true
-		switch sc.Service {
-		case "dns":
-			haveDNS = true
-		case "workflows":
-			haveWorkflows = true
-		case "iam":
-			haveIAM = true
-		case "firestore":
-			haveFirestore = true
+		have[sc.Service] = true
+	}
+	// The original twelve plus the AUD6 breadth services must each stay
+	// represented, so a dropped scenario block is caught offline.
+	for _, svc := range []string{
+		"dns", "workflows", "iam", "firestore",
+		"container", "dataproc", "monitoring", "logging", "datastore",
+		"workflowexecutions", "serviceusage",
+	} {
+		if !have[svc] {
+			t.Errorf("expected at least one %s scenario", svc)
 		}
-	}
-	if !haveDNS {
-		t.Error("expected at least one dns scenario")
-	}
-	if !haveWorkflows {
-		t.Error("expected at least one workflows scenario")
-	}
-	if !haveIAM {
-		t.Error("expected at least one iam scenario")
-	}
-	if !haveFirestore {
-		t.Error("expected at least one firestore scenario")
 	}
 }
 
@@ -88,6 +78,10 @@ func TestNormalizerCoversResources(t *testing.T) {
 		{names.ComputeInstance, "<computeInstance>"},
 		{names.SQLInstance, "<sqlInstance>"},
 		{names.RedisInstance, "<redisInstance>"},
+		{names.ContainerCluster, "<containerCluster>"},
+		{names.DataprocCluster, "<dataprocCluster>"},
+		{names.LogName, "<logName>"},
+		{names.MetricType, "<metricType>"},
 		{names.ServiceAccount + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
 		{names.ServiceAccount, "<serviceAccountId>"},
 		{"missing-" + suffix + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
