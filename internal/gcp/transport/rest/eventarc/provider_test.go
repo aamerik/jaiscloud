@@ -459,6 +459,24 @@ func TestRoutes_AllHandlersRegistered(t *testing.T) {
 		"Eventarc.ListProviders", "Eventarc.GetProvider",
 		"Eventarc.TriggerGetIamPolicy", "Eventarc.TriggerSetIamPolicy", "Eventarc.TriggerTestIamPermissions",
 		"Eventarc.ChannelGetIamPolicy", "Eventarc.ChannelSetIamPolicy", "Eventarc.ChannelTestIamPermissions",
+		"Eventarc.ListMessageBusEnrollments",
+		"Eventarc.GetGoogleChannelConfig", "Eventarc.UpdateGoogleChannelConfig",
+	}
+	// The advanced surface registers an identical CRUD+IAM shape per collection
+	// kind (minus update for channel connections).
+	for _, k := range eventarccore.AdvancedKinds {
+		want = append(want,
+			"Eventarc.Create"+k.Proto,
+			"Eventarc.Get"+k.Proto,
+			"Eventarc."+k.ListMethod,
+			"Eventarc.Delete"+k.Proto,
+			"Eventarc."+k.Proto+"GetIamPolicy",
+			"Eventarc."+k.Proto+"SetIamPolicy",
+			"Eventarc."+k.Proto+"TestIamPermissions",
+		)
+		if !k.NoUpdate {
+			want = append(want, "Eventarc.Update"+k.Proto)
+		}
 	}
 	for _, k := range want {
 		if routes[k] == nil {
@@ -1046,5 +1064,119 @@ func TestBoolParamNativeBool(t *testing.T) {
 	}
 	if _, err := p.GetTrigger(ctx, newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/triggers/t1"})); err == nil {
 		t.Fatal("native-bool validateOnly create persisted")
+	}
+}
+
+// TestAdvancedSurfaceREST drives the advanced-surface REST routes end to end:
+// a message bus (full CRUD + IAM), an enrollment referencing it with the
+// listEnrollments custom method, a pipeline, and the Google channel config
+// singleton. The route keys are fetched from Routes() so a missing registration
+// fails the test.
+func TestAdvancedSurfaceREST(t *testing.T) {
+	ctx := context.Background()
+	p, _, _ := newProvider()
+	routes := p.Routes()
+
+	call := func(t *testing.T, key string, params map[string]any) *model.ProviderResponse {
+		t.Helper()
+		h := routes[key]
+		if h == nil {
+			t.Fatalf("route %q not registered", key)
+		}
+		resp, err := h(ctx, newNR(params))
+		if err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+		return resp
+	}
+
+	busName := "projects/proj/locations/us-central1/messageBuses/mb1"
+
+	// Create → done operation wrapping the message bus.
+	create := call(t, "Eventarc.CreateMessageBus", map[string]any{
+		"location": "us-central1", "messageBusId": "mb1",
+		"body": map[string]any{"displayName": "demo"},
+	})
+	if create.Data["done"] != true {
+		t.Fatalf("create done = %v", create.Data["done"])
+	}
+	created, _ := create.Data["response"].(map[string]any)
+	if created["name"] != busName || created["@type"] != eventarccore.MessageBusKind.TypeURL() {
+		t.Fatalf("created = %v", created)
+	}
+	if created["uid"] == "" || created["etag"] == "" {
+		t.Fatalf("uid/etag missing: %v", created)
+	}
+
+	// Get / List.
+	got := call(t, "Eventarc.GetMessageBus", map[string]any{"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1"})
+	if got.Data["name"] != busName {
+		t.Fatalf("get = %v", got.Data)
+	}
+	list := call(t, "Eventarc.ListMessageBuses", map[string]any{"location": "us-central1"})
+	if items, _ := list.Data["messageBuses"].([]any); len(items) != 1 {
+		t.Fatalf("list = %v", list.Data)
+	}
+
+	// Masked update.
+	upd := call(t, "Eventarc.UpdateMessageBus", map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1",
+		"updateMask": "labels", "body": map[string]any{"labels": map[string]any{"a": "b"}},
+	})
+	updated, _ := upd.Data["response"].(map[string]any)
+	if labels, _ := updated["labels"].(map[string]string); labels["a"] != "b" {
+		t.Fatalf("updated labels = %v", updated["labels"])
+	}
+
+	// Enrollment referencing the bus, then listEnrollments.
+	call(t, "Eventarc.CreateEnrollment", map[string]any{
+		"location": "us-central1", "enrollmentId": "e1",
+		"body": map[string]any{"messageBus": busName},
+	})
+	enr := call(t, "Eventarc.ListMessageBusEnrollments", map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1",
+	})
+	if names, _ := enr.Data["enrollments"].([]string); len(names) != 1 || names[0] != "projects/proj/locations/us-central1/enrollments/e1" {
+		t.Fatalf("listEnrollments = %v", enr.Data)
+	}
+
+	// A pipeline is pure metadata.
+	call(t, "Eventarc.CreatePipeline", map[string]any{
+		"location": "us-central1", "pipelineId": "p1", "body": map[string]any{"displayName": "p"},
+	})
+
+	// IAM trio on the message bus.
+	if pol := call(t, "Eventarc.MessageBusGetIamPolicy", map[string]any{"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1"}); pol.Data["etag"] == nil {
+		t.Fatalf("getIamPolicy = %v", pol.Data)
+	}
+	call(t, "Eventarc.MessageBusSetIamPolicy", map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1",
+		"body": map[string]any{"bindings": []any{map[string]any{"role": "roles/eventarc.viewer", "members": []any{"allUsers"}}}},
+	})
+	perms := call(t, "Eventarc.MessageBusTestIamPermissions", map[string]any{
+		"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1",
+		"body": map[string]any{"permissions": []any{"eventarc.messageBuses.get"}},
+	})
+	if got, _ := perms.Data["permissions"].([]string); len(got) != 1 {
+		t.Fatalf("testIamPermissions = %v", perms.Data)
+	}
+
+	// Google channel config singleton: default get, then update.
+	def := call(t, "Eventarc.GetGoogleChannelConfig", map[string]any{"location": "us-central1"})
+	if def.Data["name"] != "projects/proj/locations/us-central1/googleChannelConfig" {
+		t.Fatalf("default config = %v", def.Data)
+	}
+	cfg := call(t, "Eventarc.UpdateGoogleChannelConfig", map[string]any{
+		"location": "us-central1", "updateMask": "crypto_key_name",
+		"body": map[string]any{"cryptoKeyName": "projects/proj/locations/us-central1/keyRings/r/cryptoKeys/k"},
+	})
+	if cfg.Data["cryptoKeyName"] == nil {
+		t.Fatalf("updated config = %v", cfg.Data)
+	}
+
+	// Delete the bus and confirm it is gone.
+	call(t, "Eventarc.DeleteMessageBus", map[string]any{"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1"})
+	if _, err := routes["Eventarc.GetMessageBus"](ctx, newNR(map[string]any{"location": "us-central1", "name": "locations/us-central1/messageBuses/mb1"})); err == nil {
+		t.Fatal("message bus still present after delete")
 	}
 }

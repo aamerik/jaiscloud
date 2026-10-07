@@ -154,6 +154,20 @@ var actionOverrides = map[string]string{
 	"Container.SetNodePoolSize":         "container.projects.locations.clusters.nodePools.setSize",
 	"Container.SetNodePoolManagement":   "container.projects.locations.clusters.nodePools.setManagement",
 	"Container.RollbackNodePoolUpgrade": "container.projects.locations.clusters.nodePools.rollback",
+
+	// Eventarc's advanced message-bus actions do not derive from the CamelCase
+	// heuristic: the Discovery collection is "messageBuses" (which singularises
+	// to "messageBus"), so the verb-first candidate comes out "messageBus.create"
+	// rather than "messageBuses.create".
+	"Eventarc.CreateMessageBus":             "eventarc.projects.locations.messageBuses.create",
+	"Eventarc.GetMessageBus":                "eventarc.projects.locations.messageBuses.get",
+	"Eventarc.ListMessageBuses":             "eventarc.projects.locations.messageBuses.list",
+	"Eventarc.UpdateMessageBus":             "eventarc.projects.locations.messageBuses.patch",
+	"Eventarc.DeleteMessageBus":             "eventarc.projects.locations.messageBuses.delete",
+	"Eventarc.ListMessageBusEnrollments":    "eventarc.projects.locations.messageBuses.listEnrollments",
+	"Eventarc.MessageBusGetIamPolicy":       "eventarc.projects.locations.messageBuses.getIamPolicy",
+	"Eventarc.MessageBusSetIamPolicy":       "eventarc.projects.locations.messageBuses.setIamPolicy",
+	"Eventarc.MessageBusTestIamPermissions": "eventarc.projects.locations.messageBuses.testIamPermissions",
 }
 
 // ActionResolver maps emulator registry actions to Discovery method ids within

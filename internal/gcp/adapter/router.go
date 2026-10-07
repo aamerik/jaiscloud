@@ -301,7 +301,8 @@ func detectV1Service(path string) string {
 		return "workflows"
 	case "executions":
 		return "workflowexecutions"
-	case "triggers", "channels", "providers":
+	case "triggers", "channels", "providers", "messageBuses", "enrollments",
+		"pipelines", "googleApiSources", "channelConnections", "googleChannelConfig":
 		return "eventarc"
 	}
 	return ""

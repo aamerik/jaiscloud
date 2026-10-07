@@ -32,7 +32,7 @@ import (
 // Enrollment, Pipeline, GoogleApiSource) is an explicit Unimplemented stub and
 // is deliberately not probed.
 func eventarcChecks() []Check {
-	return []Check{
+	base := []Check{
 		{Service: "eventarc", RPC: "CreateTrigger", Method: "CreateTrigger", KeyField: "LRO done + trigger echo", Run: checkEACreateTrigger},
 		{Service: "eventarc", RPC: "GetTrigger", Method: "GetTrigger", KeyField: "name round-trip", Run: checkEAGetTrigger},
 		{Service: "eventarc", RPC: "ListTriggers", Method: "ListTriggers", KeyField: "created trigger present", Run: checkEAListTriggers},
@@ -49,6 +49,7 @@ func eventarcChecks() []Check {
 		{Service: "iam", RPC: "SetIamPolicy (Eventarc trigger)", Method: "SetIamPolicy", KeyField: "binding round-trips through the router", Run: checkEATriggerIAMSet},
 		{Service: "iam", RPC: "TestIamPermissions (Eventarc trigger)", Method: "TestIamPermissions", KeyField: "requested permissions echoed back", Run: checkEATriggerIAMTest},
 	}
+	return append(base, eventarcAdvancedChecks()...)
 }
 
 const eventarcLocation = "us-central1"
