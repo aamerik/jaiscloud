@@ -226,6 +226,7 @@ func main() {
 	check := flag.Bool("check", false, "with -query/-service, exit 2 if already done, 3 if in flight")
 	audit := flag.Bool("audit", false, "print the audit classification of not-done items")
 	coverage := flag.Bool("coverage", false, "report per-doc coverage and fail if any doc has status markers but no rows")
+	evidence := flag.Bool("evidence", false, "report per-operation conformance evidence from the fidelity matrix (verified vs unverified)")
 	next := flag.Bool("next", false, "print the next actionable items in priority order")
 	nextN := flag.Int("n", 5, "number of items for -next")
 	by := flag.String("by", "wave", "ordering for -next: wave (execution order) or pri (P-list rank)")
@@ -294,6 +295,9 @@ func main() {
 	if *coverage {
 		os.Exit(runCoverage(*docs, *includeArchive, items))
 	}
+	if *evidence {
+		os.Exit(runEvidence(*matrixPath))
+	}
 	if *next {
 		runNext(items, *nextN, *by)
 		return
@@ -317,7 +321,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	printSummary(items, *out, *jsonOut)
+	printSummary(items, *out, *jsonOut, *matrixPath)
 }
 
 // ─── document parsing ─────────────────────────────────────────────────────────
@@ -1900,6 +1904,11 @@ type matrixCell struct {
 	Transport string `json:"transport"`
 	State     string `json:"state"`
 	Reason    string `json:"reason"`
+	// Discovery is the official Discovery method a REST cell maps to ("" none).
+	Discovery string `json:"discovery"`
+	// Verified is the recorded-evidence signal (validated transcript response
+	// for REST, passing official-client check for gRPC).
+	Verified bool `json:"verified"`
 }
 
 type matrixFile struct {
@@ -2289,7 +2298,7 @@ func writeTable(b *strings.Builder, rows []*Item) {
 	}
 }
 
-func printSummary(items []*Item, out, jsonOut string) {
+func printSummary(items []*Item, out, jsonOut, matrixPath string) {
 	backlog, prs, matrix := 0, 0, 0
 	for _, it := range items {
 		switch it.Kind {
@@ -2302,12 +2311,114 @@ func printSummary(items []*Item, out, jsonOut string) {
 		}
 	}
 	fmt.Printf("gcp-status: %d items (%d backlog + %d PR + %d matrix) — %s\n", len(items), backlog, prs, matrix, countsLine(classCounts(items)))
+	if ev, ok := loadEvidence(matrixPath); ok {
+		fmt.Printf("  conformance evidence: rest %d/%d verified, grpc %d/%d verified (run `-evidence` for the REST gaps)\n",
+			ev.restVerified, ev.restTotal, ev.grpcVerified, ev.grpcTotal)
+	}
 	if out != "" {
 		fmt.Printf("  wrote %s\n", out)
 	}
 	if jsonOut != "" {
 		fmt.Printf("  wrote %s\n", jsonOut)
 	}
+}
+
+// evidenceCounts is the per-transport verified/total rollup of the matrix.
+type evidenceCounts struct {
+	restVerified, restTotal int
+	grpcVerified, grpcTotal int
+}
+
+// loadEvidence reads the fidelity matrix and rolls up its evidence signal. A
+// missing/unreadable matrix is reported as ok=false so the caller can skip.
+func loadEvidence(path string) (evidenceCounts, bool) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return evidenceCounts{}, false
+	}
+	var mf matrixFile
+	if json.Unmarshal(raw, &mf) != nil {
+		return evidenceCounts{}, false
+	}
+	return rollupEvidence(mf), true
+}
+
+// rollupEvidence counts verified/total cells per transport.
+func rollupEvidence(mf matrixFile) evidenceCounts {
+	var ev evidenceCounts
+	for _, c := range mf.Cells {
+		switch c.Transport {
+		case "rest":
+			ev.restTotal++
+			if c.Verified {
+				ev.restVerified++
+			}
+		case "grpc":
+			ev.grpcTotal++
+			if c.Verified {
+				ev.grpcVerified++
+			}
+		}
+	}
+	return ev
+}
+
+// runEvidence prints the per-operation conformance-evidence ledger: the
+// per-transport verified rollup, then every Discovery-mapped REST operation
+// with no validated transcript response, grouped by service — the AUD2 work
+// list. Report-only (exit 0); it never fails the build.
+func runEvidence(path string) int {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gcpstatus: read matrix %s: %v\n", path, err)
+		return 2
+	}
+	var mf matrixFile
+	if err := json.Unmarshal(raw, &mf); err != nil {
+		fmt.Fprintf(os.Stderr, "gcpstatus: parse matrix %s: %v\n", path, err)
+		return 2
+	}
+
+	ev := rollupEvidence(mf)
+	fmt.Printf("conformance evidence (%s)\n", path)
+	fmt.Printf("  rest: %d/%d cells verified (%d without a validated transcript response)\n",
+		ev.restVerified, ev.restTotal, ev.restTotal-ev.restVerified)
+	fmt.Printf("  grpc: %d/%d cells verified (%d without a passing check)\n",
+		ev.grpcVerified, ev.grpcTotal, ev.grpcTotal-ev.grpcVerified)
+
+	// A mapped REST op with no validated response is the actionable gap.
+	byService := map[string][]string{}
+	unmapped := 0
+	for _, c := range mf.Cells {
+		if c.Transport != "rest" || c.Verified {
+			continue
+		}
+		if c.Discovery == "" {
+			unmapped++
+			continue
+		}
+		byService[c.Service] = append(byService[c.Service], c.Operation+" ["+c.Discovery+"]")
+	}
+
+	total := 0
+	for _, ops := range byService {
+		total += len(ops)
+	}
+	fmt.Printf("\nMapped REST operations without a validated response: %d (%d more cells have no Discovery method)\n", total, unmapped)
+	svcs := make([]string, 0, len(byService))
+	for svc := range byService {
+		svcs = append(svcs, svc)
+	}
+	sort.Strings(svcs)
+	for _, svc := range svcs {
+		ops := byService[svc]
+		sort.Strings(ops)
+		fmt.Printf("  %s (%d)\n", svc, len(ops))
+		for _, op := range ops {
+			fmt.Printf("    %s\n", op)
+		}
+	}
+	return 0
 }
 
 func classCounts(items []*Item) map[string]int {
