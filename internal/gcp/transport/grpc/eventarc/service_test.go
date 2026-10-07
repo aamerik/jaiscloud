@@ -254,13 +254,131 @@ func TestTriggerIAM(t *testing.T) {
 	}
 }
 
-// TestUnimplementedRPC verifies the non-trigger/channel/provider surface (e.g.
-// ChannelConnection) falls through to the embedded Unimplemented stub.
-func TestUnimplementedRPC(t *testing.T) {
+// TestAdvancedSurfaceServed verifies the advanced surface (message buses,
+// enrollments, pipelines, Google API sources, channel connections, Google
+// channel config) is served by the Eventarc service rather than falling through
+// to the embedded Unimplemented stub: a missing message bus is NotFound, not
+// Unimplemented.
+func TestAdvancedSurfaceServed(t *testing.T) {
 	ctx := context.Background()
 	s := newGRPCService()
 	_, err := s.GetMessageBus(ctx, &eventarcpb.GetMessageBusRequest{Name: "projects/proj/locations/us-central1/messageBuses/mb"})
-	if status.Code(err) != codes.Unimplemented {
-		t.Fatalf("GetMessageBus code = %v, want Unimplemented", status.Code(err))
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("GetMessageBus code = %v, want NotFound", status.Code(err))
+	}
+	// A malformed advanced name is InvalidArgument, not Unimplemented.
+	if _, err := s.GetMessageBus(ctx, &eventarcpb.GetMessageBusRequest{Name: "projects/proj/locations/us-central1/messageBuses/"}); status.Code(err) == codes.Unimplemented {
+		t.Fatalf("GetMessageBus on an empty id must not be Unimplemented")
+	}
+}
+
+// TestAdvancedMessageBusGRPC drives the advanced gRPC surface for a message bus
+// (create LRO → get → list → update → delete), plus the Google channel config
+// singleton and the listEnrollments custom method.
+func TestAdvancedMessageBusGRPC(t *testing.T) {
+	ctx := context.Background()
+	s := newGRPCService()
+	parent := "projects/proj/locations/us-central1"
+	busName := parent + "/messageBuses/mb1"
+
+	op, err := s.CreateMessageBus(ctx, &eventarcpb.CreateMessageBusRequest{
+		Parent: parent, MessageBusId: "mb1",
+		MessageBus: &eventarcpb.MessageBus{DisplayName: "demo"},
+	})
+	if err != nil {
+		t.Fatalf("CreateMessageBus: %v", err)
+	}
+	if !op.GetDone() {
+		t.Fatalf("create not done")
+	}
+	var created eventarcpb.MessageBus
+	if err := op.GetResponse().UnmarshalTo(&created); err != nil {
+		t.Fatalf("unpack response: %v", err)
+	}
+	if created.GetName() != busName || created.GetUid() == "" {
+		t.Fatalf("created = %+v", &created)
+	}
+
+	got, err := s.GetMessageBus(ctx, &eventarcpb.GetMessageBusRequest{Name: busName})
+	if err != nil || got.GetDisplayName() != "demo" {
+		t.Fatalf("GetMessageBus = %+v, %v", got, err)
+	}
+
+	list, err := s.ListMessageBuses(ctx, &eventarcpb.ListMessageBusesRequest{Parent: parent})
+	if err != nil || len(list.GetMessageBuses()) != 1 {
+		t.Fatalf("ListMessageBuses = %+v, %v", list, err)
+	}
+
+	upd, err := s.UpdateMessageBus(ctx, &eventarcpb.UpdateMessageBusRequest{
+		MessageBus: &eventarcpb.MessageBus{Name: busName, Labels: map[string]string{"x": "y"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateMessageBus: %v", err)
+	}
+	var updated eventarcpb.MessageBus
+	if err := upd.GetResponse().UnmarshalTo(&updated); err != nil {
+		t.Fatalf("unpack update: %v", err)
+	}
+	if updated.GetLabels()["x"] != "y" {
+		t.Fatalf("updated labels = %v", updated.GetLabels())
+	}
+
+	// An enrollment attached to the bus is listed by listEnrollments.
+	if _, err := s.CreateEnrollment(ctx, &eventarcpb.CreateEnrollmentRequest{
+		Parent: parent, EnrollmentId: "e1",
+		Enrollment: &eventarcpb.Enrollment{MessageBus: busName},
+	}); err != nil {
+		t.Fatalf("CreateEnrollment: %v", err)
+	}
+	enr, err := s.ListMessageBusEnrollments(ctx, &eventarcpb.ListMessageBusEnrollmentsRequest{Parent: busName})
+	if err != nil || len(enr.GetEnrollments()) != 1 {
+		t.Fatalf("ListMessageBusEnrollments = %+v, %v", enr, err)
+	}
+
+	// Google channel config singleton: default get then update (inline response).
+	cfgName := parent + "/googleChannelConfig"
+	def, err := s.GetGoogleChannelConfig(ctx, &eventarcpb.GetGoogleChannelConfigRequest{Name: cfgName})
+	if err != nil || def.GetName() != cfgName {
+		t.Fatalf("GetGoogleChannelConfig = %+v, %v", def, err)
+	}
+	if _, err := s.UpdateGoogleChannelConfig(ctx, &eventarcpb.UpdateGoogleChannelConfigRequest{
+		GoogleChannelConfig: &eventarcpb.GoogleChannelConfig{Name: cfgName, CryptoKeyName: "projects/p/locations/us-central1/keyRings/r/cryptoKeys/k"},
+		UpdateMask:          &fieldmaskpb.FieldMask{Paths: []string{"crypto_key_name"}},
+	}); err != nil {
+		t.Fatalf("UpdateGoogleChannelConfig: %v", err)
+	}
+
+	del, err := s.DeleteMessageBus(ctx, &eventarcpb.DeleteMessageBusRequest{Name: busName})
+	if err != nil || !del.GetDone() {
+		t.Fatalf("DeleteMessageBus = %+v, %v", del, err)
+	}
+	if _, err := s.GetMessageBus(ctx, &eventarcpb.GetMessageBusRequest{Name: busName}); status.Code(err) != codes.NotFound {
+		t.Fatalf("Get after delete = %v, want NotFound", err)
+	}
+}
+
+// TestAdvancedIAMGRPC verifies the IAM router dispatches the advanced-surface
+// families (a message bus here) and reports NotFound for a missing one.
+func TestAdvancedIAMGRPC(t *testing.T) {
+	ctx := context.Background()
+	s := newGRPCService()
+	name := "projects/proj/locations/us-central1/messageBuses/mb1"
+	if _, err := s.CreateMessageBus(ctx, &eventarcpb.CreateMessageBusRequest{
+		Parent: "projects/proj/locations/us-central1", MessageBusId: "mb1", MessageBus: &eventarcpb.MessageBus{},
+	}); err != nil {
+		t.Fatalf("CreateMessageBus: %v", err)
+	}
+	if !s.Owns(name) {
+		t.Fatalf("Owns(%q) = false", name)
+	}
+	pol, err := s.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{Resource: name})
+	if err != nil || len(pol.GetBindings()) != 0 {
+		t.Fatalf("GetIamPolicy = %+v, %v", pol, err)
+	}
+	if _, err := s.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{
+		Resource: "projects/proj/locations/us-central1/pipelines/missing",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("missing pipeline IAM = %v, want NotFound", err)
 	}
 }

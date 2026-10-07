@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 1022,
+    "total": 1064,
     "by_state": {
-      "ga": 848,
+      "ga": 917,
       "limited": 101,
       "preview": 14,
-      "unsupported": 59
+      "unsupported": 32
     },
     "by_transport": {
       "grpc": {
-        "ga": 410,
+        "ga": 437,
         "limited": 1,
-        "unsupported": 47
+        "unsupported": 20
       },
       "rest": {
-        "ga": 438,
+        "ga": 480,
         "limited": 100,
         "preview": 14,
         "unsupported": 12
@@ -50,8 +50,7 @@
         "ga": 16
       },
       "eventarc": {
-        "ga": 30,
-        "unsupported": 27
+        "ga": 99
       },
       "firestore": {
         "ga": 33
@@ -2605,60 +2604,55 @@
       "service": "eventarc",
       "operation": "CreateChannelConnection",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "SaaS channel connections require a connected provider; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "CreateEnrollment",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "CreateGoogleApiSource",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "CreateMessageBus",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "CreatePipeline",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -2687,60 +2681,55 @@
       "service": "eventarc",
       "operation": "DeleteChannelConnection",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "SaaS channel connections require a connected provider; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "DeleteEnrollment",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "DeleteGoogleApiSource",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "DeleteMessageBus",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "DeletePipeline",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -2752,6 +2741,37 @@
         "mutating",
         "postgres=yes",
         "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.ChannelConnectionGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.channelConnections.getIamPolicy",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.ChannelConnectionSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.channelConnections.setIamPolicy",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.ChannelConnectionTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.channelConnections.testIamPermissions",
+        "postgres=yes"
       ]
     },
     {
@@ -2798,6 +2818,61 @@
     },
     {
       "service": "eventarc",
+      "operation": "Eventarc.CreateChannelConnection",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.channelConnections.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.CreateEnrollment",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.enrollments.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.CreateGoogleApiSource",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.googleApiSources.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.CreateMessageBus",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.messageBuses.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.CreatePipeline",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.pipelines.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
       "operation": "Eventarc.CreateTrigger",
       "transport": "rest",
       "state": "ga",
@@ -2820,6 +2895,61 @@
     },
     {
       "service": "eventarc",
+      "operation": "Eventarc.DeleteChannelConnection",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.channelConnections.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.DeleteEnrollment",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.enrollments.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.DeleteGoogleApiSource",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.googleApiSources.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.DeleteMessageBus",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.messageBuses.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.DeletePipeline",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.pipelines.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
       "operation": "Eventarc.DeleteTrigger",
       "transport": "rest",
       "state": "ga",
@@ -2831,11 +2961,102 @@
     },
     {
       "service": "eventarc",
+      "operation": "Eventarc.EnrollmentGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.enrollments.getIamPolicy",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.EnrollmentSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.enrollments.setIamPolicy",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.EnrollmentTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.enrollments.testIamPermissions",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
       "operation": "Eventarc.GetChannel",
       "transport": "rest",
       "state": "ga",
       "evidence": [
         "discovery=eventarc.projects.locations.channels.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.GetChannelConnection",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.channelConnections.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.GetEnrollment",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.enrollments.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.GetGoogleApiSource",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.googleApiSources.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.GetGoogleChannelConfig",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.getGoogleChannelConfig",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.GetMessageBus",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.messageBuses.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.GetPipeline",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.pipelines.get",
         "postgres=yes"
       ]
     },
@@ -2861,11 +3082,102 @@
     },
     {
       "service": "eventarc",
+      "operation": "Eventarc.GoogleApiSourceGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.googleApiSources.getIamPolicy",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.GoogleApiSourceSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.googleApiSources.setIamPolicy",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.GoogleApiSourceTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.googleApiSources.testIamPermissions",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.ListChannelConnections",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.channelConnections.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
       "operation": "Eventarc.ListChannels",
       "transport": "rest",
       "state": "ga",
       "evidence": [
         "discovery=eventarc.projects.locations.channels.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.ListEnrollments",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.enrollments.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.ListGoogleApiSources",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.googleApiSources.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.ListMessageBusEnrollments",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.messageBuses.listEnrollments",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.ListMessageBuses",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.messageBuses.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.ListPipelines",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.pipelines.list",
         "postgres=yes"
       ]
     },
@@ -2886,6 +3198,68 @@
       "state": "ga",
       "evidence": [
         "discovery=eventarc.projects.locations.triggers.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.MessageBusGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.messageBuses.getIamPolicy",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.MessageBusSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.messageBuses.setIamPolicy",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.MessageBusTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.messageBuses.testIamPermissions",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.PipelineGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.pipelines.getIamPolicy",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.PipelineSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.pipelines.setIamPolicy",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.PipelineTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.pipelines.testIamPermissions",
         "postgres=yes"
       ]
     },
@@ -2933,6 +3307,61 @@
     },
     {
       "service": "eventarc",
+      "operation": "Eventarc.UpdateEnrollment",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.enrollments.patch",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.UpdateGoogleApiSource",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.googleApiSources.patch",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.UpdateGoogleChannelConfig",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.updateGoogleChannelConfig",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.UpdateMessageBus",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.messageBuses.patch",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.UpdatePipeline",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=eventarc.projects.locations.pipelines.patch",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "eventarc",
       "operation": "Eventarc.UpdateTrigger",
       "transport": "rest",
       "state": "ga",
@@ -2956,66 +3385,60 @@
       "service": "eventarc",
       "operation": "GetChannelConnection",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "SaaS channel connections require a connected provider; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "GetEnrollment",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "GetGoogleApiSource",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "GetGoogleChannelConfig",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "Google-channel CMEK config is not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "GetMessageBus",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "GetPipeline",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -3042,11 +3465,10 @@
       "service": "eventarc",
       "operation": "ListChannelConnections",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "SaaS channel connections require a connected provider; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -3063,55 +3485,50 @@
       "service": "eventarc",
       "operation": "ListEnrollments",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "ListGoogleApiSources",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "ListMessageBusEnrollments",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "ListMessageBuses",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "ListPipelines",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -3149,60 +3566,55 @@
       "service": "eventarc",
       "operation": "UpdateEnrollment",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "UpdateGoogleApiSource",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "UpdateGoogleChannelConfig",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "Google-channel CMEK config is not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "UpdateMessageBus",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "message buses are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "eventarc",
       "operation": "UpdatePipeline",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -4309,7 +4721,7 @@
       "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (conformance=2/2 pass)"
+        "transport=grpc (conformance=3/3 pass)"
       ]
     },
     {
@@ -4531,7 +4943,7 @@
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (conformance=2/2 pass)"
+        "transport=grpc (conformance=3/3 pass)"
       ]
     },
     {
@@ -4541,7 +4953,7 @@
       "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (conformance=2/2 pass)"
+        "transport=grpc (conformance=3/3 pass)"
       ]
     },
     {

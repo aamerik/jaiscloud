@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1022**
+Cells: **1064**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 848 |
+| ga | 917 |
 | limited | 101 |
 | preview | 14 |
-| unsupported | 59 |
+| unsupported | 32 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 438 | 100 | 14 | 12 |
-| grpc | 410 | 1 | 0 | 47 |
+| rest | 480 | 100 | 14 | 12 |
+| grpc | 437 | 1 | 0 | 20 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -301,66 +301,108 @@ _16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
 
 ## eventarc
 
-_57 cell(s): ga=30 limited=0 preview=0 unsupported=27_
+_99 cell(s): ga=99 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | CreateChannel | grpc | ga | — |
-| CreateChannelConnection | grpc | unsupported | SaaS channel connections require a connected provider; explicit Unimplemented stub |
-| CreateEnrollment | grpc | unsupported | enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| CreateGoogleApiSource | grpc | unsupported | Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| CreateMessageBus | grpc | unsupported | message buses are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| CreatePipeline | grpc | unsupported | pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub |
+| CreateChannelConnection | grpc | ga | — |
+| CreateEnrollment | grpc | ga | — |
+| CreateGoogleApiSource | grpc | ga | — |
+| CreateMessageBus | grpc | ga | — |
+| CreatePipeline | grpc | ga | — |
 | CreateTrigger | grpc | ga | — |
 | DeleteChannel | grpc | ga | — |
-| DeleteChannelConnection | grpc | unsupported | SaaS channel connections require a connected provider; explicit Unimplemented stub |
-| DeleteEnrollment | grpc | unsupported | enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| DeleteGoogleApiSource | grpc | unsupported | Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| DeleteMessageBus | grpc | unsupported | message buses are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| DeletePipeline | grpc | unsupported | pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub |
+| DeleteChannelConnection | grpc | ga | — |
+| DeleteEnrollment | grpc | ga | — |
+| DeleteGoogleApiSource | grpc | ga | — |
+| DeleteMessageBus | grpc | ga | — |
+| DeletePipeline | grpc | ga | — |
 | DeleteTrigger | grpc | ga | — |
+| Eventarc.ChannelConnectionGetIamPolicy | rest | ga | — |
+| Eventarc.ChannelConnectionSetIamPolicy | rest | ga | — |
+| Eventarc.ChannelConnectionTestIamPermissions | rest | ga | — |
 | Eventarc.ChannelGetIamPolicy | rest | ga | — |
 | Eventarc.ChannelSetIamPolicy | rest | ga | — |
 | Eventarc.ChannelTestIamPermissions | rest | ga | — |
 | Eventarc.CreateChannel | rest | ga | — |
+| Eventarc.CreateChannelConnection | rest | ga | — |
+| Eventarc.CreateEnrollment | rest | ga | — |
+| Eventarc.CreateGoogleApiSource | rest | ga | — |
+| Eventarc.CreateMessageBus | rest | ga | — |
+| Eventarc.CreatePipeline | rest | ga | — |
 | Eventarc.CreateTrigger | rest | ga | — |
 | Eventarc.DeleteChannel | rest | ga | — |
+| Eventarc.DeleteChannelConnection | rest | ga | — |
+| Eventarc.DeleteEnrollment | rest | ga | — |
+| Eventarc.DeleteGoogleApiSource | rest | ga | — |
+| Eventarc.DeleteMessageBus | rest | ga | — |
+| Eventarc.DeletePipeline | rest | ga | — |
 | Eventarc.DeleteTrigger | rest | ga | — |
+| Eventarc.EnrollmentGetIamPolicy | rest | ga | — |
+| Eventarc.EnrollmentSetIamPolicy | rest | ga | — |
+| Eventarc.EnrollmentTestIamPermissions | rest | ga | — |
 | Eventarc.GetChannel | rest | ga | — |
+| Eventarc.GetChannelConnection | rest | ga | — |
+| Eventarc.GetEnrollment | rest | ga | — |
+| Eventarc.GetGoogleApiSource | rest | ga | — |
+| Eventarc.GetGoogleChannelConfig | rest | ga | — |
+| Eventarc.GetMessageBus | rest | ga | — |
+| Eventarc.GetPipeline | rest | ga | — |
 | Eventarc.GetProvider | rest | ga | — |
 | Eventarc.GetTrigger | rest | ga | — |
+| Eventarc.GoogleApiSourceGetIamPolicy | rest | ga | — |
+| Eventarc.GoogleApiSourceSetIamPolicy | rest | ga | — |
+| Eventarc.GoogleApiSourceTestIamPermissions | rest | ga | — |
+| Eventarc.ListChannelConnections | rest | ga | — |
 | Eventarc.ListChannels | rest | ga | — |
+| Eventarc.ListEnrollments | rest | ga | — |
+| Eventarc.ListGoogleApiSources | rest | ga | — |
+| Eventarc.ListMessageBusEnrollments | rest | ga | — |
+| Eventarc.ListMessageBuses | rest | ga | — |
+| Eventarc.ListPipelines | rest | ga | — |
 | Eventarc.ListProviders | rest | ga | — |
 | Eventarc.ListTriggers | rest | ga | — |
+| Eventarc.MessageBusGetIamPolicy | rest | ga | — |
+| Eventarc.MessageBusSetIamPolicy | rest | ga | — |
+| Eventarc.MessageBusTestIamPermissions | rest | ga | — |
+| Eventarc.PipelineGetIamPolicy | rest | ga | — |
+| Eventarc.PipelineSetIamPolicy | rest | ga | — |
+| Eventarc.PipelineTestIamPermissions | rest | ga | — |
 | Eventarc.TriggerGetIamPolicy | rest | ga | — |
 | Eventarc.TriggerSetIamPolicy | rest | ga | — |
 | Eventarc.TriggerTestIamPermissions | rest | ga | — |
 | Eventarc.UpdateChannel | rest | ga | — |
+| Eventarc.UpdateEnrollment | rest | ga | — |
+| Eventarc.UpdateGoogleApiSource | rest | ga | — |
+| Eventarc.UpdateGoogleChannelConfig | rest | ga | — |
+| Eventarc.UpdateMessageBus | rest | ga | — |
+| Eventarc.UpdatePipeline | rest | ga | — |
 | Eventarc.UpdateTrigger | rest | ga | — |
 | GetChannel | grpc | ga | — |
-| GetChannelConnection | grpc | unsupported | SaaS channel connections require a connected provider; explicit Unimplemented stub |
-| GetEnrollment | grpc | unsupported | enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| GetGoogleApiSource | grpc | unsupported | Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| GetGoogleChannelConfig | grpc | unsupported | Google-channel CMEK config is not modelled; explicit Unimplemented stub |
-| GetMessageBus | grpc | unsupported | message buses are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| GetPipeline | grpc | unsupported | pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub |
+| GetChannelConnection | grpc | ga | — |
+| GetEnrollment | grpc | ga | — |
+| GetGoogleApiSource | grpc | ga | — |
+| GetGoogleChannelConfig | grpc | ga | — |
+| GetMessageBus | grpc | ga | — |
+| GetPipeline | grpc | ga | — |
 | GetProvider | grpc | ga | — |
 | GetTrigger | grpc | ga | — |
-| ListChannelConnections | grpc | unsupported | SaaS channel connections require a connected provider; explicit Unimplemented stub |
+| ListChannelConnections | grpc | ga | — |
 | ListChannels | grpc | ga | — |
-| ListEnrollments | grpc | unsupported | enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| ListGoogleApiSources | grpc | unsupported | Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| ListMessageBusEnrollments | grpc | unsupported | message buses are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| ListMessageBuses | grpc | unsupported | message buses are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| ListPipelines | grpc | unsupported | pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub |
+| ListEnrollments | grpc | ga | — |
+| ListGoogleApiSources | grpc | ga | — |
+| ListMessageBusEnrollments | grpc | ga | — |
+| ListMessageBuses | grpc | ga | — |
+| ListPipelines | grpc | ga | — |
 | ListProviders | grpc | ga | — |
 | ListTriggers | grpc | ga | — |
 | UpdateChannel | grpc | ga | — |
-| UpdateEnrollment | grpc | unsupported | enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| UpdateGoogleApiSource | grpc | unsupported | Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| UpdateGoogleChannelConfig | grpc | unsupported | Google-channel CMEK config is not modelled; explicit Unimplemented stub |
-| UpdateMessageBus | grpc | unsupported | message buses are not modelled (no event-delivery engine); explicit Unimplemented stub |
-| UpdatePipeline | grpc | unsupported | pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub |
+| UpdateEnrollment | grpc | ga | — |
+| UpdateGoogleApiSource | grpc | ga | — |
+| UpdateGoogleChannelConfig | grpc | ga | — |
+| UpdateMessageBus | grpc | ga | — |
+| UpdatePipeline | grpc | ga | — |
 | UpdateTrigger | grpc | ga | — |
 
 ## firestore

@@ -204,6 +204,32 @@ var formatters = map[string]func(project, name string) string{
 		loc, op := wfLoc(n)
 		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
 	},
+	// Eventarc advanced surface — names embed the location; callers pass
+	// "location/id" for a collection member, or just "location" for the
+	// googleChannelConfig singleton.
+	"eventarc-message-bus": func(p, n string) string {
+		loc, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/messageBuses/%s", p, loc, id)
+	},
+	"eventarc-enrollment": func(p, n string) string {
+		loc, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/enrollments/%s", p, loc, id)
+	},
+	"eventarc-pipeline": func(p, n string) string {
+		loc, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/pipelines/%s", p, loc, id)
+	},
+	"eventarc-google-api-source": func(p, n string) string {
+		loc, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/googleApiSources/%s", p, loc, id)
+	},
+	"eventarc-channel-connection": func(p, n string) string {
+		loc, id := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/channelConnections/%s", p, loc, id)
+	},
+	"eventarc-google-channel-config": func(p, n string) string {
+		return fmt.Sprintf("projects/%s/locations/%s/googleChannelConfig", p, n)
+	},
 	// Memorystore for Redis — names embed the location; callers pass
 	// "location/instance" and "location/operation".
 	"memorystore-instance": func(p, n string) string {

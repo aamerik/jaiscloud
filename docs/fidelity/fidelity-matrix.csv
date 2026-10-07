@@ -224,61 +224,103 @@ datastore,Rollback,grpc,ga,
 datastore,RunAggregationQuery,grpc,ga,
 datastore,RunQuery,grpc,ga,
 eventarc,CreateChannel,grpc,ga,
-eventarc,CreateChannelConnection,grpc,unsupported,SaaS channel connections require a connected provider; explicit Unimplemented stub
-eventarc,CreateEnrollment,grpc,unsupported,enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,CreateGoogleApiSource,grpc,unsupported,Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,CreateMessageBus,grpc,unsupported,message buses are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,CreatePipeline,grpc,unsupported,pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,CreateChannelConnection,grpc,ga,
+eventarc,CreateEnrollment,grpc,ga,
+eventarc,CreateGoogleApiSource,grpc,ga,
+eventarc,CreateMessageBus,grpc,ga,
+eventarc,CreatePipeline,grpc,ga,
 eventarc,CreateTrigger,grpc,ga,
 eventarc,DeleteChannel,grpc,ga,
-eventarc,DeleteChannelConnection,grpc,unsupported,SaaS channel connections require a connected provider; explicit Unimplemented stub
-eventarc,DeleteEnrollment,grpc,unsupported,enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,DeleteGoogleApiSource,grpc,unsupported,Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,DeleteMessageBus,grpc,unsupported,message buses are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,DeletePipeline,grpc,unsupported,pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,DeleteChannelConnection,grpc,ga,
+eventarc,DeleteEnrollment,grpc,ga,
+eventarc,DeleteGoogleApiSource,grpc,ga,
+eventarc,DeleteMessageBus,grpc,ga,
+eventarc,DeletePipeline,grpc,ga,
 eventarc,DeleteTrigger,grpc,ga,
+eventarc,Eventarc.ChannelConnectionGetIamPolicy,rest,ga,
+eventarc,Eventarc.ChannelConnectionSetIamPolicy,rest,ga,
+eventarc,Eventarc.ChannelConnectionTestIamPermissions,rest,ga,
 eventarc,Eventarc.ChannelGetIamPolicy,rest,ga,
 eventarc,Eventarc.ChannelSetIamPolicy,rest,ga,
 eventarc,Eventarc.ChannelTestIamPermissions,rest,ga,
 eventarc,Eventarc.CreateChannel,rest,ga,
+eventarc,Eventarc.CreateChannelConnection,rest,ga,
+eventarc,Eventarc.CreateEnrollment,rest,ga,
+eventarc,Eventarc.CreateGoogleApiSource,rest,ga,
+eventarc,Eventarc.CreateMessageBus,rest,ga,
+eventarc,Eventarc.CreatePipeline,rest,ga,
 eventarc,Eventarc.CreateTrigger,rest,ga,
 eventarc,Eventarc.DeleteChannel,rest,ga,
+eventarc,Eventarc.DeleteChannelConnection,rest,ga,
+eventarc,Eventarc.DeleteEnrollment,rest,ga,
+eventarc,Eventarc.DeleteGoogleApiSource,rest,ga,
+eventarc,Eventarc.DeleteMessageBus,rest,ga,
+eventarc,Eventarc.DeletePipeline,rest,ga,
 eventarc,Eventarc.DeleteTrigger,rest,ga,
+eventarc,Eventarc.EnrollmentGetIamPolicy,rest,ga,
+eventarc,Eventarc.EnrollmentSetIamPolicy,rest,ga,
+eventarc,Eventarc.EnrollmentTestIamPermissions,rest,ga,
 eventarc,Eventarc.GetChannel,rest,ga,
+eventarc,Eventarc.GetChannelConnection,rest,ga,
+eventarc,Eventarc.GetEnrollment,rest,ga,
+eventarc,Eventarc.GetGoogleApiSource,rest,ga,
+eventarc,Eventarc.GetGoogleChannelConfig,rest,ga,
+eventarc,Eventarc.GetMessageBus,rest,ga,
+eventarc,Eventarc.GetPipeline,rest,ga,
 eventarc,Eventarc.GetProvider,rest,ga,
 eventarc,Eventarc.GetTrigger,rest,ga,
+eventarc,Eventarc.GoogleApiSourceGetIamPolicy,rest,ga,
+eventarc,Eventarc.GoogleApiSourceSetIamPolicy,rest,ga,
+eventarc,Eventarc.GoogleApiSourceTestIamPermissions,rest,ga,
+eventarc,Eventarc.ListChannelConnections,rest,ga,
 eventarc,Eventarc.ListChannels,rest,ga,
+eventarc,Eventarc.ListEnrollments,rest,ga,
+eventarc,Eventarc.ListGoogleApiSources,rest,ga,
+eventarc,Eventarc.ListMessageBusEnrollments,rest,ga,
+eventarc,Eventarc.ListMessageBuses,rest,ga,
+eventarc,Eventarc.ListPipelines,rest,ga,
 eventarc,Eventarc.ListProviders,rest,ga,
 eventarc,Eventarc.ListTriggers,rest,ga,
+eventarc,Eventarc.MessageBusGetIamPolicy,rest,ga,
+eventarc,Eventarc.MessageBusSetIamPolicy,rest,ga,
+eventarc,Eventarc.MessageBusTestIamPermissions,rest,ga,
+eventarc,Eventarc.PipelineGetIamPolicy,rest,ga,
+eventarc,Eventarc.PipelineSetIamPolicy,rest,ga,
+eventarc,Eventarc.PipelineTestIamPermissions,rest,ga,
 eventarc,Eventarc.TriggerGetIamPolicy,rest,ga,
 eventarc,Eventarc.TriggerSetIamPolicy,rest,ga,
 eventarc,Eventarc.TriggerTestIamPermissions,rest,ga,
 eventarc,Eventarc.UpdateChannel,rest,ga,
+eventarc,Eventarc.UpdateEnrollment,rest,ga,
+eventarc,Eventarc.UpdateGoogleApiSource,rest,ga,
+eventarc,Eventarc.UpdateGoogleChannelConfig,rest,ga,
+eventarc,Eventarc.UpdateMessageBus,rest,ga,
+eventarc,Eventarc.UpdatePipeline,rest,ga,
 eventarc,Eventarc.UpdateTrigger,rest,ga,
 eventarc,GetChannel,grpc,ga,
-eventarc,GetChannelConnection,grpc,unsupported,SaaS channel connections require a connected provider; explicit Unimplemented stub
-eventarc,GetEnrollment,grpc,unsupported,enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,GetGoogleApiSource,grpc,unsupported,Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,GetGoogleChannelConfig,grpc,unsupported,Google-channel CMEK config is not modelled; explicit Unimplemented stub
-eventarc,GetMessageBus,grpc,unsupported,message buses are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,GetPipeline,grpc,unsupported,pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,GetChannelConnection,grpc,ga,
+eventarc,GetEnrollment,grpc,ga,
+eventarc,GetGoogleApiSource,grpc,ga,
+eventarc,GetGoogleChannelConfig,grpc,ga,
+eventarc,GetMessageBus,grpc,ga,
+eventarc,GetPipeline,grpc,ga,
 eventarc,GetProvider,grpc,ga,
 eventarc,GetTrigger,grpc,ga,
-eventarc,ListChannelConnections,grpc,unsupported,SaaS channel connections require a connected provider; explicit Unimplemented stub
+eventarc,ListChannelConnections,grpc,ga,
 eventarc,ListChannels,grpc,ga,
-eventarc,ListEnrollments,grpc,unsupported,enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,ListGoogleApiSources,grpc,unsupported,Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,ListMessageBusEnrollments,grpc,unsupported,message buses are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,ListMessageBuses,grpc,unsupported,message buses are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,ListPipelines,grpc,unsupported,pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,ListEnrollments,grpc,ga,
+eventarc,ListGoogleApiSources,grpc,ga,
+eventarc,ListMessageBusEnrollments,grpc,ga,
+eventarc,ListMessageBuses,grpc,ga,
+eventarc,ListPipelines,grpc,ga,
 eventarc,ListProviders,grpc,ga,
 eventarc,ListTriggers,grpc,ga,
 eventarc,UpdateChannel,grpc,ga,
-eventarc,UpdateEnrollment,grpc,unsupported,enrollments are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,UpdateGoogleApiSource,grpc,unsupported,Google API sources are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,UpdateGoogleChannelConfig,grpc,unsupported,Google-channel CMEK config is not modelled; explicit Unimplemented stub
-eventarc,UpdateMessageBus,grpc,unsupported,message buses are not modelled (no event-delivery engine); explicit Unimplemented stub
-eventarc,UpdatePipeline,grpc,unsupported,pipelines are not modelled (no event-delivery engine); explicit Unimplemented stub
+eventarc,UpdateEnrollment,grpc,ga,
+eventarc,UpdateGoogleApiSource,grpc,ga,
+eventarc,UpdateGoogleChannelConfig,grpc,ga,
+eventarc,UpdateMessageBus,grpc,ga,
+eventarc,UpdatePipeline,grpc,ga,
 eventarc,UpdateTrigger,grpc,ga,
 firestore,BatchGetDocuments,grpc,ga,
 firestore,BatchWrite,grpc,ga,

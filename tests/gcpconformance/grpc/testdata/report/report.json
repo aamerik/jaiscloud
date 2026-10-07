@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 445,
-  "passed": 445,
+  "total": 475,
+  "passed": 475,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 445,
-    "passed": 445,
+    "checks": 475,
+    "passed": 475,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -37,8 +37,8 @@
     },
     {
       "service": "eventarc",
-      "total": 12,
-      "passed": 12,
+      "total": 39,
+      "passed": 39,
       "failed": 0,
       "unimplemented": 0
     },
@@ -65,8 +65,8 @@
     },
     {
       "service": "iam",
-      "total": 6,
-      "passed": 6,
+      "total": 9,
+      "passed": 9,
       "failed": 0,
       "unimplemented": 0
     },
@@ -2616,6 +2616,216 @@
     {
       "service": "iam",
       "rpc": "TestIamPermissions (Eventarc trigger)",
+      "method": "TestIamPermissions",
+      "status": "pass",
+      "key_field": "requested permissions echoed back"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "CreateMessageBus",
+      "method": "CreateMessageBus",
+      "status": "pass",
+      "key_field": "LRO done + message bus echo"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetMessageBus",
+      "method": "GetMessageBus",
+      "status": "pass",
+      "key_field": "name round-trip"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListMessageBuses",
+      "method": "ListMessageBuses",
+      "status": "pass",
+      "key_field": "created bus present"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "UpdateMessageBus",
+      "method": "UpdateMessageBus",
+      "status": "pass",
+      "key_field": "labels updated via LRO"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "DeleteMessageBus",
+      "method": "DeleteMessageBus",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListMessageBusEnrollments",
+      "method": "ListMessageBusEnrollments",
+      "status": "pass",
+      "key_field": "enrollment name listed"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "CreateEnrollment",
+      "method": "CreateEnrollment",
+      "status": "pass",
+      "key_field": "LRO done + enrollment echo"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetEnrollment",
+      "method": "GetEnrollment",
+      "status": "pass",
+      "key_field": "name round-trip"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListEnrollments",
+      "method": "ListEnrollments",
+      "status": "pass",
+      "key_field": "created enrollment present"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "UpdateEnrollment",
+      "method": "UpdateEnrollment",
+      "status": "pass",
+      "key_field": "labels updated via LRO"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "DeleteEnrollment",
+      "method": "DeleteEnrollment",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "CreatePipeline",
+      "method": "CreatePipeline",
+      "status": "pass",
+      "key_field": "LRO done + pipeline echo"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetPipeline",
+      "method": "GetPipeline",
+      "status": "pass",
+      "key_field": "name round-trip"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListPipelines",
+      "method": "ListPipelines",
+      "status": "pass",
+      "key_field": "created pipeline present"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "UpdatePipeline",
+      "method": "UpdatePipeline",
+      "status": "pass",
+      "key_field": "labels updated via LRO"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "DeletePipeline",
+      "method": "DeletePipeline",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "CreateGoogleApiSource",
+      "method": "CreateGoogleApiSource",
+      "status": "pass",
+      "key_field": "LRO done + source echo"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetGoogleApiSource",
+      "method": "GetGoogleApiSource",
+      "status": "pass",
+      "key_field": "name round-trip"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListGoogleApiSources",
+      "method": "ListGoogleApiSources",
+      "status": "pass",
+      "key_field": "created source present"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "UpdateGoogleApiSource",
+      "method": "UpdateGoogleApiSource",
+      "status": "pass",
+      "key_field": "labels updated via LRO"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "DeleteGoogleApiSource",
+      "method": "DeleteGoogleApiSource",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "CreateChannelConnection",
+      "method": "CreateChannelConnection",
+      "status": "pass",
+      "key_field": "LRO done + connection echo"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetChannelConnection",
+      "method": "GetChannelConnection",
+      "status": "pass",
+      "key_field": "name round-trip"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "ListChannelConnections",
+      "method": "ListChannelConnections",
+      "status": "pass",
+      "key_field": "created connection present"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "DeleteChannelConnection",
+      "method": "DeleteChannelConnection",
+      "status": "pass",
+      "key_field": "LRO done + NotFound after"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "GetGoogleChannelConfig",
+      "method": "GetGoogleChannelConfig",
+      "status": "pass",
+      "key_field": "singleton name"
+    },
+    {
+      "service": "eventarc",
+      "rpc": "UpdateGoogleChannelConfig",
+      "method": "UpdateGoogleChannelConfig",
+      "status": "pass",
+      "key_field": "cryptoKeyName round-trip"
+    },
+    {
+      "service": "iam",
+      "rpc": "GetIamPolicy (Eventarc message bus)",
+      "method": "GetIamPolicy",
+      "status": "pass",
+      "key_field": "empty policy on a fresh bus"
+    },
+    {
+      "service": "iam",
+      "rpc": "SetIamPolicy (Eventarc message bus)",
+      "method": "SetIamPolicy",
+      "status": "pass",
+      "key_field": "binding round-trips through the router"
+    },
+    {
+      "service": "iam",
+      "rpc": "TestIamPermissions (Eventarc message bus)",
       "method": "TestIamPermissions",
       "status": "pass",
       "key_field": "requested permissions echoed back"

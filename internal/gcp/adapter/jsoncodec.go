@@ -109,9 +109,11 @@ func (c *JSONCodec) Decode(r *http.Request, body []byte) (*model.NormalizedReque
 		}
 	}
 
-	// Eventarc (triggers/channels/providers): surface the location segment for
-	// store scoping and resource-name reconstruction.
-	if resourceType == "triggers" || resourceType == "channels" || resourceType == "providers" {
+	// Eventarc (triggers/channels/providers and the advanced surface): surface
+	// the location segment for store scoping and resource-name reconstruction.
+	switch resourceType {
+	case "triggers", "channels", "providers", "messageBuses", "enrollments",
+		"pipelines", "googleApiSources", "channelConnections", "googleChannelConfig":
 		for i, s := range rest {
 			if s == "locations" && i+1 < len(rest) {
 				nr.Params["location"] = rest[i+1]
@@ -264,6 +266,27 @@ func detectResourceType(segs []string) string {
 			// (…/locations/{l}/workloadIdentityPools[/{pool}]). Only
 			// custom-method discovery (getAllowedLocations) is modelled.
 			return "workloadIdentityPools"
+		case "messageBuses":
+			// Eventarc message buses (…/locations/{l}/messageBuses[/{b}]).
+			return "messageBuses"
+		case "enrollments":
+			// Eventarc enrollments (…/locations/{l}/enrollments[/{e}]).
+			return "enrollments"
+		case "pipelines":
+			// Eventarc pipelines (…/locations/{l}/pipelines[/{p}]).
+			return "pipelines"
+		case "googleApiSources":
+			// Eventarc Google API sources
+			// (…/locations/{l}/googleApiSources[/{s}]).
+			return "googleApiSources"
+		case "channelConnections":
+			// Eventarc channel connections
+			// (…/locations/{l}/channelConnections[/{c}]).
+			return "channelConnections"
+		case "googleChannelConfig":
+			// Eventarc Google channel config — a per-location singleton
+			// (…/locations/{l}/googleChannelConfig).
+			return "googleChannelConfig"
 		}
 	}
 	if hasExecutions {
@@ -560,6 +583,53 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			case "testIamPermissions":
 				return "ChannelTestIamPermissions"
 			}
+		case "messageBuses":
+			switch custom {
+			case "getIamPolicy":
+				return "MessageBusGetIamPolicy"
+			case "setIamPolicy":
+				return "MessageBusSetIamPolicy"
+			case "testIamPermissions":
+				return "MessageBusTestIamPermissions"
+			case "listEnrollments":
+				return "ListMessageBusEnrollments"
+			}
+		case "enrollments":
+			switch custom {
+			case "getIamPolicy":
+				return "EnrollmentGetIamPolicy"
+			case "setIamPolicy":
+				return "EnrollmentSetIamPolicy"
+			case "testIamPermissions":
+				return "EnrollmentTestIamPermissions"
+			}
+		case "pipelines":
+			switch custom {
+			case "getIamPolicy":
+				return "PipelineGetIamPolicy"
+			case "setIamPolicy":
+				return "PipelineSetIamPolicy"
+			case "testIamPermissions":
+				return "PipelineTestIamPermissions"
+			}
+		case "googleApiSources":
+			switch custom {
+			case "getIamPolicy":
+				return "GoogleApiSourceGetIamPolicy"
+			case "setIamPolicy":
+				return "GoogleApiSourceSetIamPolicy"
+			case "testIamPermissions":
+				return "GoogleApiSourceTestIamPermissions"
+			}
+		case "channelConnections":
+			switch custom {
+			case "getIamPolicy":
+				return "ChannelConnectionGetIamPolicy"
+			case "setIamPolicy":
+				return "ChannelConnectionSetIamPolicy"
+			case "testIamPermissions":
+				return "ChannelConnectionTestIamPermissions"
+			}
 		case "instances":
 			switch custom {
 			case "upgrade":
@@ -792,6 +862,76 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "ListProviders"
 		case method == http.MethodGet:
 			return "GetProvider"
+		}
+	case "messageBuses":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateMessageBus"
+		case isCollection && method == http.MethodGet:
+			return "ListMessageBuses"
+		case method == http.MethodPatch:
+			return "UpdateMessageBus"
+		case method == http.MethodDelete:
+			return "DeleteMessageBus"
+		case method == http.MethodGet:
+			return "GetMessageBus"
+		}
+	case "enrollments":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateEnrollment"
+		case isCollection && method == http.MethodGet:
+			return "ListEnrollments"
+		case method == http.MethodPatch:
+			return "UpdateEnrollment"
+		case method == http.MethodDelete:
+			return "DeleteEnrollment"
+		case method == http.MethodGet:
+			return "GetEnrollment"
+		}
+	case "pipelines":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreatePipeline"
+		case isCollection && method == http.MethodGet:
+			return "ListPipelines"
+		case method == http.MethodPatch:
+			return "UpdatePipeline"
+		case method == http.MethodDelete:
+			return "DeletePipeline"
+		case method == http.MethodGet:
+			return "GetPipeline"
+		}
+	case "googleApiSources":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateGoogleApiSource"
+		case isCollection && method == http.MethodGet:
+			return "ListGoogleApiSources"
+		case method == http.MethodPatch:
+			return "UpdateGoogleApiSource"
+		case method == http.MethodDelete:
+			return "DeleteGoogleApiSource"
+		case method == http.MethodGet:
+			return "GetGoogleApiSource"
+		}
+	case "channelConnections":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateChannelConnection"
+		case isCollection && method == http.MethodGet:
+			return "ListChannelConnections"
+		case method == http.MethodDelete:
+			return "DeleteChannelConnection"
+		case method == http.MethodGet:
+			return "GetChannelConnection"
+		}
+	case "googleChannelConfig":
+		switch method {
+		case http.MethodPatch:
+			return "UpdateGoogleChannelConfig"
+		case http.MethodGet:
+			return "GetGoogleChannelConfig"
 		}
 	case "instances":
 		switch {
