@@ -155,6 +155,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-wire-conformance record-gcp-wire-conformance test-gcp-grpc-conformance \
         test-gcp-routing \
         test-gcp-error-mapping \
+        test-gcp-persistence-parity \
         test-gcp-rest-grpc-parity \
         test-gcp-gcloud-conformance test-gcp-python-conformance \
         test-gcp-differential record-gcp-differential \
@@ -759,6 +760,15 @@ test-gcp-error-mapping: ## Offline error-envelope ↔ gRPC-status mapping audit 
 	go test -count=1 -run 'TestCanonicalErrorMapping|TestDatastoreProtoErrorMapping|TestErrorCode' -v ./internal/gcp/adapter/
 	go test -count=1 -run 'TestResolve|TestGRPCCodeForStatus|TestStatusForHTTP|TestHTTPForStatus' -v ./internal/gcp/gcperr/
 
+# The offline persistence-parity coverage gate (AUD9): every wire service the
+# adapter knows must be exercised by a persistence round-trip probe (or carry a
+# documented sibling-suite/exemption classification), so a new service cannot
+# land without proving — or explicitly disclaiming — its snapshot/reset/
+# export-import round-trip. The live round-trip itself (restart, reset,
+# export→import) rides test-e2e-gcp-persistence (Docker Postgres).
+test-gcp-persistence-parity: ## Offline coverage gate: every GCP wire service has a persistence round-trip probe (tag: gcp_persistence)
+	go test -count=1 -tags gcp_persistence -run TestPersistenceProbeCoverage -v ./tests/persistent_mode/gcp/parity/
+
 record-gcp-wire-conformance: ## Record a fresh transcript against an ephemeral emulator, then stop it
 	@echo "Building jaiscloud-gcp..."
 	@go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
@@ -974,8 +984,10 @@ gcp-status-finalize: ## Finalize a completed plan doc: PLAN=plan_docs/<doc>.md I
 
 # One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/GA.md.
 # The gRPC and gcloud targets each build + boot an ephemeral emulator on :8080/:8081 and stop it;
-# gcloud self-skips when it is not on PATH. Persistence/e2e are intentionally excluded.
-ga-check: check-gcp-fidelity-matrix test-gcp-wire-conformance test-gcp-grpc-conformance test-gcp-error-mapping test-gcp-rest-grpc-parity test-gcp-gcloud-conformance ## One aggregate GA gate: fidelity drift + REST/gRPC/gcloud client conformance (no Docker/Postgres/k8s)
+# gcloud self-skips when it is not on PATH. The offline persistence coverage gate
+# (test-gcp-persistence-parity) is included; the Docker/Postgres-backed persistence
+# round-trip and the e2e targets are intentionally excluded.
+ga-check: check-gcp-fidelity-matrix test-gcp-wire-conformance test-gcp-grpc-conformance test-gcp-error-mapping test-gcp-persistence-parity test-gcp-rest-grpc-parity test-gcp-gcloud-conformance ## One aggregate GA gate: fidelity drift + REST/gRPC/gcloud client conformance (no Docker/Postgres/k8s)
 	@echo ""
 	@echo "GA gate: offline + client conformance passed"
 	@echo "  (grpc/gcloud targets build + boot an ephemeral emulator; this can take a few minutes)"
