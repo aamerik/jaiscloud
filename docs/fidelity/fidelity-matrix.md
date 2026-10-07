@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 500 | 123 |
+| rest | 501 | 122 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -579,7 +579,7 @@ _7 cell(s): ga=7 limited=0 preview=0 unsupported=0_
 | GenerateIdToken | grpc | ga | yes | — |
 | IAMCredentials.GenerateAccessToken | rest | ga | yes | — |
 | IAMCredentials.GenerateIdToken | rest | ga | yes | — |
-| IAMCredentials.GetAllowedLocations | rest | ga | no | — |
+| IAMCredentials.GetAllowedLocations | rest | ga | yes | — |
 | SignBlob | grpc | ga | yes | — |
 | SignJwt | grpc | ga | yes | — |
 

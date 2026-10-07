@@ -129,11 +129,11 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 500
+        "rest": 501
       },
       "unverified": {
         "grpc": 21,
-        "rest": 123
+        "rest": 122
       }
     },
     "grpc_only_services": [
@@ -6349,11 +6349,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "iamcredentials.projects.serviceAccounts.getAllowedLocations",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=iamcredentials.projects.serviceAccounts.getAllowedLocations",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -12959,7 +12959,7 @@
         "discovery=secretmanager.projects.locations.secrets.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 15 transcript entries)"
+        "verified=true (rest, 16 transcript entries)"
       ]
     },
     {
@@ -13041,7 +13041,7 @@
       "evidence": [
         "discovery=secretmanager.projects.secrets.get",
         "postgres=yes",
-        "verified=true (rest, 2 transcript entries)"
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {
@@ -13080,7 +13080,7 @@
       "evidence": [
         "discovery=secretmanager.projects.secrets.list",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {

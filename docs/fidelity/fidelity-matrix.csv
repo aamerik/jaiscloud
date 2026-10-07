@@ -453,7 +453,7 @@ iamcredentials,GenerateAccessToken,grpc,ga,true,
 iamcredentials,GenerateIdToken,grpc,ga,true,
 iamcredentials,IAMCredentials.GenerateAccessToken,rest,ga,true,
 iamcredentials,IAMCredentials.GenerateIdToken,rest,ga,true,
-iamcredentials,IAMCredentials.GetAllowedLocations,rest,ga,false,
+iamcredentials,IAMCredentials.GetAllowedLocations,rest,ga,true,
 iamcredentials,SignBlob,grpc,ga,true,
 iamcredentials,SignJwt,grpc,ga,true,
 iceberg,Iceberg.CommitTable,rest,preview,false,BigLake Iceberg REST catalog; no official Discovery document
