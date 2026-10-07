@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1086**
+Cells: **1087**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 939 |
+| ga | 940 |
 | limited | 101 |
 | preview | 14 |
 | unsupported | 32 |
@@ -21,7 +21,7 @@ Cells: **1086**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 497 | 100 | 14 | 12 |
+| rest | 498 | 100 | 14 | 12 |
 | grpc | 442 | 1 | 0 | 20 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 512 | 111 |
+| rest | 513 | 111 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -1003,7 +1003,7 @@ _5 cell(s): ga=5 limited=0 preview=0 unsupported=0_
 
 ## pubsub
 
-_45 cell(s): ga=45 limited=0 preview=0 unsupported=0_
+_46 cell(s): ga=46 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -1045,6 +1045,7 @@ _45 cell(s): ga=45 limited=0 preview=0 unsupported=0_
 | PubSub.TopicPublish | rest | ga | yes | — |
 | PubSub.TopicSetIamPolicy | rest | ga | yes | — |
 | PubSub.TopicTestIamPermissions | rest | ga | yes | — |
+| PubSub.TopicUpdate | rest | ga | yes | — |
 | Publish | grpc | ga | yes | — |
 | Pull | grpc | ga | yes | — |
 | Seek | grpc | ga | yes | — |

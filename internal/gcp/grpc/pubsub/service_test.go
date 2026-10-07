@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"testing"
 	"time"
@@ -704,6 +705,47 @@ func TestPubSubUpdateTopicGRPC(t *testing.T) {
 	}
 	if got.GetMessageRetentionDuration().AsDuration() != retention {
 		t.Fatalf("GetTopic retention = %v, want %v", got.GetMessageRetentionDuration().AsDuration(), retention)
+	}
+}
+
+// TestTopicRetentionStoredAsProtoJSON guards F1: the stored
+// messageRetentionDuration must be the protobuf-JSON form ("600s"), not Go's
+// "10m0s", or the official REST client cannot unmarshal every later read of the
+// topic as a google.protobuf.Duration.
+func TestTopicRetentionStoredAsProtoJSON(t *testing.T) {
+	resources := store.NewMemoryResourceStore()
+	svc := NewService(resources, pubsubstore.NewMemoryMessages(), crypto.NewEnvelopeEncryptor(kmsstore.NewMemoryStore()), "test")
+	ctx := context.Background()
+
+	if _, err := svc.CreateTopic(ctx, &pubsubpb.Topic{
+		Name:                     "projects/test/topics/ret",
+		MessageRetentionDuration: durationpb.New(10 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	assertStoredRetention(t, resources, "ret", "600s")
+
+	if _, err := svc.UpdateTopic(ctx, &pubsubpb.UpdateTopicRequest{
+		Topic:      &pubsubpb.Topic{Name: "projects/test/topics/ret", MessageRetentionDuration: durationpb.New(15 * time.Minute)},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"message_retention_duration"}},
+	}); err != nil {
+		t.Fatalf("UpdateTopic: %v", err)
+	}
+	assertStoredRetention(t, resources, "ret", "900s")
+}
+
+func assertStoredRetention(t *testing.T, resources store.ResourceStore, id, want string) {
+	t.Helper()
+	e, err := resources.Get(context.Background(), "test", store.GlobalRegion, rtTopic, id)
+	if err != nil {
+		t.Fatalf("store get: %v", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(e.Data, &meta); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, _ := meta["messageRetentionDuration"].(string); got != want {
+		t.Errorf("stored retention = %q, want %q", got, want)
 	}
 }
 

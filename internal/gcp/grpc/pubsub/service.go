@@ -208,7 +208,7 @@ func (s *Service) CreateTopic(ctx context.Context, req *pubsubpb.Topic) (*pubsub
 	}
 	meta := map[string]any{"name": topicName(project, t)}
 	if req.GetMessageRetentionDuration() != nil {
-		meta["messageRetentionDuration"] = req.GetMessageRetentionDuration().AsDuration().String()
+		meta["messageRetentionDuration"] = durationJSON(req.GetMessageRetentionDuration().AsDuration())
 	}
 	if k := req.GetKmsKeyName(); k != "" {
 		meta["kmsKeyName"] = k
@@ -1237,7 +1237,7 @@ func (s *Service) UpdateTopic(ctx context.Context, req *pubsubpb.UpdateTopicRequ
 			if in.GetMessageRetentionDuration() == nil {
 				delete(meta, "messageRetentionDuration")
 			} else {
-				meta["messageRetentionDuration"] = in.GetMessageRetentionDuration().AsDuration().String()
+				meta["messageRetentionDuration"] = durationJSON(in.GetMessageRetentionDuration().AsDuration())
 			}
 		default:
 			return nil, mapError(model.NewProviderError("InvalidArgument", "unsupported update_mask path: "+p, 400))
@@ -1719,6 +1719,14 @@ func (s *Service) resourceExists(ctx context.Context, project, policyType, id st
 }
 
 // ─── proto ↔ internal transcoding ─────────────────────────────────────────────
+
+// durationJSON renders a duration in the protobuf-JSON form ("600s"), which the
+// official REST client can unmarshal as a google.protobuf.Duration. Go's
+// time.Duration.String() ("10m0s") is NOT valid protobuf JSON and breaks every
+// REST read of a topic whose retention was set.
+func durationJSON(d time.Duration) string {
+	return fmt.Sprintf("%ds", int64(d.Seconds()))
+}
 
 func topicToProto(project, id string, meta map[string]any) *pubsubpb.Topic {
 	t := &pubsubpb.Topic{Name: topicName(project, id)}

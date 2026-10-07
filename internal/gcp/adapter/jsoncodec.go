@@ -660,6 +660,10 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 		switch {
 		case method == http.MethodPut && !isCollection:
 			return "TopicCreate"
+		case method == http.MethodPatch && !isCollection:
+			// topics.patch (updateMask) — the REST update the official clients
+			// send; mirrors gRPC UpdateTopic.
+			return "TopicUpdate"
 		case isCollection && method == http.MethodGet:
 			return "TopicList"
 		case method == http.MethodGet:

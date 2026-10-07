@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 
 	pubsubapiv1 "cloud.google.com/go/pubsub/v2/apiv1"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
@@ -79,17 +80,13 @@ func pubSubScenario() Scenario {
 			},
 		},
 		{
-			Op: "UpdateTopic (gRPC)",
+			// The REST route is what AUD3-1 fixed: topics.patch must be served,
+			// not just gRPC UpdateTopic. Mutating over REST and reading back over
+			// both transports proves the two agree.
+			Op: "UpdateTopic (REST)",
 			Mutate: func(ctx context.Context, e *Env) error {
-				c, err := pubsubapiv1.NewTopicAdminClient(ctx, e.GRPCClientOptions()...)
-				if err != nil {
-					return err
-				}
-				defer c.Close()
-				_, err = c.UpdateTopic(ctx, &pubsubpb.UpdateTopicRequest{
-					Topic:      &pubsubpb.Topic{Name: topicName(e), Labels: map[string]string{"parity": "true"}},
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
-				})
+				body := fmt.Sprintf(`{"topic":{"name":%q,"labels":{"parity":"true"}},"updateMask":"labels"}`, topicName(e))
+				_, err := e.Rest(ctx, http.MethodPatch, "/v1/"+topicName(e), body)
 				return err
 			},
 		},
