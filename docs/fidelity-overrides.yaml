@@ -334,14 +334,6 @@ operations:
   # emulator does not model, so implementing it would fabricate a wire-divergent
   # result. They fail loudly with codes.Unimplemented rather than silently
   # succeeding.
-  - service: secretmanager
-    operation: RotateSecret
-    state: limited
-    reason: "the proto rotates the secret and updates a linked Cloud SQL password; the emulator has no Cloud SQL data plane"
-  - service: secretmanager
-    operation: EnableManagedRotation
-    state: limited
-    reason: "managed rotation needs a rotation Cloud Function and config the emulator does not model"
   - service: logging
     operation: TailLogEntries
     state: limited

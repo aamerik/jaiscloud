@@ -6,14 +6,14 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **967**
+Cells: **969**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 723 |
-| limited | 103 |
+| ga | 727 |
+| limited | 101 |
 | preview | 14 |
 | unsupported | 127 |
 
@@ -21,8 +21,8 @@ Cells: **967**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 383 | 100 | 14 | 12 |
-| grpc | 340 | 3 | 0 | 115 |
+| rest | 385 | 100 | 14 | 12 |
+| grpc | 342 | 1 | 0 | 115 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -1015,7 +1015,7 @@ _16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
 
 ## secretmanager
 
-_32 cell(s): ga=30 limited=2 preview=0 unsupported=0_
+_34 cell(s): ga=34 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
@@ -1025,26 +1025,28 @@ _32 cell(s): ga=30 limited=2 preview=0 unsupported=0_
 | DeleteSecret | grpc | ga | — |
 | DestroySecretVersion | grpc | ga | — |
 | DisableSecretVersion | grpc | ga | — |
-| EnableManagedRotation | grpc | limited | managed rotation needs a rotation Cloud Function and config the emulator does not model |
+| EnableManagedRotation | grpc | ga | — |
 | EnableSecretVersion | grpc | ga | — |
 | GetIamPolicy | grpc | ga | — |
 | GetSecret | grpc | ga | — |
 | GetSecretVersion | grpc | ga | — |
 | ListSecretVersions | grpc | ga | — |
 | ListSecrets | grpc | ga | — |
-| RotateSecret | grpc | limited | the proto rotates the secret and updates a linked Cloud SQL password; the emulator has no Cloud SQL data plane |
+| RotateSecret | grpc | ga | — |
 | Secret.Access | rest | ga | — |
 | Secret.AddVersion | rest | ga | — |
 | Secret.Create | rest | ga | — |
 | Secret.Delete | rest | ga | — |
 | Secret.DestroyVersion | rest | ga | — |
 | Secret.DisableVersion | rest | ga | — |
+| Secret.EnableManagedRotation | rest | ga | — |
 | Secret.EnableVersion | rest | ga | — |
 | Secret.Get | rest | ga | — |
 | Secret.GetIamPolicy | rest | ga | — |
 | Secret.GetVersion | rest | ga | — |
 | Secret.List | rest | ga | — |
 | Secret.ListVersions | rest | ga | — |
+| Secret.RotateSecret | rest | ga | — |
 | Secret.SetIamPolicy | rest | ga | — |
 | Secret.TestIamPermissions | rest | ga | — |
 | Secret.Update | rest | ga | — |

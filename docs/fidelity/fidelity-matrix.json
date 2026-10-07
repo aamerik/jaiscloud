@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 967,
+    "total": 969,
     "by_state": {
-      "ga": 723,
-      "limited": 103,
+      "ga": 727,
+      "limited": 101,
       "preview": 14,
       "unsupported": 127
     },
     "by_transport": {
       "grpc": {
-        "ga": 340,
-        "limited": 3,
+        "ga": 342,
+        "limited": 1,
         "unsupported": 115
       },
       "rest": {
-        "ga": 383,
+        "ga": 385,
         "limited": 100,
         "preview": 14,
         "unsupported": 12
@@ -109,8 +109,7 @@
         "ga": 16
       },
       "secretmanager": {
-        "ga": 30,
-        "limited": 2
+        "ga": 34
       },
       "serviceusage": {
         "ga": 12
@@ -8926,12 +8925,11 @@
       "service": "secretmanager",
       "operation": "EnableManagedRotation",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "managed rotation needs a rotation Cloud Function and config the emulator does not model",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -8999,11 +8997,10 @@
       "service": "secretmanager",
       "operation": "RotateSecret",
       "transport": "grpc",
-      "state": "limited",
-      "reason": "the proto rotates the secret and updates a linked Cloud SQL password; the emulator has no Cloud SQL data plane",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -9072,6 +9069,17 @@
     },
     {
       "service": "secretmanager",
+      "operation": "Secret.EnableManagedRotation",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.enableManagedRotation",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "secretmanager",
       "operation": "Secret.EnableVersion",
       "transport": "rest",
       "state": "ga",
@@ -9128,6 +9136,16 @@
       "state": "ga",
       "evidence": [
         "discovery=secretmanager.projects.locations.secrets.versions.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "secretmanager",
+      "operation": "Secret.RotateSecret",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=secretmanager.projects.locations.secrets.rotateSecret",
         "postgres=yes"
       ]
     },

@@ -2,6 +2,7 @@ package secretmanager
 
 import (
 	"context"
+	"encoding/base64"
 	"strconv"
 	"sync"
 	"testing"
@@ -552,4 +553,175 @@ func TestVersionMapEtagAndReplicationStatus(t *testing.T) {
 	if enabled["etag"] == disabled["etag"] {
 		t.Errorf("etag should change with lifecycle state")
 	}
+}
+
+// TestManagedRotation covers the Cloud SQL managed-rotation surface:
+// EnableManagedRotation records the credentials + ACTIVE status and stores a
+// generated password as version 1; RotateSecret adds version 2; the preconditions
+// (rotate-before-enable, double-enable) fail FailedPrecondition; and the stored
+// password round-trips through Access.
+func TestManagedRotation(t *testing.T) {
+	ctx := context.Background()
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+
+	const name = "projects/proj/secrets/managed"
+	if _, err := p.Create(ctx, newNR(map[string]any{"secretId": "managed"})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Rotate before managed rotation is enabled → FailedPrecondition.
+	if _, err := p.RotateSecret(ctx, newNR(map[string]any{"name": name})); err != nil {
+		requireProviderCode(t, err, "FailedPrecondition")
+	} else {
+		t.Fatal("RotateSecret before enable returned nil, want FailedPrecondition")
+	}
+
+	// Enable without credentials → InvalidRequest.
+	if _, err := p.EnableManagedRotation(ctx, newNR(map[string]any{"name": name, "body": map[string]any{}})); err != nil {
+		requireProviderCode(t, err, "InvalidRequest")
+	} else {
+		t.Fatal("EnableManagedRotation without credentials returned nil, want InvalidRequest")
+	}
+
+	// Enable → version 1, status ACTIVE.
+	creds := map[string]any{"instanceId": "inst", "username": "app"}
+	resp, err := p.EnableManagedRotation(ctx, newNR(map[string]any{
+		"name": name,
+		"body": map[string]any{"cloudSqlSingleUserCredentials": creds},
+	}))
+	if err != nil {
+		t.Fatalf("EnableManagedRotation: %v", err)
+	}
+	if got, _ := resp.Data["name"].(string); got != name+"/versions/1" {
+		t.Fatalf("EnableManagedRotation version = %q, want %q", got, name+"/versions/1")
+	}
+
+	get, err := p.Get(ctx, newNR(map[string]any{"name": name}))
+	if err != nil {
+		t.Fatalf("get after enable: %v", err)
+	}
+	rot, _ := get.Data["rotation"].(map[string]any)
+	mrs, _ := rot["managedRotationStatus"].(map[string]any)
+	if mrs["state"] != "ACTIVE" {
+		t.Fatalf("managedRotationStatus = %#v, want state ACTIVE", mrs)
+	}
+
+	// Enabling twice → FailedPrecondition.
+	if _, err := p.EnableManagedRotation(ctx, newNR(map[string]any{
+		"name": name,
+		"body": map[string]any{"cloudSqlSingleUserCredentials": creds},
+	})); err != nil {
+		requireProviderCode(t, err, "FailedPrecondition")
+	} else {
+		t.Fatal("second EnableManagedRotation returned nil, want FailedPrecondition")
+	}
+
+	// Rotate → version 2.
+	resp, err = p.RotateSecret(ctx, newNR(map[string]any{"name": name}))
+	if err != nil {
+		t.Fatalf("RotateSecret: %v", err)
+	}
+	if got, _ := resp.Data["name"].(string); got != name+"/versions/2" {
+		t.Fatalf("RotateSecret version = %q, want %q", got, name+"/versions/2")
+	}
+
+	// The generated password round-trips through Access.
+	acc, err := p.Access(ctx, newNR(map[string]any{"name": name + "/versions/1"}))
+	if err != nil {
+		t.Fatalf("access managed version: %v", err)
+	}
+	payload, _ := acc.Data["payload"].(map[string]any)
+	if data, _ := payload["data"].(string); data == "" {
+		t.Fatalf("managed version payload = %#v, want a non-empty password", payload)
+	}
+
+	// A schedule update must not clobber the managed-rotation status.
+	if _, err := p.Update(ctx, newNR(map[string]any{
+		"name": name,
+		"body": map[string]any{"rotation": map[string]any{"rotationPeriod": "3600s"}},
+	})); err != nil {
+		t.Fatalf("update rotation period: %v", err)
+	}
+	get, err = p.Get(ctx, newNR(map[string]any{"name": name}))
+	if err != nil {
+		t.Fatalf("get after update: %v", err)
+	}
+	rot, _ = get.Data["rotation"].(map[string]any)
+	if mrs, _ = rot["managedRotationStatus"].(map[string]any); mrs["state"] != "ACTIVE" {
+		t.Fatalf("managedRotationStatus after schedule update = %#v, want ACTIVE", mrs)
+	}
+}
+
+// TestManagedRotationSuppliedPassword covers the optional Cloud SQL password: a
+// supplied password is stored as the version payload (not replaced by a
+// generated one).
+func TestManagedRotationSuppliedPassword(t *testing.T) {
+	ctx := context.Background()
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+
+	const name = "projects/proj/secrets/managed-pw"
+	if _, err := p.Create(ctx, newNR(map[string]any{"secretId": "managed-pw"})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := p.EnableManagedRotation(ctx, newNR(map[string]any{
+		"name": name,
+		"body": map[string]any{"cloudSqlSingleUserCredentials": map[string]any{
+			"instanceId": "inst", "username": "app", "password": "supplied-password",
+		}},
+	})); err != nil {
+		t.Fatalf("EnableManagedRotation: %v", err)
+	}
+	acc, err := p.Access(ctx, newNR(map[string]any{"name": name + "/versions/1"}))
+	if err != nil {
+		t.Fatalf("access: %v", err)
+	}
+	payload, _ := acc.Data["payload"].(map[string]any)
+	if data, _ := payload["data"].(string); data != base64.StdEncoding.EncodeToString([]byte("supplied-password")) {
+		t.Fatalf("stored password = %q, want the supplied password", data)
+	}
+}
+
+// TestManagedRotationConcurrentReads hammers GetSecret while managed rotation is
+// being enabled. Run under -race, it guards against mutating the *Rotation the
+// store hands out (which aliases the stored map entry) in place.
+func TestManagedRotationConcurrentReads(t *testing.T) {
+	ctx := context.Background()
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+
+	const name = "projects/proj/secrets/managed-race"
+	if _, err := p.Create(ctx, newNR(map[string]any{"secretId": "managed-race"})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Seed a rotation schedule so reads return a non-nil Rotation.
+	if _, err := p.Update(ctx, newNR(map[string]any{
+		"name": name,
+		"body": map[string]any{"rotation": map[string]any{"rotationPeriod": "3600s"}},
+	})); err != nil {
+		t.Fatalf("seed rotation: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_, _ = p.Get(ctx, newNR(map[string]any{"name": name}))
+				}
+			}
+		}()
+	}
+	if _, err := p.EnableManagedRotation(ctx, newNR(map[string]any{
+		"name": name,
+		"body": map[string]any{"cloudSqlSingleUserCredentials": map[string]any{"instanceId": "inst", "username": "app"}},
+	})); err != nil {
+		t.Fatalf("EnableManagedRotation: %v", err)
+	}
+	close(stop)
+	wg.Wait()
 }

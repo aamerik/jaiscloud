@@ -432,3 +432,68 @@ func TestSecretManagerLatestAlias(t *testing.T) {
 		t.Fatalf("GetSecretVersion latest name = %q, want %q", ver.GetName(), secret+"/versions/2")
 	}
 }
+
+// TestManagedRotationGRPC covers the Cloud SQL managed-rotation RPCs over the
+// wire: EnableManagedRotation records ACTIVE status + credentials and stores a
+// generated password (version 1); RotateSecret adds version 2; and the
+// preconditions (rotate-before-enable, double-enable) return FailedPrecondition.
+func TestManagedRotationGRPC(t *testing.T) {
+	client, _, cleanup := secretTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const parent = "projects/test/secrets/managed-rot"
+	if _, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/test", SecretId: "managed-rot",
+		Secret: &secretmanagerpb.Secret{},
+	}); err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+
+	if _, err := client.RotateSecret(ctx, &secretmanagerpb.RotateSecretRequest{Parent: parent}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("RotateSecret before enable = %v, want FailedPrecondition", err)
+	}
+
+	// Missing credentials → InvalidArgument.
+	if _, err := client.EnableManagedRotation(ctx, &secretmanagerpb.EnableManagedRotationRequest{Parent: parent}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("EnableManagedRotation without credentials = %v, want InvalidArgument", err)
+	}
+
+	creds := func() *secretmanagerpb.EnableManagedRotationRequest {
+		return &secretmanagerpb.EnableManagedRotationRequest{
+			Parent: parent,
+			Credentials: &secretmanagerpb.EnableManagedRotationRequest_CloudSqlSingleUserCredentials{
+				CloudSqlSingleUserCredentials: &secretmanagerpb.EnableManagedRotationRequest_CloudSQLSingleUserCredentials{
+					InstanceId: "inst", Username: "app",
+				},
+			},
+		}
+	}
+	enabled, err := client.EnableManagedRotation(ctx, creds())
+	if err != nil {
+		t.Fatalf("EnableManagedRotation: %v", err)
+	}
+	if enabled.GetName() != parent+"/versions/1" {
+		t.Fatalf("EnableManagedRotation version = %q, want %q", enabled.GetName(), parent+"/versions/1")
+	}
+
+	got, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: parent})
+	if err != nil {
+		t.Fatalf("GetSecret after enable: %v", err)
+	}
+	if st := got.GetRotation().GetManagedRotationStatus().GetState(); st != secretmanagerpb.Rotation_ManagedRotationStatus_ACTIVE {
+		t.Fatalf("ManagedRotationStatus = %v, want ACTIVE", st)
+	}
+
+	if _, err := client.EnableManagedRotation(ctx, creds()); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("second EnableManagedRotation = %v, want FailedPrecondition", err)
+	}
+
+	rotated, err := client.RotateSecret(ctx, &secretmanagerpb.RotateSecretRequest{Parent: parent})
+	if err != nil {
+		t.Fatalf("RotateSecret: %v", err)
+	}
+	if rotated.GetName() != parent+"/versions/2" {
+		t.Fatalf("RotateSecret version = %q, want %q", rotated.GetName(), parent+"/versions/2")
+	}
+}

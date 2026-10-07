@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 375,
-  "passed": 375,
+  "total": 377,
+  "passed": 377,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 375,
-    "passed": 375,
+    "checks": 377,
+    "passed": 377,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -149,8 +149,8 @@
     },
     {
       "service": "secretmanager",
-      "total": 16,
-      "passed": 16,
+      "total": 18,
+      "passed": 18,
       "failed": 0,
       "unimplemented": 0
     },
@@ -715,6 +715,20 @@
       "method": "DeleteSecret",
       "status": "pass",
       "key_field": "fixture secret absent after delete"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "EnableManagedRotation",
+      "method": "EnableManagedRotation",
+      "status": "pass",
+      "key_field": "new ENABLED version + managed_rotation_status ACTIVE"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "RotateSecret",
+      "method": "RotateSecret",
+      "status": "pass",
+      "key_field": "second ENABLED version created"
     },
     {
       "service": "pubsub",
