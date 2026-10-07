@@ -484,7 +484,11 @@ func (p *Provider) CryptoKeyVersionAsymmetricDecrypt(ctx context.Context, nr *mo
 	}
 	loc, kr, key, version := parseVersion(name)
 	body, _ := nr.Params["body"].(map[string]any)
-	ct, err := base64.StdEncoding.DecodeString(body["ciphertext"].(string))
+	ctStr, _ := body["ciphertext"].(string)
+	if ctStr == "" {
+		return nil, model.NewProviderError("InvalidRequest", "ciphertext is required", 400)
+	}
+	ct, err := base64.StdEncoding.DecodeString(ctStr)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidRequest", "ciphertext must be base64", 400)
 	}
@@ -507,7 +511,11 @@ func (p *Provider) CryptoKeyVersionMacSign(ctx context.Context, nr *model.Normal
 	}
 	loc, kr, key, version := parseVersion(name)
 	body, _ := nr.Params["body"].(map[string]any)
-	data, err := base64.StdEncoding.DecodeString(body["data"].(string))
+	dataStr, _ := body["data"].(string)
+	if dataStr == "" {
+		return nil, model.NewProviderError("InvalidRequest", "data is required", 400)
+	}
+	data, err := base64.StdEncoding.DecodeString(dataStr)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidRequest", "data must be base64", 400)
 	}
@@ -531,11 +539,19 @@ func (p *Provider) CryptoKeyVersionMacVerify(ctx context.Context, nr *model.Norm
 	}
 	loc, kr, key, version := parseVersion(name)
 	body, _ := nr.Params["body"].(map[string]any)
-	data, err := base64.StdEncoding.DecodeString(body["data"].(string))
+	dataStr, _ := body["data"].(string)
+	if dataStr == "" {
+		return nil, model.NewProviderError("InvalidRequest", "data is required", 400)
+	}
+	data, err := base64.StdEncoding.DecodeString(dataStr)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidRequest", "data must be base64", 400)
 	}
-	mac, err := base64.StdEncoding.DecodeString(body["mac"].(string))
+	macStr, _ := body["mac"].(string)
+	if macStr == "" {
+		return nil, model.NewProviderError("InvalidRequest", "mac is required", 400)
+	}
+	mac, err := base64.StdEncoding.DecodeString(macStr)
 	if err != nil {
 		return nil, model.NewProviderError("InvalidRequest", "mac must be base64", 400)
 	}

@@ -31,6 +31,13 @@ var actionOverrides = map[string]string{
 	"Secret.DestroyVersion": "secretmanager.projects.secrets.versions.destroy",
 	"Secret.DisableVersion": "secretmanager.projects.secrets.versions.disable",
 	"Secret.EnableVersion":  "secretmanager.projects.secrets.versions.enable",
+	// The version access/list and the secret rotation verbs exist on both the
+	// project-level and the location-level surface; the emulator serves the
+	// classic project-level methods, so pin those.
+	"Secret.Access":                "secretmanager.projects.secrets.versions.access",
+	"Secret.ListVersions":          "secretmanager.projects.secrets.versions.list",
+	"Secret.EnableManagedRotation": "secretmanager.projects.secrets.enableManagedRotation",
+	"Secret.RotateSecret":          "secretmanager.projects.secrets.rotateSecret",
 
 	// IAM service-account keys nest under serviceAccounts in Discovery.
 	"IAM.ServiceAccountKeyCreate": "iam.projects.serviceAccounts.keys.create",
@@ -138,11 +145,12 @@ var actionOverrides = map[string]string{
 
 	// Cloud Logging Settings/CMEK are Discovery custom methods whose ids do not
 	// derive from the flat registry action names ("logging.projects.getSettings",
-	// not "projects.settings.get").
+	// not "projects.settings.get"). The updates live on the bare "logging.*"
+	// resource, not "logging.projects.*".
 	"Logging.SettingsGet":    "logging.projects.getSettings",
-	"Logging.SettingsUpdate": "logging.projects.updateSettings",
+	"Logging.SettingsUpdate": "logging.updateSettings",
 	"Logging.CmekGet":        "logging.projects.getCmekSettings",
-	"Logging.CmekUpdate":     "logging.projects.updateCmekSettings",
+	"Logging.CmekUpdate":     "logging.updateCmekSettings",
 
 	// GKE (container) setter custom methods nest under clusters / nodePools and
 	// several use a different Discovery verb than the registry action name.

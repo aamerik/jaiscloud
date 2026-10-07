@@ -744,6 +744,9 @@ func (p *Provider) ListCollectionIds(ctx context.Context, nr *model.NormalizedRe
 		return nil, err
 	}
 	resp := map[string]any{"collectionIds": ids}
+	if ids == nil {
+		resp["collectionIds"] = []string{}
+	}
 	if nextToken != "" {
 		resp["nextPageToken"] = nextToken
 	}

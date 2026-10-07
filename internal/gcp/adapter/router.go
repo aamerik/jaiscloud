@@ -289,7 +289,7 @@ func detectV1Service(path string) string {
 		return "pubsub"
 	case "secrets":
 		return "secretmanager"
-	case "keyRings", "cryptoKeys", "cryptoKeyVersions":
+	case "keyRings", "cryptoKeys", "cryptoKeyVersions", "importJobs":
 		return "kms"
 	case "serviceAccounts", "keys":
 		return "iam"

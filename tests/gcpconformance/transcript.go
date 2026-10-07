@@ -140,9 +140,16 @@ func Record(jaiscloudHost string) (Transcript, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	suffix := runSuffix()
 
+	docs, err := LoadSnapshots("discovery")
+	if err != nil {
+		return Transcript{}, fmt.Errorf("load discovery snapshots: %w", err)
+	}
+	scenarios := append(Scenarios(suffix), SynthPrelude()...)
+	scenarios = append(scenarios, SynthScenarios(docs, suffix)...)
+
 	var tr Transcript
 	vars := map[string]string{}
-	for _, sc := range Scenarios(suffix) {
+	for _, sc := range scenarios {
 		path := expandVars(sc.Path, vars)
 		reqBody := expandVars(sc.Body, vars)
 		url := jaiscloudHost + path
@@ -182,7 +189,7 @@ func Record(jaiscloudHost string) (Transcript, error) {
 			Path:    path,
 			Status:  resp.StatusCode,
 		}
-		if len(bytes.TrimSpace(respBody)) > 0 {
+		if len(bytes.TrimSpace(respBody)) > 0 && json.Valid(respBody) {
 			entry.Body = json.RawMessage(respBody)
 		}
 		// Only JSON request bodies map to a Discovery `request` schema; media
