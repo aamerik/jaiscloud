@@ -340,11 +340,14 @@ func isDatastoreVerb(seg string) bool {
 // (POST /v2/entries:write|:list), the descriptor catalog
 // (/v2/monitoredResourceDescriptors), the {scope}/{scopeID}/logs family
 // (logs.list / logs.delete), the config plane
-// ({scope}/{scopeID}/{sinks,exclusions}), and logs-based metrics
-// ({scope}/{scopeID}/metrics); Cloud Functions owns
+// ({scope}/{scopeID}/{sinks,exclusions}), logs-based metrics
+// ({scope}/{scopeID}/metrics), and the Admin v2 plane
+// ({scope}/{scopeID}/locations/{location}/{buckets,logScopes} plus the
+// settings/cmekSettings records); Cloud Functions owns
 // /v2/projects/{project}/locations/... (functions/operations). The two do not
 // collide: Logging's log paths sit directly under a project, while Functions
-// always has a locations segment next.
+// always has a locations segment next, and the Admin v2 bucket/logScopes
+// families are routed explicitly before the Functions fallback.
 func detectV2Service(path string) string {
 	// SDK test clients may yield a leading "//"; collapse it as DetectService does.
 	path = "/" + strings.TrimLeft(path, "/")
@@ -371,6 +374,13 @@ func detectV2Service(path string) string {
 	// Cloud Logging logs-based metrics:
 	// /v2/{scope}/{scopeID}/metrics[/{metricId...}].
 	if isLoggingMetricsPath(seg) {
+		return "logging"
+	}
+	// Cloud Logging Admin v2: buckets/views/links under
+	// /v2/{scope}/{scopeID}/locations/{location}..., and the per-scope
+	// settings/cmekSettings records. These would otherwise be claimed by the
+	// /v2/projects/{p}/locations fallback (Cloud Functions).
+	if isLoggingAdminPath(seg) {
 		return "logging"
 	}
 
@@ -458,6 +468,28 @@ func isLoggingMetricsPath(seg []string) bool {
 		return false
 	}
 	return seg[3] == "metrics"
+}
+
+// isLoggingAdminPath reports whether seg is a Cloud Logging Admin v2 path:
+// /v2/{scope}/{scopeID}/locations/{location}/buckets... (buckets, and the views
+// and links nested under them), /v2/{scope}/{scopeID}/locations/{location}/logScopes...,
+// or the per-scope settings/cmekSettings records at either the container or the
+// location level.
+func isLoggingAdminPath(seg []string) bool {
+	if len(seg) < 4 || !servicelogging.IsLogScope(seg[1]) || seg[2] == "" {
+		return false
+	}
+	if seg[3] == "settings" || seg[3] == "cmekSettings" {
+		return len(seg) == 4
+	}
+	if seg[3] != "locations" || len(seg) < 6 || seg[4] == "" {
+		return false
+	}
+	switch seg[5] {
+	case "buckets", "buckets:createAsync", "logScopes", "settings", "cmekSettings":
+		return true
+	}
+	return false
 }
 
 // detectDataprocResourceType returns "clusters", "jobs", "operations", or

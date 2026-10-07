@@ -135,6 +135,14 @@ var actionOverrides = map[string]string{
 	"ResourceManager.ProjectGetIamPolicy":       "cloudresourcemanager.projects.getIamPolicy",
 	"ResourceManager.ProjectSetIamPolicy":       "cloudresourcemanager.projects.setIamPolicy",
 	"ResourceManager.ProjectTestIamPermissions": "cloudresourcemanager.projects.testIamPermissions",
+
+	// Cloud Logging Settings/CMEK are Discovery custom methods whose ids do not
+	// derive from the flat registry action names ("logging.projects.getSettings",
+	// not "projects.settings.get").
+	"Logging.SettingsGet":    "logging.projects.getSettings",
+	"Logging.SettingsUpdate": "logging.projects.updateSettings",
+	"Logging.CmekGet":        "logging.projects.getCmekSettings",
+	"Logging.CmekUpdate":     "logging.projects.updateCmekSettings",
 }
 
 // ActionResolver maps emulator registry actions to Discovery method ids within

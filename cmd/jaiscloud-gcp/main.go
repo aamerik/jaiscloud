@@ -329,7 +329,7 @@ func startCmd() *cobra.Command {
 			// Cloud Logging's transport-neutral core is shared by the REST
 			// provider and the gRPC adapter below, so both transports use one
 			// log store and cannot drift.
-			loggingCore := loggingcore.NewService(stores.logEntries, cfg.ProjectID)
+			loggingCore := loggingcore.NewService(stores.logEntries, cfg.ProjectID, loggingcore.WithResources(stores.resources))
 			loggingRestP := restlogging.NewProvider(loggingCore, cfg.ProjectID)
 
 			// Cloud Monitoring's transport-neutral core is shared by the REST

@@ -332,94 +332,11 @@ operations:
     state: limited
     reason: "bounded store-poll tail whose latency derives from buffer_window; no deterministic conformance assertion exists"
 
-  # Cloud Logging gRPC ConfigServiceV2 is implemented for sinks + exclusions.
-  # The log-bucket / view / link storage plane, CMEK/settings, and the
-  # cross-project CopyLogEntries operation are not modelled and are explicit
-  # Unimplemented stubs inherited from UnimplementedConfigServiceV2Server.
-  - service: logging
-    operation: ListBuckets
-    state: unsupported
-    reason: "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub"
-  - service: logging
-    operation: GetBucket
-    state: unsupported
-    reason: "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub"
-  - service: logging
-    operation: CreateBucket
-    state: unsupported
-    reason: "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub"
-  - service: logging
-    operation: UpdateBucket
-    state: unsupported
-    reason: "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub"
-  - service: logging
-    operation: DeleteBucket
-    state: unsupported
-    reason: "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub"
-  - service: logging
-    operation: UndeleteBucket
-    state: unsupported
-    reason: "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub"
-  - service: logging
-    operation: CreateBucketAsync
-    state: unsupported
-    reason: "asynchronous log-bucket creation is not modelled; explicit Unimplemented stub"
-  - service: logging
-    operation: UpdateBucketAsync
-    state: unsupported
-    reason: "asynchronous log-bucket updates are not modelled; explicit Unimplemented stub"
-  - service: logging
-    operation: ListViews
-    state: unsupported
-    reason: "log views are not modelled (entries live in a flat store); explicit Unimplemented stub"
-  - service: logging
-    operation: GetView
-    state: unsupported
-    reason: "log views are not modelled (entries live in a flat store); explicit Unimplemented stub"
-  - service: logging
-    operation: CreateView
-    state: unsupported
-    reason: "log views are not modelled (entries live in a flat store); explicit Unimplemented stub"
-  - service: logging
-    operation: UpdateView
-    state: unsupported
-    reason: "log views are not modelled (entries live in a flat store); explicit Unimplemented stub"
-  - service: logging
-    operation: DeleteView
-    state: unsupported
-    reason: "log views are not modelled (entries live in a flat store); explicit Unimplemented stub"
-  - service: logging
-    operation: ListLinks
-    state: unsupported
-    reason: "BigQuery linked datasets are not modelled; explicit Unimplemented stub"
-  - service: logging
-    operation: GetLink
-    state: unsupported
-    reason: "BigQuery linked datasets are not modelled; explicit Unimplemented stub"
-  - service: logging
-    operation: CreateLink
-    state: unsupported
-    reason: "BigQuery linked datasets are not modelled; explicit Unimplemented stub"
-  - service: logging
-    operation: DeleteLink
-    state: unsupported
-    reason: "BigQuery linked datasets are not modelled; explicit Unimplemented stub"
-  - service: logging
-    operation: GetCmekSettings
-    state: unsupported
-    reason: "Logging CMEK settings are not modelled; explicit Unimplemented stub"
-  - service: logging
-    operation: UpdateCmekSettings
-    state: unsupported
-    reason: "Logging CMEK settings are not modelled; explicit Unimplemented stub"
-  - service: logging
-    operation: GetSettings
-    state: unsupported
-    reason: "Logging service settings are not modelled; explicit Unimplemented stub"
-  - service: logging
-    operation: UpdateSettings
-    state: unsupported
-    reason: "Logging service settings are not modelled; explicit Unimplemented stub"
+  # Cloud Logging's Admin v2 config plane — log buckets (+ async), views (with
+  # their IAM policy), BigQuery links, log scopes, and the Settings/CMEK
+  # records — is implemented on both transports. CopyLogEntries remains an
+  # explicit Unimplemented stub: the emulator has no per-bucket entry data
+  # plane, so a cross-project copy has nothing faithful to copy.
   - service: logging
     operation: CopyLogEntries
     state: unsupported

@@ -1,21 +1,21 @@
 {
   "version": 1,
   "summary": {
-    "total": 970,
+    "total": 999,
     "by_state": {
-      "ga": 729,
+      "ga": 779,
       "limited": 101,
       "preview": 14,
-      "unsupported": 126
+      "unsupported": 105
     },
     "by_transport": {
       "grpc": {
-        "ga": 343,
+        "ga": 364,
         "limited": 1,
-        "unsupported": 114
+        "unsupported": 93
       },
       "rest": {
-        "ga": 386,
+        "ga": 415,
         "limited": 100,
         "preview": 14,
         "unsupported": 12
@@ -76,9 +76,9 @@
         "ga": 70
       },
       "logging": {
-        "ga": 41,
+        "ga": 91,
         "limited": 1,
-        "unsupported": 22
+        "unsupported": 1
       },
       "managedkafka": {
         "ga": 44
@@ -5305,24 +5305,22 @@
       "service": "logging",
       "operation": "CreateBucket",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "logging",
       "operation": "CreateBucketAsync",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "asynchronous log-bucket creation is not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -5340,12 +5338,11 @@
       "service": "logging",
       "operation": "CreateLink",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "BigQuery linked datasets are not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -5374,24 +5371,22 @@
       "service": "logging",
       "operation": "CreateView",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "log views are not modelled (entries live in a flat store); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "logging",
       "operation": "DeleteBucket",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -5409,12 +5404,11 @@
       "service": "logging",
       "operation": "DeleteLink",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "BigQuery linked datasets are not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -5454,34 +5448,31 @@
       "service": "logging",
       "operation": "DeleteView",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "log views are not modelled (entries live in a flat store); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "logging",
       "operation": "GetBucket",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "logging",
       "operation": "GetCmekSettings",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "Logging CMEK settings are not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -5498,11 +5489,10 @@
       "service": "logging",
       "operation": "GetLink",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "BigQuery linked datasets are not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -5519,11 +5509,10 @@
       "service": "logging",
       "operation": "GetSettings",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "Logging service settings are not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -5540,22 +5529,20 @@
       "service": "logging",
       "operation": "GetView",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "log views are not modelled (entries live in a flat store); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "logging",
       "operation": "ListBuckets",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -5572,11 +5559,10 @@
       "service": "logging",
       "operation": "ListLinks",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "BigQuery linked datasets are not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -5633,11 +5619,116 @@
       "service": "logging",
       "operation": "ListViews",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "log views are not modelled (entries live in a flat store); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.BucketCreate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.BucketCreateAsync",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.createAsync",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.BucketDelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.BucketGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.BucketList",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.BucketUndelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.undelete",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.BucketUpdate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.patch",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.BucketUpdateAsync",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.updateAsync",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.CmekGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.projects.getCmekSettings",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.CmekUpdate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.projects.updateCmekSettings",
+        "mutating",
+        "postgres=yes"
       ]
     },
     {
@@ -5715,6 +5806,48 @@
     },
     {
       "service": "logging",
+      "operation": "Logging.LinkCreate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.links.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.LinkDelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.links.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.LinkGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.links.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.LinkList",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.links.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
       "operation": "Logging.LogDelete",
       "transport": "rest",
       "state": "ga",
@@ -5731,6 +5864,59 @@
       "state": "ga",
       "evidence": [
         "discovery=logging.billingAccounts.locations.buckets.views.logs.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.LogScopeCreate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.folders.locations.logScopes.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.LogScopeDelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.folders.locations.logScopes.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.LogScopeGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.folders.locations.logScopes.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.LogScopeList",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.folders.locations.logScopes.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.LogScopeUpdate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.folders.locations.logScopes.patch",
+        "mutating",
         "postgres=yes"
       ]
     },
@@ -5794,6 +5980,27 @@
       "state": "ga",
       "evidence": [
         "discovery=logging.monitoredResourceDescriptors.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.SettingsGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.projects.getSettings",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.SettingsUpdate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.projects.updateSettings",
+        "mutating",
         "postgres=yes"
       ]
     },
@@ -5863,6 +6070,90 @@
     },
     {
       "service": "logging",
+      "operation": "Logging.ViewCreate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.views.create",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.ViewDelete",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.views.delete",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.ViewGet",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.views.get",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.ViewGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.folders.locations.buckets.views.getIamPolicy",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.ViewList",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.views.list",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.ViewSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.folders.locations.buckets.views.setIamPolicy",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.ViewTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.folders.locations.buckets.views.testIamPermissions",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
+      "operation": "Logging.ViewUpdate",
+      "transport": "rest",
+      "state": "ga",
+      "evidence": [
+        "discovery=logging.billingAccounts.locations.buckets.views.patch",
+        "mutating",
+        "postgres=yes"
+      ]
+    },
+    {
+      "service": "logging",
       "operation": "TailLogEntries",
       "transport": "grpc",
       "state": "limited",
@@ -5876,47 +6167,43 @@
       "service": "logging",
       "operation": "UndeleteBucket",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "logging",
       "operation": "UpdateBucket",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "logging",
       "operation": "UpdateBucketAsync",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "asynchronous log-bucket updates are not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
       "service": "logging",
       "operation": "UpdateCmekSettings",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "Logging CMEK settings are not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -5945,12 +6232,11 @@
       "service": "logging",
       "operation": "UpdateSettings",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "Logging service settings are not modelled; explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {
@@ -5968,12 +6254,11 @@
       "service": "logging",
       "operation": "UpdateView",
       "transport": "grpc",
-      "state": "unsupported",
-      "reason": "log views are not modelled (entries live in a flat store); explicit Unimplemented stub",
+      "state": "ga",
       "evidence": [
         "mutating",
         "postgres=yes",
-        "transport=grpc (proto-conformance pending)"
+        "transport=grpc (conformance=1/1 pass)"
       ]
     },
     {

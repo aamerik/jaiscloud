@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 378,
-  "passed": 378,
+  "total": 399,
+  "passed": 399,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 378,
-    "passed": 378,
+    "checks": 399,
+    "passed": 399,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -86,8 +86,8 @@
     },
     {
       "service": "logging",
-      "total": 21,
-      "passed": 21,
+      "total": 42,
+      "passed": 42,
       "failed": 0,
       "unimplemented": 0
     },
@@ -1310,6 +1310,153 @@
       "method": "DeleteLogMetric",
       "status": "pass",
       "key_field": "metric absent from ListLogMetrics after delete"
+    },
+    {
+      "service": "logging",
+      "rpc": "CreateBucket",
+      "method": "CreateBucket",
+      "status": "pass",
+      "key_field": "bucket name/retentionDays/lifecycleState"
+    },
+    {
+      "service": "logging",
+      "rpc": "GetBucket",
+      "method": "GetBucket",
+      "status": "pass",
+      "key_field": "bucket by full resource name"
+    },
+    {
+      "service": "logging",
+      "rpc": "ListBuckets",
+      "method": "ListBuckets",
+      "status": "pass",
+      "key_field": "buckets[] contains the created bucket"
+    },
+    {
+      "service": "logging",
+      "rpc": "UpdateBucket",
+      "method": "UpdateBucket",
+      "status": "pass",
+      "key_field": "masked description update preserves retention"
+    },
+    {
+      "service": "logging",
+      "rpc": "CreateBucketAsync",
+      "method": "CreateBucketAsync",
+      "status": "pass",
+      "key_field": "operation completes with the created bucket"
+    },
+    {
+      "service": "logging",
+      "rpc": "UpdateBucketAsync",
+      "method": "UpdateBucketAsync",
+      "status": "pass",
+      "key_field": "operation completes with the updated bucket"
+    },
+    {
+      "service": "logging",
+      "rpc": "DeleteBucket",
+      "method": "DeleteBucket",
+      "status": "pass",
+      "key_field": "lifecycleState becomes DELETE_REQUESTED"
+    },
+    {
+      "service": "logging",
+      "rpc": "UndeleteBucket",
+      "method": "UndeleteBucket",
+      "status": "pass",
+      "key_field": "lifecycleState returns to ACTIVE"
+    },
+    {
+      "service": "logging",
+      "rpc": "CreateView",
+      "method": "CreateView",
+      "status": "pass",
+      "key_field": "view name/filter round-trip"
+    },
+    {
+      "service": "logging",
+      "rpc": "GetView",
+      "method": "GetView",
+      "status": "pass",
+      "key_field": "view by full resource name"
+    },
+    {
+      "service": "logging",
+      "rpc": "ListViews",
+      "method": "ListViews",
+      "status": "pass",
+      "key_field": "views[] contains the created view"
+    },
+    {
+      "service": "logging",
+      "rpc": "UpdateView",
+      "method": "UpdateView",
+      "status": "pass",
+      "key_field": "masked description update"
+    },
+    {
+      "service": "logging",
+      "rpc": "DeleteView",
+      "method": "DeleteView",
+      "status": "pass",
+      "key_field": "view absent after delete"
+    },
+    {
+      "service": "logging",
+      "rpc": "CreateLink",
+      "method": "CreateLink",
+      "status": "pass",
+      "key_field": "operation completes with the created link"
+    },
+    {
+      "service": "logging",
+      "rpc": "GetLink",
+      "method": "GetLink",
+      "status": "pass",
+      "key_field": "link by full resource name"
+    },
+    {
+      "service": "logging",
+      "rpc": "ListLinks",
+      "method": "ListLinks",
+      "status": "pass",
+      "key_field": "links[] contains the created link"
+    },
+    {
+      "service": "logging",
+      "rpc": "DeleteLink",
+      "method": "DeleteLink",
+      "status": "pass",
+      "key_field": "operation completes and the link is gone"
+    },
+    {
+      "service": "logging",
+      "rpc": "GetSettings",
+      "method": "GetSettings",
+      "status": "pass",
+      "key_field": "settings with a service account id"
+    },
+    {
+      "service": "logging",
+      "rpc": "UpdateSettings",
+      "method": "UpdateSettings",
+      "status": "pass",
+      "key_field": "masked storageLocation update"
+    },
+    {
+      "service": "logging",
+      "rpc": "GetCmekSettings",
+      "method": "GetCmekSettings",
+      "status": "pass",
+      "key_field": "cmek settings with a service account id"
+    },
+    {
+      "service": "logging",
+      "rpc": "UpdateCmekSettings",
+      "method": "UpdateCmekSettings",
+      "status": "pass",
+      "key_field": "masked kmsKeyName update"
     },
     {
       "service": "operations",

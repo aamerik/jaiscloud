@@ -158,5 +158,36 @@ type Store interface {
 	UpdateMetric(ctx context.Context, scope string, m LogMetric) error
 	DeleteMetric(ctx context.Context, scope, name string) error
 
+	// Admin v2 registries (log buckets, views, links, log scopes, and the
+	// per-scope Settings/CMEK records). scope is the owning resource parent and
+	// the id/name the short client-assigned identifier. See admin.go.
+	CreateBucket(ctx context.Context, scope string, b LogBucket) error
+	GetBucket(ctx context.Context, scope, id string) (LogBucket, error)
+	ListBuckets(ctx context.Context, scope string) ([]LogBucket, error)
+	UpdateBucket(ctx context.Context, scope string, b LogBucket) error
+	DeleteBucket(ctx context.Context, scope, id string) error
+
+	CreateView(ctx context.Context, scope string, v LogView) error
+	GetView(ctx context.Context, scope, id string) (LogView, error)
+	ListViews(ctx context.Context, scope string) ([]LogView, error)
+	UpdateView(ctx context.Context, scope string, v LogView) error
+	DeleteView(ctx context.Context, scope, id string) error
+
+	CreateLink(ctx context.Context, scope string, l LogLink) error
+	GetLink(ctx context.Context, scope, id string) (LogLink, error)
+	ListLinks(ctx context.Context, scope string) ([]LogLink, error)
+	DeleteLink(ctx context.Context, scope, id string) error
+
+	CreateLogScope(ctx context.Context, scope string, ls LogScope) error
+	GetLogScope(ctx context.Context, scope, id string) (LogScope, error)
+	ListLogScopes(ctx context.Context, scope string) ([]LogScope, error)
+	UpdateLogScope(ctx context.Context, scope string, ls LogScope) error
+	DeleteLogScope(ctx context.Context, scope, id string) error
+
+	GetSettings(ctx context.Context, scope string) (LogSettings, bool, error)
+	SetSettings(ctx context.Context, scope string, s LogSettings) error
+	GetCmekSettings(ctx context.Context, scope string) (LogCmekSettings, bool, error)
+	SetCmekSettings(ctx context.Context, scope string, c LogCmekSettings) error
+
 	Reset(ctx context.Context)
 }
