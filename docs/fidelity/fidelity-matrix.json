@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 1086,
+    "total": 1087,
     "by_state": {
-      "ga": 939,
+      "ga": 940,
       "limited": 101,
       "preview": 14,
       "unsupported": 32
@@ -15,7 +15,7 @@
         "unsupported": 20
       },
       "rest": {
-        "ga": 497,
+        "ga": 498,
         "limited": 100,
         "preview": 14,
         "unsupported": 12
@@ -96,7 +96,7 @@
         "ga": 5
       },
       "pubsub": {
-        "ga": 45
+        "ga": 46
       },
       "resourcemanager": {
         "ga": 20
@@ -129,7 +129,7 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 512
+        "rest": 513
       },
       "unverified": {
         "grpc": 21,
@@ -11680,7 +11680,7 @@
         "discovery=pubsub.projects.topics.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 9 transcript entries)"
+        "verified=true (rest, 10 transcript entries)"
       ]
     },
     {
@@ -11773,6 +11773,20 @@
       "verified": true,
       "evidence": [
         "discovery=pubsub.projects.topics.testIamPermissions",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "pubsub",
+      "operation": "PubSub.TopicUpdate",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "pubsub.projects.topics.patch",
+      "verified": true,
+      "evidence": [
+        "discovery=pubsub.projects.topics.patch",
+        "mutating",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]

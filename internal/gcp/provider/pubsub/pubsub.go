@@ -65,6 +65,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
 		"PubSub.TopicCreate":                    p.TopicCreate,
 		"PubSub.TopicGet":                       p.TopicGet,
+		"PubSub.TopicUpdate":                    p.TopicUpdate,
 		"PubSub.TopicDelete":                    p.TopicDelete,
 		"PubSub.TopicList":                      p.TopicList,
 		"PubSub.TopicPublish":                   p.TopicPublish,
