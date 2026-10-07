@@ -54,6 +54,40 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Logging.MetricList":   p.MetricList,
 		"Logging.MetricUpdate": p.MetricUpdate,
 		"Logging.MetricDelete": p.MetricDelete,
+
+		"Logging.BucketCreate":      p.BucketCreate,
+		"Logging.BucketCreateAsync": p.BucketCreateAsync,
+		"Logging.BucketGet":         p.BucketGet,
+		"Logging.BucketList":        p.BucketList,
+		"Logging.BucketUpdate":      p.BucketUpdate,
+		"Logging.BucketUpdateAsync": p.BucketUpdateAsync,
+		"Logging.BucketDelete":      p.BucketDelete,
+		"Logging.BucketUndelete":    p.BucketUndelete,
+
+		"Logging.ViewCreate":             p.ViewCreate,
+		"Logging.ViewGet":                p.ViewGet,
+		"Logging.ViewList":               p.ViewList,
+		"Logging.ViewUpdate":             p.ViewUpdate,
+		"Logging.ViewDelete":             p.ViewDelete,
+		"Logging.ViewGetIamPolicy":       p.ViewGetIamPolicy,
+		"Logging.ViewSetIamPolicy":       p.ViewSetIamPolicy,
+		"Logging.ViewTestIamPermissions": p.ViewTestIamPermissions,
+
+		"Logging.LinkCreate": p.LinkCreate,
+		"Logging.LinkGet":    p.LinkGet,
+		"Logging.LinkList":   p.LinkList,
+		"Logging.LinkDelete": p.LinkDelete,
+
+		"Logging.LogScopeCreate": p.LogScopeCreate,
+		"Logging.LogScopeGet":    p.LogScopeGet,
+		"Logging.LogScopeList":   p.LogScopeList,
+		"Logging.LogScopeUpdate": p.LogScopeUpdate,
+		"Logging.LogScopeDelete": p.LogScopeDelete,
+
+		"Logging.SettingsGet":    p.SettingsGet,
+		"Logging.SettingsUpdate": p.SettingsUpdate,
+		"Logging.CmekGet":        p.CmekGet,
+		"Logging.CmekUpdate":     p.CmekUpdate,
 	}
 }
 

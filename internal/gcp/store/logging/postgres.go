@@ -14,11 +14,67 @@ import (
 // PostgresStore implements Store against jc_log_entries.
 type PostgresStore struct {
 	pool *pgxpool.Pool
+	adminRecords
 }
 
 // NewPostgresStore returns a Postgres-backed store.
 func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
-	return &PostgresStore{pool: pool}
+	s := &PostgresStore{pool: pool}
+	s.backend = s
+	return s
+}
+
+// ─── admin backend ────────────────────────────────────────────────────────────
+
+func (s *PostgresStore) putAdmin(ctx context.Context, collection, scope, id string, rec adminRecord) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_log_admin_records (collection, scope, id, data)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (collection, scope, id) DO UPDATE SET data=EXCLUDED.data
+	`, collection, scope, id, nullableJSON(json.RawMessage(rec.Data)))
+	return err
+}
+
+func (s *PostgresStore) getAdmin(ctx context.Context, collection, scope, id string) (adminRecord, bool, error) {
+	var data []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT data FROM jc_log_admin_records WHERE collection=$1 AND scope=$2 AND id=$3
+	`, collection, scope, id).Scan(&data)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return adminRecord{}, false, nil
+		}
+		return adminRecord{}, false, err
+	}
+	return adminRecord{Data: append(json.RawMessage(nil), data...)}, true, nil
+}
+
+func (s *PostgresStore) listAdmin(ctx context.Context, collection, scope string) (map[string]adminRecord, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, data FROM jc_log_admin_records WHERE collection=$1 AND scope=$2 ORDER BY id
+	`, collection, scope)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]adminRecord{}
+	for rows.Next() {
+		var id string
+		var data []byte
+		if err := rows.Scan(&id, &data); err != nil {
+			return nil, err
+		}
+		out[id] = adminRecord{Data: append(json.RawMessage(nil), data...)}
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) deleteAdmin(ctx context.Context, collection, scope, id string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM jc_log_admin_records WHERE collection=$1 AND scope=$2 AND id=$3`, collection, scope, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 func nullableJSON(v any) any {
@@ -418,4 +474,5 @@ func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_sinks`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_exclusions`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_metrics`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_log_admin_records`)
 }

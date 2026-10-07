@@ -14,11 +14,12 @@ import (
 )
 
 // ConfigService implements the Cloud Logging v2 config-plane RPCs
-// (google.logging.v2.ConfigServiceV2) for sinks and exclusions over the shared
-// transport-neutral core. Every other ConfigServiceV2 RPC (buckets, views,
-// links, CMEK/settings, CopyLogEntries) is inherited from the generated
-// Unimplemented stub and fails loud — those planes are out of scope for the
-// emulator.
+// (google.logging.v2.ConfigServiceV2) over the shared transport-neutral core.
+// It covers sinks and exclusions (config.go), and the Admin v2 surface
+// (admin.go): log buckets (sync + async), views, BigQuery links, log scopes,
+// and the Settings/CMEK records. CopyLogEntries is inherited from the generated
+// Unimplemented stub and fails loud — the emulator has no per-bucket entry data
+// plane, so a cross-project copy has nothing faithful to copy.
 type ConfigService struct {
 	loggingpb.UnimplementedConfigServiceV2Server
 

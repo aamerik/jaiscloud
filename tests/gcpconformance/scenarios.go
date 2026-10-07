@@ -416,6 +416,66 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + metricName},
 	)
 
+	// Cloud Logging Admin v2: buckets, views (+ IAM), links, log scopes, and the
+	// per-scope settings/CMEK records. One project bucket holds the views and
+	// links; a second exercises the async create/update and delete/undelete.
+	logLocParent := "projects/" + p + "/locations/global"
+	logBucketID := "conf-bucket-" + suffix
+	logBucket := logLocParent + "/buckets/" + logBucketID
+	logBucket2ID := "conf-bucket2-" + suffix
+	logBucket2 := logLocParent + "/buckets/" + logBucket2ID
+	logViewID := "conf-view-" + suffix
+	logView := logBucket + "/views/" + logViewID
+	logLinkID := "conf-link-" + suffix
+	logLink := logBucket + "/links/" + logLinkID
+	logScopeID := "conf-scope-" + suffix
+	logScope := logLocParent + "/logScopes/" + logScopeID
+	sc = append(sc,
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/" + logLocParent + "/buckets?bucketId=" + logBucketID,
+			Body: `{"description":"conformance","retentionDays":30}`},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + logLocParent + "/buckets"},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + logBucket},
+		Scenario{Service: "logging", Method: "PATCH", Path: "/v2/" + logBucket + "?updateMask=description",
+			Body: `{"description":"updated"}`},
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/" + logLocParent + "/buckets:createAsync?bucketId=" + logBucket2ID,
+			Body: `{"description":"async"}`},
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/" + logBucket2 + ":updateAsync?updateMask=description",
+			Body: `{"description":"async-updated"}`},
+		Scenario{Service: "logging", Method: "DELETE", Path: "/v2/" + logBucket2},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + logBucket2},
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/" + logBucket2 + ":undelete"},
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/" + logBucket + "/views?viewId=" + logViewID,
+			Body: `{"description":"conformance","filter":"severity>=ERROR"}`},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + logView},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + logBucket + "/views"},
+		Scenario{Service: "logging", Method: "PATCH", Path: "/v2/" + logView + "?updateMask=description",
+			Body: `{"description":"updated"}`},
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/" + logView + ":getIamPolicy", Body: `{}`},
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/" + logView + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/viewer","members":["user:test@example.com"]}]}}`},
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/" + logView + ":testIamPermissions",
+			Body: `{"permissions":["logging.views.get"]}`},
+		Scenario{Service: "logging", Method: "DELETE", Path: "/v2/" + logView},
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/" + logBucket + "/links?linkId=" + logLinkID,
+			Body: fmt.Sprintf(`{"description":"conformance","bigqueryDataset":{"datasetId":"conf_ds_%s"}}`, suffix)},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + logLink},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + logBucket + "/links"},
+		Scenario{Service: "logging", Method: "DELETE", Path: "/v2/" + logLink},
+		Scenario{Service: "logging", Method: "POST", Path: "/v2/" + logLocParent + "/logScopes?logScopeId=" + logScopeID,
+			Body: fmt.Sprintf(`{"description":"conformance","resourceNames":["projects/%s"]}`, p)},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + logScope},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/" + logLocParent + "/logScopes"},
+		Scenario{Service: "logging", Method: "PATCH", Path: "/v2/" + logScope + "?updateMask=description",
+			Body: `{"description":"updated"}`},
+		Scenario{Service: "logging", Method: "DELETE", Path: "/v2/" + logScope},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/projects/" + p + "/settings"},
+		Scenario{Service: "logging", Method: "PATCH", Path: "/v2/projects/" + p + "/settings?updateMask=storageLocation",
+			Body: `{"storageLocation":"us"}`},
+		Scenario{Service: "logging", Method: "GET", Path: "/v2/projects/" + p + "/cmekSettings"},
+		Scenario{Service: "logging", Method: "PATCH", Path: "/v2/projects/" + p + "/cmekSettings?updateMask=kmsKeyName",
+			Body: `{"kmsKeyName":"projects/p/locations/global/keyRings/r/cryptoKeys/k"}`},
+	)
+
 	// ─── Cloud Functions v2 runtime catalog ───────────────────────────────────
 	// The runtime catalog is the v2-deploy enabler: gcloud resolves a function's
 	// runtime from this list (filtered to environment GEN_2) before uploading

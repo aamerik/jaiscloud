@@ -27,19 +27,36 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	"jaiscloud/internal/store"
 )
 
 // Service is the transport-neutral Cloud Logging service over the shared store.
 type Service struct {
 	store       loggingstore.Store
+	resources   store.ResourceStore
 	defaultProj string
+}
+
+// Option configures the logging core.
+type Option func(*Service)
+
+// WithResources supplies the store.ResourceStore that backs the log-view IAM
+// policy surface (getIamPolicy / setIamPolicy / testIamPermissions). Without
+// it the entry/sink/metric/bucket planes work unchanged and only view IAM is
+// unavailable.
+func WithResources(s store.ResourceStore) Option {
+	return func(svc *Service) { svc.resources = s }
 }
 
 // NewService returns a Logging core backed by the shared store. defaultProj is
 // the config-default project; transports use it when a request carries no
 // project/scope.
-func NewService(store loggingstore.Store, defaultProj string) *Service {
-	return &Service{store: store, defaultProj: defaultProj}
+func NewService(store loggingstore.Store, defaultProj string, opts ...Option) *Service {
+	svc := &Service{store: store, defaultProj: defaultProj}
+	for _, o := range opts {
+		o(svc)
+	}
+	return svc
 }
 
 // ─── write path ───────────────────────────────────────────────────────────────

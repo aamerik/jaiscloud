@@ -6,23 +6,23 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **970**
+Cells: **999**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 729 |
+| ga | 779 |
 | limited | 101 |
 | preview | 14 |
-| unsupported | 126 |
+| unsupported | 105 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 386 | 100 | 14 | 12 |
-| grpc | 343 | 1 | 0 | 114 |
+| rest | 415 | 100 | 14 | 12 |
+| grpc | 364 | 1 | 0 | 93 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -609,42 +609,52 @@ _70 cell(s): ga=70 limited=0 preview=0 unsupported=0_
 
 ## logging
 
-_64 cell(s): ga=41 limited=1 preview=0 unsupported=22_
+_93 cell(s): ga=91 limited=1 preview=0 unsupported=1_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | CopyLogEntries | grpc | unsupported | cross-project log copy is not modelled; explicit Unimplemented stub |
-| CreateBucket | grpc | unsupported | log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub |
-| CreateBucketAsync | grpc | unsupported | asynchronous log-bucket creation is not modelled; explicit Unimplemented stub |
+| CreateBucket | grpc | ga | — |
+| CreateBucketAsync | grpc | ga | — |
 | CreateExclusion | grpc | ga | — |
-| CreateLink | grpc | unsupported | BigQuery linked datasets are not modelled; explicit Unimplemented stub |
+| CreateLink | grpc | ga | — |
 | CreateLogMetric | grpc | ga | — |
 | CreateSink | grpc | ga | — |
-| CreateView | grpc | unsupported | log views are not modelled (entries live in a flat store); explicit Unimplemented stub |
-| DeleteBucket | grpc | unsupported | log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub |
+| CreateView | grpc | ga | — |
+| DeleteBucket | grpc | ga | — |
 | DeleteExclusion | grpc | ga | — |
-| DeleteLink | grpc | unsupported | BigQuery linked datasets are not modelled; explicit Unimplemented stub |
+| DeleteLink | grpc | ga | — |
 | DeleteLog | grpc | ga | — |
 | DeleteLogMetric | grpc | ga | — |
 | DeleteSink | grpc | ga | — |
-| DeleteView | grpc | unsupported | log views are not modelled (entries live in a flat store); explicit Unimplemented stub |
-| GetBucket | grpc | unsupported | log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub |
-| GetCmekSettings | grpc | unsupported | Logging CMEK settings are not modelled; explicit Unimplemented stub |
+| DeleteView | grpc | ga | — |
+| GetBucket | grpc | ga | — |
+| GetCmekSettings | grpc | ga | — |
 | GetExclusion | grpc | ga | — |
-| GetLink | grpc | unsupported | BigQuery linked datasets are not modelled; explicit Unimplemented stub |
+| GetLink | grpc | ga | — |
 | GetLogMetric | grpc | ga | — |
-| GetSettings | grpc | unsupported | Logging service settings are not modelled; explicit Unimplemented stub |
+| GetSettings | grpc | ga | — |
 | GetSink | grpc | ga | — |
-| GetView | grpc | unsupported | log views are not modelled (entries live in a flat store); explicit Unimplemented stub |
-| ListBuckets | grpc | unsupported | log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub |
+| GetView | grpc | ga | — |
+| ListBuckets | grpc | ga | — |
 | ListExclusions | grpc | ga | — |
-| ListLinks | grpc | unsupported | BigQuery linked datasets are not modelled; explicit Unimplemented stub |
+| ListLinks | grpc | ga | — |
 | ListLogEntries | grpc | ga | — |
 | ListLogMetrics | grpc | ga | — |
 | ListLogs | grpc | ga | — |
 | ListMonitoredResourceDescriptors | grpc | ga | — |
 | ListSinks | grpc | ga | — |
-| ListViews | grpc | unsupported | log views are not modelled (entries live in a flat store); explicit Unimplemented stub |
+| ListViews | grpc | ga | — |
+| Logging.BucketCreate | rest | ga | — |
+| Logging.BucketCreateAsync | rest | ga | — |
+| Logging.BucketDelete | rest | ga | — |
+| Logging.BucketGet | rest | ga | — |
+| Logging.BucketList | rest | ga | — |
+| Logging.BucketUndelete | rest | ga | — |
+| Logging.BucketUpdate | rest | ga | — |
+| Logging.BucketUpdateAsync | rest | ga | — |
+| Logging.CmekGet | rest | ga | — |
+| Logging.CmekUpdate | rest | ga | — |
 | Logging.EntryList | rest | ga | — |
 | Logging.EntryWrite | rest | ga | — |
 | Logging.ExclusionCreate | rest | ga | — |
@@ -652,30 +662,49 @@ _64 cell(s): ga=41 limited=1 preview=0 unsupported=22_
 | Logging.ExclusionGet | rest | ga | — |
 | Logging.ExclusionList | rest | ga | — |
 | Logging.ExclusionPatch | rest | ga | — |
+| Logging.LinkCreate | rest | ga | — |
+| Logging.LinkDelete | rest | ga | — |
+| Logging.LinkGet | rest | ga | — |
+| Logging.LinkList | rest | ga | — |
 | Logging.LogDelete | rest | ga | — |
 | Logging.LogList | rest | ga | — |
+| Logging.LogScopeCreate | rest | ga | — |
+| Logging.LogScopeDelete | rest | ga | — |
+| Logging.LogScopeGet | rest | ga | — |
+| Logging.LogScopeList | rest | ga | — |
+| Logging.LogScopeUpdate | rest | ga | — |
 | Logging.MetricCreate | rest | ga | — |
 | Logging.MetricDelete | rest | ga | — |
 | Logging.MetricGet | rest | ga | — |
 | Logging.MetricList | rest | ga | — |
 | Logging.MetricUpdate | rest | ga | — |
 | Logging.MonitoredResourceDescriptorList | rest | ga | — |
+| Logging.SettingsGet | rest | ga | — |
+| Logging.SettingsUpdate | rest | ga | — |
 | Logging.SinkCreate | rest | ga | — |
 | Logging.SinkDelete | rest | ga | — |
 | Logging.SinkGet | rest | ga | — |
 | Logging.SinkList | rest | ga | — |
 | Logging.SinkPatch | rest | ga | — |
 | Logging.SinkUpdate | rest | ga | — |
+| Logging.ViewCreate | rest | ga | — |
+| Logging.ViewDelete | rest | ga | — |
+| Logging.ViewGet | rest | ga | — |
+| Logging.ViewGetIamPolicy | rest | ga | — |
+| Logging.ViewList | rest | ga | — |
+| Logging.ViewSetIamPolicy | rest | ga | — |
+| Logging.ViewTestIamPermissions | rest | ga | — |
+| Logging.ViewUpdate | rest | ga | — |
 | TailLogEntries | grpc | limited | bounded store-poll tail whose latency derives from buffer_window; no deterministic conformance assertion exists |
-| UndeleteBucket | grpc | unsupported | log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub |
-| UpdateBucket | grpc | unsupported | log buckets are not modelled (entries live in a flat store); explicit Unimplemented stub |
-| UpdateBucketAsync | grpc | unsupported | asynchronous log-bucket updates are not modelled; explicit Unimplemented stub |
-| UpdateCmekSettings | grpc | unsupported | Logging CMEK settings are not modelled; explicit Unimplemented stub |
+| UndeleteBucket | grpc | ga | — |
+| UpdateBucket | grpc | ga | — |
+| UpdateBucketAsync | grpc | ga | — |
+| UpdateCmekSettings | grpc | ga | — |
 | UpdateExclusion | grpc | ga | — |
 | UpdateLogMetric | grpc | ga | — |
-| UpdateSettings | grpc | unsupported | Logging service settings are not modelled; explicit Unimplemented stub |
+| UpdateSettings | grpc | ga | — |
 | UpdateSink | grpc | ga | — |
-| UpdateView | grpc | unsupported | log views are not modelled (entries live in a flat store); explicit Unimplemented stub |
+| UpdateView | grpc | ga | — |
 | WriteLogEntries | grpc | ga | — |
 
 ## managedkafka
