@@ -153,6 +153,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq \
         _check-lakehouse-k3d-prereq _check-gcp-samples-prereq _check-dataproc-streaming-k8s-prereq _check-dataproc-namespace-k8s-prereq _check-managedkafka-broker-k8s-prereq _refresh-gcp-image \
         test-gcp-wire-conformance record-gcp-wire-conformance test-gcp-grpc-conformance \
+        test-gcp-rest-grpc-parity \
         test-gcp-gcloud-conformance test-gcp-python-conformance \
         test-gcp-differential record-gcp-differential \
         test-gcp-terraform test-gcp-opentofu \
@@ -828,6 +829,19 @@ test-gcp-grpc-conformance: build-gcp ## gRPC message-level conformance suite via
 	  done; echo "  ready (REST :8080, gRPC :8081)"; \
 	  ( cd tests/gcpconformance/grpc && GCP_EMULATOR_ENDPOINT_GRPC=localhost:8081 go test -count=1 -v -timeout 180s ./... )
 
+test-gcp-rest-grpc-parity: build-gcp ## REST<->gRPC cross-transport parity suite (tags: gcp_parity,gcp_differential,gcp_conformance)
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@set -e; \
+	  ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-parity.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-parity.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080, gRPC :8081)"; \
+	  GCP_EMULATOR_ENDPOINT_REST=http://localhost:8080 GCP_EMULATOR_ENDPOINT_GRPC=localhost:8081 \
+	    go test -count=1 -tags gcp_conformance,gcp_differential,gcp_parity -v -timeout 300s ./tests/gcpparity/
+
 test-gcp-gcloud-conformance: ## gcloud CLI client-conformance smoke suite vs ephemeral emulator (tag: gcloud_conformance)
 	@echo "Building jaiscloud-gcp -> /tmp/jc-gcloud ..."
 	@go build -o /tmp/jc-gcloud ./cmd/jaiscloud-gcp/
@@ -935,7 +949,7 @@ gcp-status-finalize: ## Finalize a completed plan doc: PLAN=plan_docs/<doc>.md I
 # One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/GA.md.
 # The gRPC and gcloud targets each build + boot an ephemeral emulator on :8080/:8081 and stop it;
 # gcloud self-skips when it is not on PATH. Persistence/e2e are intentionally excluded.
-ga-check: check-gcp-fidelity-matrix test-gcp-wire-conformance test-gcp-grpc-conformance test-gcp-gcloud-conformance ## One aggregate GA gate: fidelity drift + REST/gRPC/gcloud client conformance (no Docker/Postgres/k8s)
+ga-check: check-gcp-fidelity-matrix test-gcp-wire-conformance test-gcp-grpc-conformance test-gcp-rest-grpc-parity test-gcp-gcloud-conformance ## One aggregate GA gate: fidelity drift + REST/gRPC/gcloud client conformance (no Docker/Postgres/k8s)
 	@echo ""
 	@echo "GA gate: offline + client conformance passed"
 	@echo "  (grpc/gcloud targets build + boot an ephemeral emulator; this can take a few minutes)"

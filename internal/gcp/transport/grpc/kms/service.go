@@ -827,6 +827,19 @@ func cryptoKeyToProto(project string, k kmsstore.CryptoKey, primaryVersion kmsst
 		Algorithm:       algorithmToProto(k.Algorithm),
 		ProtectionLevel: pl,
 	}
+	// A CryptoKeyVersion always carries createTime + generateTime; the REST
+	// adapter renders them from the version's stored CreateTime (falling back to
+	// the key's), so the gRPC render must too — otherwise the two transports
+	// disagree on a field the proto defines. Software-generated key material has
+	// createTime == generateTime.
+	primaryCreateTime := primaryVersion.CreateTime
+	if primaryCreateTime.IsZero() {
+		primaryCreateTime = k.CreateTime
+	}
+	if !primaryCreateTime.IsZero() {
+		primary.CreateTime = timestamppb.New(primaryCreateTime)
+		primary.GenerateTime = timestamppb.New(primaryCreateTime)
+	}
 	if primaryVersion.State == "DESTROY_SCHEDULED" && !primaryVersion.DestroyTime.IsZero() {
 		primary.DestroyTime = timestamppb.New(primaryVersion.DestroyTime)
 	}
