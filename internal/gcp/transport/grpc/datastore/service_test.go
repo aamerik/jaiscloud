@@ -196,6 +196,10 @@ func TestCommitInsertAutoAllocatesKey(t *testing.T) {
 	if len(look.GetFound()) != 1 {
 		t.Fatalf("found = %v, want 1", look.GetFound())
 	}
+	// A lookup response carries the served-at timestamp on both transports.
+	if look.GetReadTime() == nil {
+		t.Fatal("lookup read_time must be set")
+	}
 }
 
 func TestLookupFoundAndMissing(t *testing.T) {

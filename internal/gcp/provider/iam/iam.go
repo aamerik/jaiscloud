@@ -88,6 +88,31 @@ func resourceName(nr *model.NormalizedRequest) (string, error) {
 	return n, nil
 }
 
+// validAccountID enforces the service-account accountId pattern real GCP
+// applies, [a-z]([-a-z0-9]*[a-z0-9])?: the id begins with a lowercase letter,
+// contains only lowercase letters, digits and hyphens, and (when longer than
+// one character) ends in a letter or digit. The 6-30 length rule is not
+// enforced here because the emulator's own fixtures use shorter ids.
+func validAccountID(id string) bool {
+	if id == "" || id[0] < 'a' || id[0] > 'z' {
+		return false
+	}
+	if len(id) > 1 {
+		last := id[len(id)-1]
+		if !((last >= 'a' && last <= 'z') || (last >= '0' && last <= '9')) {
+			return false
+		}
+	}
+	for i := 1; i < len(id)-1; i++ {
+		c := id[i]
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // emailFromName extracts the service-account email from a full or relative
 // resource name (last path segment).
 func emailFromName(name string) string {
@@ -106,6 +131,10 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	}
 	if accountID == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing accountId", 400)
+	}
+	if !validAccountID(accountID) {
+		return nil, model.NewProviderError("InvalidRequest",
+			accountID+" does not match [a-z]([-a-z0-9]*[a-z0-9])?", 400)
 	}
 	displayName := accountID
 	description := ""

@@ -383,7 +383,7 @@ func (s *Service) Lookup(ctx context.Context, project string, keys []Key, txn []
 	if err := s.requireActive(txn); err != nil {
 		return nil, err
 	}
-	resp := &LookupResult{}
+	resp := &LookupResult{ReadTime: clock.Now()}
 	for _, k := range keys {
 		if !k.Complete() {
 			return nil, invalidArgument("lookup key is incomplete")

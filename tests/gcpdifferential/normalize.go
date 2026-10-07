@@ -78,6 +78,12 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		{names.ComputeInstance, "<computeInstance>"},
 		{names.SQLInstance, "<sqlInstance>"},
 		{names.RedisInstance, "<redisInstance>"},
+		// AUD6 breadth: the GKE/Dataproc read-only probes, the custom log name
+		// and the nonexistent metric type all embed the run suffix.
+		{names.ContainerCluster, "<containerCluster>"},
+		{names.DataprocCluster, "<dataprocCluster>"},
+		{names.LogName, "<logName>"},
+		{names.MetricType, "<metricType>"},
 		// A missing service-account probe is an email-shaped 404 path; fold it
 		// too so a golden never carries an "@" or the gserviceaccount domain.
 		{"missing-" + suffix + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
@@ -245,6 +251,9 @@ var volatileStringKeys = map[string]string{
 	// List counts are polluted by unrelated real-project resources; the element
 	// arrays are scoped to this harness's resources, so the raw count is noise.
 	"totalSize": "<totalSize>",
+	// Cloud Datastore entity versions are opaque, monotonically increasing
+	// server-side values that differ between real GCP and the emulator.
+	"version": "<version>",
 }
 
 // volatileObjectKeys are fields whose entire value is opaque/volatile and is
@@ -287,6 +296,11 @@ var sortArrayKeys = map[string]bool{
 	"accounts": true,
 	// Firestore document list.
 	"documents": true,
+	// AUD6 breadth: GKE/Dataproc cluster lists, workflow-execution lists and
+	// the project log-name list have unspecified element order.
+	"clusters":   true,
+	"executions": true,
+	"logNames":   true,
 }
 
 // scopedListPlaceholders maps a collection field to the placeholder that
@@ -318,6 +332,15 @@ var scopedListPlaceholders = map[string]string{
 	// Memorystore: scoped to this run's (always-absent) instance, so unrelated
 	// real-project instances cannot pollute the empty-list golden.
 	"instances": "<redisInstance>",
+	// AUD6 breadth. GKE/Dataproc clusters are a read-only smoke that creates no
+	// resource, so the list is forced empty: the placeholder matches no
+	// normalized element name (the probes fold to <containerCluster> /
+	// <dataprocCluster>), which keeps unrelated real-project clusters out of the
+	// routing/empty-shape golden — the same intent as compute's `items` →
+	// `<bucket>`. The logging log-name list is scoped to this run's custom log,
+	// which drops the real project's always-present cloudaudit logs.
+	"clusters": "<cluster>",
+	"logNames": "<logName>",
 }
 
 // value normalizes a decoded JSON value, rewriting volatile fields and sorting

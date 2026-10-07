@@ -47,6 +47,31 @@ func bucketParams() *model.NormalizedRequest {
 	return &model.NormalizedRequest{AccountID: "proj", Params: map[string]any{}, ResourceID: resource.ResourceID("proj")}
 }
 
+// TestBucketsInsertRejectsInvalidName pins the GCS bucket-naming rule the
+// differential harness found missing: a name with uppercase letters or an
+// out-of-place separator is INVALID_ARGUMENT (400), while a legal name still
+// creates.
+func TestBucketsInsertRejectsInvalidName(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"INVALID_BUCKET_NAME", "Upper", "-lead", "trail-", "has space"} {
+		p := newTestProvider()
+		nr := bucketParams()
+		nr.Params["body"] = map[string]any{"name": name}
+		_, err := p.BucketsInsert(ctx, nr)
+		pe, ok := err.(*model.ProviderError)
+		if !ok || pe.HTTPStatus != 400 {
+			t.Errorf("BucketsInsert(%q) err = %v, want 400 ProviderError", name, err)
+		}
+	}
+
+	p := newTestProvider()
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "conf-bucket-a1b2c3"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Errorf("BucketsInsert(valid) err = %v, want nil", err)
+	}
+}
+
 // TestObjectsScopeToBucketProject verifies that object operations scope to the
 // bucket's owning project rather than the request's default project (object
 // requests carry no ?project=). Without this, a bucket created under

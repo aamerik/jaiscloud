@@ -124,6 +124,9 @@ func (p *Provider) Lookup(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		}
 		out["missing"] = missing
 	}
+	if !resp.ReadTime.IsZero() {
+		out["readTime"] = resp.ReadTime.UTC().Format(time.RFC3339Nano)
+	}
 	return provider.OK(out), nil
 }
 

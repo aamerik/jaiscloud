@@ -270,6 +270,11 @@ func (p *Provider) TopicPublish(ctx context.Context, nr *model.NormalizedRequest
 
 	body, _ := nr.Params["body"].(map[string]any)
 	msgs, _ := body["messages"].([]any)
+	if len(msgs) == 0 {
+		// Real Pub/Sub requires at least one message per publish request.
+		return nil, model.NewProviderError("InvalidRequest",
+			"The value for message_count is too small. You passed 0; it must be at least 1.", 400)
+	}
 	ids := make([]string, 0, len(msgs))
 	stored := make([]pubsubstore.Message, 0, len(msgs))
 	plainData := make([]string, 0, len(msgs))

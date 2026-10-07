@@ -95,6 +95,23 @@ var triageRules = []TriageRule{
 		Location: "response.error.details",
 		Reason:   "google.rpc error details[] (e.g. ResourceInfo) is optional; the modern envelope's code+message+status match",
 	},
+	// BigQuery's legacy errors[] detail carries a per-token location and
+	// locationType for a SQL parse error. The machine-readable code/message/
+	// status match; no official client branches on the token position.
+	{
+		Service:  "bigquery",
+		Op:       "query_bad_sql",
+		Kind:     "missing_field",
+		Location: "errors[0].location",
+		Reason:   "BigQuery's legacy errors[].location is a per-token parse-offset detail; the code/message/status in the envelope match real GCP",
+	},
+	{
+		Service:  "bigquery",
+		Op:       "query_bad_sql",
+		Kind:     "missing_field",
+		Location: "errors[0].locationType",
+		Reason:   "BigQuery's legacy errors[].locationType is a per-token parse-offset detail; the code/message/status in the envelope match real GCP",
+	},
 	// Long-running operations complete synchronously in the emulator, so its
 	// create/update/delete operation is already done=true while real GCP
 	// returns done=false at submit time. The operation and its metadata are
@@ -236,6 +253,16 @@ var triageRules = []TriageRule{
 		Service: "redis",
 		Op:      "redis_instances_list_noauth",
 		Reason:  "authz is not enforced by design (G1, docs/GA.md §10): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
+	},
+	{
+		Service: "container",
+		Op:      "container_clusters_list_noauth",
+		Reason:  "authz is not enforced by design (G1, docs/GA.md §10): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
+	},
+	{
+		Service: "serviceusage",
+		Op:      "su_service_get_unknown",
+		Reason:  "the emulator does not maintain the Service Usage catalog: it synthesizes any service name as DISABLED instead of reporting real GCP's 403 PERMISSION_DENIED for a service the caller cannot see; the divergence is the documented catalog/authz gap (G1), not a wire-shape bug",
 	},
 }
 

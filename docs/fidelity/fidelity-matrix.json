@@ -11751,7 +11751,7 @@
         "discovery=pubsub.projects.topics.publish",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 2 transcript entries)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {

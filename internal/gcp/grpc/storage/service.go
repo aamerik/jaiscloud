@@ -535,6 +535,9 @@ func (s *Service) CreateBucket(ctx context.Context, req *storagepb.CreateBucketR
 	if name == "" {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "missing bucket name", 400))
 	}
+	if !resource.ValidBucketName(name) {
+		return nil, mapError(model.NewProviderError("InvalidArgument", "Invalid bucket name: "+name, 400))
+	}
 	project := parseProject(req.GetBucket().GetProject())
 	if project == "" {
 		project = grpcutil.ProjectFromMetadata(ctx, s.defaultProj)

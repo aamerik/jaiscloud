@@ -13,6 +13,29 @@ import (
 	"strings"
 )
 
+// ValidBucketName reports whether name satisfies the GCS bucket-naming
+// character rules: lowercase letters, digits, and '-', '_' or '.', with the
+// name beginning and ending in a letter or digit. It is shared by the REST and
+// gRPC adapters so both reject the same names. Length bounds (3-63, or 3-222
+// with dots) and the reserved-prefix rules (goog, google, an IP literal) are
+// not enforced: the emulator's fixtures and clients use short names, and those
+// rules are not part of the recorded differential contract.
+func ValidBucketName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case (c == '-' || c == '_' || c == '.') && i != 0 && i != len(name)-1:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // formatters maps abstract resource types to their GCP resource-name format
 // function. To add a new resource type, add one entry here — no switch to update.
 var formatters = map[string]func(project, name string) string{
