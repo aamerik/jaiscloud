@@ -338,14 +338,18 @@ func applyBucketMask(stored, incoming loggingstore.LogBucket, updateMask []strin
 			stored.Description = incoming.Description
 		case "retention_days":
 			stored.RetentionDays = incoming.RetentionDays
+		case "locked":
+			stored.Locked = incoming.Locked
 		case "analytics_enabled":
 			stored.AnalyticsEnabled = incoming.AnalyticsEnabled
+		case "restricted_fields":
+			stored.RestrictedFields = incoming.RestrictedFields
 		case "index_configs":
 			stored.IndexConfigs = incoming.IndexConfigs
 		case "cmek_settings":
 			stored.Cmek = incoming.Cmek
 		default:
-			return stored, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+raw, 501)
+			return stored, invalidMaskPath(raw)
 		}
 	}
 	return stored, nil
@@ -449,7 +453,7 @@ func (s *Service) UpdateView(ctx context.Context, name string, in loggingstore.L
 		case "filter":
 			stored.Filter = in.Filter
 		default:
-			return loggingstore.LogView{}, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+raw, 501)
+			return loggingstore.LogView{}, invalidMaskPath(raw)
 		}
 	}
 	stored.Name = id
@@ -655,7 +659,7 @@ func (s *Service) UpdateLogScope(ctx context.Context, name string, in loggingsto
 		case "resource_names":
 			stored.ResourceNames = in.ResourceNames
 		default:
-			return loggingstore.LogScope{}, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+raw, 501)
+			return loggingstore.LogScope{}, invalidMaskPath(raw)
 		}
 	}
 	stored.Name = id
@@ -725,7 +729,7 @@ func (s *Service) UpdateSettings(ctx context.Context, name string, in loggingsto
 		case "default_sink_config":
 			stored.DefaultSinkConfig = in.DefaultSinkConfig
 		default:
-			return loggingstore.LogSettings{}, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+raw, 501)
+			return loggingstore.LogSettings{}, invalidMaskPath(raw)
 		}
 	}
 	if err := s.store.SetSettings(ctx, scope, stored); err != nil {
@@ -781,7 +785,7 @@ func (s *Service) UpdateCmekSettings(ctx context.Context, name string, in loggin
 		case "kms_key_version_name":
 			stored.KmsKeyVersionName = in.KmsKeyVersionName
 		default:
-			return loggingstore.LogCmekSettings{}, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+raw, 501)
+			return loggingstore.LogCmekSettings{}, invalidMaskPath(raw)
 		}
 	}
 	if err := s.store.SetCmekSettings(ctx, scope, stored); err != nil {

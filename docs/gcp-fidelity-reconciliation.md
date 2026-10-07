@@ -83,6 +83,14 @@ behaviour. With the probe artifacts excluded, the grades agree.
 Rollup before → after: **ga 939 → 935, limited 101 → 105** (REST ga 497 → 493,
 REST limited 100 → 104); `verified` is unchanged (500/623 REST, 442/463 gRPC).
 
+**Follow-up (AUD2-1).** The four `limited` grades were a code gap, not a permanent
+limitation. AUD2-1 models the fields (`LogBucket.restrictedFields`;
+`LogSink.bigqueryOptions`/`interceptChildren`/`outputVersionFormat`), adds them to
+the two merges, and maps them in both transports, so the four cells are `ga` again
+and the rollup returns to **ga 939, limited 101** (REST ga 497, REST limited 100).
+Unmappable mask paths in those handlers now answer `400 INVALID_ARGUMENT`
+(AIP-134/AIP-161) instead of `501 UNIMPLEMENTED`.
+
 ### 2. No stale `unsupported` grade
 
 Every REST `unsupported` cell either resolves to no single Discovery method (the
@@ -132,10 +140,12 @@ go test -count=1 -tags gcp_conformance -run TestUnsupportedStubReconciliation ./
 
 ## Intentional `gcp-matrix-diff` regressions
 
-`make gcp-matrix-diff REF=upstream/gcp` reports exactly **4 regressions** and
-**0 new gaps** against the base: the four `ga → limited` re-grades above, and
-nothing else. Each corrects a published grade to match a real, code-grounded
-limitation; the emulator's behaviour is unchanged.
+At AUD5 merge time `make gcp-matrix-diff REF=upstream/gcp` reported exactly **4
+regressions** and **0 new gaps**: the four `ga → limited` re-grades above, and
+nothing else. Each corrected a published grade to match a real, code-grounded
+limitation. **Those four are closed by AUD2-1**, which implements the missing
+fields and restores the cells to `ga`, so `gcp-matrix-diff` now reports **0
+regressions**.
 
 ## Deferred
 

@@ -177,7 +177,8 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 
 	sinkRows, err := s.pool.Query(ctx, `
-		SELECT project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time
+		SELECT project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children,
+		       intercept_children, output_version_format, bigquery_options, create_time, update_time
 		FROM jc_log_sinks ORDER BY project_id, name
 	`)
 	if err != nil {
@@ -188,14 +189,18 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 			ProjectID string  `json:"projectId"`
 			Sink      LogSink `json:"sink"`
 		}
-		var exclusions []byte
+		var exclusions, bigQueryOptions []byte
 		if err := sinkRows.Scan(&r.ProjectID, &r.Sink.Name, &r.Sink.Destination, &r.Sink.Filter, &r.Sink.Description,
-			&r.Sink.Disabled, &exclusions, &r.Sink.WriterIdentity, &r.Sink.IncludeChildren, &r.Sink.CreateTime, &r.Sink.UpdateTime); err != nil {
+			&r.Sink.Disabled, &exclusions, &r.Sink.WriterIdentity, &r.Sink.IncludeChildren,
+			&r.Sink.InterceptChildren, &r.Sink.OutputVersionFormat, &bigQueryOptions, &r.Sink.CreateTime, &r.Sink.UpdateTime); err != nil {
 			sinkRows.Close()
 			return err
 		}
 		if len(exclusions) > 0 {
 			_ = json.Unmarshal(exclusions, &r.Sink.Exclusions)
+		}
+		if len(bigQueryOptions) > 0 && string(bigQueryOptions) != "null" {
+			_ = json.Unmarshal(bigQueryOptions, &r.Sink.BigQueryOptions)
 		}
 		snap.Sinks = append(snap.Sinks, r)
 	}
@@ -330,10 +335,13 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 	for _, r := range snap.Sinks {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_log_sinks
-				(project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+				(project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children,
+				 intercept_children, output_version_format, bigquery_options, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		`, r.ProjectID, r.Sink.Name, r.Sink.Destination, r.Sink.Filter, r.Sink.Description, r.Sink.Disabled,
-			nullableJSON(nonNilExclusions(r.Sink.Exclusions)), r.Sink.WriterIdentity, r.Sink.IncludeChildren, r.Sink.CreateTime, r.Sink.UpdateTime); err != nil {
+			nullableJSON(nonNilExclusions(r.Sink.Exclusions)), r.Sink.WriterIdentity, r.Sink.IncludeChildren,
+			r.Sink.InterceptChildren, r.Sink.OutputVersionFormat, sinkBigQueryOptionsArg(r.Sink.BigQueryOptions),
+			r.Sink.CreateTime, r.Sink.UpdateTime); err != nil {
 			return err
 		}
 	}

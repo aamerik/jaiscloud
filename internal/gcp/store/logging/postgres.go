@@ -161,10 +161,12 @@ func (s *PostgresStore) CreateSink(ctx context.Context, scope string, sink LogSi
 	}
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_log_sinks
-			(project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			(project_id, name, destination, filter, description, disabled, exclusions, writer_identity, include_children,
+			 intercept_children, output_version_format, bigquery_options, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		ON CONFLICT (project_id, name) DO NOTHING
-	`, scope, sink.Name, sink.Destination, sink.Filter, sink.Description, sink.Disabled, exclusions, sink.WriterIdentity, sink.IncludeChildren, sink.CreateTime, sink.UpdateTime)
+	`, scope, sink.Name, sink.Destination, sink.Filter, sink.Description, sink.Disabled, exclusions, sink.WriterIdentity, sink.IncludeChildren,
+		sink.InterceptChildren, sink.OutputVersionFormat, sinkBigQueryOptionsArg(sink.BigQueryOptions), sink.CreateTime, sink.UpdateTime)
 	if err != nil {
 		return err
 	}
@@ -176,7 +178,8 @@ func (s *PostgresStore) CreateSink(ctx context.Context, scope string, sink LogSi
 
 func (s *PostgresStore) GetSink(ctx context.Context, scope, name string) (LogSink, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time
+		SELECT name, destination, filter, description, disabled, exclusions, writer_identity, include_children,
+		       intercept_children, output_version_format, bigquery_options, create_time, update_time
 		FROM jc_log_sinks WHERE project_id=$1 AND name=$2
 	`, scope, name)
 	return scanSink(row)
@@ -184,7 +187,8 @@ func (s *PostgresStore) GetSink(ctx context.Context, scope, name string) (LogSin
 
 func (s *PostgresStore) ListSinks(ctx context.Context, scope string) ([]LogSink, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT name, destination, filter, description, disabled, exclusions, writer_identity, include_children, create_time, update_time
+		SELECT name, destination, filter, description, disabled, exclusions, writer_identity, include_children,
+		       intercept_children, output_version_format, bigquery_options, create_time, update_time
 		FROM jc_log_sinks WHERE project_id=$1 ORDER BY name
 	`, scope)
 	if err != nil {
@@ -209,9 +213,11 @@ func (s *PostgresStore) UpdateSink(ctx context.Context, scope string, sink LogSi
 	}
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE jc_log_sinks
-		SET destination=$3, filter=$4, description=$5, disabled=$6, exclusions=$7, writer_identity=$8, include_children=$9, update_time=$10
+		SET destination=$3, filter=$4, description=$5, disabled=$6, exclusions=$7, writer_identity=$8, include_children=$9,
+		    intercept_children=$10, output_version_format=$11, bigquery_options=$12, update_time=$13
 		WHERE project_id=$1 AND name=$2
-	`, scope, sink.Name, sink.Destination, sink.Filter, sink.Description, sink.Disabled, exclusions, sink.WriterIdentity, sink.IncludeChildren, sink.UpdateTime)
+	`, scope, sink.Name, sink.Destination, sink.Filter, sink.Description, sink.Disabled, exclusions, sink.WriterIdentity, sink.IncludeChildren,
+		sink.InterceptChildren, sink.OutputVersionFormat, sinkBigQueryOptionsArg(sink.BigQueryOptions), sink.UpdateTime)
 	if err != nil {
 		return err
 	}
@@ -240,9 +246,10 @@ type sinkScanner interface {
 
 func scanSink(row sinkScanner) (LogSink, error) {
 	var sink LogSink
-	var exclusions []byte
+	var exclusions, bigQueryOptions []byte
 	err := row.Scan(&sink.Name, &sink.Destination, &sink.Filter, &sink.Description, &sink.Disabled,
-		&exclusions, &sink.WriterIdentity, &sink.IncludeChildren, &sink.CreateTime, &sink.UpdateTime)
+		&exclusions, &sink.WriterIdentity, &sink.IncludeChildren,
+		&sink.InterceptChildren, &sink.OutputVersionFormat, &bigQueryOptions, &sink.CreateTime, &sink.UpdateTime)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return LogSink{}, ErrSinkNotFound
@@ -252,6 +259,9 @@ func scanSink(row sinkScanner) (LogSink, error) {
 	if len(exclusions) > 0 {
 		_ = json.Unmarshal(exclusions, &sink.Exclusions)
 	}
+	if len(bigQueryOptions) > 0 && string(bigQueryOptions) != "null" {
+		_ = json.Unmarshal(bigQueryOptions, &sink.BigQueryOptions)
+	}
 	return sink, nil
 }
 
@@ -260,6 +270,15 @@ func nonNilExclusions(in []LogExclusion) []LogExclusion {
 		return []LogExclusion{}
 	}
 	return in
+}
+
+// sinkBigQueryOptionsArg renders a sink's BigQueryOptions for the JSONB column:
+// SQL NULL when absent, so a scan of an empty column leaves the pointer nil.
+func sinkBigQueryOptionsArg(o *LogBigQueryOptions) any {
+	if o == nil {
+		return nil
+	}
+	return nullableJSON(o)
 }
 
 // ─── exclusions ───────────────────────────────────────────────────────────────

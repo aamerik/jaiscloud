@@ -232,31 +232,14 @@ operations:
     state: unsupported
     reason: "cross-project log copy is not modelled; explicit Unimplemented stub"
 
-  # AUD5 (fidelity-matrix reconciliation). The Discovery-driven conformance probe
-  # sends `?updateMask=labels` for every PATCH; `labels` is not a field of these
-  # resources, so the handlers correctly reject it (501 UNIMPLEMENTED). That makes
-  # the wire "no 2xx" for the resolved parent method even though the operation is
-  # implemented, so it is a **probe artifact**, not a fidelity gap — the two
-  # Logging resources below are graded `limited` only where the *code* genuinely
-  # cannot update a real, writable field (matching the exemption ledger), and the
-  # rest are left `ga`. The probe synthesizer's mask selection and recursive
-  # `{+parent}` filling are the deferred fix (AUD5-2).
-  - service: logging
-    operation: Logging.BucketUpdate
-    state: limited
-    reason: "REST `buckets.patch` cannot update a LogBucket's writable `restrictedFields` (the merge supports description/retentionDays/analyticsEnabled/indexConfigs/cmekSettings); other fields including `restrictedFields` are rejected with 501 UNIMPLEMENTED"
-  - service: logging
-    operation: Logging.BucketUpdateAsync
-    state: limited
-    reason: "REST `buckets:updateAsync` cannot update a LogBucket's writable `restrictedFields` (the merge supports description/retentionDays/analyticsEnabled/indexConfigs/cmekSettings); other fields including `restrictedFields` are rejected with 501 UNIMPLEMENTED"
-  - service: logging
-    operation: Logging.SinkPatch
-    state: limited
-    reason: "REST `sinks.patch` cannot update a LogSink's writable `bigqueryOptions`/`interceptChildren`/`outputVersionFormat` (the merge supports destination/filter/description/disabled/exclusions/includeChildren); other fields are rejected with 501 UNIMPLEMENTED"
-  - service: logging
-    operation: Logging.SinkUpdate
-    state: limited
-    reason: "REST `sinks.update` cannot update a LogSink's writable `bigqueryOptions`/`interceptChildren`/`outputVersionFormat` (the merge supports destination/filter/description/disabled/exclusions/includeChildren); other fields are rejected with 501 UNIMPLEMENTED"
+  # AUD2-1 resolved the four REST Logging `limited` cells AUD5 recorded: the
+  # `buckets.patch`/`buckets:updateAsync` merges now cover `restrictedFields`
+  # and the `sinks.patch`/`sinks.update` merges cover
+  # `bigqueryOptions`/`interceptChildren`/`outputVersionFormat`, so every
+  # writable field of each resource is merged and the cells are `ga` again. An
+  # unmappable mask path is now `400 INVALID_ARGUMENT` (AIP-134), not a 501.
+  # (The Discovery probe's `updateMask=labels` selection is the deferred
+  # conformance fix, AUD5-2.)
 
   # BigQuery routines/models/rowAccessPolicies are deliberate 501 stubs (the
   # SQL engine covers datasets/tables/jobs/rows); the rest of the service is

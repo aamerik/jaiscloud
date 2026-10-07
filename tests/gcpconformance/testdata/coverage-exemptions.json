@@ -186,43 +186,43 @@
     },
     {
       "operation": "Logging.BucketUpdate",
-      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+      "reason": "The emulator now merges every writable field of this resource; the Discovery-driven probe sends `updateMask=labels`, which is not a field of the resource, so the request is rejected. The probe's mask selection is the deferred conformance fix (AUD5-2)."
     },
     {
       "operation": "Logging.BucketUpdateAsync",
-      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+      "reason": "The emulator now merges every writable field of this resource; the Discovery-driven probe sends `updateMask=labels`, which is not a field of the resource, so the request is rejected. The probe's mask selection is the deferred conformance fix (AUD5-2)."
     },
     {
       "operation": "Logging.ExclusionPatch",
-      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+      "reason": "The emulator now merges every writable field of this resource; the Discovery-driven probe sends `updateMask=labels`, which is not a field of the resource, so the request is rejected. The probe's mask selection is the deferred conformance fix (AUD5-2)."
     },
     {
       "operation": "Logging.LogScopeUpdate",
-      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+      "reason": "The emulator now merges every writable field of this resource; the Discovery-driven probe sends `updateMask=labels`, which is not a field of the resource, so the request is rejected. The probe's mask selection is the deferred conformance fix (AUD5-2)."
     },
     {
       "operation": "Logging.SinkPatch",
-      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+      "reason": "The emulator now merges every writable field of this resource; the Discovery-driven probe sends `updateMask=labels`, which is not a field of the resource, so the request is rejected. The probe's mask selection is the deferred conformance fix (AUD5-2)."
     },
     {
       "operation": "Logging.SinkUpdate",
-      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+      "reason": "The emulator now merges every writable field of this resource; the Discovery-driven probe sends `updateMask=labels`, which is not a field of the resource, so the request is rejected. The probe's mask selection is the deferred conformance fix (AUD5-2)."
     },
     {
       "operation": "Logging.ViewGetIamPolicy",
-      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+      "reason": "The generic probe's synthesized bucket/view ids are per-operation and not chained to a create, so no view exists when the IAM call runs; the view IAM read/write needs a curated create-view-then-IAM flow."
     },
     {
       "operation": "Logging.ViewSetIamPolicy",
-      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+      "reason": "The generic probe's synthesized bucket/view ids are per-operation and not chained to a create, so no view exists when the IAM call runs; the view IAM read/write needs a curated create-view-then-IAM flow."
     },
     {
       "operation": "Logging.ViewTestIamPermissions",
-      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+      "reason": "The generic probe's synthesized bucket/view ids are per-operation and not chained to a create, so no view exists when the IAM call runs; the view IAM read/write needs a curated create-view-then-IAM flow."
     },
     {
       "operation": "Logging.ViewUpdate",
-      "reason": "The emulator returns 501 UnsupportedOperation for a non-`*` update mask on this resource (only a limited set of mask paths is implemented); logging view IAM additionally needs an existing view from the partially-supported buckets.views surface."
+      "reason": "The emulator now merges every writable field of this resource; the Discovery-driven probe sends `updateMask=labels`, which is not a field of the resource, so the request is rejected. The probe's mask selection is the deferred conformance fix (AUD5-2)."
     },
     {
       "operation": "ManagedKafka.DeleteConsumerGroup",

@@ -144,12 +144,20 @@ func sinkFromProto(p *loggingpb.LogSink) loggingstore.LogSink {
 		return loggingstore.LogSink{}
 	}
 	s := loggingstore.LogSink{
-		Name:            p.GetName(),
-		Destination:     p.GetDestination(),
-		Filter:          p.GetFilter(),
-		Description:     p.GetDescription(),
-		Disabled:        p.GetDisabled(),
-		IncludeChildren: p.GetIncludeChildren(),
+		Name:                p.GetName(),
+		Destination:         p.GetDestination(),
+		Filter:              p.GetFilter(),
+		Description:         p.GetDescription(),
+		Disabled:            p.GetDisabled(),
+		IncludeChildren:     p.GetIncludeChildren(),
+		OutputVersionFormat: versionFormatName(p.GetOutputVersionFormat()),
+	}
+	if bo := p.GetBigqueryOptions(); bo != nil {
+		// Only `use_partitioned_tables` is writable; the sibling
+		// `uses_timestamp_column_partitioning` is output-only.
+		s.BigQueryOptions = &loggingstore.LogBigQueryOptions{
+			UsePartitionedTables: bo.GetUsePartitionedTables(),
+		}
 	}
 	for _, ex := range p.GetExclusions() {
 		s.Exclusions = append(s.Exclusions, exclusionFromProto(ex))
@@ -157,15 +165,40 @@ func sinkFromProto(p *loggingpb.LogSink) loggingstore.LogSink {
 	return s
 }
 
+// versionFormatName maps the deprecated OutputVersionFormat enum to its wire
+// string, collapsing the unspecified zero value to "" so an unset field is not
+// echoed back.
+func versionFormatName(v loggingpb.LogSink_VersionFormat) string {
+	if v == loggingpb.LogSink_VERSION_FORMAT_UNSPECIFIED {
+		return ""
+	}
+	return v.String()
+}
+
+// versionFormatValue maps a stored OutputVersionFormat string back to the enum.
+func versionFormatValue(name string) loggingpb.LogSink_VersionFormat {
+	if v, ok := loggingpb.LogSink_VersionFormat_value[name]; ok {
+		return loggingpb.LogSink_VersionFormat(v)
+	}
+	return loggingpb.LogSink_VERSION_FORMAT_UNSPECIFIED
+}
+
 func sinkToProto(s loggingstore.LogSink) *loggingpb.LogSink {
 	out := &loggingpb.LogSink{
-		Name:            s.Name,
-		Destination:     s.Destination,
-		Filter:          s.Filter,
-		Description:     s.Description,
-		Disabled:        s.Disabled,
-		WriterIdentity:  s.WriterIdentity,
-		IncludeChildren: s.IncludeChildren,
+		Name:                s.Name,
+		Destination:         s.Destination,
+		Filter:              s.Filter,
+		Description:         s.Description,
+		Disabled:            s.Disabled,
+		WriterIdentity:      s.WriterIdentity,
+		IncludeChildren:     s.IncludeChildren,
+		OutputVersionFormat: versionFormatValue(s.OutputVersionFormat),
+	}
+	if s.BigQueryOptions != nil {
+		out.Options = &loggingpb.LogSink_BigqueryOptions{BigqueryOptions: &loggingpb.BigQueryOptions{
+			UsePartitionedTables:            s.BigQueryOptions.UsePartitionedTables,
+			UsesTimestampColumnPartitioning: s.BigQueryOptions.UsesTimestampColumnPartitioning,
+		}}
 	}
 	for _, ex := range s.Exclusions {
 		out.Exclusions = append(out.Exclusions, exclusionToProto(ex))

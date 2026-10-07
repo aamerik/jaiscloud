@@ -3,8 +3,8 @@
   "summary": {
     "total": 1086,
     "by_state": {
-      "ga": 935,
-      "limited": 105,
+      "ga": 939,
+      "limited": 101,
       "preview": 14,
       "unsupported": 32
     },
@@ -15,8 +15,8 @@
         "unsupported": 20
       },
       "rest": {
-        "ga": 493,
-        "limited": 104,
+        "ga": 497,
+        "limited": 100,
         "preview": 14,
         "unsupported": 12
       }
@@ -75,8 +75,8 @@
         "ga": 70
       },
       "logging": {
-        "ga": 87,
-        "limited": 5,
+        "ga": 91,
+        "limited": 1,
         "unsupported": 1
       },
       "managedkafka": {
@@ -8010,8 +8010,7 @@
       "service": "logging",
       "operation": "Logging.BucketUpdate",
       "transport": "rest",
-      "state": "limited",
-      "reason": "REST `buckets.patch` cannot update a LogBucket's writable `restrictedFields` (the merge supports description/retentionDays/analyticsEnabled/indexConfigs/cmekSettings); other fields including `restrictedFields` are rejected with 501 UNIMPLEMENTED",
+      "state": "ga",
       "discovery": "logging.billingAccounts.locations.buckets.patch",
       "verified": false,
       "evidence": [
@@ -8025,8 +8024,7 @@
       "service": "logging",
       "operation": "Logging.BucketUpdateAsync",
       "transport": "rest",
-      "state": "limited",
-      "reason": "REST `buckets:updateAsync` cannot update a LogBucket's writable `restrictedFields` (the merge supports description/retentionDays/analyticsEnabled/indexConfigs/cmekSettings); other fields including `restrictedFields` are rejected with 501 UNIMPLEMENTED",
+      "state": "ga",
       "discovery": "logging.billingAccounts.locations.buckets.updateAsync",
       "verified": false,
       "evidence": [
@@ -8472,8 +8470,7 @@
       "service": "logging",
       "operation": "Logging.SinkPatch",
       "transport": "rest",
-      "state": "limited",
-      "reason": "REST `sinks.patch` cannot update a LogSink's writable `bigqueryOptions`/`interceptChildren`/`outputVersionFormat` (the merge supports destination/filter/description/disabled/exclusions/includeChildren); other fields are rejected with 501 UNIMPLEMENTED",
+      "state": "ga",
       "discovery": "logging.billingAccounts.sinks.patch",
       "verified": false,
       "evidence": [
@@ -8487,8 +8484,7 @@
       "service": "logging",
       "operation": "Logging.SinkUpdate",
       "transport": "rest",
-      "state": "limited",
-      "reason": "REST `sinks.update` cannot update a LogSink's writable `bigqueryOptions`/`interceptChildren`/`outputVersionFormat` (the merge supports destination/filter/description/disabled/exclusions/includeChildren); other fields are rejected with 501 UNIMPLEMENTED",
+      "state": "ga",
       "discovery": "logging.billingAccounts.sinks.update",
       "verified": false,
       "evidence": [

@@ -2,10 +2,12 @@ package logging
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	"jaiscloud/internal/model"
 )
 
 func TestSinkCRUD(t *testing.T) {
@@ -96,18 +98,45 @@ func TestSinkCreateValidation(t *testing.T) {
 	}
 }
 
-func TestSinkUpdateUnsupportedMaskFailsLoud(t *testing.T) {
+func TestSinkUpdateInvalidMaskIsInvalidArgument(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService()
 	if _, err := s.CreateSink(ctx, "projects/p", loggingstore.LogSink{Name: "s", Destination: "d"}, false, ""); err != nil {
 		t.Fatalf("CreateSink: %v", err)
 	}
-	_, err := s.UpdateSink(ctx, "projects/p/sinks/s", loggingstore.LogSink{}, []string{"writerIdentity"}, false, "")
-	if err == nil {
-		t.Fatal("unsupported mask = nil error")
+	// `labels` is not a field of LogSink: an unmappable mask path is a client
+	// error (400 INVALID_ARGUMENT), not an unimplemented operation.
+	_, err := s.UpdateSink(ctx, "projects/p/sinks/s", loggingstore.LogSink{}, []string{"labels"}, false, "")
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("invalid mask = %v, want InvalidArgument/400", err)
 	}
-	if !strings.Contains(err.Error(), "unsupported update_mask") {
-		t.Fatalf("error = %v, want unsupported update_mask", err)
+	if !strings.Contains(err.Error(), "unsupported update_mask path: labels") {
+		t.Fatalf("error = %v, want the named path", err)
+	}
+}
+
+func TestSinkUpdateFullWritableMask(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateSink(ctx, "projects/p", loggingstore.LogSink{Name: "s", Destination: "d"}, false, ""); err != nil {
+		t.Fatalf("CreateSink: %v", err)
+	}
+	updated, err := s.UpdateSink(ctx, "projects/p/sinks/s", loggingstore.LogSink{
+		Destination:         "logging.googleapis.com/projects/p",
+		IncludeChildren:     true,
+		InterceptChildren:   true,
+		OutputVersionFormat: "V1",
+		BigQueryOptions:     &loggingstore.LogBigQueryOptions{UsePartitionedTables: true},
+	}, []string{"destination", "includeChildren", "interceptChildren", "outputVersionFormat", "bigqueryOptions"}, false, "")
+	if err != nil {
+		t.Fatalf("UpdateSink: %v", err)
+	}
+	if !updated.InterceptChildren || updated.OutputVersionFormat != "V1" {
+		t.Fatalf("updated = %+v", updated)
+	}
+	if updated.BigQueryOptions == nil || !updated.BigQueryOptions.UsePartitionedTables {
+		t.Fatalf("bigqueryOptions = %+v", updated.BigQueryOptions)
 	}
 }
 

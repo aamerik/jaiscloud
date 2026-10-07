@@ -6,6 +6,7 @@ import (
 
 	core "jaiscloud/internal/gcp/service/logging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	"jaiscloud/internal/model"
 	store "jaiscloud/internal/store"
 )
 
@@ -57,6 +58,20 @@ func TestRESTBucketRoundTrip(t *testing.T) {
 	})
 	if patched["description"] != "d2" || patched["retentionDays"] != float64(30) {
 		t.Fatalf("patched = %v", patched)
+	}
+
+	restricted := mustCall(t, c, p, http.MethodPatch, adminBucket+"?updateMask=restrictedFields", map[string]any{
+		"restrictedFields": []any{"jsonPayload.secret", "labels"},
+	})
+	if rf, _ := restricted["restrictedFields"].([]any); len(rf) != 2 || rf[0] != "jsonPayload.secret" {
+		t.Fatalf("restrictedFields = %v", restricted["restrictedFields"])
+	}
+
+	// An update_mask path that names no bucket field is InvalidArgument (400).
+	if _, err := call(t, c, p, http.MethodPatch, adminBucket+"?updateMask=labels", map[string]any{}); err == nil {
+		t.Fatal("invalid mask = nil error, want InvalidArgument")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("invalid mask = %v, want InvalidArgument/400", err)
 	}
 
 	if _, err := call(t, c, p, http.MethodDelete, adminBucket, nil); err != nil {
