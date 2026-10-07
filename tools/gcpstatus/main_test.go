@@ -313,6 +313,22 @@ func TestMatrixItemsFrom(t *testing.T) {
 	}
 }
 
+// TestRollupEvidence covers the per-transport verified/total rollup that
+// `make gcp-status` prints and `-evidence` reports on.
+func TestRollupEvidence(t *testing.T) {
+	mf := matrixFile{Cells: []matrixCell{
+		{Service: "a", Operation: "A.Get", Transport: "rest", Verified: true, Discovery: "example.a.get"},
+		{Service: "a", Operation: "A.List", Transport: "rest", Verified: false, Discovery: "example.a.list"},
+		{Service: "b", Operation: "Get", Transport: "grpc", Verified: true},
+		{Service: "b", Operation: "Put", Transport: "grpc", Verified: false},
+		{Service: "b", Operation: "Unrelated", Transport: "other", Verified: true},
+	}}
+	ev := rollupEvidence(mf)
+	if ev.restVerified != 1 || ev.restTotal != 2 || ev.grpcVerified != 1 || ev.grpcTotal != 2 {
+		t.Fatalf("rollup = %+v, want rest 1/2 grpc 1/2", ev)
+	}
+}
+
 func TestStateRank(t *testing.T) {
 	cases := map[string]int{"ga": 3, "limited": 2, "preview": 1, "unsupported": 0, "bogus": 0}
 	for in, want := range cases {

@@ -82,6 +82,17 @@ Part of the gRPC surface is `ga` today — the cells the official `cloud.google.
 conformance suite verifies against a live emulator (see §5); the rest remain `limited`,
 verified against the proto descriptors only (see §7).
 
+### Recorded evidence (`verified`)
+
+Each cell carries a **`verified`** signal distinct from its state: a cell is verified when
+real recorded evidence backs it — a schema-validated response in the committed conformance
+transcript (REST) or a passing check from the official-client gRPC conformance suite. A `ga`
+cell that is not `verified` is a *registration claim* (implemented, Discovery-mapped, no
+finding, persists), not a response guarantee. Currently **166/623** REST cells and
+**442/463** gRPC cells are verified. `make gcp-status` prints the rollup, and
+`make gcp-status-evidence` lists every Discovery-mapped REST operation without a validated
+response — report-only today; the audit wave (AUD2) turns it into a gate.
+
 ---
 
 ## 3. Stability & versioning

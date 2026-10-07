@@ -46,9 +46,13 @@ Manager, Firebase Auth (Identity Toolkit).
 
 ### Fidelity matrix
 
-Every operation (per transport) is classified **ga / limited / preview / unsupported**. The
-matrix is *derived* — from the emulator's operation registry, the official Discovery schemas,
-and the wire-conformance harness — so it can't drift from the code:
+Every operation (per transport) is classified **ga / limited / preview / unsupported**, and each
+cell also carries a **`verified`** signal — whether real recorded evidence backs it (a
+schema-validated committed transcript response for REST, a passing official-client check for
+gRPC). `ga` without `verified` is a registration claim, not a response guarantee; run
+`make gcp-status-evidence` for the REST gaps. The matrix is *derived* — from the emulator's
+operation registry, the official Discovery schemas, and the wire-conformance harness — so it
+can't drift from the code:
 
 - [`docs/fidelity/fidelity-matrix.md`](docs/fidelity/fidelity-matrix.md) — human-readable, grouped by service
 - [`docs/fidelity/fidelity-matrix.json`](docs/fidelity/fidelity-matrix.json) — machine-readable canonical form

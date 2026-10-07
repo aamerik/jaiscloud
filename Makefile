@@ -157,7 +157,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-differential record-gcp-differential \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
-        gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff
+        gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -894,6 +894,11 @@ gcp-status-coverage: ## Fail if any plan_docs file has status markers but produc
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
 	@bin/gcpstatus -docs plan_docs -coverage -resolved "$(RESOLVED)" $(if $(include-archive),-include-archive,)
+
+gcp-status-evidence: ## Report per-operation conformance evidence (verified vs unverified) from the fidelity matrix (report-only)
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -evidence -matrix docs/fidelity/fidelity-matrix.json
 
 gcp-status-next: ## Print the next actionable items in priority order (N=5, BY=wave|pri, SERIES=a,b)
 	@mkdir -p bin
