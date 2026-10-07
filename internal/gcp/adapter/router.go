@@ -179,7 +179,23 @@ func detectBigQueryService(path string) string {
 // detectV1Service maps a /v1/projects/{project}/... path to a service name by
 // inspecting the resource-type segment(s) after the project.
 func detectV1Service(path string) string {
+	// SDK test clients concatenate an endpoint that may already end in "/" with
+	// "/v1/..." paths, yielding a leading "//". Collapse it (mirrors
+	// detectV2Service) so the top-level "/v1/operations" guard and the segment
+	// scan below stay stable.
+	path = "/" + strings.TrimLeft(path, "/")
 	seg := splitEscaped(path)
+	// IAM Service Account Credentials' getAllowedLocations is a plain trailing
+	// resource segment in the real Discovery documents
+	// (…/serviceAccounts/{sa}/allowedLocations and
+	// …/workloadIdentityPools/{pool}/allowedLocations), not the
+	// ":getAllowedLocations" custom verb the other iamcredentials methods use.
+	// It shares the serviceAccounts path with IAM, so the trailing segment is
+	// the discriminator (and it must run before the resource-type switch, which
+	// would otherwise claim the serviceAccounts path for iam).
+	if len(seg) > 0 && seg[len(seg)-1] == "allowedLocations" {
+		return "iamcredentials"
+	}
 	// v1 Cloud Functions operations are top-level (operations/{id}); the
 	// location-scoped .../locations/{l}/operations/{id} form belongs to the
 	// Workflows/Managed Kafka/etc. resource switch below.

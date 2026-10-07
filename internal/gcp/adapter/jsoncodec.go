@@ -339,6 +339,15 @@ func (c *JSONCodec) decodeTopLevelOperations(r *http.Request, body []byte, seg [
 // LRO surface differs between the two (its operation verbs are location-scoped
 // and unambiguous, unlike the shared /v1 operations path).
 func deriveAction(resourceType string, isCollection bool, name, method, custom, apiVersion string) string {
+	// IAM Service Account Credentials' getAllowedLocations Discovery path is a
+	// plain trailing resource segment (…/serviceAccounts/{sa}/allowedLocations,
+	// …/workloadIdentityPools/{pool}/allowedLocations), not a custom verb. The
+	// router routes those paths to iamcredentials; this derives the action its
+	// provider registers. The ":getAllowedLocations" verb form (below) is still
+	// accepted for older clients.
+	if custom == "" && strings.HasSuffix(name, "/allowedLocations") {
+		return "GetAllowedLocations"
+	}
 	// Cloud Functions v2 runtime catalog. `runtimes.list` is the only v2
 	// runtime method real GCP declares (no get), and the resource exists only
 	// in v2, so a non-list method fails loud.

@@ -153,6 +153,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq \
         _check-lakehouse-k3d-prereq _check-gcp-samples-prereq _check-dataproc-streaming-k8s-prereq _check-dataproc-namespace-k8s-prereq _check-managedkafka-broker-k8s-prereq _refresh-gcp-image \
         test-gcp-wire-conformance record-gcp-wire-conformance test-gcp-grpc-conformance \
+        test-gcp-routing \
         test-gcp-rest-grpc-parity \
         test-gcp-gcloud-conformance test-gcp-python-conformance \
         test-gcp-differential record-gcp-differential \
@@ -738,6 +739,14 @@ test-throttle-gcp: build-gcp ## Run the opt-in throttle/quota injection live e2e
 
 test-gcp-wire-conformance: ## Offline GCP wire-conformance harness (Discovery snapshots + recorder; tag: gcp_conformance)
 	go test -count=1 -tags gcp_conformance ./tests/gcpconformance/
+
+# The offline REST routing matrix: asserts every request shape a real client
+# emits (the curated flows + one Discovery-synthesized probe per registered
+# operation) resolves to its owning provider, with the intentional single-origin
+# shared-path owners documented as exemptions. Offline; also part of
+# test-gcp-wire-conformance (hence ga-check + CI check-gcp-fidelity-matrix).
+test-gcp-routing: ## Offline REST routing matrix: every registered op routes to its owning provider (tag: gcp_conformance)
+	go test -count=1 -tags gcp_conformance -run TestRESTRoutingMatrix -v ./tests/gcpconformance/
 
 record-gcp-wire-conformance: ## Record a fresh transcript against an ephemeral emulator, then stop it
 	@echo "Building jaiscloud-gcp..."

@@ -18,13 +18,16 @@ func TestEndpointToken(t *testing.T) {
 		return metadata.NewIncomingContext(context.Background(), metadata.Pairs(":authority", authority))
 	}
 	cases := map[string]string{
-		"managedkafka.localhost:8081": "managedkafka",
-		"managedkafka.googleapis.com": "managedkafka",
-		"METASTORE.localhost":         "metastore",
-		"localhost:8081":              "localhost",
-		"127.0.0.1:8081":              "127",
-		"[::1]:8081":                  "[::1]",
-		"":                            "",
+		"managedkafka.localhost:8081":     "managedkafka",
+		"managedkafka.googleapis.com":     "managedkafka",
+		"managedkafka":                    "managedkafka",
+		"managedkafka.googleapis.com:443": "managedkafka",
+		"managedkafka.googleapis.com.":    "managedkafka",
+		"METASTORE.localhost":             "metastore",
+		"localhost:8081":                  "localhost",
+		"127.0.0.1:8081":                  "127",
+		"[::1]:8081":                      "[::1]",
+		"":                                "",
 	}
 	for host, want := range cases {
 		if got := endpointToken(with(host)); got != want {
@@ -64,6 +67,82 @@ func dialOperations(t *testing.T, addr, authority string) (longrunningpb.Operati
 		t.Fatalf("dial: %v", err)
 	}
 	return longrunningpb.NewOperationsClient(conn), func() { _ = conn.Close() }
+}
+
+// TestEndpointAuthorityMatrix is the gRPC analogue of the REST routing matrix:
+// every service whose google.longrunning.Operations surface the emulator scopes
+// by endpoint is registered under its canonical host token (mirroring
+// cmd/jaiscloud-gcp/main.go), and each is isolated — a request addressed to one
+// host lists only that service's operations. A request to an unregistered host
+// token uses the untokened fallback chain and never sees an endpoint-only page.
+func TestEndpointAuthorityMatrix(t *testing.T) {
+	// The LRO-owning endpoint host tokens the emulator wires (the first DNS
+	// label of each service's canonical host). Cloud Functions v1 and v2 share
+	// cloudfunctions.googleapis.com; Service Usage and Resource Manager
+	// register only in the opt-in async mode, but the scoping mechanism is the
+	// same.
+	tokens := []string{
+		"managedkafka", "metastore", "dataproc", "cloudfunctions",
+		"workflows", "run", "serviceusage", "cloudresourcemanager",
+	}
+	parent := "projects/p/locations/us"
+
+	// A distinct registry per token, each claiming only its own operation. All
+	// are also in the untokened chain; being endpoint-registered they must be
+	// excluded from the untokened List fallback.
+	var resolvers []Resolver
+	res := map[string]*fakeRegistry{}
+	for _, tok := range tokens {
+		name := parent + "/operations/" + tok + "-op"
+		reg := &fakeRegistry{
+			ops:      map[string]*longrunningpb.Operation{name: {Name: name, Done: false}},
+			listAck:  true,
+			listPage: &longrunningpb.ListOperationsResponse{Operations: []*longrunningpb.Operation{{Name: name}}},
+		}
+		res[tok] = reg
+		resolvers = append(resolvers, reg)
+	}
+	// An explicitly untokened registry sits in the fallback chain the
+	// endpoint-only resolvers are excluded from.
+	fallbackName := parent + "/operations/fallback-op"
+	fallback := &fakeRegistry{
+		ops:      map[string]*longrunningpb.Operation{fallbackName: {Name: fallbackName, Done: false}},
+		listAck:  true,
+		listPage: &longrunningpb.ListOperationsResponse{Operations: []*longrunningpb.Operation{{Name: fallbackName}}},
+	}
+	svc := New(append([]Resolver{fallback}, resolvers...)...)
+	for _, tok := range tokens {
+		svc.SetEndpointResolvers(tok, res[tok])
+	}
+
+	addr, stop := startOperationsServer(t, svc)
+	defer stop()
+	ctx := context.Background()
+
+	for _, tok := range tokens {
+		client, closeClient := dialOperations(t, addr, tok+".googleapis.com:443")
+		page, err := client.ListOperations(ctx, &longrunningpb.ListOperationsRequest{Name: parent})
+		if err != nil {
+			t.Fatalf("%s ListOperations: %v", tok, err)
+		}
+		want := parent + "/operations/" + tok + "-op"
+		if n := len(page.GetOperations()); n != 1 || page.GetOperations()[0].GetName() != want {
+			t.Fatalf("%s ListOperations = %+v, want only %s", tok, page.GetOperations(), want)
+		}
+		closeClient()
+	}
+
+	// An unregistered host token is not endpoint-scoped: the untokened fallback
+	// answers, and no endpoint-only registry leaks into its page.
+	client, closeClient := dialOperations(t, addr, "redis.googleapis.com:443")
+	defer closeClient()
+	page, err := client.ListOperations(ctx, &longrunningpb.ListOperationsRequest{Name: parent})
+	if err != nil {
+		t.Fatalf("unregistered-token ListOperations: %v", err)
+	}
+	if n := len(page.GetOperations()); n != 1 || page.GetOperations()[0].GetName() != fallbackName {
+		t.Fatalf("unregistered-token ListOperations = %+v, want the fallback's page %s", page.GetOperations(), fallbackName)
+	}
 }
 
 // TestEndpointScopedListIsolatesServices verifies that a request addressed to a
