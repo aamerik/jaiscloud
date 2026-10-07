@@ -175,3 +175,107 @@ func TestSynthPrelude(t *testing.T) {
 		t.Fatalf("prelude missing resources: topic=%v bus=%v channel=%v", haveTopic, haveBus, haveChannel)
 	}
 }
+
+// TestSynthValidInputs pins the AUD5-2 fixes: the synthesizer must emit inputs
+// the emulator accepts (and real GCP would accept), so a probe rejection is a
+// real gap, not an artifact.
+//
+//   - Firestore createDocument: the flatPath collapses the recursive
+//     "{+parent=…/documents/**}" binding to one "{documentsId}" segment, which
+//     yields a document-shaped path the codec rejects. The probe must emit the
+//     real root-collection shape "…/documents/{collectionId}?documentId=" and
+//     still resolve to createDocument.
+//   - update_mask: Logging/Monitoring resources have no "labels" field, so the
+//     generic mask is rejected; the probe must send a real writable field.
+func TestSynthValidInputs(t *testing.T) {
+	docs := loadDocs(t)
+	ix := BuildMethodIndex(docs)
+	scenarios := SynthScenarios(docs, "000000000000")
+
+	base := func(p string) string { return strings.SplitN(p, "?", 2)[0] }
+
+	// (a) Firestore createDocument probes.
+	created := map[string]bool{}
+	var createSeen, getSeen bool
+	for _, s := range scenarios {
+		if s.Service != "firestore" {
+			continue
+		}
+		b := base(s.Path)
+		q := ""
+		if i := strings.IndexByte(s.Path, '?'); i >= 0 {
+			q = s.Path[i+1:]
+		}
+		if s.Method == "POST" && strings.Contains(q, "documentId=") {
+			_, m, ok := ix.MatchMethodInService("firestore", "POST", s.Path)
+			if !ok || m.ID != "firestore.projects.databases.documents.createDocument" {
+				t.Errorf("firestore create probe %q resolved to %v (ok=%v), want createDocument", s.Path, m, ok)
+				continue
+			}
+			createSeen = true
+			// Real createDocument always has an odd number of segments after
+			// the "documents" literal (the recursive parent is a document path).
+			if n := segmentsAfterDocumentsProd(b); n == 0 || n%2 == 0 {
+				t.Errorf("firestore create probe %q has %d segment(s) after documents, want odd", b, n)
+			}
+			for _, kv := range strings.Split(q, "&") {
+				if id, ok := strings.CutPrefix(kv, "documentId="); ok {
+					created[b+"/"+id] = true
+				}
+			}
+		}
+		if s.Method == "GET" && strings.Contains(b, "/documents/") {
+			if created[b] {
+				getSeen = true
+			}
+		}
+	}
+	if !createSeen {
+		t.Error("no firestore createDocument probe emitted")
+	}
+	if !getSeen {
+		t.Error("no firestore document GET probe read a staged create's document")
+	}
+
+	// (b) update_mask: Logging and Monitoring resources with no "labels" field
+	// must use a real writable field instead of the rejected generic default.
+	var loggingSeen, monitoringSeen bool
+	for _, s := range scenarios {
+		switch s.Service {
+		case "logging":
+			if !strings.Contains(s.Path, "updateMask=") {
+				continue
+			}
+			loggingSeen = true
+			if strings.Contains(s.Path, "updateMask=labels") {
+				t.Errorf("logging probe %q still sends the rejected updateMask=labels", s.Path)
+			}
+		case "monitoring":
+			if !strings.Contains(s.Path, "/services/") || !strings.Contains(s.Path, "updateMask=") {
+				continue
+			}
+			monitoringSeen = true
+			if !strings.Contains(s.Path, "updateMask=displayName") {
+				t.Errorf("monitoring service/SLO probe %q should send updateMask=displayName", s.Path)
+			}
+		}
+	}
+	if !loggingSeen {
+		t.Error("no logging updateMask probe emitted")
+	}
+	if !monitoringSeen {
+		t.Error("no monitoring service/SLO updateMask probe emitted")
+	}
+}
+
+// segmentsAfterDocumentsProd mirrors the production codec's count (the
+// conformance package has no access to internal/gcp/adapter).
+func segmentsAfterDocumentsProd(name string) int {
+	parts := strings.Split(strings.TrimPrefix(name, "/"), "/")
+	for i, p := range parts {
+		if p == "documents" {
+			return len(parts) - i - 1
+		}
+	}
+	return 0
+}

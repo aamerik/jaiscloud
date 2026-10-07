@@ -264,6 +264,10 @@ var placeholderOverrides = map[string]string{
 // version is minted by secrets:addVersion).
 var collectionCreateAlias = map[string][]string{
 	"versions": {".addVersion"},
+	// Firestore documents are minted by documents.createDocument, which the
+	// ".create"/".insert" suffix match misses, so a document read/patch/delete
+	// probe can stage its target.
+	"documents": {".createDocument"},
 }
 
 // resolvedOp is one registry operation joined to the Discovery method it
@@ -385,7 +389,7 @@ func SynthScenarios(docs map[string]*DiscoveryDoc, suffix string) []Scenario {
 		for i, ro := range ops {
 			token := strconv.Itoa(i)
 			tokens := map[string]string{}
-			tpl := templateOf(ro.Method)
+			tpl := probeTemplate(ro.Method)
 
 			isCreate := createMethodID(ro.ID, allMethods, registryResolves) != ""
 			setup := instanceChain(tpl)
@@ -394,12 +398,18 @@ func SynthScenarios(docs map[string]*DiscoveryDoc, suffix string) []Scenario {
 				// own target; only its ancestors need to exist first.
 				setup = setup[:len(setup)-1]
 			}
+			// A method can reference the same owning collection at more than one
+			// nesting level (Firestore's documents/{a}/{b}); emit each
+			// prerequisite create once, and never stage the target method via
+			// itself.
+			staged := map[string]bool{}
 			for _, coll := range setup {
 				tokens[coll] = token
 				createID := createForCollection(coll, tpl, allMethods, registryResolves)
-				if createID == "" {
+				if createID == "" || createID == ro.ID || staged[createID] {
 					continue
 				}
+				staged[createID] = true
 				// The prerequisite may belong to another Discovery surface
 				// (workflowexecutions -> workflows); record it under its owning
 				// service so the harness matches it to the right document.
@@ -546,11 +556,12 @@ func isInfraPlaceholder(name string) bool {
 // placeholders (and create id parameters) so a create's chosen id and the
 // singleton that reads it match.
 func synthScenario(svc string, cfg synthService, doc *DiscoveryDoc, m *Method, suffix string, tokens map[string]string) Scenario {
-	path := cfg.base + fillTemplate(templateOf(m), cfg, suffix, tokens)
+	tpl := probeTemplate(m)
+	path := cfg.base + fillTemplate(tpl, cfg, suffix, tokens)
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	if q := queryParams(m, suffix, tokens); len(q) > 0 {
+	if q := queryParams(svc, m, suffix, tokens); len(q) > 0 {
 		path += "?" + q.Encode()
 	}
 
@@ -737,9 +748,9 @@ func deriveID(collection, suffix, token string) string {
 // queryParams assembles the query string for a probe: the id-typed parameter a
 // create uses (derived from the collection segment so it matches the singleton
 // path value) plus any required parameter.
-func queryParams(m *Method, suffix string, tokens map[string]string) urlValues {
+func queryParams(svc string, m *Method, suffix string, tokens map[string]string) urlValues {
 	q := urlValues{}
-	lastLiteral := lastLiteralSegment(templateOf(m))
+	lastLiteral := lastLiteralSegment(probeTemplate(m))
 	names := make([]string, 0, len(m.Parameters))
 	for n := range m.Parameters {
 		names = append(names, n)
@@ -759,7 +770,7 @@ func queryParams(m *Method, suffix string, tokens map[string]string) urlValues {
 			continue
 		}
 		if strings.EqualFold(n, "updateMask") || strings.EqualFold(n, "fieldMask") {
-			q.Set(n, requiredQueryValue(n))
+			q.Set(n, updateMaskValue(svc, m))
 			continue
 		}
 		if p.Required {
@@ -767,6 +778,60 @@ func queryParams(m *Method, suffix string, tokens map[string]string) urlValues {
 		}
 	}
 	return q
+}
+
+// updateMaskValue returns the update_mask/field_mask value a probe sends. The
+// generic default is "labels", which most resources accept, but a resource
+// whose writable field set has no "labels" rejects it (Logging/Monitoring
+// return 400/501 for a path that names no field, per AIP-134). maskFieldByResource
+// pins a real writable field for those resources so the probe exercises the
+// merge instead of being rejected on input.
+func updateMaskValue(svc string, m *Method) string {
+	ref := m.Request.Ref
+	if i := strings.LastIndexByte(ref, '.'); i >= 0 {
+		ref = ref[i+1:]
+	}
+	if v, ok := maskFieldByResource[svc+":"+ref]; ok {
+		return v
+	}
+	return "labels"
+}
+
+// maskFieldByResource pins a valid update_mask field for a resource whose
+// writable fields exclude the generic "labels" default. Keyed by
+// "<discovery service>:<request schema name>".
+var maskFieldByResource = map[string]string{
+	"logging:LogBucket":                "description",
+	"logging:LogSink":                  "description",
+	"logging:LogExclusion":             "description",
+	"logging:LogScope":                 "description",
+	"logging:LogView":                  "description",
+	"logging:Settings":                 "storageLocation",
+	"logging:CmekSettings":             "kmsKeyName",
+	"monitoring:Service":               "displayName",
+	"monitoring:ServiceLevelObjective": "displayName",
+}
+
+// pathOverrides pins the real request path for a method whose Discovery flatPath
+// collapses a recursive "{+x=.../**}" resource binding into a single literal
+// segment. Firestore's createDocument parent is "…/documents/**", which the
+// flatPath renders as one "{documentsId}" segment; filling that yields a
+// document-shaped path the (correct) generic codec rejects. The override emits
+// the real root-collection shape "…/documents/{collectionId}?documentId=",
+// which the harness matches to createDocument through the non-flat "{+parent}"
+// template.
+var pathOverrides = map[string]string{
+	"firestore.projects.databases.documents.createDocument": "v1/projects/{projectsId}/databases/{databasesId}/documents/{collectionId}",
+}
+
+// probeTemplate returns the Discovery template a probe should fill: the
+// pathOverrides entry when one exists (a recursive binding the flatPath
+// collapses), otherwise the flatPath-preferred template.
+func probeTemplate(m *Method) string {
+	if t, ok := pathOverrides[m.ID]; ok {
+		return t
+	}
+	return templateOf(m)
 }
 
 // lastLiteralSegment returns the final literal segment of a template.

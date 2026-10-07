@@ -69,28 +69,20 @@
       "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
     },
     {
-      "operation": "Firestore.CreateDocument",
-      "reason": "Firestore REST document/index admin needs a (default) database and a staged collection; Firestore's primary surface is gRPC and the official-client gRPC conformance suite covers these methods."
-    },
-    {
       "operation": "Firestore.CreateIndex",
-      "reason": "Firestore REST document/index admin needs a (default) database and a staged collection; Firestore's primary surface is gRPC and the official-client gRPC conformance suite covers these methods."
+      "reason": "Firestore index admin needs a staged collection group and a server-assigned index id; the Discovery path probe cannot chain a create to the read/delete."
     },
     {
       "operation": "Firestore.DeleteIndex",
-      "reason": "Firestore REST document/index admin needs a (default) database and a staged collection; Firestore's primary surface is gRPC and the official-client gRPC conformance suite covers these methods."
-    },
-    {
-      "operation": "Firestore.GetDocument",
-      "reason": "Firestore REST document/index admin needs a (default) database and a staged collection; Firestore's primary surface is gRPC and the official-client gRPC conformance suite covers these methods."
+      "reason": "Firestore index admin needs a staged collection group and a server-assigned index id; the Discovery path probe cannot chain a create to the read/delete."
     },
     {
       "operation": "Firestore.GetIndex",
-      "reason": "Firestore REST document/index admin needs a (default) database and a staged collection; Firestore's primary surface is gRPC and the official-client gRPC conformance suite covers these methods."
+      "reason": "Firestore index admin needs a staged collection group and a server-assigned index id; the Discovery path probe cannot chain a create to the read/delete."
     },
     {
       "operation": "Firestore.RunQuery",
-      "reason": "Firestore REST document/index admin needs a (default) database and a staged collection; Firestore's primary surface is gRPC and the official-client gRPC conformance suite covers these methods."
+      "reason": "Firestore runQuery needs a structured query against a staged document; the generic body probe cannot synthesize one, so the request is rejected on input rather than unimplemented."
     },
     {
       "operation": "Function.GetOperation",
@@ -111,10 +103,6 @@
     {
       "operation": "IAM.ServiceAccountKeyGet",
       "reason": "Service-account keys have server-assigned ids returned by keys.create, so the probe cannot reference a created key."
-    },
-    {
-      "operation": "IAMCredentials.GetAllowedLocations",
-      "reason": "IAMCredentials.getAllowedLocations needs a service account created through the IAM surface; the probe's cross-service create does not satisfy its store view."
     },
     {
       "operation": "KMS.CryptoKeyDelete",
@@ -185,30 +173,6 @@
       "reason": "KMS cryptoKeyVersion ids are server-assigned (always \"1\") and the operation needs a version created with a specific algorithm/purpose and, for import, externally-wrapped key material; the Discovery-driven probe cannot stage that state. CryptoKey delete also requires all versions deleted first, and importJob ids are server-assigned."
     },
     {
-      "operation": "Logging.BucketUpdate",
-      "reason": "The emulator now merges every writable field of this resource; the Discovery-driven probe sends `updateMask=labels`, which is not a field of the resource, so the request is rejected. The probe's mask selection is the deferred conformance fix (AUD5-2)."
-    },
-    {
-      "operation": "Logging.BucketUpdateAsync",
-      "reason": "The emulator now merges every writable field of this resource; the Discovery-driven probe sends `updateMask=labels`, which is not a field of the resource, so the request is rejected. The probe's mask selection is the deferred conformance fix (AUD5-2)."
-    },
-    {
-      "operation": "Logging.ExclusionPatch",
-      "reason": "The emulator now merges every writable field of this resource; the Discovery-driven probe sends `updateMask=labels`, which is not a field of the resource, so the request is rejected. The probe's mask selection is the deferred conformance fix (AUD5-2)."
-    },
-    {
-      "operation": "Logging.LogScopeUpdate",
-      "reason": "The emulator now merges every writable field of this resource; the Discovery-driven probe sends `updateMask=labels`, which is not a field of the resource, so the request is rejected. The probe's mask selection is the deferred conformance fix (AUD5-2)."
-    },
-    {
-      "operation": "Logging.SinkPatch",
-      "reason": "The emulator now merges every writable field of this resource; the Discovery-driven probe sends `updateMask=labels`, which is not a field of the resource, so the request is rejected. The probe's mask selection is the deferred conformance fix (AUD5-2)."
-    },
-    {
-      "operation": "Logging.SinkUpdate",
-      "reason": "The emulator now merges every writable field of this resource; the Discovery-driven probe sends `updateMask=labels`, which is not a field of the resource, so the request is rejected. The probe's mask selection is the deferred conformance fix (AUD5-2)."
-    },
-    {
       "operation": "Logging.ViewGetIamPolicy",
       "reason": "The generic probe's synthesized bucket/view ids are per-operation and not chained to a create, so no view exists when the IAM call runs; the view IAM read/write needs a curated create-view-then-IAM flow."
     },
@@ -219,10 +183,6 @@
     {
       "operation": "Logging.ViewTestIamPermissions",
       "reason": "The generic probe's synthesized bucket/view ids are per-operation and not chained to a create, so no view exists when the IAM call runs; the view IAM read/write needs a curated create-view-then-IAM flow."
-    },
-    {
-      "operation": "Logging.ViewUpdate",
-      "reason": "The emulator now merges every writable field of this resource; the Discovery-driven probe sends `updateMask=labels`, which is not a field of the resource, so the request is rejected. The probe's mask selection is the deferred conformance fix (AUD5-2)."
     },
     {
       "operation": "ManagedKafka.DeleteConsumerGroup",
@@ -262,15 +222,7 @@
     },
     {
       "operation": "Monitoring.ListTimeSeries",
-      "reason": "TimeSeries is served on the projects surface only (the folders variant is unsupported), and service/SLO update returns 501 for the generic update mask."
-    },
-    {
-      "operation": "Monitoring.UpdateService",
-      "reason": "TimeSeries is served on the projects surface only (the folders variant is unsupported), and service/SLO update returns 501 for the generic update mask."
-    },
-    {
-      "operation": "Monitoring.UpdateServiceLevelObjective",
-      "reason": "TimeSeries is served on the projects surface only (the folders variant is unsupported), and service/SLO update returns 501 for the generic update mask."
+      "reason": "TimeSeries is served on the projects surface only; the folders/*/timeSeries variant is unsupported."
     },
     {
       "operation": "Run.DeleteOperation",

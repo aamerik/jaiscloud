@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 501 | 122 |
+| rest | 512 | 111 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -431,11 +431,11 @@ _33 cell(s): ga=33 limited=0 preview=0 unsupported=0_
 | Firestore.BatchWrite | rest | ga | yes | — |
 | Firestore.BeginTransaction | rest | ga | yes | — |
 | Firestore.Commit | rest | ga | yes | — |
-| Firestore.CreateDocument | rest | ga | no | — |
+| Firestore.CreateDocument | rest | ga | yes | — |
 | Firestore.CreateIndex | rest | ga | no | — |
 | Firestore.DeleteDocument | rest | ga | yes | — |
 | Firestore.DeleteIndex | rest | ga | no | — |
-| Firestore.GetDocument | rest | ga | no | — |
+| Firestore.GetDocument | rest | ga | yes | — |
 | Firestore.GetIndex | rest | ga | no | — |
 | Firestore.ListCollectionIds | rest | ga | yes | — |
 | Firestore.ListDocuments | rest | ga | yes | — |
@@ -725,8 +725,8 @@ _93 cell(s): ga=91 limited=1 preview=0 unsupported=1_
 | Logging.BucketGet | rest | ga | yes | — |
 | Logging.BucketList | rest | ga | yes | — |
 | Logging.BucketUndelete | rest | ga | yes | — |
-| Logging.BucketUpdate | rest | ga | no | — |
-| Logging.BucketUpdateAsync | rest | ga | no | — |
+| Logging.BucketUpdate | rest | ga | yes | — |
+| Logging.BucketUpdateAsync | rest | ga | yes | — |
 | Logging.CmekGet | rest | ga | yes | — |
 | Logging.CmekUpdate | rest | ga | yes | — |
 | Logging.EntryList | rest | ga | yes | — |
@@ -735,7 +735,7 @@ _93 cell(s): ga=91 limited=1 preview=0 unsupported=1_
 | Logging.ExclusionDelete | rest | ga | yes | — |
 | Logging.ExclusionGet | rest | ga | yes | — |
 | Logging.ExclusionList | rest | ga | yes | — |
-| Logging.ExclusionPatch | rest | ga | no | — |
+| Logging.ExclusionPatch | rest | ga | yes | — |
 | Logging.LinkCreate | rest | ga | yes | — |
 | Logging.LinkDelete | rest | ga | yes | — |
 | Logging.LinkGet | rest | ga | yes | — |
@@ -746,7 +746,7 @@ _93 cell(s): ga=91 limited=1 preview=0 unsupported=1_
 | Logging.LogScopeDelete | rest | ga | yes | — |
 | Logging.LogScopeGet | rest | ga | yes | — |
 | Logging.LogScopeList | rest | ga | yes | — |
-| Logging.LogScopeUpdate | rest | ga | no | — |
+| Logging.LogScopeUpdate | rest | ga | yes | — |
 | Logging.MetricCreate | rest | ga | yes | — |
 | Logging.MetricDelete | rest | ga | yes | — |
 | Logging.MetricGet | rest | ga | yes | — |
@@ -759,8 +759,8 @@ _93 cell(s): ga=91 limited=1 preview=0 unsupported=1_
 | Logging.SinkDelete | rest | ga | yes | — |
 | Logging.SinkGet | rest | ga | yes | — |
 | Logging.SinkList | rest | ga | yes | — |
-| Logging.SinkPatch | rest | ga | no | — |
-| Logging.SinkUpdate | rest | ga | no | — |
+| Logging.SinkPatch | rest | ga | yes | — |
+| Logging.SinkUpdate | rest | ga | yes | — |
 | Logging.ViewCreate | rest | ga | yes | — |
 | Logging.ViewDelete | rest | ga | yes | — |
 | Logging.ViewGet | rest | ga | yes | — |
@@ -768,7 +768,7 @@ _93 cell(s): ga=91 limited=1 preview=0 unsupported=1_
 | Logging.ViewList | rest | ga | yes | — |
 | Logging.ViewSetIamPolicy | rest | ga | no | — |
 | Logging.ViewTestIamPermissions | rest | ga | no | — |
-| Logging.ViewUpdate | rest | ga | no | — |
+| Logging.ViewUpdate | rest | ga | yes | — |
 | TailLogEntries | grpc | limited | no | bounded store-poll tail whose latency derives from buffer_window; no deterministic conformance assertion exists |
 | UndeleteBucket | grpc | ga | yes | — |
 | UpdateBucket | grpc | ga | yes | — |
@@ -979,8 +979,8 @@ _68 cell(s): ga=68 limited=0 preview=0 unsupported=0_
 | Monitoring.SendNotificationChannelVerificationCode | rest | ga | yes | — |
 | Monitoring.UpdateAlertPolicy | rest | ga | yes | — |
 | Monitoring.UpdateNotificationChannel | rest | ga | yes | — |
-| Monitoring.UpdateService | rest | ga | no | — |
-| Monitoring.UpdateServiceLevelObjective | rest | ga | no | — |
+| Monitoring.UpdateService | rest | ga | yes | — |
+| Monitoring.UpdateServiceLevelObjective | rest | ga | yes | — |
 | Monitoring.VerifyNotificationChannel | rest | ga | yes | — |
 | SendNotificationChannelVerificationCode | grpc | ga | yes | — |
 | UpdateAlertPolicy | grpc | ga | yes | — |
