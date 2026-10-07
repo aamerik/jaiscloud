@@ -621,7 +621,10 @@ func (p *Provider) SubscriptionCreate(ctx context.Context, nr *model.NormalizedR
 		}
 		meta["deadLetterPolicy"] = normalized
 	}
-	if raw, ok := body["retryPolicy"]; ok {
+	// An explicit JSON null for a message-typed field means "unset" (real GCP
+	// treats it that way, and the hashicorp/google provider emits null for
+	// absent nested blocks); only a non-null non-object is a type error.
+	if raw, ok := body["retryPolicy"]; ok && raw != nil {
 		rp, isObject := raw.(map[string]any)
 		if !isObject {
 			return nil, model.NewProviderError("InvalidArgument", "retryPolicy must be an object", 400)
