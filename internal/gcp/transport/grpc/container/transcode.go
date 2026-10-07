@@ -140,6 +140,18 @@ func maintenancePolicyToProto(mp *containerstore.MaintenancePolicy) *containerpb
 		}
 		w.Policy = &containerpb.MaintenanceWindow_RecurringWindow{RecurringWindow: rw}
 	}
+	if len(mp.Window.MaintenanceExclusions) > 0 {
+		w.MaintenanceExclusions = make(map[string]*containerpb.TimeWindow, len(mp.Window.MaintenanceExclusions))
+		for k, v := range mp.Window.MaintenanceExclusions {
+			if v == nil {
+				continue
+			}
+			w.MaintenanceExclusions[k] = &containerpb.TimeWindow{
+				StartTime: stringToTimestamp(v.StartTime),
+				EndTime:   stringToTimestamp(v.EndTime),
+			}
+		}
+	}
 	out.Window = w
 	return out
 }
@@ -169,6 +181,18 @@ func maintenancePolicyFromProto(pb *containerpb.MaintenancePolicy) containerstor
 				}
 			}
 			mp.Window = &containerstore.MaintenanceWindow{RecurringWindow: rw}
+		}
+		if ex := w.GetMaintenanceExclusions(); len(ex) > 0 {
+			if mp.Window == nil {
+				mp.Window = &containerstore.MaintenanceWindow{}
+			}
+			mp.Window.MaintenanceExclusions = make(map[string]*containerstore.TimeWindow, len(ex))
+			for k, v := range ex {
+				mp.Window.MaintenanceExclusions[k] = &containerstore.TimeWindow{
+					StartTime: timestampToString(v.GetStartTime()),
+					EndTime:   timestampToString(v.GetEndTime()),
+				}
+			}
 		}
 	}
 	return mp
@@ -213,6 +237,19 @@ func nodePoolToProto(p containerstore.NodePool) *containerpb.NodePool {
 		}
 	}
 	return out
+}
+
+// nodePoolAutoscalingFromProto builds the core's autoscaling subset.
+func nodePoolAutoscalingFromProto(a *containerpb.NodePoolAutoscaling) *containerstore.NodePoolAutoscaling {
+	return &containerstore.NodePoolAutoscaling{
+		Enabled:           a.GetEnabled(),
+		MinNodeCount:      a.GetMinNodeCount(),
+		MaxNodeCount:      a.GetMaxNodeCount(),
+		Autoprovisioned:   a.GetAutoprovisioned(),
+		LocationPolicy:    a.GetLocationPolicy().String(),
+		TotalMinNodeCount: a.GetTotalMinNodeCount(),
+		TotalMaxNodeCount: a.GetTotalMaxNodeCount(),
+	}
 }
 
 // nodeConfigToProto renders a stored node config as the proto NodeConfig.
@@ -271,15 +308,7 @@ func nodePoolFromProto(pb *containerpb.NodePool) containerstore.NodePool {
 		}
 	}
 	if a := pb.GetAutoscaling(); a != nil {
-		p.Autoscaling = &containerstore.NodePoolAutoscaling{
-			Enabled:           a.GetEnabled(),
-			MinNodeCount:      a.GetMinNodeCount(),
-			MaxNodeCount:      a.GetMaxNodeCount(),
-			Autoprovisioned:   a.GetAutoprovisioned(),
-			LocationPolicy:    a.GetLocationPolicy().String(),
-			TotalMinNodeCount: a.GetTotalMinNodeCount(),
-			TotalMaxNodeCount: a.GetTotalMaxNodeCount(),
-		}
+		p.Autoscaling = nodePoolAutoscalingFromProto(a)
 	}
 	if m := pb.GetManagement(); m != nil {
 		p.Management = &containerstore.NodeManagement{

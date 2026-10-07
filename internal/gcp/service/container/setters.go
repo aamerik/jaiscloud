@@ -120,9 +120,11 @@ func (s *Service) UpdateCluster(ctx context.Context, project, location, cluster 
 		if u.DesiredMonitoringService != "" {
 			c.MonitoringService = u.DesiredMonitoringService
 		}
-		if u.DesiredNodePoolAutoscaling != nil {
+		// Real GKE targets the node pool named by desiredNodePoolId (there is no
+		// "all pools" form), so an empty ID applies nothing.
+		if u.DesiredNodePoolAutoscaling != nil && u.DesiredNodePoolID != "" {
 			for i := range c.NodePools {
-				if u.DesiredNodePoolID == "" || c.NodePools[i].Name == u.DesiredNodePoolID {
+				if c.NodePools[i].Name == u.DesiredNodePoolID {
 					a := *u.DesiredNodePoolAutoscaling
 					c.NodePools[i].Autoscaling = &a
 				}

@@ -161,6 +161,9 @@ func clusterToJSON(c containerstore.Cluster) map[string]any {
 			"clusterCaCertificate": c.CaCertificate,
 		},
 	}
+	if c.InitialNodeCount > 0 {
+		out["initialNodeCount"] = c.InitialNodeCount
+	}
 	if len(c.NodePools) > 0 {
 		pools := make([]any, 0, len(c.NodePools))
 		for _, p := range c.NodePools {
@@ -350,6 +353,16 @@ func maintenancePolicyToJSON(mp *containerstore.MaintenancePolicy) map[string]an
 			}
 			w["recurringWindow"] = rw
 		}
+		if len(mp.Window.MaintenanceExclusions) > 0 {
+			ex := map[string]any{}
+			for k, v := range mp.Window.MaintenanceExclusions {
+				if v == nil {
+					continue
+				}
+				ex[k] = map[string]any{"startTime": v.StartTime, "endTime": v.EndTime}
+			}
+			w["maintenanceExclusions"] = ex
+		}
 		out["window"] = w
 	}
 	return out
@@ -455,6 +468,16 @@ func maintenancePolicyFromMap(m map[string]any) containerstore.MaintenancePolicy
 			rw.Window = &containerstore.TimeWindow{StartTime: str(tw, "startTime"), EndTime: str(tw, "endTime")}
 		}
 		win.RecurringWindow = rw
+	}
+	if ex, ok := w["maintenanceExclusions"].(map[string]any); ok && len(ex) > 0 {
+		win.MaintenanceExclusions = make(map[string]*containerstore.TimeWindow, len(ex))
+		for k, v := range ex {
+			tw, ok := v.(map[string]any)
+			if !ok {
+				continue
+			}
+			win.MaintenanceExclusions[k] = &containerstore.TimeWindow{StartTime: str(tw, "startTime"), EndTime: str(tw, "endTime")}
+		}
 	}
 	mp.Window = win
 	return mp

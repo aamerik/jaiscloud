@@ -569,11 +569,7 @@ func clusterUpdateFromProto(u *containerpb.ClusterUpdate) core.ClusterUpdate {
 		out.DesiredAddonsConfig = &cfg
 	}
 	if a := u.GetDesiredNodePoolAutoscaling(); a != nil {
-		out.DesiredNodePoolAutoscaling = &containerstore.NodePoolAutoscaling{
-			Enabled:      a.GetEnabled(),
-			MinNodeCount: a.GetMinNodeCount(),
-			MaxNodeCount: a.GetMaxNodeCount(),
-		}
+		out.DesiredNodePoolAutoscaling = nodePoolAutoscalingFromProto(a)
 	}
 	return out
 }

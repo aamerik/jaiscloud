@@ -109,6 +109,35 @@ func TestMemoryStoreMutateClusterNodePools(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreNoNodePoolAliasing(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryStore()
+	if err := s.CreateCluster(ctx, "p", "l", Cluster{Name: "c1", NodePools: []NodePool{{
+		Name:        "np1",
+		Autoscaling: &NodePoolAutoscaling{MaxNodeCount: 1},
+	}}}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	// A reader's returned copy must not see a later in-place mutation.
+	before, err := s.GetCluster(ctx, "p", "l", "c1")
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if err := s.MutateCluster(ctx, "p", "l", "c1", func(c *Cluster) error {
+		c.NodePools[0].Autoscaling.MaxNodeCount = 9
+		return nil
+	}); err != nil {
+		t.Fatalf("MutateCluster: %v", err)
+	}
+	if before.NodePools[0].Autoscaling.MaxNodeCount != 1 {
+		t.Fatalf("returned copy aliased the stored slice: max=%d, want 1", before.NodePools[0].Autoscaling.MaxNodeCount)
+	}
+	after, _ := s.GetCluster(ctx, "p", "l", "c1")
+	if after.NodePools[0].Autoscaling.MaxNodeCount != 9 {
+		t.Fatalf("mutation not persisted: max=%d, want 9", after.NodePools[0].Autoscaling.MaxNodeCount)
+	}
+}
+
 func TestMemoryStoreSnapshotRestoresNodePools(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemoryStore()

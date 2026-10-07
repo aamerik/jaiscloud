@@ -154,6 +154,7 @@ type MaintenancePolicy struct {
 type MaintenanceWindow struct {
 	DailyMaintenanceWindow *DailyMaintenanceWindow `json:"dailyMaintenanceWindow,omitempty"`
 	RecurringWindow        *RecurringWindow        `json:"recurringWindow,omitempty"`
+	MaintenanceExclusions  map[string]*TimeWindow  `json:"maintenanceExclusions,omitempty"`
 }
 
 // DailyMaintenanceWindow is the persisted subset of
@@ -166,9 +167,8 @@ type DailyMaintenanceWindow struct {
 // RecurringWindow is the persisted subset of
 // google.container.v1.RecurringTimeWindow.
 type RecurringWindow struct {
-	Window                *TimeWindow            `json:"window,omitempty"`
-	Recurrence            string                 `json:"recurrence,omitempty"`
-	MaintenanceExclusions map[string]*TimeWindow `json:"maintenanceExclusions,omitempty"`
+	Window     *TimeWindow `json:"window,omitempty"`
+	Recurrence string      `json:"recurrence,omitempty"`
 }
 
 // TimeWindow is the persisted subset of google.container.v1.TimeWindow.
