@@ -168,6 +168,27 @@ var actionOverrides = map[string]string{
 	"Eventarc.MessageBusGetIamPolicy":       "eventarc.projects.locations.messageBuses.getIamPolicy",
 	"Eventarc.MessageBusSetIamPolicy":       "eventarc.projects.locations.messageBuses.setIamPolicy",
 	"Eventarc.MessageBusTestIamPermissions": "eventarc.projects.locations.messageBuses.testIamPermissions",
+
+	// Dataproc Metastore federations + IAM mixin: nested methods the flat
+	// registry action names cannot derive ("federations" pluralises to
+	// "federations", and the IAM verbs nest under services/databases/tables).
+	"Metastore.CreateFederation":             "metastore.projects.locations.federations.create",
+	"Metastore.GetFederation":                "metastore.projects.locations.federations.get",
+	"Metastore.ListFederations":              "metastore.projects.locations.federations.list",
+	"Metastore.UpdateFederation":             "metastore.projects.locations.federations.patch",
+	"Metastore.DeleteFederation":             "metastore.projects.locations.federations.delete",
+	"Metastore.ServiceGetIamPolicy":          "metastore.projects.locations.services.getIamPolicy",
+	"Metastore.ServiceSetIamPolicy":          "metastore.projects.locations.services.setIamPolicy",
+	"Metastore.ServiceTestIamPermissions":    "metastore.projects.locations.services.testIamPermissions",
+	"Metastore.BackupGetIamPolicy":           "metastore.projects.locations.services.backups.getIamPolicy",
+	"Metastore.BackupSetIamPolicy":           "metastore.projects.locations.services.backups.setIamPolicy",
+	"Metastore.DatabaseGetIamPolicy":         "metastore.projects.locations.services.databases.getIamPolicy",
+	"Metastore.DatabaseSetIamPolicy":         "metastore.projects.locations.services.databases.setIamPolicy",
+	"Metastore.TableGetIamPolicy":            "metastore.projects.locations.services.databases.tables.getIamPolicy",
+	"Metastore.TableSetIamPolicy":            "metastore.projects.locations.services.databases.tables.setIamPolicy",
+	"Metastore.FederationGetIamPolicy":       "metastore.projects.locations.federations.getIamPolicy",
+	"Metastore.FederationSetIamPolicy":       "metastore.projects.locations.federations.setIamPolicy",
+	"Metastore.FederationTestIamPermissions": "metastore.projects.locations.federations.testIamPermissions",
 }
 
 // ActionResolver maps emulator registry actions to Discovery method ids within

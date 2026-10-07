@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1064**
+Cells: **1086**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 917 |
+| ga | 939 |
 | limited | 101 |
 | preview | 14 |
 | unsupported | 32 |
@@ -21,8 +21,8 @@ Cells: **1064**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 480 | 100 | 14 | 12 |
-| grpc | 437 | 1 | 0 | 20 |
+| rest | 497 | 100 | 14 | 12 |
+| grpc | 442 | 1 | 0 | 20 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -840,46 +840,68 @@ _8 cell(s): ga=0 limited=8 preview=0 unsupported=0_
 
 ## metastore
 
-_38 cell(s): ga=28 limited=0 preview=0 unsupported=10_
+_60 cell(s): ga=50 limited=0 preview=0 unsupported=10_
 
 | operation | transport | state | reason |
 | --- | --- | --- | --- |
 | AlterMetadataResourceLocation | grpc | unsupported | the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub |
 | CreateBackup | grpc | ga | — |
+| CreateFederation | grpc | ga | — |
 | CreateMetadataImport | grpc | ga | — |
 | CreateService | grpc | ga | — |
 | DeleteBackup | grpc | ga | — |
+| DeleteFederation | grpc | ga | — |
 | DeleteService | grpc | ga | — |
 | ExportMetadata | grpc | unsupported | Hive Thrift metadata export is not modelled; explicit Unimplemented stub |
 | GetBackup | grpc | ga | — |
+| GetFederation | grpc | ga | — |
 | GetMetadataImport | grpc | ga | — |
 | GetService | grpc | ga | — |
 | ListBackups | grpc | ga | — |
+| ListFederations | grpc | ga | — |
 | ListMetadataImports | grpc | ga | — |
 | ListServices | grpc | ga | — |
 | Metastore.AlterMetadataResourceLocation | rest | unsupported | explicit Unimplemented stub |
+| Metastore.BackupGetIamPolicy | rest | ga | — |
+| Metastore.BackupSetIamPolicy | rest | ga | — |
 | Metastore.CreateBackup | rest | ga | — |
+| Metastore.CreateFederation | rest | ga | — |
 | Metastore.CreateMetadataImport | rest | ga | — |
 | Metastore.CreateService | rest | ga | — |
+| Metastore.DatabaseGetIamPolicy | rest | ga | — |
+| Metastore.DatabaseSetIamPolicy | rest | ga | — |
 | Metastore.DeleteBackup | rest | ga | — |
+| Metastore.DeleteFederation | rest | ga | — |
 | Metastore.DeleteService | rest | ga | — |
 | Metastore.ExportMetadata | rest | unsupported | explicit Unimplemented stub |
+| Metastore.FederationGetIamPolicy | rest | ga | — |
+| Metastore.FederationSetIamPolicy | rest | ga | — |
+| Metastore.FederationTestIamPermissions | rest | ga | — |
 | Metastore.GetBackup | rest | ga | — |
+| Metastore.GetFederation | rest | ga | — |
 | Metastore.GetMetadataImport | rest | ga | — |
 | Metastore.GetOperation | rest | ga | — |
 | Metastore.GetService | rest | ga | — |
 | Metastore.ListBackups | rest | ga | — |
+| Metastore.ListFederations | rest | ga | — |
 | Metastore.ListMetadataImports | rest | ga | — |
 | Metastore.ListOperations | rest | ga | — |
 | Metastore.ListServices | rest | ga | — |
 | Metastore.MoveTableToDatabase | rest | unsupported | explicit Unimplemented stub |
 | Metastore.QueryMetadata | rest | unsupported | explicit Unimplemented stub |
 | Metastore.RestoreService | rest | unsupported | explicit Unimplemented stub |
+| Metastore.ServiceGetIamPolicy | rest | ga | — |
+| Metastore.ServiceSetIamPolicy | rest | ga | — |
+| Metastore.ServiceTestIamPermissions | rest | ga | — |
+| Metastore.TableGetIamPolicy | rest | ga | — |
+| Metastore.TableSetIamPolicy | rest | ga | — |
+| Metastore.UpdateFederation | rest | ga | — |
 | Metastore.UpdateMetadataImport | rest | ga | — |
 | Metastore.UpdateService | rest | ga | — |
 | MoveTableToDatabase | grpc | unsupported | the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub |
 | QueryMetadata | grpc | unsupported | the gRPC metadata query plane is not modelled; explicit Unimplemented stub |
 | RestoreService | grpc | unsupported | Hive Thrift metadata restore is not modelled; explicit Unimplemented stub |
+| UpdateFederation | grpc | ga | — |
 | UpdateMetadataImport | grpc | ga | — |
 | UpdateService | grpc | ga | — |
 

@@ -8,11 +8,15 @@ import (
 
 func TestDetectMetastoreService(t *testing.T) {
 	cases := map[string]string{
-		"/v1/projects/p/locations/us/services":                     "metastore",
-		"/v1/projects/p/locations/us/services/s":                   "metastore",
-		"/v1/projects/p/locations/us/services/s/backups":           "metastore",
-		"/v1/projects/p/locations/us/services/s/backups/b":         "metastore",
-		"/v1/projects/p/locations/us/services/s/metadataImports/m": "metastore",
+		"/v1/projects/p/locations/us/services":                        "metastore",
+		"/v1/projects/p/locations/us/services/s":                      "metastore",
+		"/v1/projects/p/locations/us/services/s/backups":              "metastore",
+		"/v1/projects/p/locations/us/services/s/backups/b":            "metastore",
+		"/v1/projects/p/locations/us/services/s/metadataImports/m":    "metastore",
+		"/v1/projects/p/locations/us/federations":                     "metastore",
+		"/v1/projects/p/locations/us/federations/f":                   "metastore",
+		"/v1/projects/p/locations/us/services/s/databases/d":          "metastore",
+		"/v1/projects/p/locations/us/services/s/databases/d/tables/t": "metastore",
 		// Shared operations path stays on workflows (path-ambiguous on one host).
 		"/v1/projects/p/locations/us/operations/op": "workflows",
 		// Unrelated locations/{l}/... services are unaffected.

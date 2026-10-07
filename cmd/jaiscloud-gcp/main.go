@@ -450,7 +450,7 @@ func startCmd() *cobra.Command {
 			// provider and the gRPC adapter below, so both transports run against
 			// one store and cannot drift. It is built before Dataproc because the
 			// Dataproc core resolves a cluster's metastore attachment through it.
-			metastoreCore := metastorecore.NewService(stores.metastore, metastorecore.WithLROMode(lroMode), metastorecore.WithEventBus(eventBus))
+			metastoreCore := metastorecore.NewService(stores.metastore, metastorecore.WithLROMode(lroMode), metastorecore.WithEventBus(eventBus), metastorecore.WithResources(stores.resources))
 			metastoreP := restmetastore.NewProvider(metastoreCore, cfg.ProjectID)
 
 			// Cloud Dataproc reuses the Spark client-mode executor: mock by
@@ -935,6 +935,7 @@ func startCmd() *cobra.Command {
 				}
 				if transports.GRPCFor("metastore") {
 					metastorepb.RegisterDataprocMetastoreServer(gserv.GRPC(), metastoreGRPC)
+					metastorepb.RegisterDataprocMetastoreFederationServer(gserv.GRPC(), metastoreGRPC)
 				}
 				if transports.GRPCFor("eventarc") {
 					eventarcpb.RegisterEventarcServer(gserv.GRPC(), eventarcGRPC)
@@ -998,14 +999,18 @@ func startCmd() *cobra.Command {
 				if transports.GRPCFor("secretmanager") {
 					secretmanagerpb.RegisterSecretManagerServiceServer(gserv.GRPC(), secretGRPC)
 				}
-				// Pub/Sub, KMS and Eventarc share the single IAMPolicy service, so
-				// their IAM surfaces are dispatched through one router. Eventarc
-				// only joins the router when its gRPC transport is selected, so a
-				// trigger/channel IAM name cannot reach a nil core.
-				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") || transports.GRPCFor("eventarc") {
+				// Pub/Sub, KMS, Eventarc and Dataproc Metastore share the single
+				// IAMPolicy service, so their IAM surfaces are dispatched through
+				// one router. Eventarc and Metastore only join the router when
+				// their gRPC transport is selected, so a trigger/channel or
+				// metastore IAM name cannot reach a nil core.
+				if transports.GRPCFor("kms") || transports.GRPCFor("pubsub") || transports.GRPCFor("eventarc") || transports.GRPCFor("metastore") {
 					iamHandlers := []grpcserver.IAMResourceServer{pubsubGRPC, kmsGRPC}
 					if transports.GRPCFor("eventarc") {
 						iamHandlers = append(iamHandlers, eventarcGRPC)
+					}
+					if transports.GRPCFor("metastore") {
+						iamHandlers = append(iamHandlers, metastoreGRPC)
 					}
 					iampb.RegisterIAMPolicyServer(gserv.GRPC(), grpcserver.NewIAMRouter(iamHandlers...))
 				}

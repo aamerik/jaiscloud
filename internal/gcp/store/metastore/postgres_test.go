@@ -60,6 +60,10 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 		t.Fatalf("create import: %v", err)
 	}
 	_ = s.CreateOperation(ctx, "proj", "us-central1", Operation{ID: "op1", Done: true, Metadata: `{"@type":"t"}`})
+	const fConfig = `{"version":"3.1.2"}`
+	if err := s.CreateFederation(ctx, "proj", "us-central1", Federation{Name: "f1", Config: []byte(fConfig), Labels: map[string]string{"k": "v"}, State: "ACTIVE"}); err != nil {
+		t.Fatalf("create federation: %v", err)
+	}
 
 	var buf bytes.Buffer
 	if err := s.Snapshot(ctx, &buf); err != nil {
@@ -89,5 +93,10 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 	gotM, err := s.GetMetadataImport(ctx, "proj", "us-central1", "s1", "m1")
 	if err != nil || gotM.State != "SUCCEEDED" || !jsonEqual(string(gotM.Config), mConfig) {
 		t.Fatalf("import lost after restore: %v %+v", err, gotM)
+	}
+
+	gotF, err := s.GetFederation(ctx, "proj", "us-central1", "f1")
+	if err != nil || gotF.State != "ACTIVE" || !jsonEqual(string(gotF.Config), fConfig) {
+		t.Fatalf("federation lost after restore: %v %+v", err, gotF)
 	}
 }

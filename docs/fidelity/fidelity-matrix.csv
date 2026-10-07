@@ -687,40 +687,62 @@ memorystore,Memorystore.UpdateInstance,rest,limited,metadata-only over ResourceS
 memorystore,Memorystore.UpgradeInstance,rest,limited,metadata-only over ResourceStore (no data plane)
 metastore,AlterMetadataResourceLocation,grpc,unsupported,the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub
 metastore,CreateBackup,grpc,ga,
+metastore,CreateFederation,grpc,ga,
 metastore,CreateMetadataImport,grpc,ga,
 metastore,CreateService,grpc,ga,
 metastore,DeleteBackup,grpc,ga,
+metastore,DeleteFederation,grpc,ga,
 metastore,DeleteService,grpc,ga,
 metastore,ExportMetadata,grpc,unsupported,Hive Thrift metadata export is not modelled; explicit Unimplemented stub
 metastore,GetBackup,grpc,ga,
+metastore,GetFederation,grpc,ga,
 metastore,GetMetadataImport,grpc,ga,
 metastore,GetService,grpc,ga,
 metastore,ListBackups,grpc,ga,
+metastore,ListFederations,grpc,ga,
 metastore,ListMetadataImports,grpc,ga,
 metastore,ListServices,grpc,ga,
 metastore,Metastore.AlterMetadataResourceLocation,rest,unsupported,explicit Unimplemented stub
+metastore,Metastore.BackupGetIamPolicy,rest,ga,
+metastore,Metastore.BackupSetIamPolicy,rest,ga,
 metastore,Metastore.CreateBackup,rest,ga,
+metastore,Metastore.CreateFederation,rest,ga,
 metastore,Metastore.CreateMetadataImport,rest,ga,
 metastore,Metastore.CreateService,rest,ga,
+metastore,Metastore.DatabaseGetIamPolicy,rest,ga,
+metastore,Metastore.DatabaseSetIamPolicy,rest,ga,
 metastore,Metastore.DeleteBackup,rest,ga,
+metastore,Metastore.DeleteFederation,rest,ga,
 metastore,Metastore.DeleteService,rest,ga,
 metastore,Metastore.ExportMetadata,rest,unsupported,explicit Unimplemented stub
+metastore,Metastore.FederationGetIamPolicy,rest,ga,
+metastore,Metastore.FederationSetIamPolicy,rest,ga,
+metastore,Metastore.FederationTestIamPermissions,rest,ga,
 metastore,Metastore.GetBackup,rest,ga,
+metastore,Metastore.GetFederation,rest,ga,
 metastore,Metastore.GetMetadataImport,rest,ga,
 metastore,Metastore.GetOperation,rest,ga,
 metastore,Metastore.GetService,rest,ga,
 metastore,Metastore.ListBackups,rest,ga,
+metastore,Metastore.ListFederations,rest,ga,
 metastore,Metastore.ListMetadataImports,rest,ga,
 metastore,Metastore.ListOperations,rest,ga,
 metastore,Metastore.ListServices,rest,ga,
 metastore,Metastore.MoveTableToDatabase,rest,unsupported,explicit Unimplemented stub
 metastore,Metastore.QueryMetadata,rest,unsupported,explicit Unimplemented stub
 metastore,Metastore.RestoreService,rest,unsupported,explicit Unimplemented stub
+metastore,Metastore.ServiceGetIamPolicy,rest,ga,
+metastore,Metastore.ServiceSetIamPolicy,rest,ga,
+metastore,Metastore.ServiceTestIamPermissions,rest,ga,
+metastore,Metastore.TableGetIamPolicy,rest,ga,
+metastore,Metastore.TableSetIamPolicy,rest,ga,
+metastore,Metastore.UpdateFederation,rest,ga,
 metastore,Metastore.UpdateMetadataImport,rest,ga,
 metastore,Metastore.UpdateService,rest,ga,
 metastore,MoveTableToDatabase,grpc,unsupported,the gRPC metadata mutation plane is not modelled; explicit Unimplemented stub
 metastore,QueryMetadata,grpc,unsupported,the gRPC metadata query plane is not modelled; explicit Unimplemented stub
 metastore,RestoreService,grpc,unsupported,Hive Thrift metadata restore is not modelled; explicit Unimplemented stub
+metastore,UpdateFederation,grpc,ga,
 metastore,UpdateMetadataImport,grpc,ga,
 metastore,UpdateService,grpc,ga,
 monitoring,CreateAlertPolicy,grpc,ga,
