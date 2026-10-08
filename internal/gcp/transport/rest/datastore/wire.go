@@ -470,6 +470,20 @@ func queryFromWire(v any) (*core.Query, error) {
 		l := int(lf)
 		out.Limit = &l
 	}
+	if raw := strFrom(m["startCursor"]); raw != "" {
+		cur, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			return nil, invalidArgument("malformed start cursor")
+		}
+		out.StartCursor = cur
+	}
+	if raw := strFrom(m["endCursor"]); raw != "" {
+		cur, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			return nil, invalidArgument("malformed end cursor")
+		}
+		out.EndCursor = cur
+	}
 	f, err := filterFromWire(m["filter"])
 	if err != nil {
 		return nil, err

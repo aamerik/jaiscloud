@@ -189,6 +189,9 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 	if resp.MoreResults == core.MoreResultsAfterLimit {
 		batch["moreResults"] = "MORE_RESULTS_AFTER_LIMIT"
 	}
+	if resp.MoreResults == core.MoreResultsAfterCursor {
+		batch["moreResults"] = "MORE_RESULTS_AFTER_CURSOR"
+	}
 	if len(resp.Entities) > 0 {
 		ers := make([]any, 0, len(resp.Entities))
 		for _, r := range resp.Entities {

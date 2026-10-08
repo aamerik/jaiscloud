@@ -16,6 +16,7 @@ import (
 	ltype "google.golang.org/genproto/googleapis/logging/type"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // GRPCScenarios returns the curated gRPC request list (AUD6-1) for the given
@@ -445,6 +446,105 @@ func GRPCScenarios(project, suffix string) []GRPCScenario {
 		},
 	)
 
+	// ─── AUD6-6: Datastore cursor paging ───────────────────────────────────────
+	// A one-result first page is taken (unrecorded) and its end cursor is fed
+	// back on the recorded request — as start_cursor for the next page and as
+	// end_cursor for the bounded range. The golden proves both that a real
+	// request carries the cursor and that the emulator resumes/limits at the
+	// same boundary. The kind holds three equal-length names so real-GCP key
+	// order and the emulator's canonical-key order agree.
+	dsPageKind := n.DSPageKind
+	dsPageNames := []string{n.DSPagePrefix + "a", n.DSPagePrefix + "b", n.DSPagePrefix + "c"}
+	seedPages := func(ctx context.Context, t *GRPCTarget) error {
+		for _, name := range dsPageNames {
+			req := &datastorepb.CommitRequest{
+				ProjectId: project,
+				Mode:      datastorepb.CommitRequest_NON_TRANSACTIONAL,
+				Mutations: []*datastorepb.Mutation{{Operation: &datastorepb.Mutation_Upsert{Upsert: &datastorepb.Entity{
+					Key: &datastorepb.Key{
+						PartitionId: &datastorepb.PartitionId{ProjectId: project},
+						Path:        []*datastorepb.Key_PathElement{{Kind: dsPageKind, IdType: &datastorepb.Key_PathElement_Name{Name: name}}},
+					},
+					Properties: map[string]*datastorepb.Value{
+						"greeting": {ValueType: &datastorepb.Value_StringValue{StringValue: "hello jaiscloud"}},
+						"count":    {ValueType: &datastorepb.Value_IntegerValue{IntegerValue: 7}},
+					},
+				}}}},
+			}
+			if _, err := dsCommit(ctx, t, req); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	firstPageCursor := func(ctx context.Context, t *GRPCTarget) ([]byte, error) {
+		resp, err := dsRunQuery(ctx, t, &datastorepb.RunQueryRequest{
+			ProjectId: project,
+			QueryType: &datastorepb.RunQueryRequest_Query{Query: &datastorepb.Query{
+				Kind:  []*datastorepb.KindExpression{{Name: dsPageKind}},
+				Limit: wrapperspb.Int32(1),
+			}},
+		})
+		if err != nil {
+			return nil, err
+		}
+		return resp.GetBatch().GetEndCursor(), nil
+	}
+	lastCursor := func(ctx context.Context, t *GRPCTarget) ([]byte, error) {
+		resp, err := dsRunQuery(ctx, t, &datastorepb.RunQueryRequest{
+			ProjectId: project,
+			QueryType: &datastorepb.RunQueryRequest_Query{Query: &datastorepb.Query{
+				Kind: []*datastorepb.KindExpression{{Name: dsPageKind}},
+			}},
+		})
+		if err != nil {
+			return nil, err
+		}
+		return resp.GetBatch().GetEndCursor(), nil
+	}
+	pageQuery := func(start, end []byte) *datastorepb.Query {
+		return &datastorepb.Query{
+			Kind:        []*datastorepb.KindExpression{{Name: dsPageKind}},
+			StartCursor: start,
+			EndCursor:   end,
+		}
+	}
+	pageScenario := func(op string, cursorAt func(context.Context, *GRPCTarget) ([]byte, error), build func([]byte) *datastorepb.Query) GRPCScenario {
+		return GRPCScenario{
+			Service: "datastore", Op: op,
+			Method: "google.datastore.v1.Datastore/RunQuery", Path: "projects/" + project,
+			Call: func(ctx context.Context, t *GRPCTarget) (proto.Message, proto.Message, error) {
+				if err := seedPages(ctx, t); err != nil {
+					return nil, nil, err
+				}
+				cursor, err := cursorAt(ctx, t)
+				if err != nil {
+					return nil, nil, err
+				}
+				req := &datastorepb.RunQueryRequest{
+					ProjectId: project,
+					QueryType: &datastorepb.RunQueryRequest_Query{Query: build(cursor)},
+				}
+				resp, err := dsRunQuery(ctx, t, req)
+				if err != nil {
+					return req, nil, err
+				}
+				return req, resp, nil
+			},
+		}
+	}
+	sc = append(sc,
+		pageScenario("ds_run_query_start_cursor", firstPageCursor, func(cursor []byte) *datastorepb.Query {
+			return pageQuery(cursor, nil)
+		}),
+		pageScenario("ds_run_query_end_cursor", firstPageCursor, func(cursor []byte) *datastorepb.Query {
+			return pageQuery(nil, cursor)
+		}),
+		pageScenario("ds_run_query_end_cursor_last", lastCursor, func(cursor []byte) *datastorepb.Query {
+			return pageQuery(nil, cursor)
+		}),
+	)
+
 	return sc
 }
 
@@ -465,6 +565,17 @@ func dsCommit(ctx context.Context, t *GRPCTarget, req *datastorepb.CommitRequest
 	err := withDatastore(ctx, t, func(c datastorepb.DatastoreClient) error {
 		var cerr error
 		resp, cerr = c.Commit(ctx, req)
+		return cerr
+	})
+	return resp, err
+}
+
+// dsRunQuery issues a RunQuery through withDatastore.
+func dsRunQuery(ctx context.Context, t *GRPCTarget, req *datastorepb.RunQueryRequest) (*datastorepb.RunQueryResponse, error) {
+	var resp *datastorepb.RunQueryResponse
+	err := withDatastore(ctx, t, func(c datastorepb.DatastoreClient) error {
+		var cerr error
+		resp, cerr = c.RunQuery(ctx, req)
 		return cerr
 	})
 	return resp, err
@@ -541,6 +652,27 @@ func (t *GRPCTarget) CleanupGRPC(ctx context.Context) []string {
 		log = append(log, "cleanup datastore entity: "+err.Error())
 	} else {
 		log = append(log, "cleanup datastore entity: ok")
+	}
+
+	// AUD6-6 paging entities (three equal-length names in a dedicated kind).
+	pageCleanupOK := true
+	for _, letter := range []string{"a", "b", "c"} {
+		name := n.DSPagePrefix + letter
+		req := &datastorepb.CommitRequest{
+			ProjectId: t.Project,
+			Mode:      datastorepb.CommitRequest_NON_TRANSACTIONAL,
+			Mutations: []*datastorepb.Mutation{{Operation: &datastorepb.Mutation_Delete{Delete: &datastorepb.Key{
+				PartitionId: &datastorepb.PartitionId{ProjectId: t.Project},
+				Path:        []*datastorepb.Key_PathElement{{Kind: n.DSPageKind, IdType: &datastorepb.Key_PathElement_Name{Name: name}}},
+			}}}},
+		}
+		if _, err := dsCommit(ctx, t, req); err != nil {
+			log = append(log, "cleanup datastore page entity "+letter+": "+err.Error())
+			pageCleanupOK = false
+		}
+	}
+	if pageCleanupOK {
+		log = append(log, "cleanup datastore page entities: ok")
 	}
 
 	fsDocName := "projects/" + t.Project + "/databases/(default)/documents/" + n.FSCollection + "/" + n.FSDoc

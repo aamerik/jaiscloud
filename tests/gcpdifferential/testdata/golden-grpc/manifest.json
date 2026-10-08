@@ -1,7 +1,7 @@
 {
   "version": 1,
   "project": "<project>",
-  "ops": 17,
+  "ops": 20,
   "services": [
     "dataproc",
     "datastore",
@@ -111,6 +111,24 @@
       "op": "operation_get_missing",
       "sha256": "58053eb91d45ef2772c8fc9f0fde616061ba4b6eb9e8245a5fac9611d44f5304",
       "status": 5
+    },
+    {
+      "file": "017-datastore-ds_run_query_start_cursor.json",
+      "op": "ds_run_query_start_cursor",
+      "sha256": "0db1036c40a2207f1bfbfd3148b6dd9b010aa098a13bbaabbba333d597f33569",
+      "status": 0
+    },
+    {
+      "file": "018-datastore-ds_run_query_end_cursor.json",
+      "op": "ds_run_query_end_cursor",
+      "sha256": "f48fb2dd7df74d8c2a6a002aedbccb957d8b80df13f0d1af9fe89b1698698101",
+      "status": 0
+    },
+    {
+      "file": "019-datastore-ds_run_query_end_cursor_last.json",
+      "op": "ds_run_query_end_cursor_last",
+      "sha256": "017c9085caf75d3d0e0cffb102c55d1f56e6670d5b3fa7ab2338ecaf8e6c9017",
+      "status": 0
     }
   ]
 }

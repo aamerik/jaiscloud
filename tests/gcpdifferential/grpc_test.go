@@ -210,13 +210,15 @@ func TestGRPCNormalizerFoldsVolatile(t *testing.T) {
 		}
 	}
 
-	// The response-only keys must NOT be folded in a request body, where a
-	// client-authored value (BigQuery's insertId dedup key, a transaction id, a
-	// cursor a client supplies back) must survive verbatim.
-	req := string(norm.RequestBytes([]byte(`{"insertId":"1","transaction":"abc","endCursor":"abc","indexUpdates":3}`)))
-	for _, want := range []string{`"insertId":"1"`, `"transaction":"abc"`, `"endCursor":"abc"`, `"indexUpdates":3`} {
+	// Response-only keys must NOT be folded in a request body, where a
+	// client-authored value (BigQuery's insertId dedup key, a transaction id)
+	// must survive verbatim. Request query cursors are the exception: a
+	// startCursor/endCursor a client sends back is always a token a previous
+	// response returned, so it folds on both sides.
+	req := string(norm.RequestBytes([]byte(`{"insertId":"1","transaction":"abc","startCursor":"abc","endCursor":"def","indexUpdates":3}`)))
+	for _, want := range []string{`"insertId":"1"`, `"transaction":"abc"`, `"indexUpdates":3`, `"startCursor":"<cursor>"`, `"endCursor":"<cursor>"`} {
 		if !strings.Contains(req, want) {
-			t.Errorf("request body lost client-authored value %s: %s", want, req)
+			t.Errorf("normalized request body missing %s: %s", want, req)
 		}
 	}
 }
