@@ -203,7 +203,79 @@ func firestoreAdminScenario() Scenario {
 		return e.RestDelete(ctx, restPrefix(e))
 	}
 
+	// ─── LRO head-to-head parity (AUD5-3) ────────────────────────────────────
+	// The control-plane mutations return a terminal google.longrunning.Operation
+	// whose typed response must transcode identically over each transport. The
+	// gRPC side unwraps the operation's Any response; the REST side uses
+	// RestOperationResource (which unwraps "response" and strips "@type"), so the
+	// two Database bodies diff directly.
+	createPath := func(e *Env) string {
+		return "/v1/projects/" + project(e) + "/databases?databaseId=" + dbID(e)
+	}
+	cleanupDatabase := func(ctx context.Context, e *Env) error {
+		return e.RestDelete(ctx, restPrefix(e))
+	}
+	createDatabaseGRPCResource := func(ctx context.Context, e *Env) (protoMessage, error) {
+		var out *adminpb.Database
+		err := fsAdminDial(ctx, e, func(c adminpb.FirestoreAdminClient) error {
+			op, cerr := c.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+				Parent:     "projects/" + project(e),
+				DatabaseId: dbID(e),
+				Database:   &adminpb.Database{LocationId: "nam5"},
+			})
+			if cerr != nil {
+				return cerr
+			}
+			out = &adminpb.Database{}
+			return op.GetResponse().UnmarshalTo(out)
+		})
+		return out, err
+	}
+	createDatabaseRESTResource := func(ctx context.Context, e *Env) (json.RawMessage, error) {
+		return e.RestOperationResource(ctx, http.MethodPost, createPath(e), `{"locationId":"nam5"}`)
+	}
+	updateDatabaseGRPCResource := func(ctx context.Context, e *Env) (protoMessage, error) {
+		if err := createDBGRPC(ctx, e); err != nil {
+			return nil, err
+		}
+		var out *adminpb.Database
+		err := fsAdminDial(ctx, e, func(c adminpb.FirestoreAdminClient) error {
+			op, cerr := c.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+				Database: &adminpb.Database{
+					Name:            dbName(e),
+					ConcurrencyMode: adminpb.Database_PESSIMISTIC,
+				},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"concurrency_mode"}},
+			})
+			if cerr != nil {
+				return cerr
+			}
+			out = &adminpb.Database{}
+			return op.GetResponse().UnmarshalTo(out)
+		})
+		return out, err
+	}
+	updateDatabaseRESTResource := func(ctx context.Context, e *Env) (json.RawMessage, error) {
+		if _, err := e.Rest(ctx, http.MethodPost, createPath(e), `{"locationId":"nam5"}`); err != nil {
+			return nil, err
+		}
+		return e.RestOperationResource(ctx, http.MethodPatch, restPrefix(e)+"?updateMask=concurrencyMode",
+			`{"concurrencyMode":"PESSIMISTIC"}`)
+	}
+
 	return Scenario{Service: "firestoreadmin", Steps: []Step{
+		{
+			Op: "CreateDatabase (LRO parity)",
+			Mutation: &MutationParity{
+				GRPC: createDatabaseGRPCResource, REST: createDatabaseRESTResource, Cleanup: cleanupDatabase,
+			},
+		},
+		{
+			Op: "UpdateDatabase (LRO parity)",
+			Mutation: &MutationParity{
+				GRPC: updateDatabaseGRPCResource, REST: updateDatabaseRESTResource, Cleanup: cleanupDatabase,
+			},
+		},
 		{Op: "SeedDatabase+Field+UserCreds+Schedule", Mutate: seed},
 		{
 			Op:   "GetDatabase",

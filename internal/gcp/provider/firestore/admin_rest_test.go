@@ -300,8 +300,46 @@ func TestRESTBackupsReadOnly(t *testing.T) {
 	}
 }
 
-func TestAdminMaskForms(t *testing.T) {
-	// Plain csv updateMask is normalized to snake_case proto paths.
+func TestRESTDatabaseOperations(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+
+	// get reports the canonical name terminal.
+	got, err := p.GetOperation(ctx, adminNR("databases/gcprobe/operations/op1", nil))
+	if err != nil {
+		t.Fatalf("GetOperation: %v", err)
+	}
+	if got.Data["name"] != "projects/proj/databases/gcprobe/operations/op1" {
+		t.Errorf("operation name = %v", got.Data["name"])
+	}
+	if got.Data["done"] != true {
+		t.Errorf("operation done = %v, want true", got.Data["done"])
+	}
+
+	// list is empty (no operation records are persisted).
+	list, err := p.ListOperations(ctx, adminNR("databases/gcprobe/operations", nil))
+	if err != nil {
+		t.Fatalf("ListOperations: %v", err)
+	}
+	if ops, _ := list.Data["operations"].([]any); len(ops) != 0 {
+		t.Errorf("ListOperations len = %d, want 0", len(ops))
+	}
+
+	// delete/cancel are no-op successes.
+	if _, err := p.DeleteOperation(ctx, adminNR("databases/gcprobe/operations/op1", nil)); err != nil {
+		t.Fatalf("DeleteOperation: %v", err)
+	}
+	if _, err := p.CancelOperation(ctx, adminNR("databases/gcprobe/operations/op1", nil)); err != nil {
+		t.Fatalf("CancelOperation: %v", err)
+	}
+
+	// A collection path is not an operation resource.
+	if _, err := p.GetOperation(ctx, adminNR("databases/gcprobe/operations", nil)); err == nil {
+		t.Error("GetOperation on the collection path succeeded, want InvalidArgument")
+	}
+}
+
+func TestAdminMaskForms(t *testing.T) { // Plain csv updateMask is normalized to snake_case proto paths.
 	nr := adminNR("databases/db", map[string]any{"updateMask": "concurrencyMode,locationId"})
 	if got := adminMask(nr); len(got) != 2 || got[0] != "concurrency_mode" || got[1] != "location_id" {
 		t.Errorf("adminMask(plain) = %v", got)

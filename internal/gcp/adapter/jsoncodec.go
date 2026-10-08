@@ -217,6 +217,14 @@ func detectResourceType(segs []string) string {
 	if len(segs) >= 1 && segs[0] == "databases" && len(segs) <= 2 {
 		return "databases"
 	}
+	// Firestore Admin long-running operations:
+	// projects.databases.{db}.operations[/{op}]. Claimed before the generic
+	// "operations" marker, which would otherwise route the poll path to the
+	// shared Workflows LRO surface (a distinct resource type keeps the shared
+	// operations semantics untouched).
+	if len(segs) >= 3 && segs[0] == "databases" && segs[2] == "operations" {
+		return "databasesOperations"
+	}
 	var hasKeyRings, hasCryptoKeys, hasVersions, hasServiceAccounts bool
 	var hasWorkflows, hasExecutions bool
 	for _, s := range segs {
@@ -911,6 +919,22 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "GetBackup"
 		case method == http.MethodDelete:
 			return "DeleteBackup"
+		}
+	case "databasesOperations":
+		// Firestore Admin long-running operations:
+		// projects.databases.{db}.operations[/{op}]. The resource marker is
+		// "operations", so collection-ness is derived from the path rather than
+		// the resource type.
+		isColl := strings.HasSuffix(name, "/operations")
+		switch {
+		case custom == "cancel":
+			return "CancelOperation"
+		case isColl && method == http.MethodGet:
+			return "ListOperations"
+		case method == http.MethodGet:
+			return "GetOperation"
+		case method == http.MethodDelete:
+			return "DeleteOperation"
 		}
 	case "functions":
 		switch {
