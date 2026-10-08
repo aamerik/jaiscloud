@@ -140,6 +140,92 @@ func TestSinkUpdateFullWritableMask(t *testing.T) {
 	}
 }
 
+func TestSinkUpdateNestedBigQueryMask(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateSink(ctx, "projects/p", loggingstore.LogSink{
+		Name:        "bq",
+		Destination: "bigquery.googleapis.com/projects/p/datasets/d",
+		BigQueryOptions: &loggingstore.LogBigQueryOptions{
+			UsePartitionedTables:            true,
+			UsesTimestampColumnPartitioning: true,
+		},
+	}, false, ""); err != nil {
+		t.Fatalf("CreateSink: %v", err)
+	}
+
+	// A nested leaf path updates only use_partitioned_tables; the output-only
+	// uses_timestamp_column_partitioning sibling is preserved rather than the
+	// whole message being replaced (AIP-134/AIP-161).
+	upd, err := s.UpdateSink(ctx, "projects/p/sinks/bq", loggingstore.LogSink{
+		BigQueryOptions: &loggingstore.LogBigQueryOptions{UsePartitionedTables: false},
+	}, []string{"bigqueryOptions.usePartitionedTables"}, false, "")
+	if err != nil {
+		t.Fatalf("UpdateSink: %v", err)
+	}
+	if upd.BigQueryOptions == nil || upd.BigQueryOptions.UsePartitionedTables {
+		t.Fatalf("use_partitioned_tables not applied: %+v", upd.BigQueryOptions)
+	}
+	if !upd.BigQueryOptions.UsesTimestampColumnPartitioning {
+		t.Fatalf("output-only subfield was cleared: %+v", upd.BigQueryOptions)
+	}
+
+	// A nested path that names no writable subfield is a 400, not a silent
+	// whole-message replace.
+	_, err = s.UpdateSink(ctx, "projects/p/sinks/bq", loggingstore.LogSink{}, []string{"bigqueryOptions.bogus"}, false, "")
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("unknown nested mask = %v, want InvalidArgument/400", err)
+	}
+}
+
+func TestSinkUpdateWildcardFullReplacement(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateSink(ctx, "projects/p", loggingstore.LogSink{
+		Name:        "s",
+		Destination: "d",
+		Filter:      "severity>=ERROR",
+		Description: "old",
+		Disabled:    true,
+	}, false, ""); err != nil {
+		t.Fatalf("CreateSink: %v", err)
+	}
+
+	// The AIP-134 `*` wildcard replaces every writable field, so omitted ones
+	// are cleared.
+	upd, err := s.UpdateSink(ctx, "projects/p/sinks/s", loggingstore.LogSink{
+		Destination: "storage.googleapis.com/b",
+	}, []string{"*"}, false, "")
+	if err != nil {
+		t.Fatalf("UpdateSink *: %v", err)
+	}
+	if upd.Destination != "storage.googleapis.com/b" {
+		t.Fatalf("destination = %q", upd.Destination)
+	}
+	if upd.Filter != "" || upd.Description != "" || upd.Disabled {
+		t.Fatalf("* did not clear omitted writable fields: %+v", upd)
+	}
+}
+
+func TestExclusionUpdateWildcardMask(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateExclusion(ctx, "projects/p", loggingstore.LogExclusion{
+		Name: "e", Filter: "severity<DEBUG", Description: "old",
+	}); err != nil {
+		t.Fatalf("CreateExclusion: %v", err)
+	}
+	upd, err := s.UpdateExclusion(ctx, "projects/p/exclusions/e",
+		loggingstore.LogExclusion{Filter: "severity<INFO"}, []string{"*"})
+	if err != nil {
+		t.Fatalf("UpdateExclusion *: %v", err)
+	}
+	if upd.Filter != "severity<INFO" || upd.Description != "" {
+		t.Fatalf("exclusion wildcard = %+v", upd)
+	}
+}
+
 func TestExclusionCRUD(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService()

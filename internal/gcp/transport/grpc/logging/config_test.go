@@ -146,6 +146,58 @@ func TestGRPCConfigSinkWritableMaskFields(t *testing.T) {
 	}
 }
 
+func TestGRPCConfigSinkNestedMaskAndWildcard(t *testing.T) {
+	client, cleanup := configTestClient(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if _, err := client.CreateSink(ctx, &loggingpb.CreateSinkRequest{
+		Parent: "projects/test",
+		Sink:   &loggingpb.LogSink{Name: "bqn", Destination: "bigquery.googleapis.com/projects/p/datasets/ds"},
+	}); err != nil {
+		t.Fatalf("CreateSink: %v", err)
+	}
+
+	// A nested proto path updates only use_partitioned_tables.
+	updated, err := client.UpdateSink(ctx, &loggingpb.UpdateSinkRequest{
+		SinkName: "projects/test/sinks/bqn",
+		Sink: &loggingpb.LogSink{
+			Options: &loggingpb.LogSink_BigqueryOptions{BigqueryOptions: &loggingpb.BigQueryOptions{UsePartitionedTables: true}},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"bigquery_options.use_partitioned_tables"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSink nested: %v", err)
+	}
+	if bo := updated.GetBigqueryOptions(); bo == nil || !bo.GetUsePartitionedTables() {
+		t.Fatalf("nested bigqueryOptions = %+v", bo)
+	}
+
+	// A nested path naming no writable subfield is InvalidArgument.
+	if _, err := client.UpdateSink(ctx, &loggingpb.UpdateSinkRequest{
+		SinkName:   "projects/test/sinks/bqn",
+		Sink:       &loggingpb.LogSink{},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"bigquery_options.bogus"}},
+	}); err == nil {
+		t.Fatal("unknown nested mask = nil error, want InvalidArgument")
+	} else if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unknown nested mask = %v, want InvalidArgument", err)
+	}
+
+	// The `*` wildcard replaces writable fields.
+	wild, err := client.UpdateSink(ctx, &loggingpb.UpdateSinkRequest{
+		SinkName:   "projects/test/sinks/bqn",
+		Sink:       &loggingpb.LogSink{Destination: "storage.googleapis.com/b"},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"*"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSink wildcard: %v", err)
+	}
+	if wild.GetDestination() != "storage.googleapis.com/b" {
+		t.Fatalf("wildcard destination = %q", wild.GetDestination())
+	}
+}
+
 func TestGRPCConfigBucketRestrictedFields(t *testing.T) {
 	client, cleanup := configTestClient(t)
 	defer cleanup()
@@ -169,6 +221,40 @@ func TestGRPCConfigBucketRestrictedFields(t *testing.T) {
 	}
 	if got := updated.GetRestrictedFields(); len(got) != 2 || got[0] != "jsonPayload.secret" {
 		t.Fatalf("restrictedFields = %v", got)
+	}
+}
+
+func TestGRPCConfigBucketNestedCmekMask(t *testing.T) {
+	client, cleanup := configTestClient(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	parent := "projects/test/locations/global"
+	if _, err := client.CreateBucket(ctx, &loggingpb.CreateBucketRequest{
+		Parent:   parent,
+		BucketId: "cmek",
+		Bucket: &loggingpb.LogBucket{CmekSettings: &loggingpb.CmekSettings{
+			KmsKeyName: "projects/test/locations/global/keyRings/r/cryptoKeys/old",
+		}},
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	updated, err := client.UpdateBucket(ctx, &loggingpb.UpdateBucketRequest{
+		Name: parent + "/buckets/cmek",
+		Bucket: &loggingpb.LogBucket{CmekSettings: &loggingpb.CmekSettings{
+			KmsKeyName: "projects/test/locations/global/keyRings/r/cryptoKeys/new",
+		}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"cmek_settings.kms_key_name"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBucket: %v", err)
+	}
+	cs := updated.GetCmekSettings()
+	if cs == nil || cs.GetKmsKeyName() != "projects/test/locations/global/keyRings/r/cryptoKeys/new" {
+		t.Fatalf("cmekSettings = %+v", cs)
+	}
+	if cs.GetServiceAccountId() == "" {
+		t.Fatalf("read-only serviceAccountId cleared: %+v", cs)
 	}
 }
 

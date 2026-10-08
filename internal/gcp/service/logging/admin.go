@@ -331,8 +331,17 @@ func (s *Service) UndeleteBucket(ctx context.Context, name string) error {
 	return mapAdminStoreError(s.store.UpdateBucket(ctx, locationParent, stored))
 }
 
+// bucketWritableMaskPaths is the writable field set of a LogBucket (Discovery
+// schema google.logging.v2.LogBucket). name/lifecycleState/createTime/updateTime
+// are read-only; cmekSettings.kmsKeyName is the only writable subfield of the
+// bucket's CMEK settings. The AIP-134 `*` wildcard expands to this set.
+var bucketWritableMaskPaths = []string{
+	"description", "retention_days", "locked", "analytics_enabled",
+	"restricted_fields", "index_configs", "cmek_settings.kms_key_name",
+}
+
 func applyBucketMask(stored, incoming loggingstore.LogBucket, updateMask []string) (loggingstore.LogBucket, error) {
-	for _, raw := range updateMask {
+	for _, raw := range expandConfigMask(updateMask, bucketWritableMaskPaths) {
 		switch normalizeConfigMaskPath(raw) {
 		case "description":
 			stored.Description = incoming.Description
@@ -346,13 +355,34 @@ func applyBucketMask(stored, incoming loggingstore.LogBucket, updateMask []strin
 			stored.RestrictedFields = incoming.RestrictedFields
 		case "index_configs":
 			stored.IndexConfigs = incoming.IndexConfigs
-		case "cmek_settings":
-			stored.Cmek = incoming.Cmek
+		case "cmek_settings", "cmek_settings.kms_key_name":
+			// `cmekSettings` (the message) and its nested writable leaf both
+			// apply only `kmsKeyName`.
+			stored.Cmek = mergeBucketCmek(stored.Cmek, incoming.Cmek)
 		default:
 			return stored, invalidMaskPath(raw)
 		}
 	}
 	return stored, nil
+}
+
+// mergeBucketCmek applies the writable `kmsKeyName` of a bucket's nested
+// cmekSettings message (named by either the message path or its nested leaf) and
+// preserves the read-only service account id and key version name, which real
+// Logging ignores on write.
+func mergeBucketCmek(stored, incoming *loggingstore.LogCmekSettings) *loggingstore.LogCmekSettings {
+	if stored == nil && incoming == nil {
+		return nil
+	}
+	out := &loggingstore.LogCmekSettings{}
+	if stored != nil {
+		out.KmsKeyVersionName = stored.KmsKeyVersionName
+		out.ServiceAccountID = stored.ServiceAccountID
+	}
+	if incoming != nil {
+		out.KmsKeyName = incoming.KmsKeyName
+	}
+	return out
 }
 
 // ─── views ────────────────────────────────────────────────────────────────────
@@ -433,6 +463,11 @@ func (s *Service) ListViews(ctx context.Context, parent string, pageSize int, pa
 	return page, next, nil
 }
 
+// viewWritableMaskPaths is the writable field set of a LogView (Discovery schema
+// google.logging.v2.LogView); name/createTime/updateTime are read-only. The
+// AIP-134 `*` wildcard expands to this set.
+var viewWritableMaskPaths = []string{"description", "filter"}
+
 // UpdateView merges a view by full resource name. A non-empty mask is required.
 func (s *Service) UpdateView(ctx context.Context, name string, in loggingstore.LogView, updateMask []string) (loggingstore.LogView, error) {
 	bucketName, id, err := ParseViewName(name)
@@ -446,7 +481,7 @@ func (s *Service) UpdateView(ctx context.Context, name string, in loggingstore.L
 	if err != nil {
 		return loggingstore.LogView{}, mapAdminStoreError(err)
 	}
-	for _, raw := range updateMask {
+	for _, raw := range expandConfigMask(updateMask, viewWritableMaskPaths) {
 		switch normalizeConfigMaskPath(raw) {
 		case "description":
 			stored.Description = in.Description
@@ -638,6 +673,11 @@ func (s *Service) ListLogScopes(ctx context.Context, parent string, pageSize int
 	return page, next, nil
 }
 
+// scopeWritableMaskPaths is the writable field set of a LogScope (Discovery
+// schema google.logging.v2.LogScope); name/createTime/updateTime are read-only.
+// The AIP-134 `*` wildcard expands to this set.
+var scopeWritableMaskPaths = []string{"description", "resource_names"}
+
 // UpdateLogScope merges a log scope by full resource name. A non-empty mask is
 // required.
 func (s *Service) UpdateLogScope(ctx context.Context, name string, in loggingstore.LogScope, updateMask []string) (loggingstore.LogScope, error) {
@@ -652,7 +692,7 @@ func (s *Service) UpdateLogScope(ctx context.Context, name string, in loggingsto
 	if err != nil {
 		return loggingstore.LogScope{}, mapAdminStoreError(err)
 	}
-	for _, raw := range updateMask {
+	for _, raw := range expandConfigMask(updateMask, scopeWritableMaskPaths) {
 		switch normalizeConfigMaskPath(raw) {
 		case "description":
 			stored.Description = in.Description
@@ -701,6 +741,14 @@ func (s *Service) GetSettings(ctx context.Context, name string) (loggingstore.Lo
 	return st, nil
 }
 
+// settingsWritableMaskPaths is the writable field set of a Settings record
+// (Discovery schema google.logging.v2.Settings); name/kmsServiceAccountId/
+// loggingServiceAccountId are read-only. The AIP-134 `*` wildcard expands to
+// this set.
+var settingsWritableMaskPaths = []string{
+	"kms_key_name", "storage_location", "disable_default_sink", "default_sink_config",
+}
+
 // UpdateSettings merges the Settings record for a scope. A non-empty mask is
 // required; the synthesized service account id is preserved.
 func (s *Service) UpdateSettings(ctx context.Context, name string, in loggingstore.LogSettings, updateMask []string) (loggingstore.LogSettings, error) {
@@ -718,7 +766,7 @@ func (s *Service) UpdateSettings(ctx context.Context, name string, in loggingsto
 	if stored.KmsServiceAccountID == "" {
 		stored.KmsServiceAccountID = loggingServiceAgent(scope)
 	}
-	for _, raw := range updateMask {
+	for _, raw := range expandConfigMask(updateMask, settingsWritableMaskPaths) {
 		switch normalizeConfigMaskPath(raw) {
 		case "kms_key_name":
 			stored.KmsKeyName = in.KmsKeyName
@@ -758,6 +806,12 @@ func (s *Service) GetCmekSettings(ctx context.Context, name string) (loggingstor
 	return st, nil
 }
 
+// cmekWritableMaskPaths is the writable field set of CmekSettings (Discovery
+// schema google.logging.v2.CmekSettings). name, kmsKeyVersionName and
+// serviceAccountId are read-only, so only kmsKeyName is writable; the AIP-134
+// `*` wildcard expands to this set.
+var cmekWritableMaskPaths = []string{"kms_key_name"}
+
 // UpdateCmekSettings merges the CMEK record for a scope. A non-empty mask and a
 // kms_key_name are required; the synthesized service account id is preserved.
 func (s *Service) UpdateCmekSettings(ctx context.Context, name string, in loggingstore.LogCmekSettings, updateMask []string) (loggingstore.LogCmekSettings, error) {
@@ -778,12 +832,10 @@ func (s *Service) UpdateCmekSettings(ctx context.Context, name string, in loggin
 	if stored.ServiceAccountID == "" {
 		stored.ServiceAccountID = loggingServiceAgent(scope)
 	}
-	for _, raw := range updateMask {
+	for _, raw := range expandConfigMask(updateMask, cmekWritableMaskPaths) {
 		switch normalizeConfigMaskPath(raw) {
 		case "kms_key_name":
 			stored.KmsKeyName = in.KmsKeyName
-		case "kms_key_version_name":
-			stored.KmsKeyVersionName = in.KmsKeyVersionName
 		default:
 			return loggingstore.LogCmekSettings{}, invalidMaskPath(raw)
 		}
