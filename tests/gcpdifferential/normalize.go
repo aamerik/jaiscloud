@@ -90,6 +90,10 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		// into it are run-suffixed, so both fold to placeholders.
 		{names.DSEntity, "<dsEntity>"},
 		{names.DSKind, "<dsKind>"},
+		// AUD6-6 cursor paging: the separate paging kind and the common name
+		// prefix of its three equal-length entities.
+		{names.DSPageKind, "<dsPageKind>"},
+		{names.DSPagePrefix, "<dsPage>"},
 		// A missing service-account probe is an email-shaped 404 path; fold it
 		// too so a golden never carries an "@" or the gserviceaccount domain.
 		{"missing-" + suffix + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
@@ -260,6 +264,11 @@ var volatileStringKeys = map[string]string{
 	// Cloud Datastore entity versions are opaque, monotonically increasing
 	// server-side values that differ between real GCP and the emulator.
 	"version": "<version>",
+	// Datastore/Firestore query cursors. A request cursor is always a token a
+	// previous response returned (real GCP's opaque protobuf cursor vs the
+	// emulator's key-based one), so it folds on both sides.
+	"startCursor": "<cursor>",
+	"endCursor":   "<cursor>",
 }
 
 // volatileResponseKeys are fields that are server-generated in a response and
@@ -275,11 +284,12 @@ var volatileResponseKeys = map[string]string{
 	// query cursors and transaction ids, Datastore's index-update count, and
 	// Cloud Logging's timestamp/receive timestamp. They are folded in responses
 	// only, so a committed gRPC golden is stable without ever rewriting a
-	// harness-authored request body.
+	// harness-authored request body. (Request-side query cursors startCursor /
+	// endCursor fold unconditionally in volatileStringKeys, since a request
+	// cursor is always a previously returned token.)
 	"readTime":         "<time>",
 	"snapshotVersion":  "<snapshotVersion>",
 	"commitTime":       "<time>",
-	"endCursor":        "<cursor>",
 	"skippedCursor":    "<cursor>",
 	"cursor":           "<cursor>",
 	"transaction":      "<transaction>",

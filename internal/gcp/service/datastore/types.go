@@ -161,6 +161,9 @@ type MoreResults int
 const (
 	MoreResultsNoMoreResults MoreResults = iota
 	MoreResultsAfterLimit
+	// MoreResultsAfterCursor mirrors real Datastore's MORE_RESULTS_AFTER_CURSOR:
+	// the request's end cursor bounded the batch.
+	MoreResultsAfterCursor
 )
 
 // Query is a transport-neutral Datastore query. Both the structured form and
@@ -171,6 +174,14 @@ type Query struct {
 	Filter *Filter
 	Offset int
 	Limit  *int // nil = unbounded
+	// StartCursor and EndCursor are opaque positions in the ordered result
+	// stream: StartCursor resumes strictly after the position it names and
+	// EndCursor stops at (and includes) the position it names. The emulator's
+	// cursor is the canonical key of the entity the position follows, so an
+	// end cursor round-trips a page's last result and a start cursor resumes
+	// at the next one.
+	StartCursor []byte
+	EndCursor   []byte
 	// Namespace and Database scope the query's partition ("" = default).
 	Namespace string
 	Database  string

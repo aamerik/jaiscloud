@@ -195,6 +195,11 @@ type ResourceNames struct {
 	// written into it, both run-suffixed and folded so a golden is stable.
 	DSKind   string
 	DSEntity string
+	// AUD6-6 cursor paging: a separate Datastore kind holding three
+	// equal-length entity names, so real-GCP key order and the emulator's
+	// canonical-key order agree and the page boundary is deterministic.
+	DSPageKind   string
+	DSPagePrefix string
 }
 
 // Names derives the run's resource identifiers from suffix.
@@ -227,6 +232,8 @@ func Names(suffix string) ResourceNames {
 		MetricType:       "custom.googleapis.com/jaiscloud_nonexistent_" + suffix,
 		DSKind:           "conf_ds_kind_" + suffix,
 		DSEntity:         "conf_ds_entity_" + suffix,
+		DSPageKind:       "conf_ds_pg_kind_" + suffix,
+		DSPagePrefix:     "conf_ds_pg_" + suffix + "_",
 	}
 }
 

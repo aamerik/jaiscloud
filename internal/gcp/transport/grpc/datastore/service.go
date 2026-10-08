@@ -186,6 +186,9 @@ func (s *Service) RunQuery(ctx context.Context, req *datastorepb.RunQueryRequest
 	if resp.MoreResults == core.MoreResultsAfterLimit {
 		batch.MoreResults = datastorepb.QueryResultBatch_MORE_RESULTS_AFTER_LIMIT
 	}
+	if resp.MoreResults == core.MoreResultsAfterCursor {
+		batch.MoreResults = datastorepb.QueryResultBatch_MORE_RESULTS_AFTER_CURSOR
+	}
 	if !resp.ReadTime.IsZero() {
 		batch.ReadTime = timestamppb.New(resp.ReadTime)
 	}

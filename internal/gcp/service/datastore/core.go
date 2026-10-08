@@ -33,6 +33,7 @@
 package datastore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sort"
@@ -442,6 +443,30 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 	if err != nil {
 		return nil, err
 	}
+	// Resolve the request's cursor positions against the ordered candidate
+	// stream. The documented stage order is kind → filter → order + start/end
+	// cursor → offset → limit: a cursor bounds the ordered stream, then offset
+	// skips within that bound. StartCursor resumes strictly after the entity it
+	// names; EndCursor stops at (and includes) the entity it names, so an end
+	// cursor round-trips the page it came from.
+	lo, hi := 0, len(entities)
+	if len(q.StartCursor) > 0 {
+		i := cursorIndex(entities, q.StartCursor)
+		if i < 0 {
+			return nil, invalidArgument("invalid start cursor")
+		}
+		lo = i + 1
+	}
+	if len(q.EndCursor) > 0 {
+		i := cursorIndex(entities, q.EndCursor)
+		if i < 0 {
+			return nil, invalidArgument("invalid end cursor")
+		}
+		hi = i + 1
+	}
+	if hi < lo {
+		hi = lo
+	}
 	now := clock.Now()
 	out := &QueryResult{
 		MoreResults:     MoreResultsNoMoreResults,
@@ -449,8 +474,9 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 		SnapshotVersion: now.UnixMicro(),
 	}
 	skipped := 0
+	limitHit := false
 	var lastSkipped *dsstore.Entity
-	for _, e := range entities {
+	for _, e := range entities[lo:hi] {
 		if !entityInScope(e, q.Namespace, q.Database) {
 			continue
 		}
@@ -474,7 +500,7 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 		// report MORE_RESULTS_AFTER_LIMIT (real Datastore's signal that a
 		// limit, not the data set, ended the batch).
 		if limit >= 0 && len(out.Entities) == limit {
-			out.MoreResults = MoreResultsAfterLimit
+			limitHit = true
 			break
 		}
 		// Internal approximation: the emulator records the version of every
@@ -493,9 +519,20 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 			out.SkippedCursor = entityCursor(*lastSkipped)
 		}
 	}
+	// MoreResults: a limit that cut the batch is MORE_RESULTS_AFTER_LIMIT;
+	// otherwise a request end_cursor that bounded it is
+	// MORE_RESULTS_AFTER_CURSOR. Real Datastore reports the latter even when
+	// the end cursor names the last result, because the cursor — not the data
+	// set — ended the scan.
+	if limitHit {
+		out.MoreResults = MoreResultsAfterLimit
+	} else if len(q.EndCursor) > 0 {
+		out.MoreResults = MoreResultsAfterCursor
+	}
 	// EndCursor points to the position after the last result, matching real
-	// Datastore's QueryResultBatch.end_cursor. The emulator does not consume a
-	// start_cursor, so the cursor is a position marker only.
+	// Datastore's QueryResultBatch.end_cursor. Fed back as a request
+	// start_cursor it resumes at the next entity; fed back as an end_cursor it
+	// reproduces this page.
 	if len(out.Entities) > 0 {
 		out.EndCursor = out.Entities[len(out.Entities)-1].Cursor
 	}
@@ -508,6 +545,18 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 // opaque and for the differential to fold it.
 func entityCursor(e dsstore.Entity) []byte {
 	return []byte(e.Key)
+}
+
+// cursorIndex returns the index of the candidate whose cursor equals the given
+// request cursor, or -1 when the stream has no such position. The candidate
+// slice is ordered by canonical key, the same encoding entityCursor returns.
+func cursorIndex(entities []dsstore.Entity, cursor []byte) int {
+	for i := range entities {
+		if bytes.Equal(entityCursor(entities[i]), cursor) {
+			return i
+		}
+	}
+	return -1
 }
 
 // queryWindow extracts a query's non-negative offset and limit. limit is -1

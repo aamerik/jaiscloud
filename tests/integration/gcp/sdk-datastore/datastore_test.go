@@ -7,6 +7,7 @@ import (
 	"cloud.google.com/go/datastore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/api/iterator"
 )
 
 type Task struct {
@@ -61,6 +62,49 @@ func TestDatastore(t *testing.T) {
 			descriptions[i] = r.Description
 		}
 		assert.Contains(t, descriptions, "Task A")
+	})
+
+	// CursorPaging exercises the official client's cursor paging path: a
+	// limited query returns MORE_RESULTS_AFTER_LIMIT + an end cursor, and
+	// resuming from that cursor must return the next entities (AUD6-6).
+	t.Run("CursorPaging", func(t *testing.T) {
+		kind := "PagingTask-" + suffix
+		names := []string{"page-a-" + suffix, "page-b-" + suffix, "page-c-" + suffix}
+		for i, name := range names {
+			_, err := client.Put(ctx, datastore.NameKey(kind, name, nil), &Task{Description: name, Priority: i})
+			require.NoError(t, err)
+		}
+		t.Cleanup(func() {
+			for _, name := range names {
+				client.Delete(ctx, datastore.NameKey(kind, name, nil))
+			}
+		})
+
+		it := client.Run(ctx, datastore.NewQuery(kind).Limit(2))
+		var first []string
+		for len(first) < 2 {
+			var task Task
+			_, err := it.Next(&task)
+			require.NoError(t, err)
+			first = append(first, task.Description)
+		}
+		assert.Equal(t, names[:2], first)
+
+		cursor, err := it.Cursor()
+		require.NoError(t, err)
+
+		var rest []string
+		it2 := client.Run(ctx, datastore.NewQuery(kind).Start(cursor))
+		for {
+			var task Task
+			_, err := it2.Next(&task)
+			if err == iterator.Done {
+				break
+			}
+			require.NoError(t, err)
+			rest = append(rest, task.Description)
+		}
+		assert.Equal(t, names[2:], rest)
 	})
 
 	t.Run("Update", func(t *testing.T) {

@@ -330,6 +330,12 @@ func queryFromProto(q *datastorepb.Query) (*core.Query, error) {
 		l := int(q.GetLimit().GetValue())
 		out.Limit = &l
 	}
+	if len(q.GetStartCursor()) > 0 {
+		out.StartCursor = q.GetStartCursor()
+	}
+	if len(q.GetEndCursor()) > 0 {
+		out.EndCursor = q.GetEndCursor()
+	}
 	f, err := filterFromProto(q.GetFilter())
 	if err != nil {
 		return nil, err
