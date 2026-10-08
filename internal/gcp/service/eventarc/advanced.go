@@ -347,13 +347,48 @@ func (s *Service) validateAdvanced(ctx context.Context, project string, k Kind, 
 var advancedOutputOnly = map[string]bool{
 	"name": true, "uid": true, "etag": true, "createtime": true,
 	"updatetime": true, "activationtoken": true, "state": true,
+	"satisfieszps": true, "pubsubtopic": true,
+}
+
+// advancedFields is the full update_mask field set of each advanced-surface
+// kind (eventarc v1 Discovery schemas), normalized. A mask root outside a
+// kind's set names no field and is a client error (400 INVALID_ARGUMENT,
+// AIP-134/AIP-161); a root inside it that advancedOutputOnly owns stays a 501
+// UnsupportedOperation.
+var advancedFields = map[string]map[string]bool{
+	"MessageBus": maskFieldSet(
+		"annotations", "cryptoKeyName", "displayName", "labels", "loggingConfig",
+		"name", "createTime", "etag", "uid", "updateTime",
+	),
+	"Enrollment": maskFieldSet(
+		"annotations", "celMatch", "destination", "displayName", "labels",
+		"messageBus", "name", "createTime", "etag", "uid", "updateTime",
+	),
+	"Pipeline": maskFieldSet(
+		"annotations", "cryptoKeyName", "destinations", "displayName",
+		"inputPayloadFormat", "labels", "loggingConfig", "mediations",
+		"retryPolicy", "name", "createTime", "etag", "satisfiesPzs", "uid", "updateTime",
+	),
+	"GoogleApiSource": maskFieldSet(
+		"annotations", "cryptoKeyName", "destination", "displayName", "labels",
+		"loggingConfig", "organizationSubscription", "projectSubscriptions",
+		"name", "createTime", "etag", "uid", "updateTime",
+	),
+	"GoogleChannelConfig": maskFieldSet(
+		"cryptoKeyName", "labels", "name", "updateTime",
+	),
+	"ChannelConnection": maskFieldSet(
+		"activationToken", "channel", "labels", "name", "createTime", "uid", "updateTime",
+	),
 }
 
 // applyAdvancedMask merges an incoming body into a stored body under the
 // updateMask paths (empty mask = apply every non-output-only body field). Path
 // roots are matched case/underscore-insensitively and mapped onto their
-// camelCase JSON key; a nested path applies its whole top-level field.
-func applyAdvancedMask(stored, incoming map[string]any, paths []string) (map[string]any, error) {
+// camelCase JSON key; a nested path applies its whole top-level field. A path
+// that names no field of the kind is a 400 InvalidArgument; an output-only
+// field a 501.
+func applyAdvancedMask(k Kind, stored, incoming map[string]any, paths []string) (map[string]any, error) {
 	merged := make(map[string]any, len(stored)+len(incoming))
 	for key, v := range stored {
 		merged[key] = v
@@ -367,10 +402,15 @@ func applyAdvancedMask(stored, incoming map[string]any, paths []string) (map[str
 		}
 		return merged, nil
 	}
+	fields := advancedFields[k.Proto]
 	for _, path := range paths {
 		root := maskRoot(path)
-		if advancedOutputOnly[normalizeMaskField(root)] {
+		n := normalizeMaskField(root)
+		if advancedOutputOnly[n] {
 			return nil, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+path, 501)
+		}
+		if !fields[n] {
+			return nil, invalidMaskPath(path)
 		}
 		key := snakeToCamel(root)
 		if v, present := incoming[key]; present {
@@ -383,12 +423,12 @@ func applyAdvancedMask(stored, incoming map[string]any, paths []string) (map[str
 // mergeAdvancedRecord applies a PATCH body to a stored record. It performs no
 // reference validation and never touches the store, so it is safe to call from
 // inside the store's locked mutate closure.
-func mergeAdvancedRecord(stored AdvancedRecord, body map[string]any, paths []string) (AdvancedRecord, map[string]any, error) {
+func mergeAdvancedRecord(k Kind, stored AdvancedRecord, body map[string]any, paths []string) (AdvancedRecord, map[string]any, error) {
 	cur := map[string]any{}
 	if len(stored.Config) > 0 {
 		_ = json.Unmarshal(stored.Config, &cur)
 	}
-	merged, err := applyAdvancedMask(cur, body, paths)
+	merged, err := applyAdvancedMask(k, cur, body, paths)
 	if err != nil {
 		return AdvancedRecord{}, nil, err
 	}
@@ -508,7 +548,7 @@ func (s *Service) UpdateAdvanced(ctx context.Context, project string, k Kind, lo
 	if err := checkEtag(reqEtag, stored.Etag); err != nil {
 		return AdvancedRecord{}, Operation{}, err
 	}
-	next, merged, err := mergeAdvancedRecord(stored, body, paths)
+	next, merged, err := mergeAdvancedRecord(k, stored, body, paths)
 	if err != nil {
 		return AdvancedRecord{}, Operation{}, err
 	}
@@ -523,7 +563,7 @@ func (s *Service) UpdateAdvanced(ctx context.Context, project string, k Kind, lo
 		if err := checkEtag(reqEtag, cur.Etag); err != nil {
 			return AdvancedRecord{}, err
 		}
-		nx, _, err := mergeAdvancedRecord(cur, body, paths)
+		nx, _, err := mergeAdvancedRecord(k, cur, body, paths)
 		if err != nil {
 			return AdvancedRecord{}, err
 		}

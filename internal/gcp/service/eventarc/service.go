@@ -179,6 +179,13 @@ func invalidArgument(msg string) error {
 	return model.NewProviderError("InvalidArgument", msg, 400)
 }
 
+// invalidMaskPath reports an update_mask path that names no field of the
+// resource. Real GCP validates the mask against the resource's field set and
+// answers INVALID_ARGUMENT (AIP-134 / AIP-161), not an unimplemented operation.
+func invalidMaskPath(path string) error {
+	return invalidArgument("unsupported update_mask path: " + path)
+}
+
 // InvalidIAMResource is the canonical InvalidArgument error for an IAM request
 // naming a resource the Eventarc service does not own.
 func InvalidIAMResource() error {
@@ -252,6 +259,35 @@ func normalizeMaskField(s string) string {
 	return strings.ToLower(strings.ReplaceAll(s, "_", ""))
 }
 
+// maskFieldSet normalizes Discovery camelCase field names to the keys
+// normalizeMaskField produces and returns them as a set.
+func maskFieldSet(names ...string) map[string]bool {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[normalizeMaskField(n)] = true
+	}
+	return set
+}
+
+// triggerMaskFields is the full update_mask field set of an Eventarc Trigger
+// (Discovery schema google.cloud.eventarc.v1.Trigger), normalized. A mask root
+// outside it names no field (400 INVALID_ARGUMENT); a root inside it but absent
+// from triggerMaskCanonical (output-only fields such as conditions or uid) is a
+// field the emulator does not write, so it stays a 501 UnsupportedOperation.
+var triggerMaskFields = maskFieldSet(
+	"destination", "eventFilters", "serviceAccount", "transport", "channel",
+	"labels", "eventDataContentType", "retryPolicy",
+	"conditions", "createTime", "etag", "satisfiesPzs", "uid", "updateTime", "name",
+)
+
+// channelMaskFields is the full update_mask field set of an Eventarc Channel
+// (Discovery schema google.cloud.eventarc.v1.Channel), normalized.
+var channelMaskFields = maskFieldSet(
+	"provider", "cryptoKeyName", "labels",
+	"activationToken", "createTime", "pubsubTopic", "satisfiesPzs", "state",
+	"uid", "updateTime", "name",
+)
+
 // triggerMaskCanonical maps a normalized update_mask root to the canonical
 // camelCase JSON key of an updatable Trigger field. Output-only fields are
 // intentionally absent so a mask naming one fails loud rather than silently
@@ -278,7 +314,8 @@ var channelMaskCanonical = map[string]string{
 // applyTriggerMask merges an incoming Trigger body into the stored body
 // according to the updateMask paths: a masked path takes the incoming value,
 // every unmasked path retains the stored value. An empty mask merges every body
-// field. An unsupported path fails loud with Unimplemented.
+// field. A path that names no field of a Trigger is a 400 InvalidArgument; a
+// real-but-unimplemented field a 501.
 func applyTriggerMask(stored, incoming map[string]any, paths []string) (map[string]any, error) {
 	merged := make(map[string]any, len(stored)+len(incoming))
 	for k, v := range stored {
@@ -291,8 +328,12 @@ func applyTriggerMask(stored, incoming map[string]any, paths []string) (map[stri
 		return merged, nil
 	}
 	for _, path := range paths {
-		canon, ok := triggerMaskCanonical[normalizeMaskField(maskRoot(path))]
+		root := normalizeMaskField(maskRoot(path))
+		canon, ok := triggerMaskCanonical[root]
 		if !ok {
+			if !triggerMaskFields[root] {
+				return nil, invalidMaskPath(path)
+			}
 			return nil, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+path, 501)
 		}
 		if v, present := incoming[canon]; present {
@@ -315,8 +356,12 @@ func applyChannelMask(stored, incoming map[string]any, paths []string) (map[stri
 		return merged, nil
 	}
 	for _, path := range paths {
-		canon, ok := channelMaskCanonical[normalizeMaskField(maskRoot(path))]
+		root := normalizeMaskField(maskRoot(path))
+		canon, ok := channelMaskCanonical[root]
 		if !ok {
+			if !channelMaskFields[root] {
+				return nil, invalidMaskPath(path)
+			}
 			return nil, model.NewProviderError("UnsupportedOperation", "unsupported update_mask path: "+path, 501)
 		}
 		if v, present := incoming[canon]; present {
