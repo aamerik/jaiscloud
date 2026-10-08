@@ -149,6 +149,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-e2e-cloudrun-k8s test-e2e-cloudrun-java test-e2e-cloudrun-docker \
         test-e2e-dataproc-docker \
         test-e2e-eventarc-k8s \
+        test-e2e-scheduler-k8s \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all test-all-gcp \
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
         _start-k8s _stop-k8s \
@@ -1146,6 +1147,13 @@ test-e2e-eventarc-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Eventarc 
 	go clean -testcache
 	K8S_NAMESPACE=$(K8S_NAMESPACE) EVENTARC_E2E_K8S=1 \
 	  go test -v -tags eventarc_e2e -timeout 20m ./tests/persistent_mode/gcp/eventarc/
+
+test-e2e-scheduler-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud Scheduler → Dataproc submit hop e2e on k3d (SPK3) — tests/persistent_mode/gcp/scheduler/ (tag: scheduler_e2e; sets the Spark executor to mock so the gate is about the hop, not a Spark run; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
+	go clean -testcache
+	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp JAISCLOUD_SPARK_EXECUTOR_MODE=mock
+	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
+	K8S_NAMESPACE=$(K8S_NAMESPACE) SCHEDULER_E2E_K8S=1 \
+	  go test -v -tags scheduler_e2e -timeout 15m ./tests/persistent_mode/gcp/scheduler/
 
 test-e2e-cloudrun-java: _check-gcp-samples-prereq _refresh-gcp-image ## OPTIONAL floci-gcp Java interop smoke (not a compliance gate) against the k3d emulator with Cloud Run k8s execution, through the in-cluster portmux (asserts CloudRunTest 7/7; JAVA_HOME/mvn on PATH — see AGENTS.md)
 	@test -d $(FLOCI_COMPAT_DIR)/sdk-test-java || (echo "ERROR: $(FLOCI_COMPAT_DIR)/sdk-test-java not found — set FLOCI_COMPAT_DIR"; exit 1)

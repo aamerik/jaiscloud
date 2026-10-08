@@ -170,7 +170,7 @@ func (s *Service) RunJob(ctx context.Context, project, location, name string) (s
 		return cur, nil
 	}
 	now := clock.Now()
-	status := s.engine.disp.Deliver(ctx, cur)
+	status := s.engine.disp.Deliver(ctx, cur, cur.ScheduleTime)
 	return s.store.UpdateJobAtomic(ctx, project, location, name, func(j schedstore.Job) (schedstore.Job, error) {
 		j.LastAttemptTime = now
 		if status.Code == 0 {
