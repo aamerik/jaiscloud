@@ -1084,7 +1084,16 @@ func protoPolicyToBody(p *iampb.Policy) map[string]any {
 }
 
 func policyToProto(p policy.Policy) *iampb.Policy {
-	out := &iampb.Policy{Version: int32(p.Version)}
+	// Mirror the REST renderer (internal/gcp/transport/rest/kms.iamPolicyMap),
+	// which matches real Cloud KMS: an empty/default policy renders as just
+	// {"etag": ...} — the semantic default version 1 is not emitted, and empty
+	// bindings are omitted by protojson. Without this the same stored policy
+	// rendered `version: 1` over gRPC while the REST route omitted it, a
+	// cross-transport divergence the parity harness caught (AUD3-16).
+	out := &iampb.Policy{}
+	if p.Version > 1 {
+		out.Version = int32(p.Version)
+	}
 	if p.Etag != "" {
 		out.Etag = []byte(p.Etag)
 	}
