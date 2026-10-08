@@ -317,37 +317,11 @@ func datastoreEntity(e *Env, key *datastorepb.Key, refKind, marker string) *data
 }
 
 // datastoreValueProjection canonicalizes a Datastore REST or gRPC-protojson body
-// into one logical form. The Value union is the same data encoded two ways, and
-// the one member whose encodings differ is the proto3 well-known
-// google.protobuf.NullValue: the Discovery REST JSON renders the enum as its
-// name "NULL_VALUE" (which the conformance validator checks against the vendored
-// Discovery schema), while protojson — what a typed gRPC client receives —
-// renders it as JSON null. Every other member already coincides (integerValue is
-// a quoted int64 on both sides, blobValue base64, timestampValue RFC3339,
-// geoPointValue/keyValue/entityValue/arrayValue nest identically), so the
-// projection rewrites only nullValue and leaves every other field untouched: a
-// genuine logical difference still reaches the differ.
+// into one logical form. Datastore's Value union is the same data encoded two
+// ways; the shared nullValueProjection reconciles the single member whose
+// encodings differ — google.protobuf.NullValue: the Discovery enum name
+// "NULL_VALUE" over REST vs JSON null through protojson — while leaving every
+// other member and any genuine logical difference intact.
 func datastoreValueProjection(raw json.RawMessage) (json.RawMessage, error) {
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return nil, err
-	}
-	canonicalizeDatastoreNulls(v)
-	return json.Marshal(v)
-}
-
-func canonicalizeDatastoreNulls(v any) {
-	switch t := v.(type) {
-	case map[string]any:
-		if val, ok := t["nullValue"]; ok && val == nil {
-			t["nullValue"] = "NULL_VALUE"
-		}
-		for _, e := range t {
-			canonicalizeDatastoreNulls(e)
-		}
-	case []any:
-		for _, e := range t {
-			canonicalizeDatastoreNulls(e)
-		}
-	}
+	return nullValueProjection(raw)
 }

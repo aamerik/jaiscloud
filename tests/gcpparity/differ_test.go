@@ -183,6 +183,51 @@ func TestDatastoreValueProjectionCanonicalizesNullValue(t *testing.T) {
 	}
 }
 
+// TestFirestoreValueProjectionCanonicalizesNullValue proves the Firestore
+// projection equalizes the one Value-union member whose REST and protojson
+// encodings differ — NullValue: the Discovery enum name "NULL_VALUE" vs JSON
+// null — at the top level and nested inside a mapValue and an arrayValue, while
+// leaving any real logical difference intact.
+func TestFirestoreValueProjectionCanonicalizesNullValue(t *testing.T) {
+	rest := json.RawMessage(`{"name":"projects/p/databases/(default)/documents/c/d","fields":{
+		"nul":{"nullValue":"NULL_VALUE"},
+		"map":{"mapValue":{"fields":{"nul":{"nullValue":"NULL_VALUE"}}}},
+		"arr":{"arrayValue":{"values":[{"nullValue":"NULL_VALUE"},{"stringValue":"x"}]}},
+		"str":{"stringValue":"x"}}}`)
+	grpc := json.RawMessage(`{"name":"projects/p/databases/(default)/documents/c/d","fields":{
+		"nul":{"nullValue":null},
+		"map":{"mapValue":{"fields":{"nul":{"nullValue":null}}}},
+		"arr":{"arrayValue":{"values":[{"nullValue":null},{"stringValue":"x"}]}},
+		"str":{"stringValue":"x"}}}`)
+
+	rn, err := firestoreValueProjection(rest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gn, err := firestoreValueProjection(grpc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rn) != string(gn) {
+		t.Fatalf("projection must fold the nested nullValue encodings:\n rest=%s\n grpc=%s", rn, gn)
+	}
+	nr, _ := normalizeJSON(rn)
+	ng, _ := normalizeJSON(gn)
+	if fs := compareNormalized("firestore", "GetDocument", nr, ng, nil); len(failFindings(fs)) != 0 {
+		t.Fatalf("projected bodies must not diverge, got %+v", failFindings(fs))
+	}
+
+	// A real dropped field must still fail after projection.
+	dropped, err := firestoreValueProjection(json.RawMessage(`{"name":"projects/p/databases/(default)/documents/c/d","fields":{"str":{"stringValue":"x"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nd, _ := normalizeJSON(dropped)
+	if len(failFindings(compareNormalized("firestore", "GetDocument", nr, nd, nil))) == 0 {
+		t.Fatal("a field one transport drops must still gate after projection")
+	}
+}
+
 // TestMutationProjectionAppliesSymmetric proves the mutation path applies a
 // MutationParity projection to both sides after the twin token is folded out
 // (the datastore CommitResponse carries no Value, so the scenario projection is
