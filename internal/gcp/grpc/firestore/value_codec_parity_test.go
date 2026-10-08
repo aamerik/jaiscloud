@@ -26,9 +26,9 @@ import (
 // path stored NULL_VALUE. For every variant (including nested array/map and the
 // zero scalar forms) this test asserts that:
 //
-//  1. the two encodings are the same logical JSON once the one documented
-//     difference is folded (protojson renders google.protobuf.NullValue as JSON
-//     null; the REST codec renders the Discovery enum name "NULL_VALUE"),
+//  1. the two encodings are the same logical JSON — both render
+//     google.protobuf.NullValue as JSON null (AUD3-13), so a one-sided
+//     regression fails here,
 //  2. each codec round-trips its own wire form back to the same store value,
 //     and
 //  3. each decoder accepts the other boundary's wire form, so the two wire
@@ -85,10 +85,12 @@ func TestValueCodecsAgree(t *testing.T) {
 			gj := grpcJSON(t, in)
 			rj := restJSON(t, in)
 
-			// 1. The two boundaries must encode the same logical value. Fold
-			// the single documented encoding difference (nullValue) before
-			// comparing, so a real one-sided divergence still fails.
-			if got, want := foldNullValue(gj), foldNullValue(rj); !reflect.DeepEqual(got, want) {
+			// 1. The two boundaries must encode the same logical value —
+			// including google.protobuf.NullValue, which both render as JSON
+			// null since AUD3-13. A one-sided regression (the REST codec back
+			// to the Discovery enum name, or the gRPC codec off JSON null)
+			// fails here.
+			if got, want := asAny(gj), asAny(rj); !reflect.DeepEqual(got, want) {
 				t.Fatalf("codecs disagree:\n grpc=%s\n rest=%s", gj, rj)
 			}
 
@@ -151,33 +153,14 @@ func mustJSON(t *testing.T, v *firestorestore.Value) string {
 	return string(b)
 }
 
-// foldNullValue canonicalizes a Value JSON body to one logical form by
-// rewriting every nested "nullValue": null (protojson's rendering of
-// google.protobuf.NullValue) to the Discovery enum name the REST codec emits,
-// mirroring the parity harness's nullValueProjection.
-func foldNullValue(raw json.RawMessage) any {
+// asAny decodes a Value JSON body into a generic form so two encodings can be
+// compared semantically (map key order is irrelevant to reflect.DeepEqual).
+func asAny(raw json.RawMessage) any {
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
 		panic(err)
 	}
-	foldNulls(v)
 	return v
-}
-
-func foldNulls(v any) {
-	switch t := v.(type) {
-	case map[string]any:
-		if val, ok := t["nullValue"]; ok && val == nil {
-			t["nullValue"] = "NULL_VALUE"
-		}
-		for _, e := range t {
-			foldNulls(e)
-		}
-	case []any:
-		for _, e := range t {
-			foldNulls(e)
-		}
-	}
 }
 
 // TestValueCodecsAgreeNullIsNotDropped is a focused regression guard for the

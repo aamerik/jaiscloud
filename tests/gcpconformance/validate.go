@@ -69,6 +69,15 @@ func validateValueOpts(doc *DiscoveryDoc, schema *Schema, v any, path string, op
 		}
 		return nil
 	}
+	if v == nil && isNullValueEnum(schema) {
+		// google.protobuf.NullValue: real GCP's REST transcoder runs protojson,
+		// which renders this single-value enum as JSON null rather than the enum
+		// name "NULL_VALUE" the Discovery schema lists (confirmed against real
+		// GCP: datastore/firestore responses carry `"nullValue":null`). Accept
+		// the protojson form for exactly this enum; the enum name is still
+		// accepted by the string branch below.
+		return nil
+	}
 	typ := schema.Type
 	if typ == "" {
 		switch {
@@ -118,6 +127,14 @@ func validateValueOpts(doc *DiscoveryDoc, schema *Schema, v any, path string, op
 	default:
 		return nil
 	}
+}
+
+// isNullValueEnum reports whether schema is the google.protobuf.NullValue enum
+// as the Discovery document renders it: a string field whose only enum value is
+// "NULL_VALUE". Real GCP's REST transcoder (protojson) emits JSON null for this
+// enum instead of the name, so a nil value is conformant for exactly this schema.
+func isNullValueEnum(schema *Schema) bool {
+	return schema.Type == "string" && len(schema.Enum) == 1 && schema.Enum[0] == "NULL_VALUE"
 }
 
 func validateObject(doc *DiscoveryDoc, schema *Schema, obj map[string]any, path string, opts validateOpts) []Divergence {

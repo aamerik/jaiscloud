@@ -258,7 +258,13 @@ func valueFromWire(v any) (dsstore.Value, error) {
 func valueToWire(v dsstore.Value, project string) map[string]any {
 	switch {
 	case v.NullValue != nil:
-		return map[string]any{"nullValue": "NULL_VALUE"}
+		// google.protobuf.NullValue: real GCP's REST transcoder runs protojson,
+		// which renders the NullValue enum as JSON null (confirmed against real
+		// GCP: `{"nullValue":null}` at the top level, inside arrayValue, and
+		// inside a nested entityValue). The vendored Discovery schema documents
+		// the enum name "NULL_VALUE" — a lossy Discovery representation the
+		// conformance validator carves out (tests/gcpconformance/validate.go).
+		return map[string]any{"nullValue": nil}
 	case v.BooleanValue != nil:
 		return map[string]any{"booleanValue": *v.BooleanValue}
 	case v.IntegerValue != nil:
