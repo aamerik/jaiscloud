@@ -10,6 +10,7 @@ import (
 	workflows "cloud.google.com/go/workflows/apiv1"
 	"cloud.google.com/go/workflows/apiv1/workflowspb"
 	"google.golang.org/api/iterator"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 const parityWorkflowSource = "main:\n  steps:\n    - r:\n        return: 1\n"
@@ -25,6 +26,30 @@ func workflowsScenario() Scenario {
 	newClient := func(ctx context.Context, e *Env) (*workflows.Client, error) {
 		return workflows.NewClient(ctx, e.GRPCClientOptions()...)
 	}
+	createGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		c, err := newClient(ctx, e)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		op, err := c.CreateWorkflow(ctx, &workflowspb.CreateWorkflowRequest{
+			Parent: parent(e),
+			Workflow: &workflowspb.Workflow{
+				Name:       name(e),
+				SourceCode: &workflowspb.Workflow_SourceContents{SourceContents: parityWorkflowSource},
+			},
+			WorkflowId: e.Resource(id),
+		})
+		if err != nil {
+			return nil, err
+		}
+		return op.Wait(ctx)
+	}
+	createREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
+		body := fmt.Sprintf(`{"sourceContents":%q}`, parityWorkflowSource)
+		return e.RestOperationResource(ctx, "POST", "/v1/"+parent(e)+"/workflows?workflowId="+e.Resource(id), body)
+	}
+	del := func(ctx context.Context, e *Env) error { return e.RestDelete(ctx, "/v1/"+name(e)) }
 
 	return Scenario{Service: "workflows", Steps: []Step{
 		{
@@ -119,6 +144,44 @@ func workflowsScenario() Scenario {
 			Mutate: func(ctx context.Context, e *Env) error {
 				_, err := e.Rest(ctx, "DELETE", "/v1/"+name(e), "")
 				return err
+			},
+		},
+		{
+			Op: "CreateWorkflow (parity)",
+			Mutation: &MutationParity{
+				GRPC:    createGRPC,
+				REST:    createREST,
+				Cleanup: del,
+			},
+		},
+		{
+			Op: "UpdateWorkflow (parity)",
+			Mutation: &MutationParity{
+				GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
+					if _, err := createGRPC(ctx, e); err != nil {
+						return nil, err
+					}
+					c, err := newClient(ctx, e)
+					if err != nil {
+						return nil, err
+					}
+					defer c.Close()
+					op, err := c.UpdateWorkflow(ctx, &workflowspb.UpdateWorkflowRequest{
+						Workflow:   &workflowspb.Workflow{Name: name(e), Description: "parity updated"},
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"description"}},
+					})
+					if err != nil {
+						return nil, err
+					}
+					return op.Wait(ctx)
+				},
+				REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+					if _, err := createREST(ctx, e); err != nil {
+						return nil, err
+					}
+					return e.RestOperationResource(ctx, "PATCH", "/v1/"+name(e)+"?updateMask=description", `{"description":"parity updated"}`)
+				},
+				Cleanup: del,
 			},
 		},
 	}}

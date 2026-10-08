@@ -453,6 +453,22 @@ func (s *Service) CreateSubscription(ctx context.Context, req *pubsubpb.Subscrip
 		"name":               subscriptionName(project, sub),
 		"topic":              req.GetTopic(),
 		"ackDeadlineSeconds": ackDeadline,
+		// A freshly created subscription is immediately usable, i.e. ACTIVE.
+		"state": "ACTIVE",
+	}
+	// Real Pub/Sub defaults: retain undelivered messages for 7 days and expire an
+	// inactive subscription after 31 days. Explicit request values win. Mirrors
+	// the REST provider so a subscription has one shape regardless of the
+	// transport that created it (AUD3-12).
+	if d := req.GetMessageRetentionDuration(); d != nil {
+		meta["messageRetentionDuration"] = durationJSON(d.AsDuration())
+	} else {
+		meta["messageRetentionDuration"] = "604800s"
+	}
+	if ep := req.GetExpirationPolicy(); ep != nil && ep.GetTtl() != nil {
+		meta["expirationPolicy"] = map[string]any{"ttl": durationJSON(ep.GetTtl().AsDuration())}
+	} else {
+		meta["expirationPolicy"] = map[string]any{"ttl": "2678400s"}
 	}
 	if exactlyOnce {
 		meta["enableExactlyOnceDelivery"] = true
@@ -1756,6 +1772,19 @@ func topicToProto(project, id string, meta map[string]any) *pubsubpb.Topic {
 	return t
 }
 
+// subscriptionState maps a persisted state string to its proto enum. The REST
+// provider persists the canonical google.rpc name ("ACTIVE"/"RESOURCE_ERROR").
+func subscriptionState(s string) pubsubpb.Subscription_State {
+	switch s {
+	case "ACTIVE":
+		return pubsubpb.Subscription_ACTIVE
+	case "RESOURCE_ERROR":
+		return pubsubpb.Subscription_RESOURCE_ERROR
+	default:
+		return pubsubpb.Subscription_STATE_UNSPECIFIED
+	}
+}
+
 func subToProto(meta map[string]any) *pubsubpb.Subscription {
 	sub := &pubsubpb.Subscription{}
 	sub.Name, _ = meta["name"].(string)
@@ -1848,6 +1877,21 @@ func subToProto(meta map[string]any) *pubsubpb.Subscription {
 			}
 		}
 		sub.PushConfig = p
+	}
+	if ret, _ := meta["messageRetentionDuration"].(string); ret != "" {
+		if d, err := time.ParseDuration(ret); err == nil {
+			sub.MessageRetentionDuration = durationpb.New(d)
+		}
+	}
+	if st, _ := meta["state"].(string); st != "" {
+		sub.State = subscriptionState(st)
+	}
+	if ep, ok := meta["expirationPolicy"].(map[string]any); ok {
+		if ttl, _ := ep["ttl"].(string); ttl != "" {
+			if d, err := parseProtoDuration(ttl); err == nil {
+				sub.ExpirationPolicy = &pubsubpb.ExpirationPolicy{Ttl: durationpb.New(d)}
+			}
+		}
 	}
 	return sub
 }

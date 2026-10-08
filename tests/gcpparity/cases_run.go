@@ -10,6 +10,7 @@ import (
 	run "cloud.google.com/go/run/apiv2"
 	"cloud.google.com/go/run/apiv2/runpb"
 	"google.golang.org/api/iterator"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 const runLocation = "us-central1"
@@ -24,6 +25,32 @@ func cloudRunScenario() Scenario {
 	newClient := func(ctx context.Context, e *Env) (*run.ServicesClient, error) {
 		return run.NewServicesClient(ctx, e.GRPCClientOptions()...)
 	}
+	createGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		c, err := newClient(ctx, e)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		op, err := c.CreateService(ctx, &runpb.CreateServiceRequest{
+			Parent:    parent(e),
+			ServiceId: e.Resource(id),
+			Service: &runpb.Service{
+				Labels: map[string]string{"parity": "true"},
+				Template: &runpb.RevisionTemplate{
+					Containers: []*runpb.Container{{Image: "nginx:latest", Ports: []*runpb.ContainerPort{{ContainerPort: 80}}}},
+				},
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		return op.Wait(ctx)
+	}
+	createREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
+		return e.RestOperationResource(ctx, "POST", "/v2/"+parent(e)+"/services?serviceId="+e.Resource(id),
+			`{"labels":{"parity":"true"},"template":{"containers":[{"image":"nginx:latest","ports":[{"containerPort":80}]}]}}`)
+	}
+	del := func(ctx context.Context, e *Env) error { return e.RestDelete(ctx, "/v2/"+name(e)) }
 
 	return Scenario{Service: "run", Steps: []Step{
 		{
@@ -127,6 +154,44 @@ func cloudRunScenario() Scenario {
 				}
 				_, err = op.Wait(ctx)
 				return err
+			},
+		},
+		{
+			Op: "CreateService (parity)",
+			Mutation: &MutationParity{
+				GRPC:    createGRPC,
+				REST:    createREST,
+				Cleanup: del,
+			},
+		},
+		{
+			Op: "UpdateService (parity)",
+			Mutation: &MutationParity{
+				GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
+					if _, err := createGRPC(ctx, e); err != nil {
+						return nil, err
+					}
+					c, err := newClient(ctx, e)
+					if err != nil {
+						return nil, err
+					}
+					defer c.Close()
+					op, err := c.UpdateService(ctx, &runpb.UpdateServiceRequest{
+						Service:    &runpb.Service{Name: name(e), Labels: map[string]string{"parity": "updated"}},
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+					})
+					if err != nil {
+						return nil, err
+					}
+					return op.Wait(ctx)
+				},
+				REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+					if _, err := createREST(ctx, e); err != nil {
+						return nil, err
+					}
+					return e.RestOperationResource(ctx, "PATCH", "/v2/"+name(e)+"?updateMask=labels", `{"labels":{"parity":"updated"}}`)
+				},
+				Cleanup: del,
 			},
 		},
 	}}

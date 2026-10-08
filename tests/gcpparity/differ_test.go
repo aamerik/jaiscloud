@@ -26,6 +26,47 @@ func kinds(fs []Finding) map[string]int {
 	return m
 }
 
+// TestMutationNormalizeFoldsTwinSide proves the gRPC (...-grpc-…) and REST
+// (...-rest-…) twins normalize to one canonical mutation-response body, so the
+// twin token itself never decides a mutation-parity comparison (AUD3-12).
+func TestMutationNormalizeFoldsTwinSide(t *testing.T) {
+	grpc := json.RawMessage(`{"name":"projects/p/topics/topic-grpc-abc123","topic":"projects/p/topics/topic-grpc-abc123"}`)
+	rest := json.RawMessage(`{"name":"projects/p/topics/topic-rest-abc123","topic":"projects/p/topics/topic-rest-abc123"}`)
+
+	gn, err := mutationNormalize(grpc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rn, err := mutationNormalize(rest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gn) != string(rn) {
+		t.Fatalf("twins must fold to one body:\n grpc=%s\n rest=%s", gn, rn)
+	}
+	if fs := compareNormalized("pubsub", "CreateTopic", rn, gn, nil); len(failFindings(fs)) != 0 {
+		t.Fatalf("folded twins must not diverge, got %+v", failFindings(fs))
+	}
+}
+
+// TestMutationParityFailsOnDivergentResponse is the seeded proof that a field
+// one transport drops from a Create/Update response is a gate failure — the bug
+// class AUD3-12 closes.
+func TestMutationParityFailsOnDivergentResponse(t *testing.T) {
+	rest := json.RawMessage(`{"name":"projects/p/topics/topic-abc","labels":{"env":"prod"}}`)
+	grpc := json.RawMessage(`{"name":"projects/p/topics/topic-abc"}`)
+
+	rn, _ := mutationNormalize(rest)
+	gn, _ := mutationNormalize(grpc)
+	fs := compareNormalized("pubsub", "CreateTopic", rn, gn, nil)
+	if k := kinds(fs); k["missing_field"] != 1 {
+		t.Fatalf("want 1 missing_field for the dropped labels, got kinds=%v", k)
+	}
+	if len(failFindings(fs)) == 0 {
+		t.Fatal("a dropped mutation-response field must fail the gate")
+	}
+}
+
 // TestDifferFailsOnDroppedField is the seeded proof that a field the REST body
 // exposes and the gRPC transcode drops is a gate failure — the bug class this
 // harness exists to catch.

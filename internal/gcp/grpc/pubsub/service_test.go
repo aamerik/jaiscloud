@@ -56,6 +56,64 @@ func pubsubTestService(t *testing.T) (pubsubpb.PublisherClient, pubsubpb.Subscri
 	return pubsubpb.NewPublisherClient(conn), pubsubpb.NewSubscriberClient(conn), iampb.NewIAMPolicyClient(conn), messages, cleanup
 }
 
+// TestCreateSubscriptionAppliesRealGCPDefaults pins the REST↔gRPC parity fix for
+// AUD3-12: the gRPC CreateSubscription must persist and return the same
+// real-GCP defaults the REST provider applies (state ACTIVE, 7-day retention,
+// 31-day expiration policy), and an explicit request value must win.
+func TestCreateSubscriptionAppliesRealGCPDefaults(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/defaults-topic"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	created, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: "projects/test/subscriptions/defaults-sub", Topic: topic,
+	})
+	if err != nil {
+		t.Fatalf("CreateSubscription: %v", err)
+	}
+	if created.GetState() != pubsubpb.Subscription_ACTIVE {
+		t.Errorf("state = %v, want ACTIVE", created.GetState())
+	}
+	if got := created.GetMessageRetentionDuration().AsDuration(); got != 7*24*time.Hour {
+		t.Errorf("messageRetentionDuration = %v, want 168h", got)
+	}
+	if got := created.GetExpirationPolicy().GetTtl().AsDuration(); got != 31*24*time.Hour {
+		t.Errorf("expirationPolicy.ttl = %v, want 744h", got)
+	}
+
+	// A read renders the same defaults (they are persisted, not synthesized on
+	// create only).
+	got, err := subc.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: created.GetName()})
+	if err != nil {
+		t.Fatalf("GetSubscription: %v", err)
+	}
+	if got.GetState() != pubsubpb.Subscription_ACTIVE || got.GetExpirationPolicy().GetTtl().AsDuration() != 31*24*time.Hour {
+		t.Errorf("GetSubscription defaults = state %v, ttl %v", got.GetState(), got.GetExpirationPolicy().GetTtl())
+	}
+
+	// Explicit request values win.
+	explicit, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name:                     "projects/test/subscriptions/explicit-sub",
+		Topic:                    topic,
+		MessageRetentionDuration: durationpb.New(2 * time.Hour),
+		ExpirationPolicy:         &pubsubpb.ExpirationPolicy{Ttl: durationpb.New(3 * time.Hour)},
+	})
+	if err != nil {
+		t.Fatalf("CreateSubscription(explicit): %v", err)
+	}
+	if got := explicit.GetMessageRetentionDuration().AsDuration(); got != 2*time.Hour {
+		t.Errorf("explicit messageRetentionDuration = %v, want 2h", got)
+	}
+	if got := explicit.GetExpirationPolicy().GetTtl().AsDuration(); got != 3*time.Hour {
+		t.Errorf("explicit expirationPolicy.ttl = %v, want 3h", got)
+	}
+}
+
 func TestPubSubEndToEnd(t *testing.T) {
 	pub, subc, iam, _, cleanup := pubsubTestService(t)
 	defer cleanup()

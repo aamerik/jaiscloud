@@ -9,6 +9,7 @@ import (
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
 	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	"google.golang.org/api/iterator"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // secretManagerScenario compares the Secret Manager secret-admin surface over
@@ -21,6 +22,28 @@ func secretManagerScenario() Scenario {
 	newClient := func(ctx context.Context, e *Env) (*secretmanager.Client, error) {
 		return secretmanager.NewClient(ctx, e.GRPCClientOptions()...)
 	}
+	createGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		c, err := newClient(ctx, e)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		return c.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+			Parent:   parent(e),
+			SecretId: e.Resource(id),
+			Secret: &secretmanagerpb.Secret{
+				Replication: &secretmanagerpb.Replication{
+					Replication: &secretmanagerpb.Replication_Automatic_{
+						Automatic: &secretmanagerpb.Replication_Automatic{},
+					},
+				},
+			},
+		})
+	}
+	createREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
+		return e.Rest(ctx, "POST", "/v1/"+parent(e)+"/secrets?secretId="+e.Resource(id), `{"replication":{"automatic":{}}}`)
+	}
+	del := func(ctx context.Context, e *Env) error { return e.RestDelete(ctx, "/v1/"+name(e)) }
 
 	return Scenario{Service: "secretmanager", Steps: []Step{
 		{
@@ -112,6 +135,40 @@ func secretManagerScenario() Scenario {
 			Op: "DeleteSecret",
 			Mutate: func(ctx context.Context, e *Env) error {
 				return e.RestDelete(ctx, "/v1/"+name(e))
+			},
+		},
+		{
+			Op: "CreateSecret (parity)",
+			Mutation: &MutationParity{
+				GRPC:    createGRPC,
+				REST:    createREST,
+				Cleanup: del,
+			},
+		},
+		{
+			Op: "UpdateSecret (parity)",
+			Mutation: &MutationParity{
+				GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
+					if _, err := createGRPC(ctx, e); err != nil {
+						return nil, err
+					}
+					c, err := newClient(ctx, e)
+					if err != nil {
+						return nil, err
+					}
+					defer c.Close()
+					return c.UpdateSecret(ctx, &secretmanagerpb.UpdateSecretRequest{
+						Secret:     &secretmanagerpb.Secret{Name: name(e), Labels: map[string]string{"parity": "true"}},
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+					})
+				},
+				REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+					if _, err := createREST(ctx, e); err != nil {
+						return nil, err
+					}
+					return e.Rest(ctx, "PATCH", "/v1/"+name(e)+"?updateMask=labels", `{"labels":{"parity":"true"}}`)
+				},
+				Cleanup: del,
 			},
 		},
 	}}
