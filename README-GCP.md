@@ -339,7 +339,9 @@ Cloud Scheduler v1 is served over REST (`cloudscheduler.googleapis.com/v1`) and 
 (`POST /_jaiscloud/clock`) and the engine delivers on its next tick, or call
 `POST /_jaiscloud/scheduler-tick` (or `jobs.run`) to fire deterministically. An `httpTarget`
 delivery performs the documented HTTP request (method, headers, body, with the `X-CloudScheduler*`
-headers) and treats a 2xx as success; a `pubsubTarget` reuses the Pub/Sub publish path, so the
+headers: `X-CloudScheduler: true`, `X-CloudScheduler-JobName`, and `X-CloudScheduler-ScheduleTime` —
+the run's cron slot as RFC3339, held constant across the run's retries so a target can dedupe them)
+and treats a 2xx as success; a `pubsubTarget` reuses the Pub/Sub publish path, so the
 message fans out to the topic's pull subscriptions. Failures are retried with exponential backoff
 honoring `retryConfig.retryCount`/`minBackoffDuration`/`maxBackoffDuration`, then fall back to the
 cron schedule.
@@ -349,6 +351,22 @@ App Engine router) — its attempts are recorded as `Unimplemented`; English-lik
 minutes") are not parsed (unix-cron plus `@` descriptors only; anything else is `InvalidArgument`);
 `oauthToken`/`oidcToken` attach a synthetic emulator-local bearer token rather than a real Google
 token; and `updateCmekConfig` is not implemented.
+
+### Cloud Scheduler → Dataproc submit hop (demo recipe)
+
+Real Cloud Scheduler has no Dataproc target, so the demo's periodic Spark SQL rollup is triggered by
+an `httpTarget` job whose uri points at a small submitter that calls `dataproc.jobs.submit`. Verified
+end-to-end by `make test-e2e-scheduler-k8s` (`tests/persistent_mode/gcp/scheduler/`, tag
+`scheduler_e2e`): the gate deploys an in-cluster submitter (a Pod + ClusterIP Service running an
+inline Python handler), creates a Dataproc cluster and an `httpTarget` cron job pointed at it, forces
+a tick on a fixed clock, and asserts the submitter received the request with `User-Agent:
+Google-Cloud-Scheduler`, `X-CloudScheduler: true`, `X-CloudScheduler-JobName`,
+`X-CloudScheduler-ScheduleTime`, and an `Authorization` bearer (from the `oidcToken`), then called
+`dataproc.jobs.submit` and the job reached DONE. A retry is asserted against a target that answers
+500 once: the first attempt records the 500 and the `minBackoffDuration` next fire, the retry
+succeeds, and both attempts carry the same `X-CloudScheduler-ScheduleTime`. The gate runs the
+emulator's Spark executor in mock mode (the hop, not a Spark run); the demo can use any in-cluster
+submitter (a Cloud Run service reached by its ClusterIP, a function, or a small Deployment).
 
 ### Cloud Tasks: dispatch engine over the control plane
 
