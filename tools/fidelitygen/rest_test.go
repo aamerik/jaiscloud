@@ -151,32 +151,46 @@ func TestRestFactsMutating(t *testing.T) {
 // TestRestFactsVerified checks the response-evidence signal: a Discovery-mapped
 // op with a validated transcript response is Verified, while a Discovery-mapped
 // op with no recorded response stays unverified. The signal is independent of
-// State (BigQuery.CreateDataset is `limited` yet verified).
+// State (an op can be `limited` yet verified, or `ga` yet unverified) and of the
+// conformance report, so this test passes a nil report and derives the two
+// examples from the coverage map rather than pinning a specific operation
+// (which drifts as transcripts are re-recorded).
 func TestRestFactsVerified(t *testing.T) {
 	ops := conf.Enumerate()
 	docs := loadDocsForTest(t)
-	facts := RestFacts(ops, docs, loadReportForTest(t), loadOverridesForTest(t, ops), restCoverageForTest(t, ops, docs))
+	coverage := restCoverageForTest(t, ops, docs)
+	facts := RestFacts(ops, docs, nil, loadOverridesForTest(t, ops), coverage)
 
-	covered := findFact(t, facts, "BigQuery.CreateDataset")
-	if covered.DiscoveryMethod == "" {
-		t.Fatalf("BigQuery.CreateDataset: DiscoveryMethod empty, cannot assess evidence")
+	var covered, unverified *Facts
+	for i := range facts {
+		f := &facts[i]
+		if f.DiscoveryMethod == "" {
+			continue // unmapped ops can never be verified
+		}
+		switch {
+		case f.Verified && covered == nil:
+			covered = f
+		case !f.Verified && unverified == nil:
+			unverified = f
+		}
 	}
-	if !covered.Verified {
-		t.Errorf("BigQuery.CreateDataset: Verified = false, want true (a validated transcript response exists)")
+	if covered == nil {
+		t.Fatalf("no Discovery-mapped op with a validated transcript response (coverage map empty?)")
 	}
 	if covered.RESTEvidenceEntries == 0 {
-		t.Errorf("BigQuery.CreateDataset: RESTEvidenceEntries = 0, want > 0")
+		t.Errorf("%s: RESTEvidenceEntries = 0, want > 0", covered.Operation)
 	}
-	if cell := Classify(covered); !cell.Verified || cell.DiscoveryMethod == "" {
-		t.Errorf("BigQuery.CreateDataset: cell Verified=%v discovery=%q, want true + method", cell.Verified, cell.DiscoveryMethod)
+	if !Classify(*covered).Verified {
+		t.Errorf("%s: cell Verified = false, want true", covered.Operation)
 	}
-
-	unverified := findFact(t, facts, "BigQuery.ListJobs")
-	if unverified.DiscoveryMethod == "" {
-		t.Fatalf("BigQuery.ListJobs: DiscoveryMethod empty, want a mapped op for this check")
+	if unverified == nil {
+		t.Fatalf("no Discovery-mapped op without a validated transcript response (coverage is total?)")
 	}
-	if unverified.Verified {
-		t.Errorf("BigQuery.ListJobs: Verified = true, want false (no transcript response)")
+	if unverified.RESTEvidenceEntries != 0 {
+		t.Errorf("%s: RESTEvidenceEntries = %d, want 0", unverified.Operation, unverified.RESTEvidenceEntries)
+	}
+	if Classify(*unverified).Verified {
+		t.Errorf("%s: cell Verified = true, want false", unverified.Operation)
 	}
 }
 
