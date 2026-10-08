@@ -52,10 +52,11 @@ func TestValueSpecialDoubleJSONRoundTrip(t *testing.T) {
 }
 
 // TestValueNullDecodesToCanonicalEnum asserts both wire encodings of a null
-// value — protojson's JSON null (what a typed gRPC-marshalled REST body and the
-// Firestore REST reference send) and the Discovery enum name "NULL_VALUE" —
-// decode to the canonical enum name, so a document written over REST reads back
-// the same null variant as one written over gRPC.
+// value — protojson's JSON null (what real GCP's REST transcoder emits, and what
+// the Firestore REST reference sends) and the Discovery enum name "NULL_VALUE"
+// (a tolerant input) — decode to the canonical enum name, so a document written
+// over REST reads back the same null variant as one written over gRPC. The
+// encode side renders JSON null, matching real GCP (AUD3-13).
 func TestValueNullDecodesToCanonicalEnum(t *testing.T) {
 	for _, wire := range []string{`{"nullValue":null}`, `{"nullValue":"NULL_VALUE"}`} {
 		var v Value
@@ -72,7 +73,7 @@ func TestValueNullDecodesToCanonicalEnum(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}
-		if string(out) != `{"nullValue":"NULL_VALUE"}` {
+		if string(out) != `{"nullValue":null}` {
 			t.Fatalf("%s: wire round-trip = %s", wire, out)
 		}
 	}

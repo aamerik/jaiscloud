@@ -23,9 +23,9 @@ import (
 // path, not a separate resource — so the scenario creates a top-level document
 // and a nested subcollection document, reads both back over each transport,
 // lists each collection, and drives CreateDocument/UpdateDocument
-// mutation-parity steps. Every step carries firestoreValueProjection, because
-// the REST JSON and gRPC protojson encodings of the Value union differ only for
-// google.protobuf.NullValue.
+// mutation-parity steps. No projection is needed: the REST JSON and gRPC
+// protojson encodings of the Value union coincide, including
+// google.protobuf.NullValue, which both now render as JSON null (AUD3-13).
 func firestoreScenario() Scenario {
 	const database = "(default)"
 	collection := func(e *Env) string { return "ParityCollection" + e.Cfg.Suffix }
@@ -92,8 +92,7 @@ func firestoreScenario() Scenario {
 			},
 		},
 		{
-			Op:      "GetDocument",
-			Project: firestoreValueProjection,
+			Op: "GetDocument",
 			GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
 				var out *firestorepb.Document
 				err := fsDial(ctx, e, func(c firestorepb.FirestoreClient) error {
@@ -113,8 +112,7 @@ func firestoreScenario() Scenario {
 		{
 			// A document in a subcollection exercises the recursive
 			// "{+parent}/documents/**" REST binding on the read path.
-			Op:      "GetDocument(nested)",
-			Project: firestoreValueProjection,
+			Op: "GetDocument(nested)",
 			GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
 				var out *firestorepb.Document
 				err := fsDial(ctx, e, func(c firestorepb.FirestoreClient) error {
@@ -132,9 +130,8 @@ func firestoreScenario() Scenario {
 			},
 		},
 		{
-			Op:      "ListDocuments",
-			Scope:   true,
-			Project: firestoreValueProjection,
+			Op:    "ListDocuments",
+			Scope: true,
 			GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
 				var out *firestorepb.ListDocumentsResponse
 				err := fsDial(ctx, e, func(c firestorepb.FirestoreClient) error {
@@ -155,9 +152,8 @@ func firestoreScenario() Scenario {
 			},
 		},
 		{
-			Op:      "ListDocuments(nested)",
-			Scope:   true,
-			Project: firestoreValueProjection,
+			Op:    "ListDocuments(nested)",
+			Scope: true,
 			GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
 				var out *firestorepb.ListDocumentsResponse
 				err := fsDial(ctx, e, func(c firestorepb.FirestoreClient) error {
@@ -189,7 +185,6 @@ func firestoreScenario() Scenario {
 				Cleanup: func(ctx context.Context, e *Env) error {
 					return e.RestDelete(ctx, fsREST(e, docPath(e)))
 				},
-				Project: firestoreValueProjection,
 			},
 		},
 		{
@@ -231,7 +226,6 @@ func firestoreScenario() Scenario {
 				Cleanup: func(ctx context.Context, e *Env) error {
 					return e.RestDelete(ctx, fsREST(e, docPath(e)))
 				},
-				Project: firestoreValueProjection,
 			},
 		},
 		// Remove the canonical documents.
@@ -305,14 +299,4 @@ func firestoreFields(e *Env, collection, marker string) map[string]*firestorepb.
 		}}}},
 		"ref": {ValueType: &firestorepb.Value_ReferenceValue{ReferenceValue: ref}},
 	}
-}
-
-// firestoreValueProjection canonicalizes a Firestore REST or gRPC-protojson
-// body into one logical form. Firestore's Value union is the same data encoded
-// two ways; the shared nullValueProjection reconciles the single member whose
-// encodings differ — google.protobuf.NullValue: the Discovery enum name
-// "NULL_VALUE" over REST vs JSON null through protojson — while leaving every
-// other member and any genuine logical difference intact.
-func firestoreValueProjection(raw json.RawMessage) (json.RawMessage, error) {
-	return nullValueProjection(raw)
 }

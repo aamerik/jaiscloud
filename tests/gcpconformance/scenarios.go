@@ -337,7 +337,11 @@ func Scenarios(suffix string) []Scenario {
 	}
 	sc = append(sc,
 		Scenario{Service: "datastore", Method: "POST", Path: "/v1/projects/" + p + ":commit",
-			Body: fmt.Sprintf(`{"mode":"NON_TRANSACTIONAL","mutations":[{"upsert":{"key":%s,"properties":{"n":{"integerValue":"1"}}}}]}`, dsKey(dsA))},
+			// The null property (top level and inside an array) exercises the
+			// google.protobuf.NullValue wire form: real GCP renders it as JSON
+			// null (protojson), which the validator accepts via the NullValue
+			// enum carve-out in validate.go.
+			Body: fmt.Sprintf(`{"mode":"NON_TRANSACTIONAL","mutations":[{"upsert":{"key":%s,"properties":{"n":{"integerValue":"1"},"nul":{"nullValue":null},"arr":{"arrayValue":{"values":[{"nullValue":null}]}}}}}]}`, dsKey(dsA))},
 		Scenario{Service: "datastore", Method: "POST", Path: "/v1/projects/" + p + ":lookup",
 			Body: fmt.Sprintf(`{"keys":[%s]}`, dsKey(dsA))},
 		Scenario{Service: "datastore", Method: "POST", Path: "/v1/projects/" + p + ":lookup",

@@ -54,7 +54,14 @@ func (v *Value) MarshalJSON() ([]byte, error) {
 	m := make(map[string]any, 1)
 	switch {
 	case v.NullValue != nil:
-		m["nullValue"] = *v.NullValue
+		// google.protobuf.NullValue over REST is JSON null: real GCP's REST
+		// transcoder runs protojson, which renders the NullValue enum as null
+		// (confirmed against real GCP). The internal canonical form still stores
+		// the enum name (NullEnumValue) so the REST and gRPC codecs share one
+		// representation; only the wire encoding is null. The vendored Discovery
+		// schema documents the enum name "NULL_VALUE", which the conformance
+		// validator carves out (tests/gcpconformance/validate.go).
+		m["nullValue"] = nil
 	case v.BooleanValue != nil:
 		m["booleanValue"] = *v.BooleanValue
 	case v.IntegerValue != nil:

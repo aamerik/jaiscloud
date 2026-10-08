@@ -135,96 +135,44 @@ func TestDifferPassesOnEquivalentBodies(t *testing.T) {
 	}
 }
 
-// TestDatastoreValueProjectionCanonicalizesNullValue proves the Datastore
-// projection equalizes the one Value-union member whose REST and protojson
-// encodings differ — NullValue: the Discovery enum name "NULL_VALUE" vs JSON
-// null — while leaving every other member, and any real logical difference,
-// intact.
-func TestDatastoreValueProjectionCanonicalizesNullValue(t *testing.T) {
-	// The same logical entity: REST renders nullValue as the Discovery enum
-	// name, protojson renders it as JSON null — at the top level and nested
-	// inside an entityValue and an arrayValue, so the recursion is exercised.
-	rest := json.RawMessage(`{"found":[{"entity":{"properties":{
-		"nul":{"nullValue":"NULL_VALUE"},
-		"nest":{"entityValue":{"properties":{"nul":{"nullValue":"NULL_VALUE"}}}},
-		"arr":{"arrayValue":{"values":[{"nullValue":"NULL_VALUE"},{"stringValue":"x"}]}},
-		"str":{"stringValue":"x"}}}}]}`)
-	grpc := json.RawMessage(`{"found":[{"entity":{"properties":{
-		"nul":{"nullValue":null},
-		"nest":{"entityValue":{"properties":{"nul":{"nullValue":null}}}},
-		"arr":{"arrayValue":{"values":[{"nullValue":null},{"stringValue":"x"}]}},
-		"str":{"stringValue":"x"}}}}]}`)
-
-	rn, err := datastoreValueProjection(rest)
-	if err != nil {
-		t.Fatal(err)
+// TestNullValueEncodingsAgreeWithoutProjection proves that once the REST codecs
+// render google.protobuf.NullValue as JSON null — the protojson form real GCP
+// emits (AUD3-13) — the Datastore and Firestore Value-union nulls compare equal
+// with no per-service projection, at the top level and nested inside an
+// entityValue/mapValue/arrayValue. The Discovery enum name "NULL_VALUE" (the
+// pre-fix REST encoding) still diverges, so a regression is not masked.
+func TestNullValueEncodingsAgreeWithoutProjection(t *testing.T) {
+	cases := []struct{ svc, op, body string }{
+		{"datastore", "Lookup", `{"found":[{"entity":{"properties":{
+			"nul":{"nullValue":null},
+			"nest":{"entityValue":{"properties":{"nul":{"nullValue":null}}}},
+			"arr":{"arrayValue":{"values":[{"nullValue":null},{"stringValue":"x"}]}},
+			"str":{"stringValue":"x"}}}}]}`},
+		{"firestore", "GetDocument", `{"name":"projects/p/databases/(default)/documents/c/d","fields":{
+			"nul":{"nullValue":null},
+			"map":{"mapValue":{"fields":{"nul":{"nullValue":null}}}},
+			"arr":{"arrayValue":{"values":[{"nullValue":null},{"stringValue":"x"}]}},
+			"str":{"stringValue":"x"}}}`},
 	}
-	gn, err := datastoreValueProjection(grpc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(rn) != string(gn) {
-		t.Fatalf("projection must fold the nested nullValue encodings:\n rest=%s\n grpc=%s", rn, gn)
-	}
-	nr, _ := normalizeJSON(rn)
-	ng, _ := normalizeJSON(gn)
-	if fs := compareNormalized("datastore", "Lookup", nr, ng, nil); len(failFindings(fs)) != 0 {
-		t.Fatalf("projected bodies must not diverge, got %+v", failFindings(fs))
-	}
-
-	// A real dropped property must still fail after projection.
-	dropped, err := datastoreValueProjection(json.RawMessage(`{"found":[{"entity":{"properties":{"str":{"stringValue":"x"}}}}]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	nd, _ := normalizeJSON(dropped)
-	if len(failFindings(compareNormalized("datastore", "Lookup", nr, nd, nil))) == 0 {
-		t.Fatal("a property one transport drops must still gate after projection")
-	}
-}
-
-// TestFirestoreValueProjectionCanonicalizesNullValue proves the Firestore
-// projection equalizes the one Value-union member whose REST and protojson
-// encodings differ — NullValue: the Discovery enum name "NULL_VALUE" vs JSON
-// null — at the top level and nested inside a mapValue and an arrayValue, while
-// leaving any real logical difference intact.
-func TestFirestoreValueProjectionCanonicalizesNullValue(t *testing.T) {
-	rest := json.RawMessage(`{"name":"projects/p/databases/(default)/documents/c/d","fields":{
-		"nul":{"nullValue":"NULL_VALUE"},
-		"map":{"mapValue":{"fields":{"nul":{"nullValue":"NULL_VALUE"}}}},
-		"arr":{"arrayValue":{"values":[{"nullValue":"NULL_VALUE"},{"stringValue":"x"}]}},
-		"str":{"stringValue":"x"}}}`)
-	grpc := json.RawMessage(`{"name":"projects/p/databases/(default)/documents/c/d","fields":{
-		"nul":{"nullValue":null},
-		"map":{"mapValue":{"fields":{"nul":{"nullValue":null}}}},
-		"arr":{"arrayValue":{"values":[{"nullValue":null},{"stringValue":"x"}]}},
-		"str":{"stringValue":"x"}}}`)
-
-	rn, err := firestoreValueProjection(rest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gn, err := firestoreValueProjection(grpc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(rn) != string(gn) {
-		t.Fatalf("projection must fold the nested nullValue encodings:\n rest=%s\n grpc=%s", rn, gn)
-	}
-	nr, _ := normalizeJSON(rn)
-	ng, _ := normalizeJSON(gn)
-	if fs := compareNormalized("firestore", "GetDocument", nr, ng, nil); len(failFindings(fs)) != 0 {
-		t.Fatalf("projected bodies must not diverge, got %+v", failFindings(fs))
-	}
-
-	// A real dropped field must still fail after projection.
-	dropped, err := firestoreValueProjection(json.RawMessage(`{"name":"projects/p/databases/(default)/documents/c/d","fields":{"str":{"stringValue":"x"}}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	nd, _ := normalizeJSON(dropped)
-	if len(failFindings(compareNormalized("firestore", "GetDocument", nr, nd, nil))) == 0 {
-		t.Fatal("a field one transport drops must still gate after projection")
+	for _, tc := range cases {
+		a, err := normalizeJSON(json.RawMessage(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := normalizeJSON(json.RawMessage(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fs := compareNormalized(tc.svc, tc.op, a, b, nil); len(failFindings(fs)) != 0 {
+			t.Fatalf("%s/%s: identical JSON-null bodies must agree, got %+v", tc.svc, tc.op, failFindings(fs))
+		}
+		regressed, err := normalizeJSON(json.RawMessage(bytes.ReplaceAll([]byte(tc.body), []byte(":null"), []byte(`:"NULL_VALUE"`))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(failFindings(compareNormalized(tc.svc, tc.op, a, regressed, nil))) == 0 {
+			t.Fatalf("%s/%s: the Discovery enum form must still gate", tc.svc, tc.op)
+		}
 	}
 }
 

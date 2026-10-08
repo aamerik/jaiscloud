@@ -21,9 +21,11 @@ import (
 // writes an entity addressed by a Key and a Lookup/RunQuery reads it back — so
 // the canonical flow is Commit(upsert) → Lookup(found) → Lookup(missing) →
 // RunQuery → RunAggregationQuery → Commit delete, with Commit upsert and update
-// mutation-parity steps for the mutation-response gate (AUD3-12). Every step
-// carries datastoreValueProjection, because the REST Entity JSON and the gRPC
-// proto value union are the same logical data encoded two ways.
+// mutation-parity steps for the mutation-response gate (AUD3-12). No projection
+// is needed: the REST Entity JSON and the gRPC proto value union are the same
+// logical data encoded two ways, and every member — including
+// google.protobuf.NullValue, which both now render as JSON null — coincides
+// (AUD3-13).
 func datastoreScenario() Scenario {
 	kind := func(e *Env) string { return "ParityEntity" + e.Cfg.Suffix }
 	refKind := func(e *Env) string { return "ParityRef" + e.Cfg.Suffix }
@@ -115,8 +117,7 @@ func datastoreScenario() Scenario {
 			},
 		},
 		{
-			Op:      "Lookup",
-			Project: datastoreValueProjection,
+			Op: "Lookup",
 			GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
 				var out *datastorepb.LookupResponse
 				err := dsDial(ctx, e, func(c datastorepb.DatastoreClient) error {
@@ -138,8 +139,7 @@ func datastoreScenario() Scenario {
 			},
 		},
 		{
-			Op:      "Lookup(missing)",
-			Project: datastoreValueProjection,
+			Op: "Lookup(missing)",
 			GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
 				var out *datastorepb.LookupResponse
 				err := dsDial(ctx, e, func(c datastorepb.DatastoreClient) error {
@@ -161,8 +161,7 @@ func datastoreScenario() Scenario {
 			},
 		},
 		{
-			Op:      "RunQuery",
-			Project: datastoreValueProjection,
+			Op: "RunQuery",
 			GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
 				var out *datastorepb.RunQueryResponse
 				err := dsDial(ctx, e, func(c datastorepb.DatastoreClient) error {
@@ -191,9 +190,8 @@ func datastoreScenario() Scenario {
 		},
 		{
 			// An aggregation response is a Value union too (aggregateProperties),
-			// so it is a second surface the projection must reconcile.
-			Op:      "RunAggregationQuery",
-			Project: datastoreValueProjection,
+			// so it is a second surface the two transports must encode alike.
+			Op: "RunAggregationQuery",
 			GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
 				var out *datastorepb.RunAggregationQueryResponse
 				err := dsDial(ctx, e, func(c datastorepb.DatastoreClient) error {
@@ -230,7 +228,6 @@ func datastoreScenario() Scenario {
 					return commitREST(ctx, e, dsUpsert(e, entityName(e), "v1"))
 				},
 				Cleanup: cleanup,
-				Project: datastoreValueProjection,
 			},
 		},
 		{
@@ -239,7 +236,6 @@ func datastoreScenario() Scenario {
 				GRPC:    updateGRPC,
 				REST:    updateREST,
 				Cleanup: cleanup,
-				Project: datastoreValueProjection,
 			},
 		},
 		// Remove the canonical entity.
@@ -314,14 +310,4 @@ func datastoreEntity(e *Env, key *datastorepb.Key, refKind, marker string) *data
 		"exi": {ValueType: &datastorepb.Value_StringValue{StringValue: "x"}, ExcludeFromIndexes: true},
 		"ref": {ValueType: &datastorepb.Value_KeyValue{KeyValue: ref}},
 	}}
-}
-
-// datastoreValueProjection canonicalizes a Datastore REST or gRPC-protojson body
-// into one logical form. Datastore's Value union is the same data encoded two
-// ways; the shared nullValueProjection reconciles the single member whose
-// encodings differ — google.protobuf.NullValue: the Discovery enum name
-// "NULL_VALUE" over REST vs JSON null through protojson — while leaving every
-// other member and any genuine logical difference intact.
-func datastoreValueProjection(raw json.RawMessage) (json.RawMessage, error) {
-	return nullValueProjection(raw)
 }
