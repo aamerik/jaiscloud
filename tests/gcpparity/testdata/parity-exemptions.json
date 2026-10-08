@@ -1,10 +1,6 @@
 {
   "exemptions": [
     {
-      "service": "datastore",
-      "reason": "REST and gRPC expose different value/entity encodings (REST Entity vs the proto Value union). A full-body diff is not meaningful without a per-field logical projection, so Datastore has its own follow-up row (AUD3-2)."
-    },
-    {
       "service": "firestore",
       "reason": "Like Datastore, Firestore documents are Value unions, and the REST surface uses the recursive {+parent} document path. A like-for-like comparison needs a projection; tracked as AUD3-3."
     },

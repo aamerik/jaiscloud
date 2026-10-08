@@ -3,6 +3,7 @@
 package gcpparity
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -40,6 +41,13 @@ type Step struct {
 	// other suites on a shared emulator cannot pollute the comparison and so a
 	// transport-specific field cannot reorder the two sides.
 	Scope bool
+	// Project, when set, rewrites each transport's raw body into one canonical
+	// logical form before normalization. It exists for a service whose REST JSON
+	// and gRPC protojson encode the same logical data differently (Datastore's
+	// Value union renders the NullValue enum as its Discovery name over REST and
+	// as JSON null through protojson). The transform is applied to both sides, so
+	// a genuine logical difference survives it.
+	Project func(json.RawMessage) (json.RawMessage, error)
 }
 
 // MutationParity is a self-contained cross-transport diff of one mutation's
@@ -57,6 +65,10 @@ type MutationParity struct {
 	GRPC    func(ctx context.Context, e *Env) (proto.Message, error)
 	REST    func(ctx context.Context, e *Env) (json.RawMessage, error)
 	Cleanup func(ctx context.Context, e *Env) error
+	// Project is the mutation-response analogue of Step.Project: it canonicalizes
+	// each transport's raw body after the twin token is folded out and before
+	// normalization.
+	Project func(json.RawMessage) (json.RawMessage, error)
 }
 
 // Scenario is one dual service's canonical create → get → list → mutate →
@@ -84,6 +96,7 @@ func Registry() []Scenario {
 	s = append(s, cloudRunScenario())
 	s = append(s, loggingScenario())
 	s = append(s, functionsScenario())
+	s = append(s, datastoreScenario())
 	return s
 }
 
@@ -144,6 +157,16 @@ func runScenario(ctx context.Context, e *Env, sc Scenario, allowances []Allowanc
 			res.Findings = append(res.Findings, Finding{Service: sc.Service, Op: st.Op, Kind: "call_error", Severity: "high", Actual: err.Error()})
 			continue
 		}
+		gb, err = projectBody(st.Project, gb)
+		if err != nil {
+			res.Findings = append(res.Findings, Finding{Service: sc.Service, Op: st.Op, Kind: "call_error", Severity: "high", Actual: err.Error()})
+			continue
+		}
+		rb, err = projectBody(st.Project, rb)
+		if err != nil {
+			res.Findings = append(res.Findings, Finding{Service: sc.Service, Op: st.Op, Kind: "call_error", Severity: "high", Expected: err.Error()})
+			continue
+		}
 		norm := normalizeJSON
 		if st.Scope {
 			norm = func(b []byte) (json.RawMessage, error) { return normalizeScoped(b, e.Cfg.Suffix) }
@@ -196,15 +219,25 @@ func runMutationParity(ctx context.Context, e *Env, service, op string, mp *Muta
 			Expected: errString(rerr), Actual: errString(gerr),
 		}}
 	}
-	gn, err := mutationNormalize(gb)
+	gn, err := mutationNormalize(gb, mp.Project)
 	if err != nil {
 		return []Finding{{Service: service, Op: op, Kind: "call_error", Severity: "high", Actual: err.Error()}}
 	}
-	rn, err := mutationNormalize(rb)
+	rn, err := mutationNormalize(rb, mp.Project)
 	if err != nil {
 		return []Finding{{Service: service, Op: op, Kind: "call_error", Severity: "high", Expected: err.Error()}}
 	}
 	return compareNormalized(service, op, rn, gn, allowances)
+}
+
+// projectBody applies an optional per-service projection (Step.Project /
+// MutationParity.Project) to a raw response body. A nil projection or an empty
+// body is returned unchanged.
+func projectBody(project func(json.RawMessage) (json.RawMessage, error), raw json.RawMessage) (json.RawMessage, error) {
+	if project == nil || len(bytes.TrimSpace(raw)) == 0 {
+		return raw, nil
+	}
+	return project(raw)
 }
 
 // cleanupTwin removes one side's twin after its mutation, best-effort: a
