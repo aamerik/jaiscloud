@@ -73,6 +73,14 @@
       "reason": "Firestore index admin needs a staged collection group and a server-assigned index id; the Discovery path probe cannot chain a create to the read/delete."
     },
     {
+      "operation": "Firestore.DeleteBackup",
+      "reason": "Firestore backups are read-only in the Admin API (a backup schedule produces them); there is no create path to stage, so a get/delete probe cannot be synthesized."
+    },
+    {
+      "operation": "Firestore.GetBackup",
+      "reason": "Firestore backups are read-only in the Admin API (a backup schedule produces them); there is no create path to stage, so a get/delete probe cannot be synthesized."
+    },
+    {
       "operation": "Firestore.DeleteIndex",
       "reason": "Firestore index admin needs a staged collection group and a server-assigned index id; the Discovery path probe cannot chain a create to the read/delete."
     },

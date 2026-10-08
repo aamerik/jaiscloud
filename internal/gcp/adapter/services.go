@@ -287,10 +287,12 @@ func ServiceNames() []string {
 }
 
 // grpcOnlyServices are wire services with a gRPC surface but no REST descriptor
-// in gcpServices. Firestore Admin is gRPC-only: its index CRUD is REST under
-// the `firestore` service (projects.databases.collectionGroups.indexes) but
-// exposed over gRPC as the distinct google.firestore.admin.v1.FirestoreAdmin
-// wire service, so it has no REST descriptor of its own.
+// in gcpServices. Firestore Admin is gRPC-only: its control plane (composite
+// indexes, databases, collection-group fields, backup schedules, backups, user
+// creds) is REST under the `firestore` service
+// (projects.databases... on firestore.googleapis.com/v1) but exposed over gRPC
+// as the distinct google.firestore.admin.v1.FirestoreAdmin wire service, so it
+// has no REST descriptor of its own.
 var grpcOnlyServices = []string{"firestoreadmin"}
 
 // KnownServiceNames returns the union of the REST service names and the

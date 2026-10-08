@@ -98,6 +98,10 @@ var actionOverrides = map[string]string{
 	"Metastore.AlterMetadataResourceLocation":    "metastore.projects.locations.services.alterLocation",
 	"Workflow.ListWorkflowRevisions":             "workflows.projects.locations.workflows.listRevisions",
 
+	// Firestore Admin user-creds resetPassword is a Discovery custom method
+	// ("userCreds.resetPassword") the flat registry action name cannot derive.
+	"Firestore.ResetUserPassword": "firestore.projects.databases.userCreds.resetPassword",
+
 	// BigQuery's tabledata/jobs/projects surfaces use different method names
 	// than the emulator's registry actions.
 	"BigQuery.InsertAll":         "bigquery.tabledata.insertAll",
