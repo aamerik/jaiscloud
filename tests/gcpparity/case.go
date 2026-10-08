@@ -131,6 +131,7 @@ func Registry() []Scenario {
 	s = append(s, storageScenario())
 	s = append(s, storageBucketsScenario())
 	s = append(s, workflowExecutionsScenario())
+	s = append(s, resourceManagerScenario())
 	return s
 }
 

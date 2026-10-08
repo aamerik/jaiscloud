@@ -453,3 +453,85 @@ func TestStreamParityAggregatesFrames(t *testing.T) {
 		t.Fatal("a dropped stream frame must fail the gate")
 	}
 }
+
+// TestResourceManagerProjectionReconcilesEncodings proves the Resource Manager
+// projection equalizes the v1 REST and v3 protojson renderings of one Project:
+// the overloaded `name` (v1 display name vs the v3 "projects/{id}" resource
+// name), `lifecycleState` vs `state`, the v1 ResourceId parent vs the v3 parent
+// string, and the fields only one schema defines (v1 `projectNumber`; v3
+// `etag`/`updateTime`/`deleteTime`) — while a genuine logical field one
+// transport drops still fails after projection. It also aligns the
+// projects.list envelope, which both transports key on `projects`.
+func TestResourceManagerProjectionReconcilesEncodings(t *testing.T) {
+	rest := json.RawMessage(`{
+		"projectId":"rm-abc123","projectNumber":"415104041262","name":"My Project",
+		"lifecycleState":"ACTIVE","parent":{"type":"organization","id":"123"},
+		"labels":{"env":"parity"},"createTime":"2024-01-01T00:00:00Z"}`)
+	grpc := json.RawMessage(`{
+		"name":"projects/rm-abc123","parent":"organizations/123","projectId":"rm-abc123",
+		"state":"ACTIVE","displayName":"My Project","labels":{"env":"parity"},
+		"createTime":"2024-01-01T00:00:00Z","updateTime":"2024-01-01T00:00:00Z","etag":"abc"}`)
+
+	rn, err := resourceManagerProjection(rest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gn, err := resourceManagerProjection(grpc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nr, _ := normalizeJSON(rn)
+	ng, _ := normalizeJSON(gn)
+	if fs := compareNormalized("resourcemanager", "GetProject", nr, ng, nil); len(failFindings(fs)) != 0 {
+		t.Fatalf("projected project bodies must not diverge, got %+v", failFindings(fs))
+	}
+
+	// A real dropped logical field must still gate after projection.
+	dropped, err := resourceManagerProjection(json.RawMessage(`{
+		"name":"projects/rm-abc123","projectId":"rm-abc123","state":"ACTIVE","parent":"organizations/123"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nd, _ := normalizeJSON(dropped)
+	if len(failFindings(compareNormalized("resourcemanager", "GetProject", nr, nd, nil))) == 0 {
+		t.Fatal("a logical field one transport drops must still gate after projection")
+	}
+
+	// The projects.list envelope aligns after projection: both transports use
+	// the `projects` key, and `name` is normalized so list-scoping can filter.
+	// The other project is out of scope, so scoping must drop it.
+	listREST, err := resourceManagerProjection(json.RawMessage(`{
+		"projects":[
+			{"projectId":"rm-abc123","projectNumber":"9","name":"My Project","lifecycleState":"ACTIVE"},
+			{"projectId":"other-zzz999","projectNumber":"8","name":"Other","lifecycleState":"ACTIVE"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	listGRPC, err := resourceManagerProjection(json.RawMessage(`{
+		"projects":[
+			{"name":"projects/rm-abc123","projectId":"rm-abc123","displayName":"My Project","state":"ACTIVE"},
+			{"name":"projects/other-zzz999","projectId":"other-zzz999","displayName":"Other","state":"ACTIVE"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nl, _ := normalizeJSON(listREST)
+	ngl, _ := normalizeJSON(listGRPC)
+	if fs := compareNormalized("resourcemanager", "ListProjects", nl, ngl, nil); len(failFindings(fs)) != 0 {
+		t.Fatalf("project list envelopes must align after projection, got %+v", failFindings(fs))
+	}
+	// Scoping on the normalized `name` keeps only the run project on both sides.
+	scopedREST, _ := normalizeScoped(listREST, "abc123")
+	scopedGRPC, _ := normalizeScoped(listGRPC, "abc123")
+	if fs := compareNormalized("resourcemanager", "ListProjects", scopedREST, scopedGRPC, nil); len(failFindings(fs)) != 0 {
+		t.Fatalf("scoped list envelopes must align, got %+v", failFindings(fs))
+	}
+	var scoped struct {
+		Projects []map[string]any `json:"projects"`
+	}
+	if err := json.Unmarshal(scopedREST, &scoped); err != nil {
+		t.Fatal(err)
+	}
+	if len(scoped.Projects) != 1 || scoped.Projects[0]["projectId"] != "rm-abc123" {
+		t.Fatalf("list scoping on the normalized name must keep only the run project, got %s", scopedREST)
+	}
+}
