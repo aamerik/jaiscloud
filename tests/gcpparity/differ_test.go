@@ -535,3 +535,36 @@ func TestResourceManagerProjectionReconcilesEncodings(t *testing.T) {
 		t.Fatalf("list scoping on the normalized name must keep only the run project, got %s", scopedREST)
 	}
 }
+
+// TestIamPolicyBodiesAgree proves the shared IAMPolicy Policy envelope renders
+// identically over the two transports after normalization (AUD3-6): the REST
+// Discovery JSON and the gRPC protojson form carry the same version and bindings
+// (member order is not part of the contract), while the per-render `etag` folds
+// to the volatile sentinel. A binding one transport drops still gates, so the
+// fold does not mask a real logical divergence.
+func TestIamPolicyBodiesAgree(t *testing.T) {
+	rest := json.RawMessage(`{"version":1,"etag":"ACAB","bindings":[{"role":"roles/pubsub.viewer","members":["user:a@example.com","user:b@example.com"]}]}`)
+	grpc := json.RawMessage(`{"version":1,"etag":"QUNBQg==","bindings":[{"role":"roles/pubsub.viewer","members":["user:b@example.com","user:a@example.com"]}]}`)
+
+	rn, err := normalizeJSON(rest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gn, err := normalizeJSON(grpc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fs := compareNormalized("iam", "GetIamPolicy", rn, gn, nil); len(failFindings(fs)) != 0 {
+		t.Fatalf("equivalent Policy bodies must not diverge, got %+v", failFindings(fs))
+	}
+
+	// A binding the gRPC side drops must still gate: the etag fold must not hide
+	// a real logical difference.
+	dropped, err := normalizeJSON(json.RawMessage(`{"version":1,"etag":"QUNBQg=="}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(failFindings(compareNormalized("iam", "GetIamPolicy", rn, dropped, nil))) == 0 {
+		t.Fatal("a dropped binding must still gate after normalization")
+	}
+}
