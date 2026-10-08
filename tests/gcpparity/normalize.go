@@ -185,6 +185,12 @@ var volatileKeys = map[string]bool{
 	// adapters may render it with different casing/encoding, and it is not part
 	// of the logical contract.
 	"uid": true,
+	// Dataproc assigns each cluster and job a server-generated uuid at create.
+	// A same-resource read returns the same value over both transports, but the
+	// mutation-parity twins (an independent create per transport) cannot share
+	// it, so it is volatile by definition.
+	"clusterUuid": true,
+	"jobUuid":     true,
 	// Cloud Workflows/Dataproc revision and operation identifiers.
 	"operationId": true,
 	"nameServer":  true,

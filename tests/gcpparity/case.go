@@ -123,6 +123,7 @@ func Registry() []Scenario {
 	s = append(s, managedKafkaScenario())
 	s = append(s, metastoreScenario())
 	s = append(s, cloudRunScenario())
+	s = append(s, dataprocScenario())
 	s = append(s, loggingScenario())
 	s = append(s, functionsScenario())
 	s = append(s, datastoreScenario())
