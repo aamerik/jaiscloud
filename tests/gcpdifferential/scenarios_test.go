@@ -46,6 +46,8 @@ func TestScenariosValid(t *testing.T) {
 		"dns", "workflows", "iam", "firestore",
 		"container", "dataproc", "monitoring", "logging", "datastore",
 		"workflowexecutions", "serviceusage",
+		"resourcemanager", "eventarc", "tasks", "run", "functions",
+		"metastore", "managedkafka",
 	} {
 		if !have[svc] {
 			t.Errorf("expected at least one %s scenario", svc)

@@ -330,6 +330,12 @@ var sortArrayKeys = map[string]bool{
 	"clusters":   true,
 	"executions": true,
 	"logNames":   true,
+	// AUD6-2 breadth: Eventarc trigger, Cloud Tasks queue, Cloud Run service,
+	// Cloud Functions function and Metastore service lists.
+	"triggers":  true,
+	"queues":    true,
+	"services":  true,
+	"functions": true,
 	// AUD6-1 gRPC differential: Datastore lookup/query result arrays, Cloud
 	// Monitoring descriptor lists and Cloud Logging entry lists have no
 	// guaranteed element order across the two backends.
@@ -378,6 +384,15 @@ var scopedListPlaceholders = map[string]string{
 	// which drops the real project's always-present cloudaudit logs.
 	"clusters": "<cluster>",
 	"logNames": "<logName>",
+	// AUD6-2 breadth. Each is a read-only smoke that creates no resource, so
+	// the list is forced empty: the placeholder matches no normalized element
+	// name, which keeps unrelated real-project resources out of the
+	// routing/empty-shape golden — the same intent as the GKE/Dataproc
+	// "clusters" rule above.
+	"triggers":  "<trigger>",
+	"queues":    "<queue>",
+	"services":  "<service>",
+	"functions": "<function>",
 }
 
 // value normalizes a decoded JSON value, rewriting volatile fields and sorting

@@ -17,12 +17,13 @@
 // emulator expose — the original twelve (storage, pubsub, secretmanager, kms,
 // bigquery, dns, workflows, iam, firestore, compute, sqladmin, redis) plus the
 // AUD6 breadth services (container, dataproc, monitoring, logging, datastore,
-// workflowexecutions, serviceusage). The curated Scenarios list may also
-// contain operations that have not been recorded yet: a scenario with no
-// committed golden is reported as "pending recording" and skipped by
-// TestReplay, so new breadth can land in the tree without breaking the offline
-// gate before the next real-GCP capture. Once the user records, every scenario
-// gains a golden and starts being diffed.
+// workflowexecutions, serviceusage) and the AUD6-2 services (resourcemanager,
+// eventarc, tasks, run, functions, metastore, managedkafka). The curated
+// Scenarios list may also contain operations that have not been recorded yet:
+// a scenario with no committed golden is reported as "pending recording" and
+// skipped by TestReplay, so new breadth can land in the tree without breaking
+// the offline gate before the next real-GCP capture. Once the user records,
+// every scenario gains a golden and starts being diffed.
 //
 // gRPC-only surfaces are out of scope for the REST differential; the AUD6-1
 // gRPC differential (Scenarios in grpc_scenarios.go) covers Datastore,
@@ -137,6 +138,15 @@ var serviceBaseURL = map[string]string{
 	"monitoring":         "https://monitoring.googleapis.com",
 	"datastore":          "https://datastore.googleapis.com",
 	"workflowexecutions": "https://workflowexecutions.googleapis.com",
+	// AUD6-2 breadth: services whose APIs are enabled on the parity project but
+	// that the differential did not previously cover.
+	"resourcemanager": "https://cloudresourcemanager.googleapis.com",
+	"eventarc":        "https://eventarc.googleapis.com",
+	"tasks":           "https://cloudtasks.googleapis.com",
+	"run":             "https://run.googleapis.com",
+	"functions":       "https://cloudfunctions.googleapis.com",
+	"metastore":       "https://metastore.googleapis.com",
+	"managedkafka":    "https://managedkafka.googleapis.com",
 }
 
 // runSuffix returns a per-run unique, resource-name-safe suffix. Record and
@@ -223,8 +233,9 @@ func Names(suffix string) ResourceNames {
 // Scenarios returns the curated request list for the given project and run
 // suffix: the original twelve REST services plus the AUD6 breadth services
 // (container, dataproc, monitoring, logging, datastore, workflowexecutions,
-// serviceusage). It also carries negative/error-envelope cases (404 / 409 /
-// 400 / 401 authz) alongside the happy paths.
+// serviceusage) and the AUD6-2 services (resourcemanager, eventarc, tasks, run,
+// functions, metastore, managedkafka). It also carries negative/error-envelope
+// cases (404 / 409 / 400 / 401 authz) alongside the happy paths.
 //
 // The list is ordered so resources exist before they are read and are deleted
 // at the end; error responses are included deliberately. Any scenario without a
@@ -545,6 +556,77 @@ func Scenarios(project, suffix string) []Scenario {
 	sc = append(sc,
 		Scenario{Op: "ds_lookup_missing", Service: "datastore", Method: "POST", Path: "/v1/projects/" + project + ":lookup",
 			Body: fmt.Sprintf(`{"keys":[{"path":[{"kind":"conf_kind","name":%q}]}]}`, "missing_"+suffix)},
+	)
+
+	// ─── AUD6-2 breadth: services the parity project now enables ─────────────
+	// Each follows the read-only smoke contract of the metadata-only services
+	// above: validate routing, the empty-list shape and the 404 error envelope,
+	// never a data plane. Nothing is created, so no cleanup is needed. Real GCP
+	// omits an empty collection member (it answers {}) while the emulator
+	// returns the empty array; that additive difference is accepted by the
+	// extra_field triage rule.
+
+	// Cloud Resource Manager (cloudresourcemanager.googleapis.com): the project
+	// resource. Its display name and creation time are accepted differences
+	// (see triage.go); projectId/projectNumber/lifecycleState match.
+	sc = append(sc,
+		Scenario{Op: "project_get", Service: "resourcemanager", Method: "GET",
+			Path: "/v1/projects/" + project},
+	)
+
+	// Eventarc (eventarc.googleapis.com): triggers under a location.
+	sc = append(sc,
+		Scenario{Op: "eventarc_triggers_list", Service: "eventarc", Method: "GET",
+			Path: "/v1/projects/" + project + "/locations/us-central1/triggers"},
+		Scenario{Op: "eventarc_trigger_get_missing", Service: "eventarc", Method: "GET",
+			Path: "/v1/projects/" + project + "/locations/us-central1/triggers/missing-" + suffix},
+	)
+
+	// Cloud Tasks v2 (cloudtasks.googleapis.com): queues under a location.
+	sc = append(sc,
+		Scenario{Op: "tasks_queues_list", Service: "tasks", Method: "GET",
+			Path: "/v2/projects/" + project + "/locations/us-central1/queues"},
+		Scenario{Op: "tasks_queue_get_missing", Service: "tasks", Method: "GET",
+			Path: "/v2/projects/" + project + "/locations/us-central1/queues/missing-" + suffix},
+	)
+
+	// Cloud Run v2 (run.googleapis.com): services under a location. The
+	// emulator discriminates run from functions on the "services" resource
+	// family.
+	sc = append(sc,
+		Scenario{Op: "run_services_list", Service: "run", Method: "GET",
+			Path: "/v2/projects/" + project + "/locations/us-central1/services"},
+		Scenario{Op: "run_service_get_missing", Service: "run", Method: "GET",
+			Path: "/v2/projects/" + project + "/locations/us-central1/services/missing-" + suffix},
+	)
+
+	// Cloud Functions v2 (cloudfunctions.googleapis.com): functions under a
+	// location.
+	sc = append(sc,
+		Scenario{Op: "functions_list", Service: "functions", Method: "GET",
+			Path: "/v2/projects/" + project + "/locations/us-central1/functions"},
+		Scenario{Op: "function_get_missing", Service: "functions", Method: "GET",
+			Path: "/v2/projects/" + project + "/locations/us-central1/functions/missing-" + suffix},
+	)
+
+	// Dataproc Metastore (metastore.googleapis.com): services under a location.
+	sc = append(sc,
+		Scenario{Op: "metastore_services_list", Service: "metastore", Method: "GET",
+			Path: "/v1/projects/" + project + "/locations/us-central1/services"},
+		Scenario{Op: "metastore_service_get_missing", Service: "metastore", Method: "GET",
+			Path: "/v1/projects/" + project + "/locations/us-central1/services/missing-" + suffix},
+	)
+
+	// Managed Service for Apache Kafka (managedkafka.googleapis.com): clusters
+	// under a location. This canonical path is shared with GKE, which the
+	// emulator discriminates by host; on the single replay origin it resolves
+	// to Managed Kafka (the GKE scenario above records the same path against
+	// container.googleapis.com, whose real response is {}).
+	sc = append(sc,
+		Scenario{Op: "managedkafka_clusters_list", Service: "managedkafka", Method: "GET",
+			Path: "/v1/projects/" + project + "/locations/us-central1/clusters"},
+		Scenario{Op: "managedkafka_cluster_get_missing", Service: "managedkafka", Method: "GET",
+			Path: "/v1/projects/" + project + "/locations/us-central1/clusters/missing-" + suffix},
 	)
 
 	// ─── Authz paths (G6 / G1) ────────────────────────────────────────────────

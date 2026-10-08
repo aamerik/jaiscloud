@@ -9,7 +9,7 @@
     "query": "SELECT 1"
   },
   "response": {
-    "cacheHit": true,
+    "cacheHit": false,
     "creationTime": "<time>",
     "endTime": "<time>",
     "jobComplete": true,
@@ -43,7 +43,8 @@
     "statementType": "SELECT",
     "totalBytesBilled": "0",
     "totalBytesProcessed": "0",
-    "totalRows": "1"
+    "totalRows": "1",
+    "totalSlotMs": "<totalSlotMs>"
   }
 }
 
