@@ -27,14 +27,28 @@ type Transcript struct {
 	Entries []Entry `json:"entries"`
 }
 
-// WriteTranscript writes a transcript as indented JSON.
+// WriteTranscript writes a transcript as JSON with one compact entry per line.
+// The entries array is the whole file, so a pretty-printed layout makes every
+// re-record rewrite the entire fixture (inserting one service's entries shifts
+// the tail); one entry per line turns that into a line-level diff of only the
+// entries that changed.
 func WriteTranscript(path string, tr Transcript) error {
-	data, err := json.MarshalIndent(tr, "", "  ")
-	if err != nil {
-		return err
+	var b bytes.Buffer
+	b.WriteString("{\n  \"entries\": [\n")
+	for i, e := range tr.Entries {
+		line, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		b.WriteString("    ")
+		b.Write(line)
+		if i < len(tr.Entries)-1 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('\n')
 	}
-	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o644)
+	b.WriteString("  ]\n}\n")
+	return os.WriteFile(path, b.Bytes(), 0o644)
 }
 
 // ReadTranscript reads a transcript from JSON. A missing file is reported as a
