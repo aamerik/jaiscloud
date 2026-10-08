@@ -65,6 +65,10 @@
       "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
     },
     {
+      "operation": "Dataproc.UpdateJob",
+      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), so the generic path probe cannot stage a job to patch. The handler is exercised by the REST jobs.patch unit test and the dataproc REST↔gRPC parity scenario (tests/gcpparity/cases_dataproc.go)."
+    },
+    {
       "operation": "Dataproc.UpdateWorkflowTemplate",
       "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
     },

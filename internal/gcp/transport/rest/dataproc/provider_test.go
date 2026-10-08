@@ -341,6 +341,50 @@ func TestSubmitJob_MockProgression(t *testing.T) {
 	}
 }
 
+// TestUpdateJob_Labels covers the REST jobs.patch handler (the body is the Job
+// itself and updateMask is a query parameter) and that labels persist.
+func TestUpdateJob_Labels(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+	}))
+	if _, err := p.SubmitJob(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"job": map[string]any{
+				"reference":  map[string]any{"projectId": "proj", "jobId": "j1"},
+				"placement":  map[string]any{"clusterName": "c1"},
+				"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("SubmitJob: %v", err)
+	}
+
+	resp, err := p.UpdateJob(ctx, testNR(map[string]any{
+		"region":     "us-central1",
+		"jobId":      "j1",
+		"updateMask": "labels",
+		"body":       map[string]any{"labels": map[string]any{"env": "prod"}},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateJob: %v", err)
+	}
+	if labels, _ := resp.Data["labels"].(map[string]string); labels["env"] != "prod" {
+		t.Fatalf("response labels = %v", resp.Data["labels"])
+	}
+
+	got, err := p.GetJob(ctx, testNR(map[string]any{"region": "us-central1", "jobId": "j1"}))
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if labels, _ := got.Data["labels"].(map[string]string); labels["env"] != "prod" {
+		t.Fatalf("persisted labels = %v", got.Data["labels"])
+	}
+}
+
 // TestSubmitJob_SchedulingRoundTrip verifies Job.scheduling is parsed from the
 // REST job body and echoed back on the response.
 func TestSubmitJob_SchedulingRoundTrip(t *testing.T) {

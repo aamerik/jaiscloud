@@ -187,6 +187,7 @@ dataproc,Dataproc.StopCluster,rest,ga,true,
 dataproc,Dataproc.SubmitJob,rest,ga,true,"covered by the k3d Lakehouse e2e (real Spark on Kubernetes, GKE virtualClusterConfig + driver output in GCS)"
 dataproc,Dataproc.SubmitJobAsOperation,rest,ga,true,
 dataproc,Dataproc.UpdateCluster,rest,ga,true,
+dataproc,Dataproc.UpdateJob,rest,ga,false,
 dataproc,Dataproc.UpdateWorkflowTemplate,rest,ga,false,
 dataproc,DeleteCluster,grpc,ga,true,
 dataproc,DeleteJob,grpc,ga,true,

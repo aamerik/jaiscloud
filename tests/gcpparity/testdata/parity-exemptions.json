@@ -5,10 +5,6 @@
       "reason": "IAM Credentials exposes only GenerateAccessToken/GenerateIdToken (no resource lifecycle) and the tokens are volatile; a create/get/list/delete parity flow does not apply. Tracked as AUD3-7."
     },
     {
-      "service": "dataproc",
-      "reason": "Dataproc cluster/job resources carry a heavier model and region-scoped paths; the parity flow needs LRO handling plus a cluster fixture. Tracked as AUD3-8."
-    },
-    {
       "service": "container",
       "reason": "GKE cluster mutations return the container-specific google.container.v1.Operation (not google.longrunning), and a cluster fixture needs a node-pool model. Tracked as AUD3-9."
     }

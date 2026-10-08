@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1114**
+Cells: **1115**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 967 |
+| ga | 968 |
 | limited | 101 |
 | preview | 14 |
 | unsupported | 32 |
@@ -21,7 +21,7 @@ Cells: **1114**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 525 | 100 | 14 | 12 |
+| rest | 526 | 100 | 14 | 12 |
 | grpc | 442 | 1 | 0 | 20 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 538 | 113 |
+| rest | 538 | 114 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -236,7 +236,7 @@ _66 cell(s): ga=58 limited=0 preview=0 unsupported=8_
 
 ## dataproc
 
-_44 cell(s): ga=42 limited=0 preview=0 unsupported=2_
+_45 cell(s): ga=43 limited=0 preview=0 unsupported=2_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -264,6 +264,7 @@ _44 cell(s): ga=42 limited=0 preview=0 unsupported=2_
 | Dataproc.SubmitJob | rest | ga | yes | covered by the k3d Lakehouse e2e (real Spark on Kubernetes, GKE virtualClusterConfig + driver output in GCS) |
 | Dataproc.SubmitJobAsOperation | rest | ga | yes | — |
 | Dataproc.UpdateCluster | rest | ga | yes | — |
+| Dataproc.UpdateJob | rest | ga | no | — |
 | Dataproc.UpdateWorkflowTemplate | rest | ga | no | — |
 | DeleteCluster | grpc | ga | yes | — |
 | DeleteJob | grpc | ga | yes | — |
