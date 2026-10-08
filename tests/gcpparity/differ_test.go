@@ -3,6 +3,7 @@
 package gcpparity
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
@@ -33,11 +34,11 @@ func TestMutationNormalizeFoldsTwinSide(t *testing.T) {
 	grpc := json.RawMessage(`{"name":"projects/p/topics/topic-grpc-abc123","topic":"projects/p/topics/topic-grpc-abc123"}`)
 	rest := json.RawMessage(`{"name":"projects/p/topics/topic-rest-abc123","topic":"projects/p/topics/topic-rest-abc123"}`)
 
-	gn, err := mutationNormalize(grpc)
+	gn, err := mutationNormalize(grpc, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rn, err := mutationNormalize(rest)
+	rn, err := mutationNormalize(rest, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,8 +57,8 @@ func TestMutationParityFailsOnDivergentResponse(t *testing.T) {
 	rest := json.RawMessage(`{"name":"projects/p/topics/topic-abc","labels":{"env":"prod"}}`)
 	grpc := json.RawMessage(`{"name":"projects/p/topics/topic-abc"}`)
 
-	rn, _ := mutationNormalize(rest)
-	gn, _ := mutationNormalize(grpc)
+	rn, _ := mutationNormalize(rest, nil)
+	gn, _ := mutationNormalize(grpc, nil)
 	fs := compareNormalized("pubsub", "CreateTopic", rn, gn, nil)
 	if k := kinds(fs); k["missing_field"] != 1 {
 		t.Fatalf("want 1 missing_field for the dropped labels, got kinds=%v", k)
@@ -131,6 +132,90 @@ func TestDifferPassesOnEquivalentBodies(t *testing.T) {
 	fs := compareNormalized("tasks", "GetQueue", rn, gn, nil)
 	if len(failFindings(fs)) != 0 {
 		t.Fatalf("equivalent bodies must not fail, got %+v", failFindings(fs))
+	}
+}
+
+// TestDatastoreValueProjectionCanonicalizesNullValue proves the Datastore
+// projection equalizes the one Value-union member whose REST and protojson
+// encodings differ — NullValue: the Discovery enum name "NULL_VALUE" vs JSON
+// null — while leaving every other member, and any real logical difference,
+// intact.
+func TestDatastoreValueProjectionCanonicalizesNullValue(t *testing.T) {
+	// The same logical entity: REST renders nullValue as the Discovery enum
+	// name, protojson renders it as JSON null — at the top level and nested
+	// inside an entityValue and an arrayValue, so the recursion is exercised.
+	rest := json.RawMessage(`{"found":[{"entity":{"properties":{
+		"nul":{"nullValue":"NULL_VALUE"},
+		"nest":{"entityValue":{"properties":{"nul":{"nullValue":"NULL_VALUE"}}}},
+		"arr":{"arrayValue":{"values":[{"nullValue":"NULL_VALUE"},{"stringValue":"x"}]}},
+		"str":{"stringValue":"x"}}}}]}`)
+	grpc := json.RawMessage(`{"found":[{"entity":{"properties":{
+		"nul":{"nullValue":null},
+		"nest":{"entityValue":{"properties":{"nul":{"nullValue":null}}}},
+		"arr":{"arrayValue":{"values":[{"nullValue":null},{"stringValue":"x"}]}},
+		"str":{"stringValue":"x"}}}}]}`)
+
+	rn, err := datastoreValueProjection(rest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gn, err := datastoreValueProjection(grpc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rn) != string(gn) {
+		t.Fatalf("projection must fold the nested nullValue encodings:\n rest=%s\n grpc=%s", rn, gn)
+	}
+	nr, _ := normalizeJSON(rn)
+	ng, _ := normalizeJSON(gn)
+	if fs := compareNormalized("datastore", "Lookup", nr, ng, nil); len(failFindings(fs)) != 0 {
+		t.Fatalf("projected bodies must not diverge, got %+v", failFindings(fs))
+	}
+
+	// A real dropped property must still fail after projection.
+	dropped, err := datastoreValueProjection(json.RawMessage(`{"found":[{"entity":{"properties":{"str":{"stringValue":"x"}}}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nd, _ := normalizeJSON(dropped)
+	if len(failFindings(compareNormalized("datastore", "Lookup", nr, nd, nil))) == 0 {
+		t.Fatal("a property one transport drops must still gate after projection")
+	}
+}
+
+// TestMutationProjectionAppliesSymmetric proves the mutation path applies a
+// MutationParity projection to both sides after the twin token is folded out
+// (the datastore CommitResponse carries no Value, so the scenario projection is
+// a no-op there; this pins the plumbing directly).
+func TestMutationProjectionAppliesSymmetric(t *testing.T) {
+	// The two sides differ only in the nullValue encoding; a projection that
+	// runs after the twin token is folded must equalize them.
+	grpc := json.RawMessage(`{"name":"x-grpc-abc","nul":"null"}`)
+	rest := json.RawMessage(`{"name":"x-rest-abc","nul":"NULL_VALUE"}`)
+	proj := func(raw json.RawMessage) (json.RawMessage, error) {
+		return bytes.ReplaceAll(raw, []byte(`"null"`), []byte(`"NULL_VALUE"`)), nil
+	}
+
+	// Without the projection the encoding difference is a real divergence.
+	wn, _ := mutationNormalize(grpc, nil)
+	wr, _ := mutationNormalize(rest, nil)
+	if len(failFindings(compareNormalized("datastore", "Commit", wr, wn, nil))) == 0 {
+		t.Fatal("without the projection the two encodings must diverge")
+	}
+
+	gn, err := mutationNormalize(grpc, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rn, err := mutationNormalize(rest, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gn) != string(rn) {
+		t.Fatalf("projection must apply after twin folding on both sides:\n grpc=%s\n rest=%s", gn, rn)
+	}
+	if fs := compareNormalized("datastore", "Commit", rn, gn, nil); len(failFindings(fs)) != 0 {
+		t.Fatalf("projected twins must not diverge, got %+v", failFindings(fs))
 	}
 }
 

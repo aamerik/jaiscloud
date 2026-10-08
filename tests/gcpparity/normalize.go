@@ -46,8 +46,16 @@ func normalizeScoped(raw []byte, scope string) (json.RawMessage, error) {
 // (.../parity-topic-grpc-<suffix>) and the REST twin
 // (.../parity-topic-rest-<suffix>) compare equal. The rest of the pipeline is
 // the ordinary read normalizer, so a genuine logical-field difference survives.
-func mutationNormalize(raw []byte) (json.RawMessage, error) {
-	return normalizeJSON(foldTwinSide(raw))
+func mutationNormalize(raw []byte, project func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+	raw = foldTwinSide(raw)
+	if project != nil && len(bytes.TrimSpace(raw)) > 0 {
+		r, err := project(raw)
+		if err != nil {
+			return nil, err
+		}
+		raw = r
+	}
+	return normalizeJSON(raw)
 }
 
 // twinSides are the per-transport id tokens Env.Resource folds in during a
