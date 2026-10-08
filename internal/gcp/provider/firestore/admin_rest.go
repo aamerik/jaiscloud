@@ -877,13 +877,13 @@ func (p *Provider) DeleteBackup(ctx context.Context, nr *model.NormalizedRequest
 
 // GetOperation implements projects.databases.operations.get.
 func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	name := strParam(nr, "name")
-	if _, _, isCollection, ok := splitDatabaseOperationPath(name); !ok || isCollection {
+	db, op, isCollection, ok := splitDatabaseOperationPath(strParam(nr, "name"))
+	if !ok || isCollection {
 		return nil, model.NewProviderError("InvalidArgument", "invalid operation resource name", 400)
 	}
 	// Reconstruct the canonical operation name and report it terminal. There is
 	// no stored body: the caller already received the typed response inline.
-	return provider.OK(map[string]any{"name": "projects/" + nr.AccountID + "/" + name, "done": true}), nil
+	return provider.OK(map[string]any{"name": databaseOperationName(nr.AccountID, db, op), "done": true}), nil
 }
 
 // ListOperations implements projects.databases.operations.list.
