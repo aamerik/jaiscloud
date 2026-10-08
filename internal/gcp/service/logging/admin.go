@@ -2,6 +2,7 @@ package logging
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -744,7 +745,9 @@ func (s *Service) GetSettings(ctx context.Context, name string) (loggingstore.Lo
 // settingsWritableMaskPaths is the writable field set of a Settings record
 // (Discovery schema google.logging.v2.Settings); name/kmsServiceAccountId/
 // loggingServiceAccountId are read-only. The AIP-134 `*` wildcard expands to
-// this set.
+// this set. The nested leaves of `default_sink_config` (filter/mode/exclusions)
+// are accepted in applySettingsMask but are not part of the expansion set,
+// because replacing the whole message already writes every writable leaf.
 var settingsWritableMaskPaths = []string{
 	"kms_key_name", "storage_location", "disable_default_sink", "default_sink_config",
 }
@@ -766,24 +769,97 @@ func (s *Service) UpdateSettings(ctx context.Context, name string, in loggingsto
 	if stored.KmsServiceAccountID == "" {
 		stored.KmsServiceAccountID = loggingServiceAgent(scope)
 	}
-	for _, raw := range expandConfigMask(updateMask, settingsWritableMaskPaths) {
-		switch normalizeConfigMaskPath(raw) {
-		case "kms_key_name":
-			stored.KmsKeyName = in.KmsKeyName
-		case "storage_location":
-			stored.StorageLocation = in.StorageLocation
-		case "disable_default_sink":
-			stored.DisableDefaultSink = in.DisableDefaultSink
-		case "default_sink_config":
-			stored.DefaultSinkConfig = in.DefaultSinkConfig
-		default:
-			return loggingstore.LogSettings{}, invalidMaskPath(raw)
-		}
+	merged, merr := applySettingsMask(stored, in, updateMask)
+	if merr != nil {
+		return loggingstore.LogSettings{}, merr
 	}
+	stored = merged
 	if err := s.store.SetSettings(ctx, scope, stored); err != nil {
 		return loggingstore.LogSettings{}, err
 	}
 	return stored, nil
+}
+
+// applySettingsMask merges the incoming Settings into the stored one for the
+// named paths. A nested `default_sink_config.<leaf>` path (filter/mode/
+// exclusions) updates only that leaf of the stored DefaultSinkConfig object
+// (AIP-134/AIP-161), while the `default_sink_config` message path replaces the
+// whole object. A path that names no writable field is a 400 InvalidArgument;
+// element paths of the repeated `exclusions` field cannot be addressed by a
+// field mask and stay 400.
+func applySettingsMask(stored, incoming loggingstore.LogSettings, updateMask []string) (loggingstore.LogSettings, error) {
+	for _, raw := range expandConfigMask(updateMask, settingsWritableMaskPaths) {
+		p := normalizeConfigMaskPath(raw)
+		switch p {
+		case "kms_key_name":
+			stored.KmsKeyName = incoming.KmsKeyName
+		case "storage_location":
+			stored.StorageLocation = incoming.StorageLocation
+		case "disable_default_sink":
+			stored.DisableDefaultSink = incoming.DisableDefaultSink
+		case defaultSinkConfigPath:
+			stored.DefaultSinkConfig = incoming.DefaultSinkConfig
+		case defaultSinkConfigPath + ".filter", defaultSinkConfigPath + ".mode", defaultSinkConfigPath + ".exclusions":
+			merged, merr := mergeDefaultSinkConfig(stored.DefaultSinkConfig, incoming.DefaultSinkConfig, strings.TrimPrefix(p, defaultSinkConfigPath+"."))
+			if merr != nil {
+				return stored, merr
+			}
+			stored.DefaultSinkConfig = merged
+		default:
+			return stored, invalidMaskPath(raw)
+		}
+	}
+	return stored, nil
+}
+
+// defaultSinkConfigPath is the normalized proto path of Settings'
+// default_sink_config message.
+const defaultSinkConfigPath = "default_sink_config"
+
+// mergeDefaultSinkConfig merges one writable leaf (filter/mode/exclusions) of
+// the DefaultSinkConfig message into the stored object. The object is kept as
+// opaque JSON so an `exclusions` element round-trips exactly as the client sent
+// it (its createTime/updateTime are output-only and would otherwise be
+// re-serialized as zero values). A leaf absent from the request clears to its
+// zero value, matching a field mask that names the field.
+func mergeDefaultSinkConfig(stored, incoming json.RawMessage, leaf string) (json.RawMessage, error) {
+	out := map[string]json.RawMessage{}
+	if len(stored) > 0 {
+		if err := json.Unmarshal(stored, &out); err != nil {
+			return nil, invalidArgument("stored default_sink_config is not an object")
+		}
+	}
+	in := map[string]json.RawMessage{}
+	if len(incoming) > 0 {
+		if err := json.Unmarshal(incoming, &in); err != nil {
+			return nil, invalidArgument("default_sink_config must be an object")
+		}
+	}
+	v, ok := in[leaf]
+	if !ok {
+		v = defaultSinkConfigZeroLeaf(leaf)
+	}
+	out[leaf] = v
+	merged, err := json.Marshal(out)
+	if err != nil {
+		return nil, invalidArgument("default_sink_config could not be encoded")
+	}
+	return merged, nil
+}
+
+// defaultSinkConfigZeroLeaf is the JSON zero value of a DefaultSinkConfig leaf,
+// applied when a mask names the leaf but the request omits it: an empty array
+// for the repeated exclusions, the unspecified enum for mode, and an empty
+// string for filter.
+func defaultSinkConfigZeroLeaf(leafKey string) json.RawMessage {
+	switch leafKey {
+	case "exclusions":
+		return json.RawMessage("[]")
+	case "mode":
+		return json.RawMessage(`"FILTER_WRITE_MODE_UNSPECIFIED"`)
+	default:
+		return json.RawMessage(`""`)
+	}
 }
 
 // GetCmekSettings returns the CMEK record for a scope, synthesizing the default

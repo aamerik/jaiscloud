@@ -239,6 +239,31 @@ func TestRESTSettingsAndCmek(t *testing.T) {
 	}
 }
 
+func TestRESTSettingsNestedDefaultSinkConfigMask(t *testing.T) {
+	c, p := newAdminProvider(t)
+
+	// A nested leaf path merges only the named field into the stored message.
+	upd := mustCall(t, c, p, http.MethodPatch, "/v2/projects/test/settings?updateMask=defaultSinkConfig.filter",
+		map[string]any{"defaultSinkConfig": map[string]any{"filter": "severity>=ERROR"}})
+	cfg, _ := upd["defaultSinkConfig"].(map[string]any)
+	if cfg["filter"] != "severity>=ERROR" {
+		t.Fatalf("settings filter = %v", upd)
+	}
+
+	upd = mustCall(t, c, p, http.MethodPatch, "/v2/projects/test/settings?updateMask=defaultSinkConfig.mode",
+		map[string]any{"defaultSinkConfig": map[string]any{"mode": "APPEND"}})
+	cfg, _ = upd["defaultSinkConfig"].(map[string]any)
+	if cfg["mode"] != "APPEND" || cfg["filter"] != "severity>=ERROR" {
+		t.Fatalf("settings mode merge = %v", upd)
+	}
+
+	// A path naming no writable field is a 400.
+	if _, err := call(t, c, p, http.MethodPatch, "/v2/projects/test/settings?updateMask=defaultSinkConfig.bogus",
+		map[string]any{"defaultSinkConfig": map[string]any{"filter": "x"}}); err == nil {
+		t.Fatalf("bogus defaultSinkConfig mask path succeeded")
+	}
+}
+
 func TestCodecAdminRouting(t *testing.T) {
 	c := NewCodec()
 	cases := []struct {
