@@ -79,30 +79,59 @@ func (e *Env) Resource(prefix string) string {
 // non-2xx status is returned with its body; the case decides whether that is an
 // error.
 func (e *Env) restDo(ctx context.Context, method, path, body, contentType string) ([]byte, int, error) {
-	var r io.Reader
+	var payload []byte
 	if body != "" {
-		r = bytes.NewReader([]byte(body))
+		payload = []byte(body)
+	}
+	data, status, _, err := e.restDoHeaders(ctx, method, path, payload, contentType, nil)
+	return data, status, err
+}
+
+// restDoHeaders is restDo plus the raw request body and the response headers. It
+// exists for the Cloud Storage media-upload protocol, whose resumable session
+// initiation returns the upload URL in the Location header, whose chunks carry
+// a Content-Range request header, and whose incomplete chunks answer 308 — none
+// of which the JSON-only Env.Rest helper can express.
+func (e *Env) restDoHeaders(ctx context.Context, method, path string, body []byte, contentType string, extra http.Header) ([]byte, int, http.Header, error) {
+	var r io.Reader
+	if len(body) > 0 {
+		r = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, e.Cfg.REST+path, r)
 	if err != nil {
-		return nil, 0, fmt.Errorf("%s %s: %w", method, path, err)
+		return nil, 0, nil, fmt.Errorf("%s %s: %w", method, path, err)
 	}
-	if body != "" {
+	if len(body) > 0 {
 		if contentType == "" {
 			contentType = "application/json"
 		}
 		req.Header.Set("Content-Type", contentType)
 	}
+	for k, vs := range extra {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
 	resp, err := e.http.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("%s %s: %w", method, path, err)
+		return nil, 0, nil, fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("%s %s: read body: %w", method, path, err)
+		return nil, resp.StatusCode, resp.Header, fmt.Errorf("%s %s: read body: %w", method, path, err)
 	}
-	return data, resp.StatusCode, nil
+	return data, resp.StatusCode, resp.Header, nil
+}
+
+// RestRaw sends one REST request with an optional raw body and extra request
+// headers, returning the body, status and response headers without requiring a
+// 2xx. The Cloud Storage media-upload flow needs all three: the resumable
+// session start's Location header, the chunk's Content-Range request header,
+// and the 308 Resume Incomplete an incomplete chunk answers.
+func (e *Env) RestRaw(ctx context.Context, method, path string, body []byte, contentType string, extra http.Header) (json.RawMessage, int, http.Header, error) {
+	data, status, hdr, err := e.restDoHeaders(ctx, method, path, body, contentType, extra)
+	return json.RawMessage(data), status, hdr, err
 }
 
 // Rest calls restDo and requires a 2xx response.

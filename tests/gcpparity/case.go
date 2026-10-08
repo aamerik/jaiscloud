@@ -98,6 +98,7 @@ func Registry() []Scenario {
 	s = append(s, functionsScenario())
 	s = append(s, datastoreScenario())
 	s = append(s, firestoreScenario())
+	s = append(s, storageScenario())
 	return s
 }
 
