@@ -139,6 +139,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-e2e-s3-streaming test-e2e-kinesis test-e2e-ecr test-e2e-sfn \
         test-e2e-gcp-persistence test-e2e-iceberg test-e2e-iceberg-gcp \
         test-e2e-iceberg-k3d \
+        test-e2e-iceberg-streaming-k3d \
         test-e2e-lakehouse-k3d \
         test-e2e-gcp-samples-k3d \
         test-dataproc-streaming-k8s test-dataproc-streaming-kafka \
@@ -1051,6 +1052,13 @@ test-e2e-iceberg-k3d: _check-iceberg-k3d-prereq _refresh-gcp-image ## Dataproc I
 	go clean -testcache
 	K8S_NAMESPACE=$(K8S_NAMESPACE) \
 	  go test -v -tags iceberg_k3d_e2e -run '^TestDataprocIcebergK3d$$' -timeout 25m ./tests/persistent_mode/gcp/iceberg-k3d/
+
+test-e2e-iceberg-streaming-k3d: _check-iceberg-k3d-prereq _refresh-gcp-image ## Dataproc Iceberg streaming-sink e2e on k3d: Kafka source -> Iceberg table via HMS catalog (SPK2; applies deploy/k8s/jaiscloud-gcp.yaml; needs JAISCLOUD_KAFKA_BROKER_MODE=k8s; tag: iceberg_k3d_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
+	kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
+	kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
+	go clean -testcache
+	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	  go test -v -tags iceberg_k3d_e2e -run '^TestDataprocIcebergStreamingK3d$$' -timeout 35m ./tests/persistent_mode/gcp/iceberg-k3d/
 
 test-e2e-gcp-samples-k3d: _check-gcp-samples-prereq _refresh-gcp-image ## Spring Cloud GCP sample apps e2e on k3d (tag: gcpsamples_e2e; run `make docker-gcp-samples` first; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	go clean -testcache
