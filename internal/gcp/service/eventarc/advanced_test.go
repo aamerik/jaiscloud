@@ -165,3 +165,29 @@ func TestChannelConnectionRequiresChannel(t *testing.T) {
 		t.Fatalf("create channel connection: %v", err)
 	}
 }
+
+// TestAdvancedMaskPathClassification pins the update_mask error classes for the
+// advanced surface: a path that names no field of the kind is a 400
+// InvalidArgument (AIP-134/AIP-161); an output-only field the emulator owns is
+// a 501 UnsupportedOperation; a writable field still merges.
+func TestAdvancedMaskPathClassification(t *testing.T) {
+	ctx := context.Background()
+	s := newAdvancedService()
+	if _, _, err := s.CreateAdvanced(ctx, "proj", MessageBusKind, "us-central1", "mb1",
+		json.RawMessage(`{"displayName":"d"}`), false); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if _, _, err := s.UpdateAdvanced(ctx, "proj", MessageBusKind, "us-central1", "mb1",
+		json.RawMessage(`{}`), "bogusField", "", false); maskStatus(err) != 400 {
+		t.Fatalf("unknown path err = %v, want 400", err)
+	}
+	if _, _, err := s.UpdateAdvanced(ctx, "proj", MessageBusKind, "us-central1", "mb1",
+		json.RawMessage(`{}`), "createTime", "", false); maskStatus(err) != 501 {
+		t.Fatalf("output-only path err = %v, want 501", err)
+	}
+	if _, _, err := s.UpdateAdvanced(ctx, "proj", MessageBusKind, "us-central1", "mb1",
+		json.RawMessage(`{"displayName":"e"}`), "displayName", "", false); err != nil {
+		t.Fatalf("writable path: %v", err)
+	}
+}

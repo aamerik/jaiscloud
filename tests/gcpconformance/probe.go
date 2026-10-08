@@ -790,10 +790,10 @@ func queryParams(svc string, m *Method, suffix string, tokens map[string]string)
 
 // updateMaskValue returns the update_mask/field_mask value a probe sends. The
 // generic default is "labels", which most resources accept, but a resource
-// whose writable field set has no "labels" rejects it (Logging/Monitoring
-// return 400/501 for a path that names no field, per AIP-134). maskFieldByResource
-// pins a real writable field for those resources so the probe exercises the
-// merge instead of being rejected on input.
+// whose field set has no "labels" rejects it (the merge handlers answer 400
+// INVALID_ARGUMENT for a path that names no field, per AIP-134/AIP-161).
+// maskFieldByResource pins a real writable field for those resources so the
+// probe exercises the merge instead of being rejected on input.
 func updateMaskValue(svc string, m *Method) string {
 	ref := m.Request.Ref
 	if i := strings.LastIndexByte(ref, '.'); i >= 0 {

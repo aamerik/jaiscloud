@@ -581,14 +581,26 @@ func TestUpdateAlertPolicyUpdateMask(t *testing.T) {
 		t.Fatalf("combiner after masked update = %v, want AND (preserved)", updated.GetCombiner())
 	}
 
-	// An unsupported mask path is rejected with Unimplemented.
+	// A mask path that names no field is a client error (InvalidArgument),
+	// not an unimplemented operation (AIP-134/AIP-161).
 	if _, err := ac.UpdateAlertPolicy(ctx, &monitoringpb.UpdateAlertPolicyRequest{
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"bogus_field"}},
 		AlertPolicy: &monitoringpb.AlertPolicy{
 			Name: created.GetName(),
 		},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unknown mask path err = %v, want InvalidArgument", err)
+	}
+
+	// A real-but-unimplemented field stays Unimplemented: alertStrategy is a
+	// field of AlertPolicy the emulator does not store.
+	if _, err := ac.UpdateAlertPolicy(ctx, &monitoringpb.UpdateAlertPolicyRequest{
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"alert_strategy"}},
+		AlertPolicy: &monitoringpb.AlertPolicy{
+			Name: created.GetName(),
+		},
 	}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("unsupported mask path err = %v, want Unimplemented", err)
+		t.Fatalf("alert_strategy mask err = %v, want Unimplemented", err)
 	}
 }
 
