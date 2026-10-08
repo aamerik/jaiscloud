@@ -30,8 +30,12 @@
 // emulator's registries; the Makefile passes all three.
 //
 // Coverage boundary: reads cover Get/List bodies and mutations cover the
-// resource-returning Create/Update responses. Delete has no response body to
-// diff (gRPC returns google.protobuf.Empty, REST an empty body). Service Usage's
+// resource-returning Create/Update responses. A server-streaming read
+// (Firestore's runQuery/batchGet, which REST answers as newline-delimited JSON
+// and gRPC as an iterator) is cross-diffed by a StreamParity step, which
+// aggregates each transport's frames into one logical array. Delete has no
+// response body to diff (gRPC returns google.protobuf.Empty, REST an empty
+// body). Service Usage's
 // EnableService returns an Operation whose response is the Service, so its
 // parity step compares the settled Service; KMS key rings and crypto keys cannot
 // be deleted by the real API, so their twins are intentionally left in place.
