@@ -73,7 +73,9 @@ of writing:
 | **gRPC** (official clients) | 410 | 306 | 12 | 0 | 92 | 75% |
 | **REST** (Discovery-backed) | 468 | 335 | 107 | 14 | 12 | 72% |
 
-- gRPC-only services (no REST transport): **Firestore Admin, Operations (long-running)**.
+- gRPC-only wire services (no REST descriptor of their own): **Firestore Admin,
+  Operations (long-running)**. Firestore Admin's REST control plane is served
+  under the `firestore` service descriptor (see the `firestore` row).
 - gRPC split = 306 `ga` + 12 `limited` + 92 `unsupported` = 410. REST split = 335 + 107 + 14 + 12 = 468.
   Overall = 410 + 468 = 878.
 
@@ -96,8 +98,8 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `storage` | grpc, rest | 52/52 | 🟢 | Full | Yes | Bucket/object/IAM/resumable; server-streaming `ReadObject` + bidirectional `BidiReadObject`. |
 | `kms` | grpc, rest | 56/60 | 🟢 | Full | Yes | Symmetric/asym/MAC/raw + delete/import-job; 4 hard crypto leftovers. Crypto operations honor the cryptoKey IAM policy **default-permissively** (a key with no policy allows; a policy that omits the required role returns `PERMISSION_DENIED`). |
 | `secretmanager` | grpc, rest | 30/32 | 🟢 | Full | Yes | Rotation schedule tracked; managed rotation needs Cloud SQL. |
-| `firestore` | grpc, rest | 33/33 | 🟢 | Full | Yes | Full incl. `Listen`/`Write`; pipeline is a read-only subset. |
-| `firestoreadmin` | grpc | 4/32 | 🟢 | Shape only | Shape only | Composite-index CRUD only; Databases/Backups/UserCreds/Schedules/Fields/Export/Import are `unsupported` stubs. |
+| `firestore` | grpc, rest | 56/56 | 🟢 | Full | Yes | Documents/transactions/queries + Admin control plane (databases, collection-group fields, backup schedules, backups, user creds) over REST and gRPC; pipeline is a read-only subset. |
+| `firestoreadmin` | grpc | 27/32 | 🟢 | Shape only | Shape only | `google.firestore.admin.v1.FirestoreAdmin` gRPC wire service: composite-index CRUD + control plane (databases/fields/schedules/backups/user creds), mirrored by the REST control plane under `firestore`. The 5 data-plane/DR RPCs (Export/Import/Restore/Clone/BulkDelete) are `unsupported` stubs. |
 | `datastore` | grpc, rest | 16/16 | 🟢 | Full | Yes | Transactions are single entity-group with a read-set. |
 | `monitoring` | grpc, rest | 48/48 | 🟢 | Full | Yes | Metrics/alerts/channels; `condition_threshold` + `condition_absent` are evaluated. |
 | `logging` | grpc, rest | 10/11 | 🟢 | Full | Yes | Write/List/Delete; `TailLogEntries` is a bounded poll. |
@@ -163,7 +165,7 @@ behind a wire-conformant API.
 | Depth | Services | What you can actually rely on locally |
 | --- | --- | --- |
 | **Full** | `pubsub`, `storage`, `kms`, `secretmanager`, `firestore`, `datastore`, `monitoring`, `logging` | Data-plane operations and most semantics, gated against captured real-GCP responses. |
-| **Shape only** (wire-conformant, thin behaviour) | `iam` (authz not enforced), `resourcemanager` (v1 REST + v3 gRPC over one core; projects synthesized; authz not enforced; IAM policy is metadata), `serviceusage` (no real API gating), `eventarc` (Cloud Functions-only delivery), `firestoreadmin` (composite-index CRUD only), `managedkafka` (metadata-only by default; an opt-in docker/k8s/native Redpanda broker backs `bootstrapAddress`), `metastore` (control plane shape only; the Hive Thrift plane serves databases/tables/partitions/locks plus Hive-3.x `get_table_meta`/`alter_table_with_cascade`, the identity RPC `set_ugi`, and the request-struct reads `get_table_req`/`get_table_objects_by_name_req`; niche partition methods unsupported), `operations` (LROs synchronous), `workflows` (LROs synchronous), `workflowexecutions` (LROs synchronous), `dataproc` (no real cluster locally unless an executor is wired), `functions` (no real container build; single revision; Docker/K8s execution applies the platform overlay — TLS PEM bundle, extra volumes/env — like the Cloud Run/Dataproc docker executors), `bigquery` (a documented Standard SQL subset — `SELECT` + DDL/DML — executes locally on an in-process SQLite engine; arrays/structs/`UNNEST`, scripting, wildcard tables and `INFORMATION_SCHEMA` fail loud, and the full GoogleSQL surface is not modelled) | Control-plane shape and metadata. Real behaviour must be tested on real GCP. |
+| **Shape only** (wire-conformant, thin behaviour) | `iam` (authz not enforced), `resourcemanager` (v1 REST + v3 gRPC over one core; projects synthesized; authz not enforced; IAM policy is metadata), `serviceusage` (no real API gating), `eventarc` (Cloud Functions-only delivery), `firestoreadmin` (composite-index CRUD + the REST-mirrored control plane; data-plane/DR RPCs unsupported), `managedkafka` (metadata-only by default; an opt-in docker/k8s/native Redpanda broker backs `bootstrapAddress`), `metastore` (control plane shape only; the Hive Thrift plane serves databases/tables/partitions/locks plus Hive-3.x `get_table_meta`/`alter_table_with_cascade`, the identity RPC `set_ugi`, and the request-struct reads `get_table_req`/`get_table_objects_by_name_req`; niche partition methods unsupported), `operations` (LROs synchronous), `workflows` (LROs synchronous), `workflowexecutions` (LROs synchronous), `dataproc` (no real cluster locally unless an executor is wired), `functions` (no real container build; single revision; Docker/K8s execution applies the platform overlay — TLS PEM bundle, extra volumes/env — like the Cloud Run/Dataproc docker executors), `bigquery` (a documented Standard SQL subset — `SELECT` + DDL/DML — executes locally on an in-process SQLite engine; arrays/structs/`UNNEST`, scripting, wildcard tables and `INFORMATION_SCHEMA` fail loud, and the full GoogleSQL surface is not modelled) | Control-plane shape and metadata. Real behaviour must be tested on real GCP. |
 | **Metadata only** | `compute`, `cloudsql`, `clouddns`, `memorystore` | Resource records + `get`/`list`; nothing actually runs. |
 | **None (preview)** | `iceberg` | Nothing local counts as evidence. |
 
@@ -179,7 +181,7 @@ behind a wire-conformant API.
 | --- | --- | --- | --- |
 | SQS | **Pub/Sub** | 🟢 `ga` (45/45) | High — full surface. |
 | S3 | **Cloud Storage** | 🟢 `ga` (52/52) | High — full read surface (`ReadObject` + `BidiReadObject`). |
-| DynamoDB | **Firestore** / Datastore | 🟢 `ga` (Firestore 33/33, Firestore Admin 4/32, Datastore 16/16) | High — watch transaction/OCC caveats ([Known Limitations](../README-GCP.md#known-limitations)). |
+| DynamoDB | **Firestore** / Datastore | 🟢 `ga` (Firestore 56/56, Firestore Admin 27/32, Datastore 16/16) | High — watch transaction/OCC caveats ([Known Limitations](../README-GCP.md#known-limitations)). |
 | Lambda | **Cloud Functions** | 🟡 `limited` (38/38) | Control plane + GCS-referenced source execution (Docker/K8s); v2 `gcloud functions deploy --gen2` end-to-end (upload → create → poll); per-deploy revisions (Cloud Run shape) and the v2 1st→2nd gen upgrade/traffic control plane over REST; event triggers deliver Pub/Sub / GCS / Eventarc events with retry + dead-letter records (a Pub/Sub or GCS trigger's platform-provisioned backing subscription carries a user-configurable `deadLetterPolicy`). |
 | KMS | **Cloud KMS** | 🟢 `ga` (56/60) | High; 4 hard crypto leftovers (`ImportCryptoKeyVersion`, trusted-key wraps, `Decapsulate`). |
 | Secrets Manager | **Secret Manager** | 🟢 `ga` (30/32) | High; managed rotation needs Cloud SQL. |

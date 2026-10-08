@@ -257,6 +257,10 @@ var placeholderOverrides = map[string]string{
 	"providers":    "pubsub.googleapis.com",
 	"versions":     "1",
 	"acls":         "allTopics",
+	// Firestore Admin backup schedules have no id on create (the emulator
+	// assigns the single schedule id "1"), so a get/patch/delete probe must
+	// target "1" rather than a synthesized per-operation id.
+	"backupSchedules": "1",
 }
 
 // collectionCreateAlias maps a path collection segment to create-like method
@@ -268,6 +272,10 @@ var collectionCreateAlias = map[string][]string{
 	// ".create"/".insert" suffix match misses, so a document read/patch/delete
 	// probe can stage its target.
 	"documents": {".createDocument"},
+	// Firestore collection-group fields have no create method; a field is
+	// materialized by fields.patch (create-or-update), so a field read probe
+	// stages its target that way.
+	"fields": {".patch"},
 }
 
 // resolvedOp is one registry operation joined to the Discovery method it

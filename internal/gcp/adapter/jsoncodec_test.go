@@ -285,6 +285,19 @@ func TestDetectV1Service(t *testing.T) {
 		"/v1/projects/p/services:batchEnable":                "serviceusage",
 		"/v1/projects/p/services/run.googleapis.com:enable":  "serviceusage",
 		"/v1/projects/p/services/run.googleapis.com:disable": "serviceusage",
+		// Firestore Admin control plane (REST under the firestore service).
+		"/v1/projects/p/databases":                                 "firestore",
+		"/v1/projects/p/databases/db":                              "firestore",
+		"/v1/projects/p/databases/db/documents/c/d":                "firestore",
+		"/v1/projects/p/databases/db/collectionGroups/cg/indexes":  "firestore",
+		"/v1/projects/p/databases/db/collectionGroups/cg/fields":   "firestore",
+		"/v1/projects/p/databases/db/collectionGroups/cg/fields/f": "firestore",
+		"/v1/projects/p/databases/db/backupSchedules":              "firestore",
+		"/v1/projects/p/databases/db/backupSchedules/1":            "firestore",
+		"/v1/projects/p/databases/db/userCreds":                    "firestore",
+		"/v1/projects/p/databases/db/userCreds/uc:enable":          "firestore",
+		"/v1/projects/p/locations/us/backups":                      "firestore",
+		"/v1/projects/p/locations/us/backups/b":                    "firestore",
 		// Cloud Resource Manager v1 project surface (project segment is last),
 		// including the collection route.
 		"/v1/projects":                      "resourcemanager",
@@ -298,6 +311,65 @@ func TestDetectV1Service(t *testing.T) {
 	for path, want := range cases {
 		if got := detectV1Service(path); got != want {
 			t.Errorf("detectV1Service(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// TestFirestoreAdminDecode covers the Firestore Admin REST control-plane paths:
+// the five resource families decode to their registry actions, and the
+// data-plane / disaster-recovery custom verbs fail loud rather than dispatch as
+// CreateDatabase.
+func TestFirestoreAdminDecode(t *testing.T) {
+	cases := []struct{ method, path, action string }{
+		{"POST", "/v1/projects/p/databases?databaseId=db", "CreateDatabase"},
+		{"GET", "/v1/projects/p/databases", "ListDatabases"},
+		{"GET", "/v1/projects/p/databases/db", "GetDatabase"},
+		{"PATCH", "/v1/projects/p/databases/db?updateMask=concurrencyMode", "UpdateDatabase"},
+		{"DELETE", "/v1/projects/p/databases/db", "DeleteDatabase"},
+		{"POST", "/v1/projects/p/databases/db/backupSchedules", "CreateBackupSchedule"},
+		{"GET", "/v1/projects/p/databases/db/backupSchedules", "ListBackupSchedules"},
+		{"GET", "/v1/projects/p/databases/db/backupSchedules/1", "GetBackupSchedule"},
+		{"PATCH", "/v1/projects/p/databases/db/backupSchedules/1?updateMask=retention", "UpdateBackupSchedule"},
+		{"DELETE", "/v1/projects/p/databases/db/backupSchedules/1", "DeleteBackupSchedule"},
+		{"POST", "/v1/projects/p/databases/db/userCreds?userCredsId=uc", "CreateUserCreds"},
+		{"GET", "/v1/projects/p/databases/db/userCreds", "ListUserCreds"},
+		{"GET", "/v1/projects/p/databases/db/userCreds/uc", "GetUserCreds"},
+		{"POST", "/v1/projects/p/databases/db/userCreds/uc:enable", "EnableUserCreds"},
+		{"POST", "/v1/projects/p/databases/db/userCreds/uc:disable", "DisableUserCreds"},
+		{"POST", "/v1/projects/p/databases/db/userCreds/uc:resetPassword", "ResetUserPassword"},
+		{"DELETE", "/v1/projects/p/databases/db/userCreds/uc", "DeleteUserCreds"},
+		{"GET", "/v1/projects/p/databases/db/collectionGroups/cg/fields", "ListFields"},
+		{"GET", "/v1/projects/p/databases/db/collectionGroups/cg/fields/f", "GetField"},
+		{"PATCH", "/v1/projects/p/databases/db/collectionGroups/cg/fields/f?updateMask=indexConfig", "UpdateField"},
+		{"GET", "/v1/projects/p/locations/us/backups", "ListBackups"},
+		{"GET", "/v1/projects/p/locations/us/backups/b", "GetBackup"},
+		{"DELETE", "/v1/projects/p/locations/us/backups/b", "DeleteBackup"},
+	}
+	for _, tc := range cases {
+		c := &JSONCodec{Service: "firestore"}
+		r := httptest.NewRequest(tc.method, tc.path, nil)
+		nr, err := c.Decode(r, nil)
+		if err != nil {
+			t.Errorf("Decode(%s %s): %v", tc.method, tc.path, err)
+			continue
+		}
+		if nr.Action != tc.action {
+			t.Errorf("Decode(%s %s) action = %q, want %q", tc.method, tc.path, nr.Action, tc.action)
+		}
+	}
+
+	// Data-plane / disaster-recovery verbs are not modelled: fail loud instead of
+	// dispatching the collection-level POSTs as CreateDatabase.
+	for _, p := range []string{
+		"/v1/projects/p/databases:restore",
+		"/v1/projects/p/databases:clone",
+		"/v1/projects/p/databases/db:exportDocuments",
+		"/v1/projects/p/databases/db:importDocuments",
+		"/v1/projects/p/databases/db:bulkDeleteDocuments",
+	} {
+		r := httptest.NewRequest("POST", p, nil)
+		if _, err := (&JSONCodec{Service: "firestore"}).Decode(r, nil); err == nil {
+			t.Errorf("Decode(%q) succeeded, want a fail-loud error", p)
 		}
 	}
 }

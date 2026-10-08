@@ -863,7 +863,7 @@ var probedElsewhere = map[string]string{
 	// The shared ResourceStore (registered as the "resources" snapshotter and
 	// resetter) backs the metadata-only services below; its round-trip is
 	// exercised here by the clouddns/cloudsql/compute/memorystore probes.
-	"firestoreadmin":  "gRPC-only surface; its composite-index/database/backup state is the firestore provider's shared ResourceStore",
+	"firestoreadmin":  "gRPC wire service (the REST control plane is served under the firestore service); its database/field/backup/user-creds state is the firestore provider's shared ResourceStore",
 	"serviceusage":    "service enable/disable state and operations live in the shared ResourceStore",
 	"resourcemanager": "project lifecycle state and operations live in the shared ResourceStore",
 }

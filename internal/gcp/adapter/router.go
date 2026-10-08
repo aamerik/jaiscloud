@@ -309,7 +309,7 @@ func detectV1Service(path string) string {
 		return "kms"
 	case "serviceAccounts", "keys":
 		return "iam"
-	case "documents", "indexes":
+	case "documents", "indexes", "databases", "backupSchedules", "userCreds", "fields", "backups":
 		return "firestore"
 	case "functions":
 		return "functions"

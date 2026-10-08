@@ -41,7 +41,9 @@ operations:
   # Firestore Admin: composite-index CRUD and the control plane (databases,
   # collection-group fields, backup schedules, backups, user creds) are verified
   # end-to-end by the official cloud.google.com/go/firestore/apiv1/admin client
-  # conformance suite, so their cells derive `ga` with no override. The
+  # conformance suite (gRPC) and by the REST wire-conformance probes (the REST
+  # control plane is served under the `firestore` service descriptor on
+  # firestore.googleapis.com/v1), so their cells derive `ga` with no override. The
   # data-plane / disaster-recovery RPCs remain explicit Unimplemented stubs
   # (recorded as debt in the GA-fidelity wave plan, GA12-D1..D5).
 

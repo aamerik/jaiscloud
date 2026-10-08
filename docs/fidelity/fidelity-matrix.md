@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1087**
+Cells: **1110**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 940 |
+| ga | 963 |
 | limited | 101 |
 | preview | 14 |
 | unsupported | 32 |
@@ -21,7 +21,7 @@ Cells: **1087**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 498 | 100 | 14 | 12 |
+| rest | 521 | 100 | 14 | 12 |
 | grpc | 442 | 1 | 0 | 20 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 513 | 111 |
+| rest | 534 | 113 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -416,7 +416,7 @@ _99 cell(s): ga=99 limited=0 preview=0 unsupported=0_
 
 ## firestore
 
-_33 cell(s): ga=33 limited=0 preview=0 unsupported=0_
+_56 cell(s): ga=56 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -431,18 +431,41 @@ _33 cell(s): ga=33 limited=0 preview=0 unsupported=0_
 | Firestore.BatchWrite | rest | ga | yes | — |
 | Firestore.BeginTransaction | rest | ga | yes | — |
 | Firestore.Commit | rest | ga | yes | — |
+| Firestore.CreateBackupSchedule | rest | ga | yes | — |
+| Firestore.CreateDatabase | rest | ga | yes | — |
 | Firestore.CreateDocument | rest | ga | yes | — |
 | Firestore.CreateIndex | rest | ga | no | — |
+| Firestore.CreateUserCreds | rest | ga | yes | — |
+| Firestore.DeleteBackup | rest | ga | no | — |
+| Firestore.DeleteBackupSchedule | rest | ga | yes | — |
+| Firestore.DeleteDatabase | rest | ga | yes | — |
 | Firestore.DeleteDocument | rest | ga | yes | — |
 | Firestore.DeleteIndex | rest | ga | no | — |
+| Firestore.DeleteUserCreds | rest | ga | yes | — |
+| Firestore.DisableUserCreds | rest | ga | yes | — |
+| Firestore.EnableUserCreds | rest | ga | yes | — |
+| Firestore.GetBackup | rest | ga | no | — |
+| Firestore.GetBackupSchedule | rest | ga | yes | — |
+| Firestore.GetDatabase | rest | ga | yes | — |
 | Firestore.GetDocument | rest | ga | yes | — |
+| Firestore.GetField | rest | ga | yes | — |
 | Firestore.GetIndex | rest | ga | no | — |
+| Firestore.GetUserCreds | rest | ga | yes | — |
+| Firestore.ListBackupSchedules | rest | ga | yes | — |
+| Firestore.ListBackups | rest | ga | yes | — |
 | Firestore.ListCollectionIds | rest | ga | yes | — |
+| Firestore.ListDatabases | rest | ga | yes | — |
 | Firestore.ListDocuments | rest | ga | yes | — |
+| Firestore.ListFields | rest | ga | yes | — |
 | Firestore.ListIndexes | rest | ga | yes | — |
+| Firestore.ListUserCreds | rest | ga | yes | — |
 | Firestore.PatchDocument | rest | ga | yes | — |
+| Firestore.ResetUserPassword | rest | ga | yes | — |
 | Firestore.Rollback | rest | ga | yes | — |
 | Firestore.RunQuery | rest | ga | no | — |
+| Firestore.UpdateBackupSchedule | rest | ga | yes | — |
+| Firestore.UpdateDatabase | rest | ga | yes | — |
+| Firestore.UpdateField | rest | ga | yes | — |
 | GetDocument | grpc | ga | yes | — |
 | ListCollectionIds | grpc | ga | yes | — |
 | ListDocuments | grpc | ga | yes | — |

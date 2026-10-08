@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 1087,
+    "total": 1110,
     "by_state": {
-      "ga": 940,
+      "ga": 963,
       "limited": 101,
       "preview": 14,
       "unsupported": 32
@@ -15,7 +15,7 @@
         "unsupported": 20
       },
       "rest": {
-        "ga": 498,
+        "ga": 521,
         "limited": 100,
         "preview": 14,
         "unsupported": 12
@@ -53,7 +53,7 @@
         "ga": 99
       },
       "firestore": {
-        "ga": 33
+        "ga": 56
       },
       "firestoreadmin": {
         "ga": 27,
@@ -129,11 +129,11 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 513
+        "rest": 534
       },
       "unverified": {
         "grpc": 21,
-        "rest": 111
+        "rest": 113
       }
     },
     "grpc_only_services": [
@@ -4741,6 +4741,34 @@
     },
     {
       "service": "firestore",
+      "operation": "Firestore.CreateBackupSchedule",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.backupSchedules.create",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.backupSchedules.create",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 4 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.CreateDatabase",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.create",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.create",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 35 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
       "operation": "Firestore.CreateDocument",
       "transport": "rest",
       "state": "ga",
@@ -4765,6 +4793,62 @@
         "mutating",
         "postgres=yes",
         "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.CreateUserCreds",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.userCreds.create",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.userCreds.create",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 6 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.DeleteBackup",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.locations.backups.delete",
+      "verified": false,
+      "evidence": [
+        "discovery=firestore.projects.locations.backups.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.DeleteBackupSchedule",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.backupSchedules.delete",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.backupSchedules.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.DeleteDatabase",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.delete",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -4797,6 +4881,87 @@
     },
     {
       "service": "firestore",
+      "operation": "Firestore.DeleteUserCreds",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.userCreds.delete",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.userCreds.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.DisableUserCreds",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.userCreds.disable",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.userCreds.disable",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.EnableUserCreds",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.userCreds.enable",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.userCreds.enable",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.GetBackup",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.locations.backups.get",
+      "verified": false,
+      "evidence": [
+        "discovery=firestore.projects.locations.backups.get",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.GetBackupSchedule",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.backupSchedules.get",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.backupSchedules.get",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.GetDatabase",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.get",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.get",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
       "operation": "Firestore.GetDocument",
       "transport": "rest",
       "state": "ga",
@@ -4804,6 +4969,19 @@
       "verified": true,
       "evidence": [
         "discovery=firestore.projects.databases.documents.get",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.GetField",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.collectionGroups.fields.get",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.collectionGroups.fields.get",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]
@@ -4823,6 +5001,45 @@
     },
     {
       "service": "firestore",
+      "operation": "Firestore.GetUserCreds",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.userCreds.get",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.userCreds.get",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.ListBackupSchedules",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.backupSchedules.list",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.backupSchedules.list",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.ListBackups",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.locations.backups.list",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.locations.backups.list",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
       "operation": "Firestore.ListCollectionIds",
       "transport": "rest",
       "state": "ga",
@@ -4830,6 +5047,19 @@
       "verified": true,
       "evidence": [
         "discovery=firestore.projects.databases.documents.listCollectionIds",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.ListDatabases",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.list",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.list",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]
@@ -4849,6 +5079,19 @@
     },
     {
       "service": "firestore",
+      "operation": "Firestore.ListFields",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.collectionGroups.fields.list",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.collectionGroups.fields.list",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
       "operation": "Firestore.ListIndexes",
       "transport": "rest",
       "state": "ga",
@@ -4856,6 +5099,19 @@
       "verified": true,
       "evidence": [
         "discovery=firestore.projects.databases.collectionGroups.indexes.list",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.ListUserCreds",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.userCreds.list",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.userCreds.list",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]
@@ -4870,6 +5126,19 @@
       "evidence": [
         "discovery=firestore.projects.databases.documents.patch",
         "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.ResetUserPassword",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.userCreds.resetPassword",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.userCreds.resetPassword",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]
@@ -4898,6 +5167,48 @@
         "discovery=firestore.projects.databases.documents.runQuery",
         "postgres=yes",
         "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.UpdateBackupSchedule",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.backupSchedules.patch",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.backupSchedules.patch",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.UpdateDatabase",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.patch",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.patch",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.UpdateField",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.collectionGroups.fields.patch",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.collectionGroups.fields.patch",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {

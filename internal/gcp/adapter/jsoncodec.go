@@ -199,9 +199,23 @@ func detectResourceType(segs []string) string {
 		if len(segs) >= 3 && segs[2] == "instances" {
 			return "instances"
 		}
+		if len(segs) >= 3 && segs[2] == "backups" {
+			// Firestore Admin backups: locations/{loc}/backups[/{id}]. Matched
+			// by position rather than a bare segment scan, so Memorystore's
+			// locations/{loc}/backupCollections/{c}/backups is not retyped as
+			// Firestore.
+			return "backups"
+		}
 		if len(segs) <= 2 {
 			return "locations"
 		}
+	}
+	// Firestore Admin: projects.databases[/{db}] is the database control plane.
+	// It is claimed here only as the terminal resource — a deeper marker
+	// (documents, collectionGroups, ...) owns the path and is detected below —
+	// so the pre-loop length check keeps the data-plane detection intact.
+	if len(segs) >= 1 && segs[0] == "databases" && len(segs) <= 2 {
+		return "databases"
 	}
 	var hasKeyRings, hasCryptoKeys, hasVersions, hasServiceAccounts bool
 	var hasWorkflows, hasExecutions bool
@@ -223,6 +237,18 @@ func detectResourceType(segs []string) string {
 			// Firestore composite-index admin paths
 			// (.../collectionGroups/{cg}/indexes[/{id}]).
 			return "indexes"
+		case "backupSchedules":
+			// Firestore Admin backup schedules
+			// (.../databases/{db}/backupSchedules[/{id}]).
+			return "backupSchedules"
+		case "userCreds":
+			// Firestore Admin user creds
+			// (.../databases/{db}/userCreds[/{id}]).
+			return "userCreds"
+		case "fields":
+			// Firestore Admin collection-group fields
+			// (.../databases/{db}/collectionGroups/{cg}/fields[/{fieldPath}]).
+			return "fields"
 		case "keys":
 			return "keys" // service account keys
 		case "importJobs":
@@ -543,6 +569,25 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			case "listCollectionIds":
 				return "ListCollectionIds"
 			}
+		case "databases":
+			// Firestore Admin data-plane / disaster-recovery verbs
+			// (databases:restore/clone, {db}:exportDocuments/importDocuments/
+			// bulkDeleteDocuments). The emulator models the control plane only,
+			// so fail loud rather than fall through to the method switch, where
+			// `databases:restore` (POST on the collection) would otherwise
+			// dispatch as CreateDatabase.
+			return ""
+		case "userCreds":
+			// Firestore Admin user-creds verbs (the resource itself is a plain
+			// CRUD resource handled by the method switch below).
+			switch custom {
+			case "enable":
+				return "EnableUserCreds"
+			case "disable":
+				return "DisableUserCreds"
+			case "resetPassword":
+				return "ResetUserPassword"
+			}
 		case "functions":
 			switch custom {
 			case "call":
@@ -809,6 +854,63 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "GetIndex"
 		case method == http.MethodDelete:
 			return "DeleteIndex"
+		}
+	case "databases":
+		// Firestore Admin database control plane (projects.databases). Custom
+		// verbs are handled by the custom switch above (which fails loud).
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateDatabase"
+		case isCollection && method == http.MethodGet:
+			return "ListDatabases"
+		case method == http.MethodGet:
+			return "GetDatabase"
+		case method == http.MethodPatch:
+			return "UpdateDatabase"
+		case method == http.MethodDelete:
+			return "DeleteDatabase"
+		}
+	case "backupSchedules":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateBackupSchedule"
+		case isCollection && method == http.MethodGet:
+			return "ListBackupSchedules"
+		case method == http.MethodGet:
+			return "GetBackupSchedule"
+		case method == http.MethodPatch:
+			return "UpdateBackupSchedule"
+		case method == http.MethodDelete:
+			return "DeleteBackupSchedule"
+		}
+	case "userCreds":
+		switch {
+		case isCollection && method == http.MethodPost:
+			return "CreateUserCreds"
+		case isCollection && method == http.MethodGet:
+			return "ListUserCreds"
+		case method == http.MethodGet:
+			return "GetUserCreds"
+		case method == http.MethodDelete:
+			return "DeleteUserCreds"
+		}
+	case "fields":
+		switch {
+		case isCollection && method == http.MethodGet:
+			return "ListFields"
+		case method == http.MethodGet:
+			return "GetField"
+		case method == http.MethodPatch:
+			return "UpdateField"
+		}
+	case "backups":
+		switch {
+		case isCollection && method == http.MethodGet:
+			return "ListBackups"
+		case method == http.MethodGet:
+			return "GetBackup"
+		case method == http.MethodDelete:
+			return "DeleteBackup"
 		}
 	case "functions":
 		switch {

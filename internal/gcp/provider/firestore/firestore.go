@@ -89,6 +89,31 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Firestore.ListIndexes":       p.ListIndexes,
 		"Firestore.GetIndex":          p.GetIndex,
 		"Firestore.DeleteIndex":       p.DeleteIndex,
+		// Firestore Admin control plane (REST under the `firestore` service; the
+		// gRPC twin is google.firestore.admin.v1.FirestoreAdmin).
+		"Firestore.CreateDatabase":       p.CreateDatabase,
+		"Firestore.ListDatabases":        p.ListDatabases,
+		"Firestore.GetDatabase":          p.GetDatabase,
+		"Firestore.UpdateDatabase":       p.UpdateDatabase,
+		"Firestore.DeleteDatabase":       p.DeleteDatabase,
+		"Firestore.CreateBackupSchedule": p.CreateBackupSchedule,
+		"Firestore.ListBackupSchedules":  p.ListBackupSchedules,
+		"Firestore.GetBackupSchedule":    p.GetBackupSchedule,
+		"Firestore.UpdateBackupSchedule": p.UpdateBackupSchedule,
+		"Firestore.DeleteBackupSchedule": p.DeleteBackupSchedule,
+		"Firestore.CreateUserCreds":      p.CreateUserCreds,
+		"Firestore.ListUserCreds":        p.ListUserCreds,
+		"Firestore.GetUserCreds":         p.GetUserCreds,
+		"Firestore.EnableUserCreds":      p.EnableUserCreds,
+		"Firestore.DisableUserCreds":     p.DisableUserCreds,
+		"Firestore.ResetUserPassword":    p.ResetUserPassword,
+		"Firestore.DeleteUserCreds":      p.DeleteUserCreds,
+		"Firestore.ListFields":           p.ListFields,
+		"Firestore.GetField":             p.GetField,
+		"Firestore.UpdateField":          p.UpdateField,
+		"Firestore.ListBackups":          p.ListBackups,
+		"Firestore.GetBackup":            p.GetBackup,
+		"Firestore.DeleteBackup":         p.DeleteBackup,
 	}
 }
 
