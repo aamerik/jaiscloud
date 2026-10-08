@@ -301,6 +301,72 @@ func TestNormalizeDropsZeroAndEmptyMembers(t *testing.T) {
 	}
 }
 
+// TestStorageBucketProjectionReconcilesEncodings proves the bucket projection
+// equalizes the REST and protojson renderings of one Bucket and the
+// buckets.list envelope: the REST-only members (kind/id/selfLink/projectNumber/
+// generation), the gRPC-only bucketId, the iamConfiguration→iamConfig key, the
+// timestamp key names, the soft-delete retention shape
+// (retentionDurationSeconds vs a "…s" Duration), the name prefix and the
+// items[]→buckets[] envelope — leaving a real dropped field failing.
+func TestStorageBucketProjectionReconcilesEncodings(t *testing.T) {
+	rest := json.RawMessage(`{
+		"kind":"storage#bucket","id":"b","name":"b","location":"US",
+		"locationType":"multi-region","storageClass":"STANDARD",
+		"timeCreated":"2024-01-01T00:00:00Z","updated":"2024-01-01T00:00:00Z",
+		"generation":"0","metageneration":"1","projectNumber":"123",
+		"selfLink":"http://localhost/storage/v1/b/b","etag":"CAE=",
+		"versioning":{"enabled":false},
+		"iamConfiguration":{"uniformBucketLevelAccess":{"enabled":false},"bucketPolicyOnly":{"enabled":false},"publicAccessPrevention":"inherited"},
+		"softDeletePolicy":{"retentionDurationSeconds":"604800","effectiveTime":"2024-01-01T00:00:00Z"},
+		"defaultEventBasedHold":false}`)
+	grpc := json.RawMessage(`{
+		"name":"projects/_/buckets/b","bucketId":"b","etag":"CAE=","metageneration":"1",
+		"location":"US","locationType":"multi-region","storageClass":"STANDARD",
+		"createTime":"2024-01-01T00:00:00Z","updateTime":"2024-01-01T00:00:00Z",
+		"iamConfig":{"uniformBucketLevelAccess":{},"publicAccessPrevention":"inherited"},
+		"softDeletePolicy":{"retentionDuration":"604800s","effectiveTime":"2024-01-01T00:00:00Z"}}`)
+
+	rn, err := storageBucketProjection(rest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gn, err := storageBucketProjection(grpc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nr, _ := normalizeJSON(rn)
+	ng, _ := normalizeJSON(gn)
+	if fs := compareNormalized("storage", "GetBucket", nr, ng, nil); len(failFindings(fs)) != 0 {
+		t.Fatalf("projected bucket bodies must not diverge, got %+v", failFindings(fs))
+	}
+
+	// A real dropped field must still gate after projection.
+	dropped, err := storageBucketProjection(json.RawMessage(`{"name":"projects/_/buckets/b","location":"US"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nd, _ := normalizeJSON(dropped)
+	if len(failFindings(compareNormalized("storage", "GetBucket", nr, nd, nil))) == 0 {
+		t.Fatal("a logical field one transport drops must still gate after projection")
+	}
+
+	// The list envelope's items[] is renamed to buckets[] so it aligns with the
+	// gRPC list response.
+	list, err := storageBucketProjection(json.RawMessage(`{"kind":"storage#buckets","items":[{"name":"b","location":"US"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gl, err := storageBucketProjection(json.RawMessage(`{"buckets":[{"name":"projects/_/buckets/b","location":"US"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nl, _ := normalizeJSON(list)
+	ngl, _ := normalizeJSON(gl)
+	if fs := compareNormalized("storage", "ListBuckets", nl, ngl, nil); len(failFindings(fs)) != 0 {
+		t.Fatalf("bucket list envelopes must align after projection, got %+v", failFindings(fs))
+	}
+}
+
 // TestStorageObjectProjectionReconcilesEncodings proves the storage projection
 // equalizes the REST and protojson renderings of one Object — the REST-only
 // derived members (kind/id/selfLink/mediaLink/timeFinalized/
