@@ -300,3 +300,68 @@ func TestNormalizeDropsZeroAndEmptyMembers(t *testing.T) {
 		t.Fatalf("defaulted members must cancel, got %+v", failFindings(fs))
 	}
 }
+
+// TestStorageObjectProjectionReconcilesEncodings proves the storage projection
+// equalizes the REST and protojson renderings of one Object — the REST-only
+// derived members (kind/id/selfLink/mediaLink/timeFinalized/
+// timeStorageClassUpdated), the timestamp key names (timeCreated/updated vs
+// createTime/updateTime), the content-digest shape (top-level base64 crc32c/
+// md5Hash vs a checksums message) and the bucket resource prefix — and renames
+// the objects.list `items[]` envelope to the proto's `objects[]`, while leaving
+// a real dropped field failing.
+func TestStorageObjectProjectionReconcilesEncodings(t *testing.T) {
+	rest := json.RawMessage(`{
+		"kind":"storage#object","id":"b/o/1","name":"o","bucket":"b","size":"17",
+		"contentType":"text/plain","crc32c":"EjRWeA==","md5Hash":"1B2M2Y8AsgTpgAmY7PhCfg==",
+		"etag":"CAE=","selfLink":"http://localhost/storage/v1/b/b/o/o",
+		"mediaLink":"http://localhost/download/storage/v1/b/b/o/o?alt=media",
+		"generation":"1","metageneration":"1","storageClass":"STANDARD",
+		"timeCreated":"2024-01-01T00:00:00Z","updated":"2024-01-01T00:00:00Z",
+		"timeFinalized":"2024-01-01T00:00:00Z","timeStorageClassUpdated":"2024-01-01T00:00:00Z"}`)
+	grpc := json.RawMessage(`{
+		"name":"o","bucket":"projects/_/buckets/b","etag":"CAE=",
+		"generation":"1","metageneration":"1","storageClass":"STANDARD","size":"17",
+		"contentType":"text/plain",
+		"checksums":{"crc32c":305419896,"md5Hash":"1B2M2Y8AsgTpgAmY7PhCfg=="},
+		"createTime":"2024-01-01T00:00:00Z","updateTime":"2024-01-01T00:00:00Z"}`)
+
+	rn, err := storageObjectProjection(rest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gn, err := storageObjectProjection(grpc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nr, _ := normalizeJSON(rn)
+	ng, _ := normalizeJSON(gn)
+	if fs := compareNormalized("storage", "GetObject", nr, ng, nil); len(failFindings(fs)) != 0 {
+		t.Fatalf("projected object bodies must not diverge, got %+v", failFindings(fs))
+	}
+
+	// A real dropped field must still gate after projection.
+	dropped, err := storageObjectProjection(json.RawMessage(`{"name":"o","bucket":"projects/_/buckets/b","size":"17"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nd, _ := normalizeJSON(dropped)
+	if len(failFindings(compareNormalized("storage", "GetObject", nr, nd, nil))) == 0 {
+		t.Fatal("a logical field one transport drops must still gate after projection")
+	}
+
+	// The list envelope's items[] is renamed to objects[] so it aligns with the
+	// gRPC list response.
+	list, err := storageObjectProjection(json.RawMessage(`{"kind":"storage#objects","items":[{"name":"o","bucket":"b"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gl, err := storageObjectProjection(json.RawMessage(`{"objects":[{"name":"o","bucket":"projects/_/buckets/b"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nl, _ := normalizeJSON(list)
+	ngl, _ := normalizeJSON(gl)
+	if fs := compareNormalized("storage", "ListObjects", nl, ngl, nil); len(failFindings(fs)) != 0 {
+		t.Fatalf("list envelopes must align after projection, got %+v", failFindings(fs))
+	}
+}

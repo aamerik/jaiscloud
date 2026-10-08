@@ -1,10 +1,6 @@
 {
   "exemptions": [
     {
-      "service": "storage",
-      "reason": "The object/bucket surface needs the media-upload flow, and the official Go client module does not export the storage v2 proto the emulator serves (the gRPC conformance suite uses the emulator's own storagepb), so a raw cross-transport body diff needs its own harness work. Tracked as AUD3-4."
-    },
-    {
       "service": "resourcemanager",
       "reason": "REST is the legacy v1 project shape while the proto is v3 (the deliberate v1/v3 alignment from the dual-protocol effort), so a full-body diff needs a logical projection. Tracked as AUD3-5."
     },
