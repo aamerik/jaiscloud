@@ -23,6 +23,23 @@ func loggingScenario() Scenario {
 	newClient := func(ctx context.Context, e *Env) (*logging.ConfigClient, error) {
 		return logging.NewConfigClient(ctx, e.GRPCClientOptions()...)
 	}
+	createGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		c, err := newClient(ctx, e)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		return c.CreateBucket(ctx, &loggingpb.CreateBucketRequest{
+			Parent:   locationParent(e),
+			BucketId: e.Resource(id),
+			Bucket:   &loggingpb.LogBucket{Description: "parity", RetentionDays: 30},
+		})
+	}
+	createREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
+		return e.Rest(ctx, "POST", "/v2/"+locationParent(e)+"/buckets?bucketId="+e.Resource(id),
+			`{"description":"parity","retentionDays":30}`)
+	}
+	del := func(ctx context.Context, e *Env) error { return e.RestDelete(ctx, "/v2/"+name(e)) }
 
 	return Scenario{Service: "logging", Steps: []Step{
 		{
@@ -126,6 +143,41 @@ func loggingScenario() Scenario {
 			Op: "DeleteBucket",
 			Mutate: func(ctx context.Context, e *Env) error {
 				return e.RestDelete(ctx, "/v2/"+name(e))
+			},
+		},
+		{
+			Op: "CreateBucket (parity)",
+			Mutation: &MutationParity{
+				GRPC:    createGRPC,
+				REST:    createREST,
+				Cleanup: del,
+			},
+		},
+		{
+			Op: "UpdateBucket (parity)",
+			Mutation: &MutationParity{
+				GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
+					if _, err := createGRPC(ctx, e); err != nil {
+						return nil, err
+					}
+					c, err := newClient(ctx, e)
+					if err != nil {
+						return nil, err
+					}
+					defer c.Close()
+					return c.UpdateBucket(ctx, &loggingpb.UpdateBucketRequest{
+						Name:       name(e),
+						Bucket:     &loggingpb.LogBucket{Description: "parity updated"},
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"description"}},
+					})
+				},
+				REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+					if _, err := createREST(ctx, e); err != nil {
+						return nil, err
+					}
+					return e.Rest(ctx, "PATCH", "/v2/"+name(e)+"?updateMask=description", `{"description":"parity updated"}`)
+				},
+				Cleanup: del,
 			},
 		},
 	}}

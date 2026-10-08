@@ -95,5 +95,29 @@ func serviceUsageScenario() Scenario {
 				return e.Rest(ctx, "GET", "/v1/"+e.Cfg.ProjectPath()+"/services", "")
 			},
 		},
+		{
+			// EnableService is the only Service Usage mutation and its resource
+			// name is not run-unique (a real DNS service id), so the two sides
+			// intentionally target the same service: enable is an idempotent
+			// upsert, and the diff compares the resulting Service shape.
+			Op: "EnableService (parity)",
+			Mutation: &MutationParity{
+				GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
+					c, err := newClient(ctx, e)
+					if err != nil {
+						return nil, err
+					}
+					defer c.Close()
+					op, err := c.EnableService(ctx, &serviceusagepb.EnableServiceRequest{Name: name(e)})
+					if err != nil {
+						return nil, err
+					}
+					return op.Wait(ctx)
+				},
+				REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+					return e.RestOperationResource(ctx, "POST", "/v1/"+name(e)+":enable", "")
+				},
+			},
+		},
 	}}
 }

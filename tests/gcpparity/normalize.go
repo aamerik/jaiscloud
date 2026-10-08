@@ -41,6 +41,35 @@ func normalizeScoped(raw []byte, scope string) (json.RawMessage, error) {
 	return normalize(raw, scope)
 }
 
+// mutationNormalize canonicalizes a mutation-parity response body after folding
+// the per-transport twin token out of resource names, so the gRPC twin
+// (.../parity-topic-grpc-<suffix>) and the REST twin
+// (.../parity-topic-rest-<suffix>) compare equal. The rest of the pipeline is
+// the ordinary read normalizer, so a genuine logical-field difference survives.
+func mutationNormalize(raw []byte) (json.RawMessage, error) {
+	return normalizeJSON(foldTwinSide(raw))
+}
+
+// twinSides are the per-transport id tokens Env.Resource folds in during a
+// mutation-parity step. They are stripped before diffing; the tokens are
+// hyphen-delimited (`-grpc-` / `-rest-`) so an ordinary value never contains
+// them, and the run suffix is hexadecimal so it can never look like one.
+var twinSides = [][]byte{[]byte("-grpc-"), []byte("-rest-")}
+
+// foldTwinSide removes every twin token from a raw body so the two transports'
+// twins share one canonical name. The replacement joins the surrounding
+// segments with a single hyphen, which is exactly the name the twin would have
+// had with no side token.
+func foldTwinSide(raw []byte) []byte {
+	if len(raw) == 0 {
+		return raw
+	}
+	for _, side := range twinSides {
+		raw = bytes.ReplaceAll(raw, side, []byte("-"))
+	}
+	return raw
+}
+
 func normalize(raw []byte, scope string) (json.RawMessage, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {

@@ -5,6 +5,7 @@ package gcpparity
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3"
 	monitoringpb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
@@ -16,12 +17,37 @@ import (
 // over REST and gRPC: create → get → list. Metric descriptors have no delete
 // RPC, so the flow stops at list.
 func monitoringScenario() Scenario {
-	metricType := func(e *Env) string { return "custom.googleapis.com/parity/" + e.Cfg.Suffix }
+	metricType := func(e *Env) string { return "custom.googleapis.com/parity/" + e.Resource("m") }
 	name := func(e *Env) string { return e.Cfg.ProjectPath() + "/metricDescriptors/" + metricType(e) }
 
 	newClient := func(ctx context.Context, e *Env) (*monitoring.MetricClient, error) {
 		return monitoring.NewMetricClient(ctx, e.GRPCClientOptions()...)
 	}
+	metricDescriptor := func(e *Env) *metricpb.MetricDescriptor {
+		return &metricpb.MetricDescriptor{
+			Type:        metricType(e),
+			MetricKind:  metricpb.MetricDescriptor_GAUGE,
+			ValueType:   metricpb.MetricDescriptor_DOUBLE,
+			Unit:        "1",
+			Description: "parity descriptor",
+		}
+	}
+	createGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		c, err := newClient(ctx, e)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		return c.CreateMetricDescriptor(ctx, &monitoringpb.CreateMetricDescriptorRequest{
+			Name:             e.Cfg.ProjectPath(),
+			MetricDescriptor: metricDescriptor(e),
+		})
+	}
+	createREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
+		body := fmt.Sprintf(`{"type":%q,"metricKind":"GAUGE","valueType":"DOUBLE","unit":"1","description":"parity descriptor"}`, metricType(e))
+		return e.Rest(ctx, "POST", "/v3/"+e.Cfg.ProjectPath()+"/metricDescriptors", body)
+	}
+	del := func(ctx context.Context, e *Env) error { return e.RestDelete(ctx, "/v3/"+name(e)) }
 
 	return Scenario{Service: "monitoring", Steps: []Step{
 		{
@@ -84,6 +110,14 @@ func monitoringScenario() Scenario {
 			},
 			REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
 				return e.Rest(ctx, "GET", "/v3/"+e.Cfg.ProjectPath()+"/metricDescriptors", "")
+			},
+		},
+		{
+			Op: "CreateMetricDescriptor (parity)",
+			Mutation: &MutationParity{
+				GRPC:    createGRPC,
+				REST:    createREST,
+				Cleanup: del,
 			},
 		},
 	}}

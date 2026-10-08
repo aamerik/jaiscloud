@@ -10,6 +10,7 @@ import (
 	scheduler "cloud.google.com/go/scheduler/apiv1"
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	"google.golang.org/api/iterator"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // schedulerScenario compares the Cloud Scheduler job surface over REST and gRPC:
@@ -23,6 +24,30 @@ func schedulerScenario() Scenario {
 	newClient := func(ctx context.Context, e *Env) (*scheduler.CloudSchedulerClient, error) {
 		return scheduler.NewCloudSchedulerClient(ctx, e.GRPCClientOptions()...)
 	}
+	job := func(e *Env) *schedulerpb.Job {
+		return &schedulerpb.Job{
+			Name:     jobName(e),
+			Schedule: "* * * * *",
+			TimeZone: "UTC",
+			Target: &schedulerpb.Job_HttpTarget{HttpTarget: &schedulerpb.HttpTarget{
+				Uri:        "http://example.com/parity",
+				HttpMethod: schedulerpb.HttpMethod_GET,
+			}},
+		}
+	}
+	createGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		c, err := newClient(ctx, e)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		return c.CreateJob(ctx, &schedulerpb.CreateJobRequest{Parent: parent(e), Job: job(e)})
+	}
+	createREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
+		body := fmt.Sprintf(`{"name":%q,"schedule":"* * * * *","timeZone":"UTC","httpTarget":{"uri":"http://example.com/parity","httpMethod":"GET"}}`, jobName(e))
+		return e.Rest(ctx, "POST", "/v1/"+parent(e)+"/jobs", body)
+	}
+	del := func(ctx context.Context, e *Env) error { return e.RestDelete(ctx, "/v1/"+jobName(e)) }
 
 	return Scenario{Service: "scheduler", Steps: []Step{
 		{
@@ -114,6 +139,40 @@ func schedulerScenario() Scenario {
 			Op: "DeleteJob",
 			Mutate: func(ctx context.Context, e *Env) error {
 				return e.RestDelete(ctx, "/v1/"+jobName(e))
+			},
+		},
+		{
+			Op: "CreateJob (parity)",
+			Mutation: &MutationParity{
+				GRPC:    createGRPC,
+				REST:    createREST,
+				Cleanup: del,
+			},
+		},
+		{
+			Op: "UpdateJob (parity)",
+			Mutation: &MutationParity{
+				GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
+					if _, err := createGRPC(ctx, e); err != nil {
+						return nil, err
+					}
+					c, err := newClient(ctx, e)
+					if err != nil {
+						return nil, err
+					}
+					defer c.Close()
+					return c.UpdateJob(ctx, &schedulerpb.UpdateJobRequest{
+						Job:        &schedulerpb.Job{Name: jobName(e), Description: "parity updated"},
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"description"}},
+					})
+				},
+				REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+					if _, err := createREST(ctx, e); err != nil {
+						return nil, err
+					}
+					return e.Rest(ctx, "PATCH", "/v1/"+jobName(e)+"?updateMask=description", `{"description":"parity updated"}`)
+				},
+				Cleanup: del,
 			},
 		},
 	}}

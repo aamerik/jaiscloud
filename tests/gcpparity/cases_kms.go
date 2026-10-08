@@ -29,6 +29,32 @@ func kmsScenario() Scenario {
 	newClient := func(ctx context.Context, e *Env) (*kms.KeyManagementClient, error) {
 		return kms.NewKeyManagementClient(ctx, e.GRPCClientOptions()...)
 	}
+	createRingGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		c, err := newClient(ctx, e)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		return c.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{Parent: parent(e), KeyRingId: e.Resource(ringID)})
+	}
+	createRingREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
+		return e.Rest(ctx, "POST", "/v1/"+parent(e)+"/keyRings?keyRingId="+e.Resource(ringID), `{}`)
+	}
+	createKeyGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		c, err := newClient(ctx, e)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		return c.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
+			Parent:      ringName(e),
+			CryptoKeyId: e.Resource(keyID),
+			CryptoKey:   &kmspb.CryptoKey{Purpose: kmspb.CryptoKey_ENCRYPT_DECRYPT},
+		})
+	}
+	createKeyREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
+		return e.Rest(ctx, "POST", "/v1/"+ringName(e)+"/cryptoKeys?cryptoKeyId="+e.Resource(keyID), `{"purpose":"ENCRYPT_DECRYPT"}`)
+	}
 
 	return Scenario{Service: "kms", Steps: []Step{
 		{
@@ -112,6 +138,23 @@ func kmsScenario() Scenario {
 			},
 			REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
 				return e.Rest(ctx, "GET", "/v1/"+keyName(e), "")
+			},
+		},
+		// KMS key rings and crypto keys cannot be deleted by the real API, so
+		// the twins are left in place (no Cleanup) and the crypto-key step
+		// reuses the key-ring twins created by the preceding step.
+		{
+			Op: "CreateKeyRing (parity)",
+			Mutation: &MutationParity{
+				GRPC: createRingGRPC,
+				REST: createRingREST,
+			},
+		},
+		{
+			Op: "CreateCryptoKey (parity)",
+			Mutation: &MutationParity{
+				GRPC: createKeyGRPC,
+				REST: createKeyREST,
 			},
 		},
 	}}

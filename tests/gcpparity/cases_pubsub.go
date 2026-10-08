@@ -25,6 +25,38 @@ func pubSubScenario() Scenario {
 	}
 	project := func(e *Env) string { return e.Cfg.ProjectPath() }
 
+	createTopicGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		c, err := pubsubapiv1.NewTopicAdminClient(ctx, e.GRPCClientOptions()...)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		return c.CreateTopic(ctx, &pubsubpb.Topic{Name: topicName(e)})
+	}
+	createTopicREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
+		return e.Rest(ctx, "PUT", "/v1/"+topicName(e), fmt.Sprintf(`{"name":%q}`, topicName(e)))
+	}
+	createSubGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		c, err := pubsubapiv1.NewSubscriptionAdminClient(ctx, e.GRPCClientOptions()...)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		return c.CreateSubscription(ctx, &pubsubpb.Subscription{Name: subName(e), Topic: topicName(e)})
+	}
+	createSubREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
+		return e.Rest(ctx, "PUT", "/v1/"+subName(e),
+			fmt.Sprintf(`{"name":%q,"topic":%q,"ackDeadlineSeconds":10}`, subName(e), topicName(e)))
+	}
+	delTopic := func(ctx context.Context, e *Env) error { return e.RestDelete(ctx, "/v1/"+topicName(e)) }
+	delSub := func(ctx context.Context, e *Env) error { return e.RestDelete(ctx, "/v1/"+subName(e)) }
+	delSubAndTopic := func(ctx context.Context, e *Env) error {
+		if err := delSub(ctx, e); err != nil {
+			return err
+		}
+		return delTopic(ctx, e)
+	}
+
 	return Scenario{Service: "pubsub", Steps: []Step{
 		{
 			Op: "CreateTopic",
@@ -199,6 +231,92 @@ func pubSubScenario() Scenario {
 			Op: "DeleteTopic",
 			Mutate: func(ctx context.Context, e *Env) error {
 				return e.RestDelete(ctx, "/v1/"+topicName(e))
+			},
+		},
+		{
+			Op: "CreateTopic (parity)",
+			Mutation: &MutationParity{
+				GRPC:    createTopicGRPC,
+				REST:    createTopicREST,
+				Cleanup: delTopic,
+			},
+		},
+		{
+			Op: "UpdateTopic (parity)",
+			Mutation: &MutationParity{
+				GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
+					if _, err := createTopicGRPC(ctx, e); err != nil {
+						return nil, err
+					}
+					c, err := pubsubapiv1.NewTopicAdminClient(ctx, e.GRPCClientOptions()...)
+					if err != nil {
+						return nil, err
+					}
+					defer c.Close()
+					return c.UpdateTopic(ctx, &pubsubpb.UpdateTopicRequest{
+						Topic:      &pubsubpb.Topic{Name: topicName(e), Labels: map[string]string{"parity": "true"}},
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+					})
+				},
+				REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+					if _, err := createTopicREST(ctx, e); err != nil {
+						return nil, err
+					}
+					body := fmt.Sprintf(`{"topic":{"name":%q,"labels":{"parity":"true"}},"updateMask":"labels"}`, topicName(e))
+					return e.Rest(ctx, http.MethodPatch, "/v1/"+topicName(e), body)
+				},
+				Cleanup: delTopic,
+			},
+		},
+		{
+			Op: "CreateSubscription (parity)",
+			Mutation: &MutationParity{
+				GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
+					if _, err := createTopicGRPC(ctx, e); err != nil {
+						return nil, err
+					}
+					return createSubGRPC(ctx, e)
+				},
+				REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+					if _, err := createTopicREST(ctx, e); err != nil {
+						return nil, err
+					}
+					return createSubREST(ctx, e)
+				},
+				Cleanup: delSubAndTopic,
+			},
+		},
+		{
+			Op: "UpdateSubscription (parity)",
+			Mutation: &MutationParity{
+				GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
+					if _, err := createTopicGRPC(ctx, e); err != nil {
+						return nil, err
+					}
+					if _, err := createSubGRPC(ctx, e); err != nil {
+						return nil, err
+					}
+					c, err := pubsubapiv1.NewSubscriptionAdminClient(ctx, e.GRPCClientOptions()...)
+					if err != nil {
+						return nil, err
+					}
+					defer c.Close()
+					return c.UpdateSubscription(ctx, &pubsubpb.UpdateSubscriptionRequest{
+						Subscription: &pubsubpb.Subscription{Name: subName(e), Labels: map[string]string{"parity": "true"}},
+						UpdateMask:   &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+					})
+				},
+				REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+					if _, err := createTopicREST(ctx, e); err != nil {
+						return nil, err
+					}
+					if _, err := createSubREST(ctx, e); err != nil {
+						return nil, err
+					}
+					body := fmt.Sprintf(`{"subscription":{"name":%q,"labels":{"parity":"true"}},"updateMask":"labels"}`, subName(e))
+					return e.Rest(ctx, http.MethodPatch, "/v1/"+subName(e), body)
+				},
+				Cleanup: delSubAndTopic,
 			},
 		},
 	}}

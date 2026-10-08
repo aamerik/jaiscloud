@@ -28,6 +28,53 @@ func managedKafkaScenario() Scenario {
 	newClient := func(ctx context.Context, e *Env) (*managedkafka.Client, error) {
 		return managedkafka.NewClient(ctx, e.GRPCClientOptions()...)
 	}
+	createClusterGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		c, err := newClient(ctx, e)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		op, err := c.CreateCluster(ctx, &managedkafkapb.CreateClusterRequest{
+			Parent:    parent(e),
+			ClusterId: e.Resource(clusterID),
+			Cluster: &managedkafkapb.Cluster{
+				Labels:         map[string]string{"parity": "true"},
+				CapacityConfig: &managedkafkapb.CapacityConfig{VcpuCount: 3, MemoryBytes: 3221225472},
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		return op.Wait(ctx)
+	}
+	createClusterREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
+		return e.RestOperationResource(ctx, "POST", "/v1/"+parent(e)+"/clusters?clusterId="+e.Resource(clusterID),
+			`{"labels":{"parity":"true"},"capacityConfig":{"vcpuCount":3,"memoryBytes":3221225472}}`)
+	}
+	createTopicGRPC := func(ctx context.Context, e *Env) (protoMessage, error) {
+		c, err := newClient(ctx, e)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		return c.CreateTopic(ctx, &managedkafkapb.CreateTopicRequest{
+			Parent:  clusterName(e),
+			TopicId: e.Resource(topicID),
+			Topic:   &managedkafkapb.Topic{PartitionCount: 3, ReplicationFactor: 3},
+		})
+	}
+	createTopicREST := func(ctx context.Context, e *Env) (json.RawMessage, error) {
+		return e.Rest(ctx, "POST", "/v1/"+clusterName(e)+"/topics?topicId="+e.Resource(topicID),
+			`{"partitionCount":3,"replicationFactor":3}`)
+	}
+	delTopic := func(ctx context.Context, e *Env) error { return e.RestDelete(ctx, "/v1/"+topicName(e)) }
+	delCluster := func(ctx context.Context, e *Env) error { return e.RestDelete(ctx, "/v1/"+clusterName(e)) }
+	delTopicAndCluster := func(ctx context.Context, e *Env) error {
+		if err := delTopic(ctx, e); err != nil {
+			return err
+		}
+		return delCluster(ctx, e)
+	}
 
 	return Scenario{Service: "managedkafka", Steps: []Step{
 		{
@@ -171,6 +218,32 @@ func managedKafkaScenario() Scenario {
 					return err
 				}
 				return op.Wait(ctx)
+			},
+		},
+		{
+			Op: "CreateCluster (parity)",
+			Mutation: &MutationParity{
+				GRPC:    createClusterGRPC,
+				REST:    createClusterREST,
+				Cleanup: delCluster,
+			},
+		},
+		{
+			Op: "CreateTopic (parity)",
+			Mutation: &MutationParity{
+				GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
+					if _, err := createClusterGRPC(ctx, e); err != nil {
+						return nil, err
+					}
+					return createTopicGRPC(ctx, e)
+				},
+				REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+					if _, err := createClusterREST(ctx, e); err != nil {
+						return nil, err
+					}
+					return createTopicREST(ctx, e)
+				},
+				Cleanup: delTopicAndCluster,
 			},
 		},
 	}}

@@ -11,6 +11,18 @@
       "op": "ListClusters",
       "path": "response.clusters[0].bootstrapAddress",
       "reason": "Same J55 / AUD3-11 upstream-proto gap as GetCluster: the pinned managedkafka proto has no Cluster.bootstrap_address, so the gRPC list omits the REST field. The list is scoped to the run suffix, so element [0] is this run's single cluster."
+    },
+    {
+      "service": "managedkafka",
+      "op": "CreateCluster (parity)",
+      "path": "response.bootstrapAddress",
+      "reason": "Same J55 / AUD3-11 upstream-proto gap as GetCluster/ListClusters, now observed on the mutation response: the pinned managedkafka proto has no Cluster.bootstrap_address, so the gRPC create response omits the output-only REST field. Both transports share one core."
+    },
+    {
+      "service": "tasks",
+      "op": "CreateTask (parity)",
+      "path": "response.name",
+      "reason": "Cloud Tasks assigns each created task a server-generated id (the trailing `task-<hash>` segment) that is volatile by definition, so two independent creates cannot share a name. Both transports return the identical projects/{p}/locations/{l}/queues/{q}/tasks/task-<hash> shape; only the generated segment differs."
     }
   ]
 }
