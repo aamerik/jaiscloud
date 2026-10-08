@@ -2,6 +2,7 @@ package logging
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -351,6 +352,81 @@ func TestViewScopeSettingsWildcardMask(t *testing.T) {
 	}
 	if st.StorageLocation != "us" || st.KmsServiceAccountID == "" {
 		t.Fatalf("settings wildcard = %+v", st)
+	}
+}
+
+func TestSettingsDefaultSinkConfigNestedMask(t *testing.T) {
+	ctx := context.Background()
+	s := newAdminService()
+	const name = "projects/p"
+
+	// A message-path update replaces the whole DefaultSinkConfig object.
+	decoded := func(raw []byte) map[string]any {
+		t.Helper()
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("decode defaultSinkConfig: %v", err)
+		}
+		return m
+	}
+	st, err := s.UpdateSettings(ctx, name, loggingstore.LogSettings{
+		DefaultSinkConfig: json.RawMessage(`{"filter":"severity>=ERROR","mode":"APPEND","exclusions":[{"name":"e1","filter":"x"}]}`),
+	}, []string{"defaultSinkConfig"})
+	if err != nil {
+		t.Fatalf("UpdateSettings message: %v", err)
+	}
+	if got := decoded(st.DefaultSinkConfig); got["filter"] != "severity>=ERROR" || got["mode"] != "APPEND" {
+		t.Fatalf("message update = %v", got)
+	}
+
+	// A nested leaf path updates only the named leaf, preserving its siblings.
+	st, err = s.UpdateSettings(ctx, name, loggingstore.LogSettings{
+		DefaultSinkConfig: json.RawMessage(`{"filter":"severity>=WARNING"}`),
+	}, []string{"defaultSinkConfig.filter"})
+	if err != nil {
+		t.Fatalf("UpdateSettings filter: %v", err)
+	}
+	got := decoded(st.DefaultSinkConfig)
+	if got["filter"] != "severity>=WARNING" || got["mode"] != "APPEND" {
+		t.Fatalf("filter leaf = %v", got)
+	}
+	if ex, _ := got["exclusions"].([]any); len(ex) != 1 {
+		t.Fatalf("filter leaf dropped exclusions: %v", got)
+	}
+
+	// The mode leaf leaves filter/exclusions intact.
+	st, err = s.UpdateSettings(ctx, name, loggingstore.LogSettings{
+		DefaultSinkConfig: json.RawMessage(`{"mode":"OVERWRITE"}`),
+	}, []string{"defaultSinkConfig.mode"})
+	if err != nil {
+		t.Fatalf("UpdateSettings mode: %v", err)
+	}
+	got = decoded(st.DefaultSinkConfig)
+	if got["mode"] != "OVERWRITE" || got["filter"] != "severity>=WARNING" {
+		t.Fatalf("mode leaf = %v", got)
+	}
+
+	// The exclusions leaf replaces the repeated field wholesale.
+	st, err = s.UpdateSettings(ctx, name, loggingstore.LogSettings{
+		DefaultSinkConfig: json.RawMessage(`{"exclusions":[{"name":"e2","filter":"y"},{"name":"e3","filter":"z"}]}`),
+	}, []string{"defaultSinkConfig.exclusions"})
+	if err != nil {
+		t.Fatalf("UpdateSettings exclusions: %v", err)
+	}
+	got = decoded(st.DefaultSinkConfig)
+	if ex, _ := got["exclusions"].([]any); len(ex) != 2 || got["mode"] != "OVERWRITE" {
+		t.Fatalf("exclusions leaf = %v", got)
+	}
+
+	// An unmappable leaf and a repeated-field element path are client errors.
+	for _, path := range []string{"defaultSinkConfig.bogus", "defaultSinkConfig.exclusions.*"} {
+		_, uerr := s.UpdateSettings(ctx, name, loggingstore.LogSettings{
+			DefaultSinkConfig: json.RawMessage(`{"filter":"severity>=ERROR"}`),
+		}, []string{path})
+		var perr *model.ProviderError
+		if !errors.As(uerr, &perr) || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Fatalf("mask path %q = %v, want InvalidArgument/400", path, uerr)
+		}
 	}
 }
 
