@@ -88,6 +88,33 @@ func TestRESTBucketRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRESTBucketNestedCmekMask(t *testing.T) {
+	c, p := newAdminProvider(t)
+	created := mustCall(t, c, p, http.MethodPost, adminLocParent+"/buckets?bucketId=b1", map[string]any{
+		"description":  "d",
+		"cmekSettings": map[string]any{"kmsKeyName": "projects/test/locations/global/keyRings/r/cryptoKeys/old"},
+	})
+	cs, _ := created["cmekSettings"].(map[string]any)
+	if cs == nil || cs["serviceAccountId"] == nil {
+		t.Fatalf("created cmekSettings = %v", created["cmekSettings"])
+	}
+	wantSA := cs["serviceAccountId"]
+
+	// A nested path updates only kmsKeyName; the read-only serviceAccountId is
+	// preserved rather than clobbered.
+	patched := mustCall(t, c, p, http.MethodPatch, adminBucket+"?updateMask=cmekSettings.kmsKeyName",
+		map[string]any{"cmekSettings": map[string]any{
+			"kmsKeyName": "projects/test/locations/global/keyRings/r/cryptoKeys/new",
+		}})
+	cs, _ = patched["cmekSettings"].(map[string]any)
+	if cs == nil || cs["kmsKeyName"] != "projects/test/locations/global/keyRings/r/cryptoKeys/new" {
+		t.Fatalf("patched cmekSettings = %v", patched["cmekSettings"])
+	}
+	if cs["serviceAccountId"] != wantSA {
+		t.Fatalf("read-only serviceAccountId clobbered: %v want %v", cs["serviceAccountId"], wantSA)
+	}
+}
+
 func TestRESTBucketCreateAsync(t *testing.T) {
 	c, p := newAdminProvider(t)
 	op := mustCall(t, c, p, http.MethodPost, adminLocParent+"/buckets:createAsync?bucketId=b2", map[string]any{

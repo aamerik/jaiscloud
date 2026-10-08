@@ -103,6 +103,58 @@ func TestBucketUpdateRestrictedFieldsAndInvalidMask(t *testing.T) {
 	}
 }
 
+func TestBucketUpdateNestedCmekMaskAndWildcard(t *testing.T) {
+	ctx := context.Background()
+	s := newAdminService()
+	created, err := s.CreateBucket(ctx, testBucketParent, "b1", loggingstore.LogBucket{
+		Description: "b",
+		Cmek: &loggingstore.LogCmekSettings{
+			KmsKeyName: "projects/p/locations/global/keyRings/r/cryptoKeys/old",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	if created.Cmek == nil || created.Cmek.ServiceAccountID == "" {
+		t.Fatalf("bucket cmek = %+v", created.Cmek)
+	}
+	wantSA := created.Cmek.ServiceAccountID
+
+	// A nested leaf path updates only kmsKeyName; the read-only serviceAccountId
+	// is preserved rather than clobbered by a whole-message replace.
+	upd, err := s.UpdateBucket(ctx, testBucketName, loggingstore.LogBucket{
+		Cmek: &loggingstore.LogCmekSettings{
+			KmsKeyName: "projects/p/locations/global/keyRings/r/cryptoKeys/new",
+		},
+	}, []string{"cmekSettings.kmsKeyName"})
+	if err != nil {
+		t.Fatalf("UpdateBucket: %v", err)
+	}
+	if upd.Cmek == nil || upd.Cmek.KmsKeyName != "projects/p/locations/global/keyRings/r/cryptoKeys/new" {
+		t.Fatalf("cmek = %+v", upd.Cmek)
+	}
+	if upd.Cmek.ServiceAccountID != wantSA {
+		t.Fatalf("read-only serviceAccountId clobbered: %q want %q", upd.Cmek.ServiceAccountID, wantSA)
+	}
+
+	// A nested path that names no writable subfield is a 400.
+	_, err = s.UpdateBucket(ctx, testBucketName, loggingstore.LogBucket{}, []string{"cmekSettings.bogus"})
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("unknown nested cmek mask = %v, want InvalidArgument/400", err)
+	}
+
+	// The AIP-134 `*` wildcard replaces every writable field.
+	wild, err := s.UpdateBucket(ctx, testBucketName,
+		loggingstore.LogBucket{Description: "wild", RetentionDays: 7}, []string{"*"})
+	if err != nil {
+		t.Fatalf("UpdateBucket *: %v", err)
+	}
+	if wild.Description != "wild" || wild.RetentionDays != 7 {
+		t.Fatalf("wildcard update = %+v", wild)
+	}
+}
+
 func TestViewLifecycleAndIAM(t *testing.T) {
 	ctx := context.Background()
 	s := newAdminService()
@@ -243,6 +295,62 @@ func TestSettingsAndCmek(t *testing.T) {
 	}
 	if cm.KmsKeyName == "" {
 		t.Fatalf("cmek = %+v", cm)
+	}
+}
+
+func TestCmekSettingsUpdateRejectsReadOnlyMaskPath(t *testing.T) {
+	ctx := context.Background()
+	s := newAdminService()
+	// kms_key_version_name is read-only (Discovery schema google.logging.v2.CmekSettings),
+	// so a mask naming it is a client error even though the request also sets
+	// kms_key_name.
+	_, err := s.UpdateCmekSettings(ctx, "projects/p", loggingstore.LogCmekSettings{
+		KmsKeyName:        "projects/p/locations/global/keyRings/r/cryptoKeys/k",
+		KmsKeyVersionName: "projects/p/locations/global/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
+	}, []string{"kmsKeyVersionName"})
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("read-only cmek mask = %v, want InvalidArgument/400", err)
+	}
+}
+
+func TestViewScopeSettingsWildcardMask(t *testing.T) {
+	ctx := context.Background()
+	s := newAdminService()
+	seedBucket(t, s)
+	if _, err := s.CreateView(ctx, testBucketName, "v1", loggingstore.LogView{
+		Filter: "severity>=ERROR", Description: "old",
+	}); err != nil {
+		t.Fatalf("CreateView: %v", err)
+	}
+	// `*` replaces every writable view field, clearing an omitted filter.
+	upd, err := s.UpdateView(ctx, testViewName, loggingstore.LogView{Description: "new"}, []string{"*"})
+	if err != nil {
+		t.Fatalf("UpdateView *: %v", err)
+	}
+	if upd.Description != "new" || upd.Filter != "" {
+		t.Fatalf("view wildcard = %+v", upd)
+	}
+
+	if _, err := s.CreateLogScope(ctx, testBucketParent, "s1", loggingstore.LogScope{
+		ResourceNames: []string{"projects/p"},
+	}); err != nil {
+		t.Fatalf("CreateLogScope: %v", err)
+	}
+	sc, err := s.UpdateLogScope(ctx, testScopeName, loggingstore.LogScope{Description: "new"}, []string{"*"})
+	if err != nil {
+		t.Fatalf("UpdateLogScope *: %v", err)
+	}
+	if sc.Description != "new" || len(sc.ResourceNames) != 0 {
+		t.Fatalf("scope wildcard = %+v", sc)
+	}
+
+	st, err := s.UpdateSettings(ctx, "projects/p", loggingstore.LogSettings{StorageLocation: "us"}, []string{"*"})
+	if err != nil {
+		t.Fatalf("UpdateSettings *: %v", err)
+	}
+	if st.StorageLocation != "us" || st.KmsServiceAccountID == "" {
+		t.Fatalf("settings wildcard = %+v", st)
 	}
 }
 

@@ -164,6 +164,43 @@ func TestRESTSinkWritableMaskFields(t *testing.T) {
 	}
 }
 
+func TestRESTSinkNestedMaskAndWildcard(t *testing.T) {
+	c, p := newTestProvider(t)
+	if _, err := call(t, c, p, http.MethodPost, "/v2/projects/test/sinks",
+		map[string]any{"name": "bqn", "destination": "bigquery.googleapis.com/projects/test/datasets/d"}); err != nil {
+		t.Fatalf("create sink: %v", err)
+	}
+
+	// A nested REST path (camelCase) updates only that leaf.
+	patched, err := call(t, c, p, http.MethodPatch,
+		"/v2/projects/test/sinks/bqn?updateMask=bigqueryOptions.usePartitionedTables",
+		map[string]any{"bigqueryOptions": map[string]any{"usePartitionedTables": true}})
+	if err != nil {
+		t.Fatalf("patch nested sink: %v", err)
+	}
+	if bo, _ := wireData(t, patched)["bigqueryOptions"].(map[string]any); bo == nil || bo["usePartitionedTables"] != true {
+		t.Fatalf("nested bigqueryOptions = %v", wireData(t, patched)["bigqueryOptions"])
+	}
+
+	// A nested path naming no writable subfield is InvalidArgument/400.
+	if _, err := call(t, c, p, http.MethodPatch,
+		"/v2/projects/test/sinks/bqn?updateMask=bigqueryOptions.bogus", map[string]any{}); err == nil {
+		t.Fatal("unknown nested mask = nil error, want InvalidArgument")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("unknown nested mask = %v, want InvalidArgument/400", err)
+	}
+
+	// The AIP-134 `*` wildcard replaces writable fields.
+	wild, err := call(t, c, p, http.MethodPatch, "/v2/projects/test/sinks/bqn?updateMask=*",
+		map[string]any{"destination": "storage.googleapis.com/b"})
+	if err != nil {
+		t.Fatalf("patch wildcard: %v", err)
+	}
+	if wd := wireData(t, wild); wd["destination"] != "storage.googleapis.com/b" {
+		t.Fatalf("wildcard destination = %v", wd["destination"])
+	}
+}
+
 func TestRESTExclusionRoundTrip(t *testing.T) {
 	c, p := newTestProvider(t)
 
