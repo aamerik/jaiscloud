@@ -88,6 +88,12 @@ GCP_SAMPLES_MODULES  := pubsub:spring-cloud-gcp-pubsub-sample \
 FLOCI_COMPAT_DIR     ?= $(HOME)/code/floci-gcp/compatibility-tests
 CLOUDRUN_URL_SUFFIX  ?= run.floci-gcp
 CLOUDRUN_URL_PORT    ?= 4588
+# SPK4 browser reachability: a browser cannot set a Host header, so the demo
+# synthesizes the invocation authority under a *.localhost suffix (the OS/Go
+# resolver maps any *.localhost name to loopback) and forwards the emulator's
+# REST port to the host. The gate dials the synthesized hostname directly.
+CLOUDRUN_BROWSER_SUFFIX ?= run.localhost
+CLOUDRUN_BROWSER_PORT   ?= 18080
 # Bound the full floci Java suite so a hung test cannot wedge the target.
 CLOUDRUN_JAVA_TIMEOUT ?= 2400
 
@@ -147,6 +153,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-managedkafka-broker-k8s \
         test-managedkafka-broker-docker \
         test-e2e-cloudrun-k8s test-e2e-cloudrun-java test-e2e-cloudrun-docker \
+        test-e2e-cloudrun-browser \
         test-e2e-dataproc-docker \
         test-e2e-eventarc-k8s \
         test-e2e-scheduler-k8s \
@@ -1124,6 +1131,17 @@ test-e2e-cloudrun-docker: _check-docker-prereq build-gcp ## Cloud Run container 
 	  done; \
 	  CLOUDRUN_E2E_DOCKER=1 JAISCLOUD_HOST=http://localhost:8080 \
 	    go test -v -tags cloudrun_e2e -run TestCloudRunDockerExecution -timeout 10m ./tests/persistent_mode/gcp/cloudrun/
+
+test-e2e-cloudrun-browser: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud Run data-plane browser reachability on k3d (SPK4) — tests/persistent_mode/gcp/cloudrun/ (tag: cloudrun_e2e; synthesizes *.localhost authorities so a browser can reach the data plane; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
+	go clean -testcache
+	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp \
+	  JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=k8s \
+	  JAISCLOUD_CLOUDRUN_URL_SUFFIX=$(CLOUDRUN_BROWSER_SUFFIX) \
+	  JAISCLOUD_CLOUDRUN_URL_PORT=$(CLOUDRUN_BROWSER_PORT)
+	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
+	K8S_NAMESPACE=$(K8S_NAMESPACE) CLOUDRUN_E2E_BROWSER=1 \
+	  CLOUDRUN_BROWSER_SUFFIX=$(CLOUDRUN_BROWSER_SUFFIX) CLOUDRUN_BROWSER_PORT=$(CLOUDRUN_BROWSER_PORT) \
+	  go test -v -tags cloudrun_e2e -run TestCloudRunBrowserReachability -timeout 15m ./tests/persistent_mode/gcp/cloudrun/
 
 test-e2e-dataproc-docker: _check-docker-prereq _check-iceberg-gcp-prereq build-gcp ## Dataproc Spark jobs under Docker — tests/persistent_mode/gcp/dataproc/ (tag: dataproc_docker_e2e; needs the local Docker daemon + the docker group, and the GCS-connector Spark image)
 	go clean -testcache

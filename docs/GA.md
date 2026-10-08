@@ -456,6 +456,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   (`make test-e2e-cloudrun-k8s` on k3d and `make test-e2e-cloudrun-docker` on local Docker). The optional
   floci-gcp Java interop smoke suite
   (`make test-e2e-cloudrun-java`) is corroborating evidence only, not a compliance gate.
+  Browser reachability is a suffix/port configuration, not a wire feature: with
+  `JAISCLOUD_CLOUDRUN_URL_SUFFIX=run.localhost` and the authority port forwarded to the host, the
+  synthesized `http://{service}-{token}.{location}.run.localhost:{port}` loads in a browser (the OS/Go
+  resolver maps any `*.localhost` name to loopback), gated by `make test-e2e-cloudrun-browser`.
 - **Not implemented at all (out of scope for v1.x)** — Artifact Registry, Cloud
   Endpoints, Deployment Manager, and Firebase Auth (Identity Toolkit): no emulator surface
   (requests are unhandled). Artifact Registry is engine-bearing (registry proxy) and is deliberately
