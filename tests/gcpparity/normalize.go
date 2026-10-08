@@ -185,6 +185,13 @@ var volatileKeys = map[string]bool{
 	// adapters may render it with different casing/encoding, and it is not part
 	// of the logical contract.
 	"uid": true,
+	// AUD6-5 output-only fields real Datastore/Cloud Logging return: the batch
+	// snapshot version is a per-render server value (the two transports query
+	// at different instants), and insertId is server-generated when the client
+	// omits one. readTime/commitTime/receiveTimestamp fold by their RFC3339
+	// shape already; naming them here keeps the intent explicit.
+	"snapshotVersion": true,
+	"insertId":        true,
 	// Dataproc assigns each cluster and job a server-generated uuid at create.
 	// A same-resource read returns the same value over both transports, but the
 	// mutation-parity twins (an independent create per transport) cannot share
