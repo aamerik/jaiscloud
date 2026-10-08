@@ -5,12 +5,15 @@
 // requests from REAL GCP into committed goldens, then replays the exact same
 // requests against the jaiscloud GCP emulator and diffs the two.
 //
-// It is deliberately stdlib-only. The recorder authenticates with Application
-// Default Credentials via the `gcloud` CLI (never printed, never written to
-// disk by this package); the offline replay touches no network beyond the
-// local emulator and requires no credentials.
+// The REST half is stdlib-only: its recorder authenticates with Application
+// Default Credentials via the `gcloud` CLI (never printed, never written to disk
+// by this package). The AUD6-1 gRPC half (grpc_*.go) instead drives the official
+// Google gRPC clients for Datastore, Firestore, Logging and Monitoring, dialing
+// real GCP with ADC through the official dialer. In both halves the offline
+// replay touches no network beyond the local emulator and requires no
+// credentials.
 //
-// Scope: the recorded set covers the REST services both real GCP and the
+// Scope: the REST recorded set covers the services both real GCP and the
 // emulator expose — the original twelve (storage, pubsub, secretmanager, kms,
 // bigquery, dns, workflows, iam, firestore, compute, sqladmin, redis) plus the
 // AUD6 breadth services (container, dataproc, monitoring, logging, datastore,
@@ -21,8 +24,10 @@
 // gate before the next real-GCP capture. Once the user records, every scenario
 // gains a golden and starts being diffed.
 //
-// gRPC-only surfaces are out of scope for this REST differential; datastore and
-// logging are covered here over REST only.
+// gRPC-only surfaces are out of scope for the REST differential; the AUD6-1
+// gRPC differential (Scenarios in grpc_scenarios.go) covers Datastore,
+// Firestore, Logging and Monitoring over gRPC, and google.longrunning.Operations
+// is a documented deferral (AUD6-4).
 package gcpdifferential
 
 import (
@@ -176,6 +181,10 @@ type ResourceNames struct {
 	DataprocCluster  string
 	LogName          string
 	MetricType       string
+	// AUD6-1 gRPC differential: the Cloud Datastore kind and the entity name
+	// written into it, both run-suffixed and folded so a golden is stable.
+	DSKind   string
+	DSEntity string
 }
 
 // Names derives the run's resource identifiers from suffix.
@@ -206,6 +215,8 @@ func Names(suffix string) ResourceNames {
 		DataprocCluster:  "conf-dp-" + suffix,
 		LogName:          "conf-log-" + suffix,
 		MetricType:       "custom.googleapis.com/jaiscloud_nonexistent_" + suffix,
+		DSKind:           "conf_ds_kind_" + suffix,
+		DSEntity:         "conf_ds_entity_" + suffix,
 	}
 }
 

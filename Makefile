@@ -158,7 +158,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-persistence-parity \
         test-gcp-rest-grpc-parity \
         test-gcp-gcloud-conformance test-gcp-python-conformance \
-        test-gcp-differential record-gcp-differential \
+        test-gcp-differential record-gcp-differential record-gcp-differential-grpc \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
         gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff
@@ -807,7 +807,16 @@ record-gcp-differential: ## Capture differential goldens from REAL GCP (needs AD
 	@echo "Recording differential goldens from real GCP (project: $${GCP_DIFFERENTIAL_PROJECT:-parity-diff-jaiscloud})..."
 	go test -tags gcp_differential -count=1 -v -run TestRecord ./tests/gcpdifferential/ -record
 
-test-gcp-differential: ## Offline differential replay vs an ephemeral emulator (no credentials; tag: gcp_differential)
+# AUD6-1: the gRPC differential records via the OFFICIAL Google clients against
+# the real-GCP gRPC endpoints (Cloud Datastore, Firestore, Logging, Monitoring;
+# google.longrunning.Operations is the AUD6-4 deferral) and replays against the
+# emulator's single gRPC listener. It needs ADC and a project with those APIs
+# enabled (the same parity project the REST recorder uses).
+record-gcp-differential-grpc: ## Capture gRPC differential goldens from REAL GCP (needs ADC)
+	@echo "Recording gRPC differential goldens from real GCP (project: $${GCP_DIFFERENTIAL_PROJECT:-parity-diff-jaiscloud})..."
+	go test -tags gcp_differential -count=1 -v -run TestRecordGRPC ./tests/gcpdifferential/ -record
+
+test-gcp-differential: ## Offline differential replay vs an ephemeral emulator (REST + gRPC; no credentials; tag: gcp_differential)
 	@echo "Building jaiscloud-gcp..."
 	@go build -o /tmp/jc-differential ./cmd/jaiscloud-gcp/
 	@echo "Starting jaiscloud-gcp (ephemeral)..."
@@ -819,7 +828,10 @@ test-gcp-differential: ## Offline differential replay vs an ephemeral emulator (
 	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-differential.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080)"; \
-	  go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest' ./tests/gcpdifferential/
+	  n=0; until bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081' >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp gRPC not ready"; cat /tmp/jaiscloud-gcp-differential.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (gRPC :8081)"; \
+	  go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest|TestReplayGRPC|TestGRPCGoldensAreClean|TestGRPCGoldensAreMarked|TestGRPCGoldenManifest|TestGRPCScenariosValid|TestGRPCNormalizerFoldsVolatile' ./tests/gcpdifferential/
 
 # Opt-in Terraform / OpenTofu compatibility suites — drive the real
 # hashicorp/google provider against the emulator (tests/integration/gcp/terraform/).

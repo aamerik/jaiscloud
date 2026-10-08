@@ -84,6 +84,10 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		{names.DataprocCluster, "<dataprocCluster>"},
 		{names.LogName, "<logName>"},
 		{names.MetricType, "<metricType>"},
+		// AUD6-1 gRPC differential: the Datastore kind and the entity written
+		// into it are run-suffixed, so both fold to placeholders.
+		{names.DSEntity, "<dsEntity>"},
+		{names.DSKind, "<dsKind>"},
 		// A missing service-account probe is an email-shaped 404 path; fold it
 		// too so a golden never carries an "@" or the gserviceaccount domain.
 		{"missing-" + suffix + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
@@ -256,6 +260,31 @@ var volatileStringKeys = map[string]string{
 	"version": "<version>",
 }
 
+// volatileResponseKeys are fields that are server-generated in a response and
+// must be folded there, but that a request body may legitimately carry as a
+// client-authored value which must survive verbatim.
+var volatileResponseKeys = map[string]string{
+	// BigQuery's tabledata.insertAll request carries a client-supplied "insertId"
+	// dedup key ("1") while Cloud Logging's ListLogEntries response carries a
+	// server-generated "insertId", so the key cannot be folded unconditionally.
+	"insertId": "<insertId>",
+	// AUD6-1 gRPC differential. protojson carries these server-generated or
+	// wall-clock response fields: Datastore/Firestore read/commit/snapshot times,
+	// query cursors and transaction ids, Datastore's index-update count, and
+	// Cloud Logging's timestamp/receive timestamp. They are folded in responses
+	// only, so a committed gRPC golden is stable without ever rewriting a
+	// harness-authored request body.
+	"readTime":         "<time>",
+	"snapshotVersion":  "<snapshotVersion>",
+	"commitTime":       "<time>",
+	"endCursor":        "<cursor>",
+	"cursor":           "<cursor>",
+	"transaction":      "<transaction>",
+	"indexUpdates":     "<indexUpdates>",
+	"timestamp":        "<time>",
+	"receiveTimestamp": "<time>",
+}
+
 // volatileObjectKeys are fields whose entire value is opaque/volatile and is
 // replaced by a fixed object so shape differences still surface but content
 // churn does not.
@@ -301,6 +330,14 @@ var sortArrayKeys = map[string]bool{
 	"clusters":   true,
 	"executions": true,
 	"logNames":   true,
+	// AUD6-1 gRPC differential: Datastore lookup/query result arrays, Cloud
+	// Monitoring descriptor lists and Cloud Logging entry lists have no
+	// guaranteed element order across the two backends.
+	"found":             true,
+	"missing":           true,
+	"entityResults":     true,
+	"metricDescriptors": true,
+	"entries":           true,
 }
 
 // scopedListPlaceholders maps a collection field to the placeholder that
@@ -349,6 +386,14 @@ var scopedListPlaceholders = map[string]string{
 func (n *Normalizer) value(key string, v any, request bool) any {
 	if ph, ok := volatileStringKeys[key]; ok {
 		return ph
+	}
+	// Response-only volatile fields: server-generated in a response, but a
+	// client-authored request value (e.g. BigQuery's insertId dedup key) must
+	// survive verbatim.
+	if !request {
+		if ph, ok := volatileResponseKeys[key]; ok {
+			return ph
+		}
 	}
 	if volatileObjectKeys[key] {
 		return map[string]any{}

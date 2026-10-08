@@ -82,6 +82,8 @@ func TestNormalizerCoversResources(t *testing.T) {
 		{names.DataprocCluster, "<dataprocCluster>"},
 		{names.LogName, "<logName>"},
 		{names.MetricType, "<metricType>"},
+		{names.DSKind, "<dsKind>"},
+		{names.DSEntity, "<dsEntity>"},
 		{names.ServiceAccount + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
 		{names.ServiceAccount, "<serviceAccountId>"},
 		{"missing-" + suffix + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
