@@ -9,6 +9,7 @@ import (
 	"cloud.google.com/go/datastore/apiv1/datastorepb"
 	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	"cloud.google.com/go/logging/apiv2/loggingpb"
+	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	"cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	metricpb "google.golang.org/genproto/googleapis/api/metric"
 	monitoredres "google.golang.org/genproto/googleapis/api/monitoredres"
@@ -20,11 +21,11 @@ import (
 // GRPCScenarios returns the curated gRPC request list (AUD6-1) for the given
 // project and run suffix. It targets the surfaces the REST differential
 // declared out of scope because they are gRPC-first: Cloud Datastore,
-// Firestore, Cloud Logging and Cloud Monitoring. (google.longrunning.Operations
-// is deferred — see the note at the end of the list.) Each service's flow is
-// read-mostly, self-cleaning and scoped to run-suffixed names, so a recording
-// leaves nothing behind and the committed golden carries no project- or
-// run-specific string.
+// Firestore, Cloud Logging and Cloud Monitoring, plus (AUD6-4)
+// google.longrunning.Operations reached on the Dataproc endpoint. Each
+// service's flow is read-mostly, self-cleaning and scoped to
+// run-suffixed names, so a recording leaves nothing behind and the committed
+// golden carries no project- or run-specific string.
 //
 // As on the REST side, a scenario with no committed golden is "pending
 // recording" and skipped by TestReplayGRPC, so the list may grow ahead of the
@@ -395,15 +396,54 @@ func GRPCScenarios(project, suffix string) []GRPCScenario {
 		},
 	)
 
-	// ─── google.longrunning.Operations ─────────────────────────────────────────
-	// Deferred: real GCP serves google.longrunning.Operations per service
-	// endpoint, and for the parity project's principal every reachable endpoint
-	// either denies the call (Workflows) or requires a region-scoped host that
-	// has no counterpart in the emulator's single gRPC listener (Dataproc). A
-	// real-GCP Operations golden would therefore record an environment artifact
-	// rather than emulator behavior; it is tracked as a follow-up deferral. The
-	// Operations surface remains covered by the gRPC conformance suite and, over
-	// REST, by the workflows/operations scenarios.
+	// ─── google.longrunning.Operations (Dataproc endpoint, AUD6-4) ──────────────
+	// Real GCP serves google.longrunning.Operations per service endpoint, and
+	// regional Dataproc operations only on the region-scoped host
+	// ({region}-dataproc.googleapis.com); the global host rejects the region and
+	// the other reachable endpoints deny the parity principal. Dataproc is the
+	// emulator's genuinely asynchronous resolver (done=false, settles on poll).
+	// The emulator's single listener serves the service under the "dataproc"
+	// :authority token, which GRPCTarget.dial sets in emulator mode. ListOperations
+	// on the empty collection matches on both sides; GetOperation on a missing name
+	// is NOT_FOUND on both sides (only the human-readable message differs, accepted
+	// by the shared .message rule).
+	dpOpsCollection := "projects/" + project + "/regions/us-central1/operations"
+	sc = append(sc,
+		GRPCScenario{
+			Service: "dataproc", Op: "operations_list",
+			Method: "google.longrunning.Operations/ListOperations", Path: dpOpsCollection,
+			Call: func(ctx context.Context, t *GRPCTarget) (proto.Message, proto.Message, error) {
+				req := &longrunningpb.ListOperationsRequest{Name: dpOpsCollection}
+				var resp *longrunningpb.ListOperationsResponse
+				err := withOperations(ctx, t, "dataproc", func(c longrunningpb.OperationsClient) error {
+					var cerr error
+					resp, cerr = c.ListOperations(ctx, req)
+					return cerr
+				})
+				if err != nil {
+					return req, nil, err
+				}
+				return req, resp, nil
+			},
+		},
+		GRPCScenario{
+			Service: "dataproc", Op: "operation_get_missing",
+			Method: "google.longrunning.Operations/GetOperation", Path: dpOpsCollection + "/missing-" + suffix,
+			Call: func(ctx context.Context, t *GRPCTarget) (proto.Message, proto.Message, error) {
+				req := &longrunningpb.GetOperationRequest{Name: dpOpsCollection + "/missing-" + suffix}
+				var resp *longrunningpb.Operation
+				err := withOperations(ctx, t, "dataproc", func(c longrunningpb.OperationsClient) error {
+					var cerr error
+					resp, cerr = c.GetOperation(ctx, req)
+					return cerr
+				})
+				if err != nil {
+					return req, nil, err
+				}
+				return req, resp, nil
+			},
+		},
+	)
 
 	return sc
 }
@@ -461,6 +501,20 @@ func withMonitoring(ctx context.Context, t *GRPCTarget, fn func(monitoringpb.Met
 	}
 	defer conn.Close()
 	return fn(monitoringpb.NewMetricServiceClient(conn))
+}
+
+// withOperations dials a service endpoint and runs fn with the
+// google.longrunning.Operations stub, closing the connection afterwards. service
+// names the owning host (real GCP serves Operations per service); in emulator
+// mode GRPCTarget.dial sets the matching :authority token so the single listener
+// answers as that service.
+func withOperations(ctx context.Context, t *GRPCTarget, service string, fn func(longrunningpb.OperationsClient) error) error {
+	conn, err := t.dial(ctx, service)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return fn(longrunningpb.NewOperationsClient(conn))
 }
 
 // CleanupGRPC deletes every resource the gRPC scenario set creates, so a

@@ -122,6 +122,13 @@ func TestNormalizerFoldsOpaqueIDs(t *testing.T) {
 	if !strings.Contains(op, "/operations/<operation>") {
 		t.Errorf("operation name was not folded: %s", op)
 	}
+
+	// Dataproc publishes region-scoped operation names; the region segment must
+	// survive while the id folds (AUD6-4).
+	dpop := string(norm.Bytes([]byte(`{"name":"projects/differential-proj/regions/us-central1/operations/12345678-abcd"}`)))
+	if !strings.Contains(dpop, "regions/us-central1/operations/<operation>") {
+		t.Errorf("Dataproc region-scoped operation name was not folded: %s", dpop)
+	}
 }
 
 // TestNormalizerFoldsOperationPath verifies an LRO poll path's volatile
