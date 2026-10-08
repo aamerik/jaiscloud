@@ -19,10 +19,6 @@
     {
       "service": "container",
       "reason": "GKE cluster mutations return the container-specific google.container.v1.Operation (not google.longrunning), and a cluster fixture needs a node-pool model. Tracked as AUD3-9."
-    },
-    {
-      "service": "workflowexecutions",
-      "reason": "An execution requires a deployed Workflow prerequisite and an execution lifecycle; the flow needs REST prerequisite setup. Tracked as AUD3-10."
     }
   ]
 }
