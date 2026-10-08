@@ -296,8 +296,10 @@ func TestDetectV1Service(t *testing.T) {
 		"/v1/projects/p/databases/db/backupSchedules/1":            "firestore",
 		"/v1/projects/p/databases/db/userCreds":                    "firestore",
 		"/v1/projects/p/databases/db/userCreds/uc:enable":          "firestore",
-		"/v1/projects/p/locations/us/backups":                      "firestore",
-		"/v1/projects/p/locations/us/backups/b":                    "firestore",
+		"/v1/projects/p/databases/db/operations":                   "firestore",
+		"/v1/projects/p/databases/db/operations/op1":               "firestore",
+		"/v1/projects/p/databases/db/operations/op1:cancel":        "firestore", "/v1/projects/p/locations/us/backups": "firestore",
+		"/v1/projects/p/locations/us/backups/b": "firestore",
 		// Cloud Resource Manager v1 project surface (project segment is last),
 		// including the collection route.
 		"/v1/projects":                      "resourcemanager",
@@ -344,6 +346,10 @@ func TestFirestoreAdminDecode(t *testing.T) {
 		{"GET", "/v1/projects/p/locations/us/backups", "ListBackups"},
 		{"GET", "/v1/projects/p/locations/us/backups/b", "GetBackup"},
 		{"DELETE", "/v1/projects/p/locations/us/backups/b", "DeleteBackup"},
+		{"GET", "/v1/projects/p/databases/db/operations", "ListOperations"},
+		{"GET", "/v1/projects/p/databases/db/operations/op1", "GetOperation"},
+		{"DELETE", "/v1/projects/p/databases/db/operations/op1", "DeleteOperation"},
+		{"POST", "/v1/projects/p/databases/db/operations/op1:cancel", "CancelOperation"},
 	}
 	for _, tc := range cases {
 		c := &JSONCodec{Service: "firestore"}

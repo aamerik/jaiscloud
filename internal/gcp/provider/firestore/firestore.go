@@ -114,6 +114,11 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Firestore.ListBackups":          p.ListBackups,
 		"Firestore.GetBackup":            p.GetBackup,
 		"Firestore.DeleteBackup":         p.DeleteBackup,
+		// Firestore Admin long-running operations (projects.databases.operations).
+		"Firestore.GetOperation":    p.GetOperation,
+		"Firestore.ListOperations":  p.ListOperations,
+		"Firestore.DeleteOperation": p.DeleteOperation,
+		"Firestore.CancelOperation": p.CancelOperation,
 	}
 }
 

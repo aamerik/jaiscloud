@@ -98,7 +98,7 @@ from §5. "Locally trustworthy?" answers the local-trust question, not the matri
 | `storage` | grpc, rest | 52/52 | 🟢 | Full | Yes | Bucket/object/IAM/resumable; server-streaming `ReadObject` + bidirectional `BidiReadObject`. |
 | `kms` | grpc, rest | 56/60 | 🟢 | Full | Yes | Symmetric/asym/MAC/raw + delete/import-job; 4 hard crypto leftovers. Crypto operations honor the cryptoKey IAM policy **default-permissively** (a key with no policy allows; a policy that omits the required role returns `PERMISSION_DENIED`). |
 | `secretmanager` | grpc, rest | 30/32 | 🟢 | Full | Yes | Rotation schedule tracked; managed rotation needs Cloud SQL. |
-| `firestore` | grpc, rest | 56/56 | 🟢 | Full | Yes | Documents/transactions/queries + Admin control plane (databases, collection-group fields, backup schedules, backups, user creds) over REST and gRPC; pipeline is a read-only subset. |
+| `firestore` | grpc, rest | 60/60 | 🟢 | Full | Yes | Documents/transactions/queries + Admin control plane (databases, collection-group fields, backup schedules, backups, user creds, and the `databases.operations` LRO poll family) over REST and gRPC; pipeline is a read-only subset. |
 | `firestoreadmin` | grpc | 27/32 | 🟢 | Shape only | Shape only | `google.firestore.admin.v1.FirestoreAdmin` gRPC wire service: composite-index CRUD + control plane (databases/fields/schedules/backups/user creds), mirrored by the REST control plane under `firestore`. The 5 data-plane/DR RPCs (Export/Import/Restore/Clone/BulkDelete) are `unsupported` stubs. |
 | `datastore` | grpc, rest | 16/16 | 🟢 | Full | Yes | Transactions are single entity-group with a read-set. |
 | `monitoring` | grpc, rest | 48/48 | 🟢 | Full | Yes | Metrics/alerts/channels; `condition_threshold` + `condition_absent` are evaluated. |
@@ -181,7 +181,7 @@ behind a wire-conformant API.
 | --- | --- | --- | --- |
 | SQS | **Pub/Sub** | 🟢 `ga` (45/45) | High — full surface. |
 | S3 | **Cloud Storage** | 🟢 `ga` (52/52) | High — full read surface (`ReadObject` + `BidiReadObject`). |
-| DynamoDB | **Firestore** / Datastore | 🟢 `ga` (Firestore 56/56, Firestore Admin 27/32, Datastore 16/16) | High — watch transaction/OCC caveats ([Known Limitations](../README-GCP.md#known-limitations)). |
+| DynamoDB | **Firestore** / Datastore | 🟢 `ga` (Firestore 60/60, Firestore Admin 27/32, Datastore 16/16) | High — watch transaction/OCC caveats ([Known Limitations](../README-GCP.md#known-limitations)). |
 | Lambda | **Cloud Functions** | 🟡 `limited` (38/38) | Control plane + GCS-referenced source execution (Docker/K8s); v2 `gcloud functions deploy --gen2` end-to-end (upload → create → poll); per-deploy revisions (Cloud Run shape) and the v2 1st→2nd gen upgrade/traffic control plane over REST; event triggers deliver Pub/Sub / GCS / Eventarc events with retry + dead-letter records (a Pub/Sub or GCS trigger's platform-provisioned backing subscription carries a user-configurable `deadLetterPolicy`). |
 | KMS | **Cloud KMS** | 🟢 `ga` (56/60) | High; 4 hard crypto leftovers (`ImportCryptoKeyVersion`, trusted-key wraps, `Decapsulate`). |
 | Secrets Manager | **Secret Manager** | 🟢 `ga` (30/32) | High; managed rotation needs Cloud SQL. |

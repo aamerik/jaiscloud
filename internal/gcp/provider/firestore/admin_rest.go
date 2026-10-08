@@ -90,6 +90,19 @@ func splitBackupPath(name string) (loc, id string, isCollection, ok bool) {
 	return "", "", false, false
 }
 
+// splitDatabaseOperationPath parses
+// "databases/{db}/operations" | "databases/{db}/operations/{op}".
+func splitDatabaseOperationPath(name string) (db, op string, isCollection, ok bool) {
+	parts := strings.Split(name, "/")
+	switch {
+	case len(parts) == 3 && parts[0] == "databases" && parts[2] == "operations":
+		return parts[1], "", true, true
+	case len(parts) == 4 && parts[0] == "databases" && parts[2] == "operations" && parts[3] != "":
+		return parts[1], parts[3], false, true
+	}
+	return "", "", false, false
+}
+
 // ─── query/body helpers ───────────────────────────────────────────────────────
 
 // adminMask returns the update_mask field paths, normalized to the snake_case
@@ -847,6 +860,52 @@ func (p *Provider) DeleteBackup(ctx context.Context, nr *model.NormalizedRequest
 	}
 	if err := p.Service.DeleteBackup(ctx, nr.AccountID, loc, id); err != nil {
 		return nil, err
+	}
+	return emptyOK(), nil
+}
+
+// ─── Long-running operations ──────────────────────────────────────────────────
+//
+// The Firestore Admin control plane is synchronous: every mutation returns a
+// terminal (done=true) operation with its typed response inline, and no
+// operation record is persisted. The projects.databases.operations family is
+// therefore served statelessly — Get reports the requested name done, List is
+// empty, and Delete/Cancel are no-ops — matching the shared
+// google.longrunning.Operations lenient contract (and enough for a client that
+// polls the operation name to terminate cleanly; real Terraform/gcloud
+// firestore apply flows do).
+
+// GetOperation implements projects.databases.operations.get.
+func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	db, op, isCollection, ok := splitDatabaseOperationPath(strParam(nr, "name"))
+	if !ok || isCollection {
+		return nil, model.NewProviderError("InvalidArgument", "invalid operation resource name", 400)
+	}
+	// Reconstruct the canonical operation name and report it terminal. There is
+	// no stored body: the caller already received the typed response inline.
+	return provider.OK(map[string]any{"name": databaseOperationName(nr.AccountID, db, op), "done": true}), nil
+}
+
+// ListOperations implements projects.databases.operations.list.
+func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if _, _, isCollection, ok := splitDatabaseOperationPath(strParam(nr, "name")); !ok || !isCollection {
+		return nil, model.NewProviderError("InvalidArgument", "invalid operations parent path", 400)
+	}
+	return provider.OK(map[string]any{"operations": []any{}}), nil
+}
+
+// DeleteOperation implements projects.databases.operations.delete.
+func (p *Provider) DeleteOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if _, _, isCollection, ok := splitDatabaseOperationPath(strParam(nr, "name")); !ok || isCollection {
+		return nil, model.NewProviderError("InvalidArgument", "invalid operation resource name", 400)
+	}
+	return emptyOK(), nil
+}
+
+// CancelOperation implements projects.databases.operations.cancel.
+func (p *Provider) CancelOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if _, _, isCollection, ok := splitDatabaseOperationPath(strParam(nr, "name")); !ok || isCollection {
+		return nil, model.NewProviderError("InvalidArgument", "invalid operation resource name", 400)
 	}
 	return emptyOK(), nil
 }
