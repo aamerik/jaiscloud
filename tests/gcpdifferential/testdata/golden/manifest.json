@@ -1,7 +1,7 @@
 {
   "version": 1,
   "project": "<project>",
-  "ops": 112,
+  "ops": 125,
   "services": [
     "bigquery",
     "compute",
@@ -9,17 +9,24 @@
     "dataproc",
     "datastore",
     "dns",
+    "eventarc",
     "firestore",
+    "functions",
     "iam",
     "kms",
     "logging",
+    "managedkafka",
+    "metastore",
     "monitoring",
     "pubsub",
     "redis",
+    "resourcemanager",
+    "run",
     "secretmanager",
     "serviceusage",
     "sqladmin",
     "storage",
+    "tasks",
     "workflowexecutions",
     "workflows"
   ],
@@ -357,7 +364,7 @@
     {
       "file": "055-bigquery-query.json",
       "op": "query",
-      "sha256": "977ed4f98c4716b753ba2d41c169cedb7540c32c313fefa8879f01c3be4e961a",
+      "sha256": "0fc6094c02de169ae66eeae3435ab61f25bd8b6a2a2e45c0a39995a50984dec4",
       "status": 200
     },
     {
@@ -661,39 +668,117 @@
       "status": 200
     },
     {
-      "file": "106-storage-storage_buckets_list_noauth.json",
+      "file": "106-resourcemanager-project_get.json",
+      "op": "project_get",
+      "sha256": "b1a5604c0eed6e93ee938360884aa8952a40231f432a555f1fcb81ec0cab1c06",
+      "status": 200
+    },
+    {
+      "file": "107-eventarc-eventarc_triggers_list.json",
+      "op": "eventarc_triggers_list",
+      "sha256": "b5a86e7fa4de9f0d9c9414bbebbf340482befccbb2a153d2e840f4f894eec3ce",
+      "status": 200
+    },
+    {
+      "file": "108-eventarc-eventarc_trigger_get_missing.json",
+      "op": "eventarc_trigger_get_missing",
+      "sha256": "ef173e79b2391ca964cff8b4a02ae8ec75bf30de4b6b263baccc8dafb5de275e",
+      "status": 404
+    },
+    {
+      "file": "109-tasks-tasks_queues_list.json",
+      "op": "tasks_queues_list",
+      "sha256": "a00264929e7307669ef00a5991c335ffe7d84e326b9e312e431f7500c4498be6",
+      "status": 200
+    },
+    {
+      "file": "110-tasks-tasks_queue_get_missing.json",
+      "op": "tasks_queue_get_missing",
+      "sha256": "ae01492d8248b8f9ddfb01e58ed125ade43e8226f626925b65cd8ab5b9f69fd0",
+      "status": 404
+    },
+    {
+      "file": "111-run-run_services_list.json",
+      "op": "run_services_list",
+      "sha256": "ace34cc6833ed3e22ebfe7f8af5addec278e7062347aa71976e194729b50cec6",
+      "status": 200
+    },
+    {
+      "file": "112-run-run_service_get_missing.json",
+      "op": "run_service_get_missing",
+      "sha256": "642505cc63055e7b0a38fb3d5aefa813e1a54d383872c9e90034ee5c9370e9f9",
+      "status": 404
+    },
+    {
+      "file": "113-functions-functions_list.json",
+      "op": "functions_list",
+      "sha256": "ac5671a597d0fd60c61f770698a5928674c37aeb974fe5cbbf19df4e16c0286b",
+      "status": 200
+    },
+    {
+      "file": "114-functions-function_get_missing.json",
+      "op": "function_get_missing",
+      "sha256": "6a90df35492ff0016baefe50053cd89b999c8cf1666a16a53313dcbdd937d7c3",
+      "status": 404
+    },
+    {
+      "file": "115-metastore-metastore_services_list.json",
+      "op": "metastore_services_list",
+      "sha256": "2033f1e1ea124949c9c0b766185718e1447e7cf50f67acf9c7a270ddcbec08d4",
+      "status": 200
+    },
+    {
+      "file": "116-metastore-metastore_service_get_missing.json",
+      "op": "metastore_service_get_missing",
+      "sha256": "c64acf1838aeaf73d4676c6ad213b56d1a676682e80bdcae525dc6c39a9d66af",
+      "status": 404
+    },
+    {
+      "file": "117-managedkafka-managedkafka_clusters_list.json",
+      "op": "managedkafka_clusters_list",
+      "sha256": "454ef5a59969404acf5854b6ee8716f9807eca84caf29d0bb3c1a9c5be209426",
+      "status": 200
+    },
+    {
+      "file": "118-managedkafka-managedkafka_cluster_get_missing.json",
+      "op": "managedkafka_cluster_get_missing",
+      "sha256": "c930d5f905a8860dca3b928875fe80287800eb31288fd38d153a35c56b6c4920",
+      "status": 404
+    },
+    {
+      "file": "119-storage-storage_buckets_list_noauth.json",
       "op": "storage_buckets_list_noauth",
-      "sha256": "871fa77c8d91d31f3b4674a488afaae5e5b644dd612d757273c4f8625d1b2d55",
+      "sha256": "3aaded87cb3e673dd0ac6c2a99335ae32356da30f6cd7b7a2e5008234fd744d5",
       "status": 401
     },
     {
-      "file": "107-compute-compute_instances_list_noauth.json",
+      "file": "120-compute-compute_instances_list_noauth.json",
       "op": "compute_instances_list_noauth",
-      "sha256": "23af4b8866fc22c9fc4dd8592f495375b3f8560936b327fe1ffe8e31c3b43f53",
+      "sha256": "8ee1495674574eab1648996d92877b02d11d99640db4eec15d8dda5852f27dcd",
       "status": 401
     },
     {
-      "file": "108-sqladmin-sql_instances_list_noauth.json",
+      "file": "121-sqladmin-sql_instances_list_noauth.json",
       "op": "sql_instances_list_noauth",
-      "sha256": "5b13c12fccb22cd127ac813e71cb9d3493f991f891fbd5143d42c16ff82c0d11",
+      "sha256": "63f24cab6f3f0a0c2ce5d008fdb61ad39175445f04ef24701b200ee19e76af42",
       "status": 401
     },
     {
-      "file": "109-redis-redis_instances_list_noauth.json",
+      "file": "122-redis-redis_instances_list_noauth.json",
       "op": "redis_instances_list_noauth",
-      "sha256": "4e1c58e7d6097e72de7ec4bcf6ef61d3b7fbada91f3f1129607d8b9516df4f4d",
+      "sha256": "d92b7f176c2c69d8c6c6728deb09f8a91a00157b98ccdda784814b8bd98c919b",
       "status": 401
     },
     {
-      "file": "110-container-container_clusters_list_noauth.json",
+      "file": "123-container-container_clusters_list_noauth.json",
       "op": "container_clusters_list_noauth",
-      "sha256": "918c04a46d15eee44bdda89d73075ec8458535221dfd7667c71b6638cba21389",
+      "sha256": "281f8b47b9113a5a3dea237af43ad17572c59689e4a2f639c62be81e84a2a3c8",
       "status": 401
     },
     {
-      "file": "111-serviceusage-su_service_get_unknown.json",
+      "file": "124-serviceusage-su_service_get_unknown.json",
       "op": "su_service_get_unknown",
-      "sha256": "37e429bf5753a95f23ad25fd559f224bdd8502e9ad8d77e58c974db8c7f91486",
+      "sha256": "7833a7e4163a4e91de186b3be035b43ff3a1b72738ccd421213d3d718c5fba1e",
       "status": 403
     }
   ]

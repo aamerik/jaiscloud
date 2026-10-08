@@ -1,9 +1,9 @@
 {
-  "index": 110,
-  "service": "container",
-  "op": "container_clusters_list_noauth",
+  "index": 122,
+  "service": "redis",
+  "op": "redis_instances_list_noauth",
   "method": "GET",
-  "path": "/v1/projects/<project>/locations/us-central1/clusters",
+  "path": "/v1/projects/<project>/locations/us-central1/instances",
   "status": 401,
   "response": {
     "error": {
@@ -13,8 +13,8 @@
           "@type": "type.googleapis.com/google.rpc.ErrorInfo",
           "domain": "googleapis.com",
           "metadata": {
-            "method": "google.container.v1.ClusterManager.ListClusters",
-            "service": "container.googleapis.com"
+            "method": "google.cloud.redis.v1.CloudRedis.ListInstances",
+            "service": "redis.googleapis.com"
           },
           "reason": "CREDENTIALS_MISSING"
         }

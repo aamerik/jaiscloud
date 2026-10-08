@@ -210,6 +210,30 @@ var triageRules = []TriageRule{
 		Reason:   "protection level is SOFTWARE (the default) and the same key's versionTemplate.protectionLevel already returns it, so absence loses no information",
 	},
 
+	// ── Resource Manager: project display name / creation time ───────────────
+	// The v1 Project `name` is the human-readable display name, which is
+	// user-set per project: the real parity project's differs from the
+	// emulator's synthesized project (which presents the project id). The
+	// resource identity (projectId/projectNumber) and lifecycleState match.
+	{
+		Service:  "resourcemanager",
+		Op:       "project_get",
+		Kind:     "value_mismatch",
+		Location: "response.name",
+		Reason:   "the v1 Project `name` is the user-set human display name, which differs between the real parity project and the emulator's synthesized project; projectId/projectNumber/lifecycleState match",
+	},
+	// Real GCP always records when a project was created; the emulator does not
+	// synthesize a createTime for a project it never explicitly created. It is
+	// output-only metadata, not part of the project identity, and its value is
+	// folded.
+	{
+		Service:  "resourcemanager",
+		Op:       "project_get",
+		Kind:     "missing_field",
+		Location: "response.createTime",
+		Reason:   "output-only creation timestamp the emulator does not synthesize for a project it did not explicitly create; not part of the project identity (createTime values are folded)",
+	},
+
 	// ── Compute: cosmetic list-response metadata ─────────────────────────────
 	// A compute list response carries its own synthetic id and selfLink; the
 	// emulator returns the items (each with its resource name) but omits those
