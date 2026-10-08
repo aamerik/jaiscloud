@@ -246,6 +246,7 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 			case errors.Is(err, dsstore.ErrConflict):
 				mr.ConflictDetected = true
 				mr.Version = applied.Version
+				mr.CreateTime = applied.CreateTime
 				// A rejected mutation changed nothing, so real Datastore
 				// reports the current entity's update_time (not the absent
 				// "after processing" stamp).
@@ -256,6 +257,7 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 				return nil, mapStoreError(err)
 			default:
 				mr.Version = applied.Version
+				mr.CreateTime = applied.CreateTime
 				mr.UpdateTime = applied.UpdateTime
 				if allocated {
 					mr.Key = keyFromCanonical(e.Key)
@@ -273,6 +275,7 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 			case errors.Is(err, dsstore.ErrConflict):
 				mr.ConflictDetected = true
 				mr.Version = applied.Version
+				mr.CreateTime = applied.CreateTime
 				mr.UpdateTime = applied.UpdateTime
 			case errors.Is(err, dsstore.ErrEntityNotFound):
 				return nil, failedPrecondition("entity not found", 400)
@@ -280,6 +283,7 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 				return nil, mapStoreError(err)
 			default:
 				mr.Version = applied.Version
+				mr.CreateTime = applied.CreateTime
 				mr.UpdateTime = applied.UpdateTime
 			}
 		case MutationDelete:
@@ -299,7 +303,22 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 		}
 		results = append(results, mr)
 	}
-	return &CommitResponse{Results: results}, nil
+	return &CommitResponse{Results: results, IndexUpdates: indexUpdates(results)}, nil
+}
+
+// indexUpdates approximates real Datastore's output-only
+// CommitResponse.index_updates: the number of mutations that changed the
+// datastore (a conflict-detected mutation changed nothing, and a delete still
+// updates indexes). The exact server-side count is unspecified, so this is the
+// emulator's documented approximation.
+func indexUpdates(results []MutationResult) int32 {
+	var n int32
+	for _, r := range results {
+		if !r.ConflictDetected {
+			n++
+		}
+	}
+	return n
 }
 
 // commitTransactional implements the Datastore transaction commit protocol. It
@@ -365,13 +384,13 @@ func (s *Service) commitTransactional(ctx context.Context, project string, txn [
 
 	results := make([]MutationResult, 0, len(applied))
 	for i := range applied {
-		mr := MutationResult{Version: applied[i].Version, UpdateTime: applied[i].UpdateTime}
+		mr := MutationResult{Version: applied[i].Version, CreateTime: applied[i].CreateTime, UpdateTime: applied[i].UpdateTime}
 		if allocatedKeys[i] != nil {
 			mr.Key = allocatedKeys[i]
 		}
 		results = append(results, mr)
 	}
-	return &CommitResponse{Results: results, CommitTime: commitTime}, nil
+	return &CommitResponse{Results: results, CommitTime: commitTime, IndexUpdates: indexUpdates(results)}, nil
 }
 
 // ─── Lookup / RunQuery ────────────────────────────────────────────────────────
@@ -401,7 +420,7 @@ func (s *Service) Lookup(ctx context.Context, project string, keys []Key, txn []
 			return nil, mapStoreError(err)
 		default:
 			s.recordRead(txn, key, true, e.Version)
-			resp.Found = append(resp.Found, EntityResult{Entity: e, Version: e.Version})
+			resp.Found = append(resp.Found, EntityResult{Entity: e, Version: e.Version, CreateTime: e.CreateTime})
 		}
 	}
 	return resp, nil
@@ -423,8 +442,14 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 	if err != nil {
 		return nil, err
 	}
-	out := &QueryResult{MoreResults: MoreResultsNoMoreResults}
+	now := clock.Now()
+	out := &QueryResult{
+		MoreResults:     MoreResultsNoMoreResults,
+		ReadTime:        now,
+		SnapshotVersion: now.UnixMicro(),
+	}
 	skipped := 0
+	var lastSkipped *dsstore.Entity
 	for _, e := range entities {
 		if !entityInScope(e, q.Namespace, q.Database) {
 			continue
@@ -440,6 +465,8 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 		// so a cursor-based client can reconcile them.
 		if skipped < offset {
 			skipped++
+			ent := e
+			lastSkipped = &ent
 			continue
 		}
 		// Limit caps the returned entities. The scan keeps going only far
@@ -453,12 +480,34 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 		// Internal approximation: the emulator records the version of every
 		// entity the query returned and re-validates exactly those entities.
 		s.recordRead(txn, e.Key, true, e.Version)
-		out.Entities = append(out.Entities, EntityResult{Entity: e, Version: e.Version})
+		out.Entities = append(out.Entities, EntityResult{
+			Entity:     e,
+			Version:    e.Version,
+			CreateTime: e.CreateTime,
+			Cursor:     entityCursor(e),
+		})
 	}
 	if skipped > 0 {
 		out.Skipped = skipped
+		if lastSkipped != nil {
+			out.SkippedCursor = entityCursor(*lastSkipped)
+		}
+	}
+	// EndCursor points to the position after the last result, matching real
+	// Datastore's QueryResultBatch.end_cursor. The emulator does not consume a
+	// start_cursor, so the cursor is a position marker only.
+	if len(out.Entities) > 0 {
+		out.EndCursor = out.Entities[len(out.Entities)-1].Cursor
 	}
 	return out, nil
+}
+
+// entityCursor returns the opaque position cursor after an entity. Real
+// Datastore uses a base64-encoded protobuf; the emulator's cursor wraps the
+// entity's canonical key, which is enough for a client to treat the value as
+// opaque and for the differential to fold it.
+func entityCursor(e dsstore.Entity) []byte {
+	return []byte(e.Key)
 }
 
 // queryWindow extracts a query's non-negative offset and limit. limit is -1

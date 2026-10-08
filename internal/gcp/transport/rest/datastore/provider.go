@@ -107,6 +107,9 @@ func (p *Provider) Lookup(ctx context.Context, nr *model.NormalizedRequest) (*mo
 				"entity":  entityToWire(r.Entity, project),
 				"version": strconv.FormatInt(r.Version, 10),
 			}
+			if !r.CreateTime.IsZero() {
+				er["createTime"] = r.CreateTime.UTC().Format(time.RFC3339Nano)
+			}
 			if !r.Entity.UpdateTime.IsZero() {
 				er["updateTime"] = r.Entity.UpdateTime.UTC().Format(time.RFC3339Nano)
 			}
@@ -168,6 +171,18 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 		"entityResultType": "FULL",
 		"moreResults":      "NO_MORE_RESULTS",
 	}
+	if !resp.ReadTime.IsZero() {
+		batch["readTime"] = resp.ReadTime.UTC().Format(time.RFC3339Nano)
+	}
+	if resp.SnapshotVersion != 0 {
+		batch["snapshotVersion"] = strconv.FormatInt(resp.SnapshotVersion, 10)
+	}
+	if len(resp.SkippedCursor) > 0 {
+		batch["skippedCursor"] = base64.StdEncoding.EncodeToString(resp.SkippedCursor)
+	}
+	if len(resp.EndCursor) > 0 {
+		batch["endCursor"] = base64.StdEncoding.EncodeToString(resp.EndCursor)
+	}
 	if resp.Skipped > 0 {
 		batch["skippedResults"] = resp.Skipped
 	}
@@ -181,8 +196,14 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 				"entity":  entityToWire(r.Entity, project),
 				"version": strconv.FormatInt(r.Version, 10),
 			}
+			if !r.CreateTime.IsZero() {
+				er["createTime"] = r.CreateTime.UTC().Format(time.RFC3339Nano)
+			}
 			if !r.Entity.UpdateTime.IsZero() {
 				er["updateTime"] = r.Entity.UpdateTime.UTC().Format(time.RFC3339Nano)
+			}
+			if len(r.Cursor) > 0 {
+				er["cursor"] = base64.StdEncoding.EncodeToString(r.Cursor)
 			}
 			ers = append(ers, er)
 		}
@@ -279,6 +300,9 @@ func (p *Provider) Commit(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		if r.Key != nil {
 			mr["key"] = keyToWire(*r.Key, project)
 		}
+		if !r.CreateTime.IsZero() {
+			mr["createTime"] = r.CreateTime.UTC().Format(time.RFC3339Nano)
+		}
 		if !r.UpdateTime.IsZero() {
 			mr["updateTime"] = r.UpdateTime.UTC().Format(time.RFC3339Nano)
 		}
@@ -288,6 +312,9 @@ func (p *Provider) Commit(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		results = append(results, mr)
 	}
 	out := map[string]any{"mutationResults": results}
+	if resp.IndexUpdates != 0 {
+		out["indexUpdates"] = resp.IndexUpdates
+	}
 	if !resp.CommitTime.IsZero() {
 		out["commitTime"] = resp.CommitTime.UTC().Format(time.RFC3339Nano)
 	}

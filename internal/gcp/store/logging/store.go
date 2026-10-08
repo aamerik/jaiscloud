@@ -37,8 +37,11 @@ type LogEntry struct {
 	TextPayload    string            `json:"textPayload,omitempty"`
 	JsonPayload    map[string]any    `json:"jsonPayload,omitempty"`
 	Timestamp      time.Time         `json:"timestamp"`
-	InsertID       string            `json:"insertId,omitempty"`
-	Labels         map[string]string `json:"labels,omitempty"`
+	// ReceiveTimestamp is the time Cloud Logging received the entry (output
+	// only). It is stamped once at write and returned on every read.
+	ReceiveTimestamp time.Time         `json:"receiveTimestamp,omitempty"`
+	InsertID         string            `json:"insertId,omitempty"`
+	Labels           map[string]string `json:"labels,omitempty"`
 }
 
 // LogSink is a stored Cloud Logging sink (an export route). Name is the

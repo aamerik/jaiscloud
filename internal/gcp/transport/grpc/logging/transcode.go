@@ -57,6 +57,9 @@ func entryToProto(e loggingstore.LogEntry) *loggingpb.LogEntry {
 	if !e.Timestamp.IsZero() {
 		out.Timestamp = timestamppb.New(e.Timestamp)
 	}
+	if !e.ReceiveTimestamp.IsZero() {
+		out.ReceiveTimestamp = timestamppb.New(e.ReceiveTimestamp)
+	}
 	switch e.PayloadType {
 	case "json":
 		if st, err := structpb.NewStruct(e.JsonPayload); err == nil {

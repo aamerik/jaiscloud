@@ -280,6 +280,7 @@ var volatileResponseKeys = map[string]string{
 	"snapshotVersion":  "<snapshotVersion>",
 	"commitTime":       "<time>",
 	"endCursor":        "<cursor>",
+	"skippedCursor":    "<cursor>",
 	"cursor":           "<cursor>",
 	"transaction":      "<transaction>",
 	"indexUpdates":     "<indexUpdates>",

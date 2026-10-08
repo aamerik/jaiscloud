@@ -253,6 +253,26 @@ func TestNormalizeDropsZeroAndEmptyMembers(t *testing.T) {
 	}
 }
 
+// TestNormalizeFoldsDatastoreSnapshotVersion checks the AUD6-5 output-only
+// batch snapshot version — a per-render server value, so the REST and gRPC
+// queries return different numbers — cancels across transports while a real
+// logical difference still fails.
+func TestNormalizeFoldsDatastoreSnapshotVersion(t *testing.T) {
+	rest := json.RawMessage(`{"batch":{"snapshotVersion":"1791489529880689","readTime":"2026-10-08T20:00:00Z","moreResults":"NO_MORE_RESULTS"}}`)
+	grpc := json.RawMessage(`{"batch":{"snapshotVersion":"1791489529880199","readTime":"2026-10-08T20:00:01Z","moreResults":"NO_MORE_RESULTS"}}`)
+	rn, _ := normalizeJSON(rest)
+	gn, _ := normalizeJSON(grpc)
+	if fs := failFindings(compareNormalized("datastore", "RunQuery", rn, gn, nil)); len(fs) != 0 {
+		t.Fatalf("snapshotVersion must fold across transports, got %+v", fs)
+	}
+	// A genuine logical difference must still fail: moreResults is not volatile.
+	restBad := json.RawMessage(`{"batch":{"moreResults":"MORE_RESULTS_AFTER_LIMIT"}}`)
+	rnBad, _ := normalizeJSON(restBad)
+	if fs := failFindings(compareNormalized("datastore", "RunQuery", rnBad, gn, nil)); len(fs) == 0 {
+		t.Fatal("a real moreResults difference must still surface")
+	}
+}
+
 // TestStorageBucketProjectionReconcilesEncodings proves the bucket projection
 // equalizes the REST and protojson renderings of one Bucket and the
 // buckets.list envelope: the REST-only members (kind/id/selfLink/projectNumber/

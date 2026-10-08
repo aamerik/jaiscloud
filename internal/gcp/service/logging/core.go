@@ -24,6 +24,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
@@ -93,8 +95,21 @@ func (s *Service) WriteEntries(ctx context.Context, req *WriteRequest) error {
 				}
 			}
 		}
+		// Output-only fields real Cloud Logging assigns: a server-generated
+		// insertId when the client omitted one, and the receive time. Both are
+		// stamped once at write so every later ListLogEntries returns the same
+		// values; when the client omitted timestamp, the default is this same
+		// receive instant (Cloud Logging sets timestamp to the receive time
+		// when it is omitted).
+		now := clock.Now()
 		if e.Timestamp.IsZero() {
-			e.Timestamp = clock.Now()
+			e.Timestamp = now
+		}
+		if e.InsertID == "" {
+			e.InsertID = newInsertID()
+		}
+		if e.ReceiveTimestamp.IsZero() {
+			e.ReceiveTimestamp = now
 		}
 		scope, logID, err := ParseLogName(e.LogName)
 		if err != nil {
@@ -123,6 +138,12 @@ func (s *Service) WriteEntries(ctx context.Context, req *WriteRequest) error {
 	}
 	return nil
 }
+
+// newInsertID returns a unique insert_id for an entry that omitted one, matching
+// Cloud Logging's documented behavior ("If the insert_id is omitted when writing
+// a log entry, the Logging API assigns its own unique identifier in this
+// field"). The value is opaque to clients and used only for ordering/dedup.
+func newInsertID() string { return uuid.NewString() }
 
 // ─── read path ────────────────────────────────────────────────────────────────
 
