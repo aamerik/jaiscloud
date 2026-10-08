@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -889,8 +888,7 @@ func startCmd() *cobra.Command {
 			// conditions, opens/closes incidents, and publishes notifications to
 			// pubsub notification channels via the emulator's Pub/Sub store.
 			monitoringEval := grpcmonitoring.NewEvaluator(stores.monitoring, pubsubNotificationPublisher{
-				messages:  stores.messages,
-				encryptor: crypto.NewEnvelopeEncryptor(stores.keys),
+				provider: pubsubP,
 			})
 			storageGRPC := grpcstorage.NewService(stores.objects, stores.resources, storageP, cfg.ProjectID)
 			datastoreGRPC := grpcdatastore.NewService(datastoreCore, cfg.ProjectID)
@@ -1169,6 +1167,7 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterSchedulerTicker(schedulerEngine)
 			adminHandler.RegisterResetter(tasksCore)
 			adminHandler.RegisterTasksTicker(tasksEngine)
+			adminHandler.RegisterMonitoringTicker(monitoringEval)
 			adminHandler.RegisterResetter(stores.resources)
 			adminHandler.RegisterResetter(containerCore)
 			adminHandler.RegisterResetter(runCore)
@@ -1588,14 +1587,21 @@ func bindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("dev_ui_origin", cmd.Flags().Lookup("dev-ui-origin"))
 }
 
-// pubsubNotificationPublisher adapts the emulator's Pub/Sub message store to
-// the monitoring evaluator's Publisher interface. Alert-policy notifications
-// are written as ordinary Pub/Sub messages (envelope-encrypted with the server
-// DEK, matching the Publish service) on the channel's labels.topic, which is
-// the observable effect (mirrors AWS CloudWatch alarm -> SNS delivery).
+// pubsubNotificationPublisher adapts the emulator's Pub/Sub publish path to the
+// monitoring evaluator's Publisher interface. Alert-policy notifications are
+// delivered to the channel's labels.topic through the same fan-out publish used
+// by topics.publish, so every pull subscription, push endpoint, and function
+// trigger on the topic receives a copy (mirrors AWS CloudWatch alarm -> SNS).
 type pubsubNotificationPublisher struct {
-	messages  pubsubstore.Messages
-	encryptor crypto.EnvelopeEncryptor
+	provider *pubsubprovider.Provider
+}
+
+// Publish writes the notification payload to the topic named by topic (a full
+// "projects/{p}/topics/{t}" resource name). A missing topic is NotFound, as in
+// real Pub/Sub, and is recorded on the incident as a failed delivery.
+func (p pubsubNotificationPublisher) Publish(ctx context.Context, topic string, data []byte) error {
+	_, err := p.provider.PublishEvent(ctx, "", topic, data, nil)
+	return err
 }
 
 // schedulerPubSubPublisher adapts the Pub/Sub provider's fan-out publish path to
@@ -1610,34 +1616,6 @@ type schedulerPubSubPublisher struct {
 func (p schedulerPubSubPublisher) Publish(ctx context.Context, topic string, data []byte, attributes map[string]string) error {
 	_, err := p.provider.PublishEvent(ctx, "", topic, data, attributes)
 	return err
-}
-
-// Publish writes a message to the topic named by topic (a full
-// "projects/{p}/topics/{t}" resource name).
-func (p pubsubNotificationPublisher) Publish(ctx context.Context, topic string, data []byte) error {
-	short := topic
-	if i := strings.LastIndex(topic, "/topics/"); i >= 0 {
-		short = topic[i+len("/topics/"):]
-	}
-	rawDEK, wrappedDEK, err := p.encryptor.Wrap(ctx, "", "")
-	if err != nil {
-		return err
-	}
-	ciphertext, err := kmsstore.EncryptData(rawDEK, data, nil)
-	if err != nil {
-		return err
-	}
-	id, err := p.messages.NextID(ctx)
-	if err != nil {
-		return err
-	}
-	return p.messages.Put(ctx, pubsubstore.Message{
-		Topic:       short,
-		MessageID:   id,
-		Data:        base64.StdEncoding.EncodeToString(ciphertext),
-		PublishTime: clock.Now(),
-		WrappedDEK:  wrappedDEK,
-	})
 }
 
 // cloudRunEventarcInvoker adapts the Cloud Run core to Eventarc's
