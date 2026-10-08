@@ -5,6 +5,7 @@ package gcpparity
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"time"
 
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
@@ -26,6 +27,10 @@ import (
 // mutation-parity steps. No projection is needed: the REST JSON and gRPC
 // protojson encodings of the Value union coincide, including
 // google.protobuf.NullValue, which both now render as JSON null (AUD3-13).
+// It also cross-diffs the streaming query surface (AUD3-14):
+// runQuery/batchGet return newline-delimited JSON over REST and an iterator over
+// gRPC, so a StreamParity step aggregates each side's frames into one logical
+// array and diffs them, proving the query data plane agrees across transports.
 func firestoreScenario() Scenario {
 	const database = "(default)"
 	collection := func(e *Env) string { return "ParityCollection" + e.Cfg.Suffix }
@@ -45,6 +50,32 @@ func firestoreScenario() Scenario {
 	// fsREST is the v1 REST URL for a collection or document path.
 	fsREST := func(e *Env, path string) string {
 		return "/v1/projects/" + project(e) + "/databases/" + database + "/documents/" + path
+	}
+	// fsVerb is the v1 REST URL for a custom method (:runQuery, :batchGet) on
+	// the documents collection (empty path) or a document path within it.
+	fsVerb := func(e *Env, path, verb string) string {
+		url := "/v1/projects/" + project(e) + "/databases/" + database + "/documents"
+		if path != "" {
+			url += "/" + path
+		}
+		return url + ":" + verb
+	}
+	// structuredQuery selects the run's top-level collection, so the query
+	// returns exactly the one canonical document both transports created.
+	structuredQuery := func(e *Env) *firestorepb.StructuredQuery {
+		return &firestorepb.StructuredQuery{
+			From: []*firestorepb.StructuredQuery_CollectionSelector{{CollectionId: collection(e)}},
+		}
+	}
+	// batchDocs exercises all three batchGet result shapes: a found top-level
+	// document, a found subcollection document (the recursive path) and a
+	// missing document.
+	batchDocs := func(e *Env) []string {
+		return []string{
+			root(e) + "/" + docPath(e),
+			root(e) + "/" + subPath(e),
+			root(e) + "/" + collection(e) + "/" + e.Resource("fs-missing"),
+		}
 	}
 
 	// createGRPC creates a document whose fields exercise the whole Value union.
@@ -171,6 +202,88 @@ func firestoreScenario() Scenario {
 			},
 			REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
 				return e.Rest(ctx, "GET", fsREST(e, docPath(e)+"/"+subcollection(e)), "")
+			},
+		},
+		// The query surface streams (AUD3-14): REST answers newline-delimited
+		// JSON, gRPC an iterator. Each side's frames are aggregated into one
+		// logical array and diffed, so the streaming data plane is compared
+		// frame-for-frame rather than being excluded for lack of a single body.
+		{
+			Op: "RunQuery",
+			Stream: &StreamParity{
+				GRPC: func(ctx context.Context, e *Env) ([]protoMessage, error) {
+					var frames []protoMessage
+					err := fsDial(ctx, e, func(c firestorepb.FirestoreClient) error {
+						stream, cerr := c.RunQuery(ctx, &firestorepb.RunQueryRequest{
+							Parent:    root(e),
+							QueryType: &firestorepb.RunQueryRequest_StructuredQuery{StructuredQuery: structuredQuery(e)},
+						})
+						if cerr != nil {
+							return cerr
+						}
+						for {
+							msg, rerr := stream.Recv()
+							if rerr == io.EOF {
+								return nil
+							}
+							if rerr != nil {
+								return rerr
+							}
+							frames = append(frames, msg)
+						}
+					})
+					if err != nil {
+						return nil, err
+					}
+					return frames, nil
+				},
+				REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+					body, err := fsMarshal(&firestorepb.RunQueryRequest{
+						QueryType: &firestorepb.RunQueryRequest_StructuredQuery{StructuredQuery: structuredQuery(e)},
+					})
+					if err != nil {
+						return nil, err
+					}
+					return e.Rest(ctx, "POST", fsVerb(e, "", "runQuery"), body)
+				},
+			},
+		},
+		{
+			Op: "BatchGet",
+			Stream: &StreamParity{
+				GRPC: func(ctx context.Context, e *Env) ([]protoMessage, error) {
+					var frames []protoMessage
+					err := fsDial(ctx, e, func(c firestorepb.FirestoreClient) error {
+						stream, cerr := c.BatchGetDocuments(ctx, &firestorepb.BatchGetDocumentsRequest{
+							Database:  "projects/" + project(e) + "/databases/" + database,
+							Documents: batchDocs(e),
+						})
+						if cerr != nil {
+							return cerr
+						}
+						for {
+							msg, rerr := stream.Recv()
+							if rerr == io.EOF {
+								return nil
+							}
+							if rerr != nil {
+								return rerr
+							}
+							frames = append(frames, msg)
+						}
+					})
+					if err != nil {
+						return nil, err
+					}
+					return frames, nil
+				},
+				REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+					body, err := fsMarshal(&firestorepb.BatchGetDocumentsRequest{Documents: batchDocs(e)})
+					if err != nil {
+						return nil, err
+					}
+					return e.Rest(ctx, "POST", fsVerb(e, "", "batchGet"), body)
+				},
 			},
 		},
 		{

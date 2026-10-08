@@ -4,8 +4,12 @@ package gcpparity
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
+
+	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 )
 
 // failFindings returns the findings that would fail the gate.
@@ -377,5 +381,75 @@ func TestStorageObjectProjectionReconcilesEncodings(t *testing.T) {
 	ngl, _ := normalizeJSON(gl)
 	if fs := compareNormalized("storage", "ListObjects", nl, ngl, nil); len(failFindings(fs)) != 0 {
 		t.Fatalf("list envelopes must align after projection, got %+v", failFindings(fs))
+	}
+}
+
+// TestAggregateNDJSONReadsFrames proves the REST NDJSON reader turns a
+// newline-delimited stream body into one JSON array of frames — the logical form
+// the gRPC iterator is aggregated to — folds a blank line, and rejects a
+// malformed line rather than silently dropping it (a dropped frame must not let
+// a broken stream pass by omission).
+func TestAggregateNDJSONReadsFrames(t *testing.T) {
+	ndjson := json.RawMessage("{\"document\":{\"name\":\"d1\"},\"readTime\":\"2024-01-01T00:00:00Z\"}\n" +
+		"\n" +
+		"{\"document\":{\"name\":\"d2\"}}\n" +
+		"{\"done\":true}\n")
+	got, err := aggregateNDJSON(ndjson)
+	if err != nil {
+		t.Fatalf("aggregate NDJSON: %v", err)
+	}
+	want := json.RawMessage(`[{"document":{"name":"d1"},"readTime":"2024-01-01T00:00:00Z"},{"document":{"name":"d2"}},{"done":true}]`)
+	var gv, wv any
+	if err := json.Unmarshal(got, &gv); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(want, &wv); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gv, wv) {
+		t.Fatalf("NDJSON aggregation mismatch:\n got=%s\nwant=%s", got, want)
+	}
+
+	if _, err := aggregateNDJSON(json.RawMessage("{\"ok\":true}\nnot json\n")); err == nil {
+		t.Fatal("a malformed NDJSON line must be an error, not dropped")
+	}
+	if empty, err := aggregateNDJSON(nil); err != nil || string(empty) != "[]" {
+		t.Fatalf("empty body must aggregate to [], got %s (err=%v)", empty, err)
+	}
+}
+
+// TestStreamParityAggregatesFrames is the seeded proof of the AUD3-14 pipeline:
+// the gRPC iterator frames and the REST NDJSON body of the same runQuery stream
+// aggregate to equal logical arrays, while a frame one transport drops is a
+// gate failure — the class of streaming divergence the single-body contract
+// could not see.
+func TestStreamParityAggregatesFrames(t *testing.T) {
+	e := &Env{}
+	doc := &firestorepb.RunQueryResponse{
+		Document: &firestorepb.Document{Name: "projects/p/databases/(default)/documents/c/d"},
+	}
+	done := &firestorepb.RunQueryResponse{
+		ContinuationSelector: &firestorepb.RunQueryResponse_Done{Done: true},
+	}
+	restBody := json.RawMessage("{\"document\":{\"name\":\"projects/p/databases/(default)/documents/c/d\"}}\n{\"done\":true}")
+
+	match := &StreamParity{
+		GRPC: func(context.Context, *Env) ([]protoMessage, error) { return []protoMessage{doc, done}, nil },
+		REST: func(context.Context, *Env) (json.RawMessage, error) { return restBody, nil },
+	}
+	if fs := runStreamParity(context.Background(), e, "firestore", "RunQuery", match, nil); len(failFindings(fs)) != 0 {
+		t.Fatalf("equal aggregated frames must not diverge, got %+v", failFindings(fs))
+	}
+
+	dropped := &StreamParity{
+		GRPC: func(context.Context, *Env) ([]protoMessage, error) { return []protoMessage{doc}, nil },
+		REST: func(context.Context, *Env) (json.RawMessage, error) { return restBody, nil },
+	}
+	fs := runStreamParity(context.Background(), e, "firestore", "RunQuery", dropped, nil)
+	if k := kinds(fs); k["array_length_mismatch"] != 1 {
+		t.Fatalf("a dropped stream frame must surface as an array length mismatch, got kinds=%v", k)
+	}
+	if len(failFindings(fs)) == 0 {
+		t.Fatal("a dropped stream frame must fail the gate")
 	}
 }
