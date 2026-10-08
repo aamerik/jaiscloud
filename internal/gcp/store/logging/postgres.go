@@ -89,18 +89,21 @@ func (s *PostgresStore) Write(ctx context.Context, scope string, e LogEntry) err
 	if e.Timestamp.IsZero() {
 		e.Timestamp = clock.Now()
 	}
+	if e.ReceiveTimestamp.IsZero() {
+		e.ReceiveTimestamp = e.Timestamp
+	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO jc_log_entries
-			(project_id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, insert_id, labels)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			(project_id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, receive_timestamp, insert_id, labels)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 	`, scope, e.LogName, e.ResourceType, nullableJSON(e.ResourceLabels), e.Severity, e.PayloadType, e.TextPayload,
-		nullableJSON(e.JsonPayload), e.Timestamp, e.InsertID, nullableJSON(e.Labels))
+		nullableJSON(e.JsonPayload), e.Timestamp, e.ReceiveTimestamp, e.InsertID, nullableJSON(e.Labels))
 	return err
 }
 
 func (s *PostgresStore) List(ctx context.Context, scope string) ([]LogEntry, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, insert_id, labels
+		SELECT id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, receive_timestamp, insert_id, labels
 		FROM jc_log_entries WHERE project_id=$1 ORDER BY timestamp, id
 	`, scope)
 	if err != nil {
@@ -111,7 +114,7 @@ func (s *PostgresStore) List(ctx context.Context, scope string) ([]LogEntry, err
 	for rows.Next() {
 		var e LogEntry
 		var jsonPayload, resourceLabels, labels []byte
-		if err := rows.Scan(&e.ID, &e.LogName, &e.ResourceType, &resourceLabels, &e.Severity, &e.PayloadType, &e.TextPayload, &jsonPayload, &e.Timestamp, &e.InsertID, &labels); err != nil {
+		if err := rows.Scan(&e.ID, &e.LogName, &e.ResourceType, &resourceLabels, &e.Severity, &e.PayloadType, &e.TextPayload, &jsonPayload, &e.Timestamp, &e.ReceiveTimestamp, &e.InsertID, &labels); err != nil {
 			return nil, err
 		}
 		if len(jsonPayload) > 0 {

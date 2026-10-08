@@ -80,12 +80,18 @@ func (s *MemoryStore) Restore(_ context.Context, r io.Reader) error {
 	s.metrics = snap.Metrics
 	s.admin = snap.Admin
 	var maxID int64
-	for _, entries := range snap.Entries {
-		for _, e := range entries {
-			if e.ID > maxID {
-				maxID = e.ID
+	for scope, entries := range snap.Entries {
+		for i := range entries {
+			// Backfill receive_timestamp for a snapshot written before it was
+			// tracked, so a restored entry never surfaces a zero receive time.
+			if entries[i].ReceiveTimestamp.IsZero() {
+				entries[i].ReceiveTimestamp = entries[i].Timestamp
+			}
+			if entries[i].ID > maxID {
+				maxID = entries[i].ID
 			}
 		}
+		snap.Entries[scope] = entries
 	}
 	s.nextID = maxID + 1
 	return nil
@@ -144,7 +150,7 @@ type pgSnapshot struct {
 func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	var snap pgSnapshot
 	rows, err := s.pool.Query(ctx, `
-		SELECT project_id, id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, insert_id, labels
+		SELECT project_id, id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, receive_timestamp, insert_id, labels
 		FROM jc_log_entries ORDER BY project_id, id
 	`)
 	if err != nil {
@@ -156,7 +162,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 			Entry     LogEntry `json:"entry"`
 		}
 		var jsonPayload, resourceLabels, labels []byte
-		if err := rows.Scan(&r.ProjectID, &r.Entry.ID, &r.Entry.LogName, &r.Entry.ResourceType, &resourceLabels, &r.Entry.Severity, &r.Entry.PayloadType, &r.Entry.TextPayload, &jsonPayload, &r.Entry.Timestamp, &r.Entry.InsertID, &labels); err != nil {
+		if err := rows.Scan(&r.ProjectID, &r.Entry.ID, &r.Entry.LogName, &r.Entry.ResourceType, &resourceLabels, &r.Entry.Severity, &r.Entry.PayloadType, &r.Entry.TextPayload, &jsonPayload, &r.Entry.Timestamp, &r.Entry.ReceiveTimestamp, &r.Entry.InsertID, &labels); err != nil {
 			rows.Close()
 			return err
 		}
@@ -323,12 +329,18 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		return err
 	}
 	for _, r := range snap.Entries {
+		// Backfill receive_timestamp for a snapshot written before it was
+		// tracked.
+		receiveTimestamp := r.Entry.ReceiveTimestamp
+		if receiveTimestamp.IsZero() {
+			receiveTimestamp = r.Entry.Timestamp
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO jc_log_entries
-				(project_id, id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, insert_id, labels)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+				(project_id, id, log_name, resource_type, resource_labels, severity, payload_type, text_payload, json_payload, timestamp, receive_timestamp, insert_id, labels)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		`, r.ProjectID, r.Entry.ID, r.Entry.LogName, r.Entry.ResourceType, nullableJSON(r.Entry.ResourceLabels), r.Entry.Severity, r.Entry.PayloadType,
-			r.Entry.TextPayload, nullableJSON(r.Entry.JsonPayload), r.Entry.Timestamp, r.Entry.InsertID, nullableJSON(r.Entry.Labels)); err != nil {
+			r.Entry.TextPayload, nullableJSON(r.Entry.JsonPayload), r.Entry.Timestamp, receiveTimestamp, r.Entry.InsertID, nullableJSON(r.Entry.Labels)); err != nil {
 			return err
 		}
 	}

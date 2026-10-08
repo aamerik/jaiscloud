@@ -187,6 +187,9 @@ func entryToWire(e loggingstore.LogEntry) map[string]any {
 	if !e.Timestamp.IsZero() {
 		out["timestamp"] = e.Timestamp.UTC().Format(time.RFC3339Nano)
 	}
+	if !e.ReceiveTimestamp.IsZero() {
+		out["receiveTimestamp"] = e.ReceiveTimestamp.UTC().Format(time.RFC3339Nano)
+	}
 	if e.Severity != 0 {
 		out["severity"] = core.SeverityName(e.Severity)
 	}

@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"jaiscloud/internal/clock"
-
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,13 +27,13 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 // name_or_id column holds the full canonical key (KeyOfPath) and the kind
 // column is its final element kind (denormalized for kind-scoped listing); the
 // project column is scanned but discarded.
-const entityCols = "project, kind, name_or_id, properties, version, update_time"
+const entityCols = "project, kind, name_or_id, properties, version, create_time, update_time"
 
 func scanEntity(scan func(...any) error) (Entity, error) {
 	var e Entity
 	var project, nameOrID string
 	var props []byte
-	if err := scan(&project, &e.Kind, &nameOrID, &props, &e.Version, &e.UpdateTime); err != nil {
+	if err := scan(&project, &e.Kind, &nameOrID, &props, &e.Version, &e.CreateTime, &e.UpdateTime); err != nil {
 		return Entity{}, err
 	}
 	if len(props) > 0 {
@@ -210,14 +208,14 @@ func (s *PostgresStore) ApplyMutation(ctx context.Context, project string, kind 
 	case MutationUpsert:
 		e.Version = current.Version + 1
 	}
-	e.UpdateTime = nextUpdateTime(current.UpdateTime, clock.Now())
+	e = stampWrite(current, exists, e)
 
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, update_time)
-		VALUES ($1,$2,$3,$4,$5,$6)
+		INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, create_time, update_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
 		ON CONFLICT (project, kind, name_or_id) DO UPDATE
-			SET properties=EXCLUDED.properties, version=EXCLUDED.version, update_time=EXCLUDED.update_time
-	`, project, entKind, nameOrID, propertiesJSON(e.Properties), e.Version, e.UpdateTime); err != nil {
+			SET properties=EXCLUDED.properties, version=EXCLUDED.version, create_time=EXCLUDED.create_time, update_time=EXCLUDED.update_time
+	`, project, entKind, nameOrID, propertiesJSON(e.Properties), e.Version, e.CreateTime, e.UpdateTime); err != nil {
 		return Entity{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -343,9 +341,9 @@ func (s *PostgresStore) Commit(ctx context.Context, project string, reads []Read
 			// semantics: a concurrent insert of the same key surfaces as a
 			// unique violation instead of silently overwriting.
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, update_time)
-				VALUES ($1,$2,$3,$4,$5,$6)
-			`, project, kind, nameOrID, propertiesJSON(e.Properties), e.Version, e.UpdateTime); err != nil {
+				INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, create_time, update_time)
+				VALUES ($1,$2,$3,$4,$5,$6,$7)
+			`, project, kind, nameOrID, propertiesJSON(e.Properties), e.Version, e.CreateTime, e.UpdateTime); err != nil {
 				var pgErr *pgconn.PgError
 				if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 					return nil, ErrEntityExists
@@ -355,11 +353,11 @@ func (s *PostgresStore) Commit(ctx context.Context, project string, reads []Read
 			continue
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, update_time)
-			VALUES ($1,$2,$3,$4,$5,$6)
+			INSERT INTO jc_datastore_entities (project, kind, name_or_id, properties, version, create_time, update_time)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)
 			ON CONFLICT (project, kind, name_or_id) DO UPDATE
-				SET properties=EXCLUDED.properties, version=EXCLUDED.version, update_time=EXCLUDED.update_time
-		`, project, kind, nameOrID, propertiesJSON(e.Properties), e.Version, e.UpdateTime); err != nil {
+				SET properties=EXCLUDED.properties, version=EXCLUDED.version, create_time=EXCLUDED.create_time, update_time=EXCLUDED.update_time
+		`, project, kind, nameOrID, propertiesJSON(e.Properties), e.Version, e.CreateTime, e.UpdateTime); err != nil {
 			return nil, err
 		}
 	}

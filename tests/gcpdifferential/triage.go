@@ -324,48 +324,7 @@ func init() {
 			Reason:   "output-only job-statistics/timing field the emulator does not synthesize; executed rows/schema/statementType match real GCP",
 		})
 	}
-	for _, loc := range datastoreGRPCOutputOnlyFields {
-		triageRules = append(triageRules, TriageRule{
-			Service:   "datastore",
-			Transport: "grpc",
-			Kind:      "missing_field",
-			Location:  loc,
-			Reason:    "output-only consistency/pagination field the emulator's Datastore gRPC adapter does not synthesize (a known capability gap, not vanity); the entity/key/version/updateTime match and every matching entity is returned in one NO_MORE_RESULTS batch. Its value is folded, so a value regression cannot be detected; tracked as AUD6-5.",
-		})
-	}
-	for _, loc := range loggingGRPCOutputOnlyFields {
-		triageRules = append(triageRules, TriageRule{
-			Service:   "logging",
-			Transport: "grpc",
-			Kind:      "missing_field",
-			Location:  loc,
-			Reason:    "output-only field the emulator's Logging gRPC adapter does not synthesize; logName/severity/payload/resource match. Its value is folded, so a value regression cannot be detected; tracked as AUD6-5.",
-		})
-	}
 }
-
-// datastoreGRPCOutputOnlyFields and loggingGRPCOutputOnlyFields are the
-// consistency/pagination and identity output-only response members real GCP adds
-// over gRPC that the emulator's adapters do not synthesize (AUD6-1). They are
-// matched by Location suffix, and scoped to the exact actionable surfaces, so a
-// genuine regression in an actionable field still surfaces: the emulator returns
-// the entity, key, version and updateTime (plus readTime on Lookup), and every
-// matching entity in a single NO_MORE_RESULTS batch. These are recorded as the
-// AUD6-5 deferral rather than dropped silently.
-var (
-	datastoreGRPCOutputOnlyFields = []string{
-		"response.indexUpdates",
-		".createTime",
-		"response.batch.endCursor",
-		"response.batch.entityResults[0].cursor",
-		"response.batch.readTime",
-		"response.batch.snapshotVersion",
-	}
-	loggingGRPCOutputOnlyFields = []string{
-		".insertId",
-		".receiveTimestamp",
-	}
-)
 
 // matchRule returns the first rule in rules matching d, or nil.
 func matchRule(d Divergence, rules []TriageRule) *TriageRule {

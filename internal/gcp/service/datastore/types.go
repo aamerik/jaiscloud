@@ -111,6 +111,10 @@ type MutationResult struct {
 	Version          int64
 	Key              *Key // non-nil when an ID was allocated for the mutation
 	ConflictDetected bool
+	// CreateTime is the entity's creation time (create_time): set for an applied
+	// insert/update/upsert and for a rejected mutation (the current entity's
+	// stamp), and zero for a delete. Real Datastore is output-only here.
+	CreateTime time.Time
 	// UpdateTime is the server-stamped entity update time: the new stamp after
 	// an applied insert/update/upsert, the current entity's stamp when a
 	// mutation is rejected (conflict_detected — the mutation changed nothing),
@@ -125,12 +129,20 @@ type CommitResponse struct {
 	Results []MutationResult
 	// CommitTime is zero for a non-transactional commit (the proto omits it).
 	CommitTime time.Time
+	// IndexUpdates is the number of index entries updated during the commit
+	// (real Datastore's output-only CommitResponse.index_updates). The emulator
+	// approximates it with the number of mutations that changed the datastore.
+	IndexUpdates int32
 }
 
-// EntityResult is a found entity plus its per-entity version.
+// EntityResult is a found entity plus its per-entity version and output-only
+// timestamps. Cursor is the position marker after the entity, set only for a
+// RunQuery result (real Datastore sets it only within a QueryResultBatch).
 type EntityResult struct {
-	Entity  dsstore.Entity
-	Version int64
+	Entity     dsstore.Entity
+	Version    int64
+	CreateTime time.Time
+	Cursor     []byte
 }
 
 // LookupResult is the transport-neutral result of a Lookup.
@@ -169,6 +181,15 @@ type QueryResult struct {
 	Entities    []EntityResult
 	Skipped     int
 	MoreResults MoreResults
+	// ReadTime is the timestamp the batch was read from, and SnapshotVersion a
+	// monotonically increasing version of the snapshot it came from. EndCursor
+	// points to the position after the last result, and SkippedCursor to the
+	// position after the last skipped result (set only when Skipped > 0). All
+	// are output-only QueryResultBatch fields real Datastore sets.
+	ReadTime        time.Time
+	SnapshotVersion int64
+	EndCursor       []byte
+	SkippedCursor   []byte
 }
 
 // PropertyOp is a transport-neutral PropertyFilter operator. Unsupported and
