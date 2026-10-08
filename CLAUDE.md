@@ -484,4 +484,5 @@ EMR/EMRContainers providers capture `handlerCtx{cloud, region, accountID}` at ha
 | `/_jaiscloud/clock` | POST | Set clock mode: `{"mode":"fixed","time":"..."}` / `{"mode":"offset","time":"..."}` / `{"mode":"real"}` |
 | `/_jaiscloud/ttl-sweep` | POST | Synchronous DynamoDB TTL sweep (for deterministic tests) |
 | `/_jaiscloud/eb-tick` | POST | Synchronous EventBridge scheduler evaluation (for deterministic tests) |
+| `/_jaiscloud/monitoring-tick` | POST | Synchronous Cloud Monitoring alert-policy evaluation (for deterministic tests) |
 | `/metrics` | GET | Prometheus (requires `--metrics`) |
