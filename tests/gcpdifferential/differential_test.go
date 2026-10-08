@@ -23,15 +23,25 @@ const (
 	defaultReportDir = "testdata/report"
 )
 
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
-
 func goldenDir() string { return envOr("GCP_DIFFERENTIAL_GOLDEN_DIR", defaultGoldenDir) }
 func reportDir() string { return envOr("GCP_DIFFERENTIAL_REPORT_DIR", defaultReportDir) }
+
+// goldensOrSkip returns the golden files in dir, or skips the test when none are
+// present. When GCP_DIFFERENTIAL_REQUIRE_GOLDENS=1 (set by CI) a missing or empty
+// golden set is a hard failure instead, so an untracked or dropped golden
+// directory cannot make the offline gate pass vacuously.
+func goldensOrSkip(t *testing.T, dir string) []string {
+	t.Helper()
+	files, err := GoldenFiles(dir)
+	if err == nil && len(files) > 0 {
+		return files
+	}
+	if os.Getenv("GCP_DIFFERENTIAL_REQUIRE_GOLDENS") == "1" {
+		t.Fatalf("goldens required at %s but none found (err=%v)", dir, err)
+	}
+	t.Skipf("no goldens at %s (err=%v)", dir, err)
+	return nil
+}
 
 // TestRecord captures goldens from real GCP. It is skipped unless -record (or
 // GCP_DIFFERENTIAL_RECORD=1) is set, and requires ADC. It never prints the
@@ -96,9 +106,10 @@ func TestReplay(t *testing.T) {
 	if *recordFlag {
 		t.Skip("record mode: skipping replay")
 	}
+	goldensOrSkip(t, goldenDir())
 	exs, err := ReadGoldens(goldenDir())
 	if err != nil {
-		t.Skipf("no goldens at %s (run `make record-gcp-differential`): %v", goldenDir(), err)
+		t.Fatalf("read goldens at %s: %v", goldenDir(), err)
 	}
 
 	endpoint := strings.TrimRight(envOr("GCP_DIFFERENTIAL_ENDPOINT", "http://localhost:8080"), "/")
@@ -177,29 +188,41 @@ func TestReplay(t *testing.T) {
 	}
 	t.Logf("report written to %s/report.{json,md}", reportDir())
 
-	if strict := *strictFlag || os.Getenv("GCP_DIFFERENTIAL_STRICT") == "1"; strict {
-		threshold := envOr("GCP_DIFFERENTIAL_STRICT_SEVERITY", "high")
-		var failing []Divergence
-		for _, d := range rep.Open {
-			if SeverityRank(d.Severity) <= SeverityRank(threshold) {
-				failing = append(failing, d)
-			}
-		}
-		if len(failing) > 0 {
-			t.Fatalf("strict mode: %d open divergence(s) at/above %q severity (%d open total)",
-				len(failing), threshold, rep.OpenCount)
-		}
-		t.Logf("strict mode: no open divergence at/above %q severity", threshold)
+	assertStrict(t, rep)
+}
+
+// assertStrict fails the test when strict mode is on (-strict or
+// GCP_DIFFERENTIAL_STRICT=1) and any OPEN (real-bug) divergence is at/above the
+// configured severity (GCP_DIFFERENTIAL_STRICT_SEVERITY, default high). It is
+// shared by the REST and gRPC replays.
+func assertStrict(t *testing.T, rep Report) {
+	if !(*strictFlag || os.Getenv("GCP_DIFFERENTIAL_STRICT") == "1") {
+		return
 	}
+	threshold := envOr("GCP_DIFFERENTIAL_STRICT_SEVERITY", "high")
+	var failing []Divergence
+	for _, d := range rep.Open {
+		if SeverityRank(d.Severity) <= SeverityRank(threshold) {
+			failing = append(failing, d)
+		}
+	}
+	if len(failing) > 0 {
+		t.Fatalf("strict mode: %d open divergence(s) at/above %q severity (%d open total)",
+			len(failing), threshold, rep.OpenCount)
+	}
+	t.Logf("strict mode: no open divergence at/above %q severity", threshold)
 }
 
 // TestGoldensAreClean guards the hard requirement that committed goldens never
 // contain credentials or project-specific identifiers.
 func TestGoldensAreClean(t *testing.T) {
-	files, err := GoldenFiles(goldenDir())
-	if err != nil {
-		t.Skipf("no goldens at %s: %v", goldenDir(), err)
-	}
+	assertGoldensClean(t, goldenDir())
+}
+
+// assertGoldensClean is the shared credential/identifier guard for a golden
+// directory: it is applied to both the REST goldens and the AUD6-1 gRPC goldens.
+func assertGoldensClean(t *testing.T, dir string) {
+	files := goldensOrSkip(t, dir)
 	forbidden := []struct{ name, needle string }{
 		{"real project id", RealProjectDefault},
 		{"real project number", RealProjectNumberDefault},
@@ -214,7 +237,7 @@ func TestGoldensAreClean(t *testing.T) {
 	// metadata), which are not secrets. Match email shapes specifically.
 	emailRE := regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
 	for _, f := range files {
-		data, err := os.ReadFile(filepath.Join(goldenDir(), f))
+		data, err := os.ReadFile(filepath.Join(dir, f))
 		if err != nil {
 			t.Fatalf("read golden %s: %v", f, err)
 		}
@@ -238,10 +261,7 @@ func TestGoldensAreClean(t *testing.T) {
 }
 
 func TestGoldenManifest(t *testing.T) {
-	files, err := GoldenFiles(goldenDir())
-	if err != nil {
-		t.Skipf("no goldens at %s: %v", goldenDir(), err)
-	}
+	files := goldensOrSkip(t, goldenDir())
 	data, err := os.ReadFile(filepath.Join(goldenDir(), "manifest.json"))
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)

@@ -437,6 +437,7 @@ jobs:
         env:
           GCP_DIFFERENTIAL_STRICT: "1"
           GCP_DIFFERENTIAL_STRICT_SEVERITY: "low"
+          GCP_DIFFERENTIAL_REQUIRE_GOLDENS: "1"
         run: go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest' ./tests/gcpdifferential/
 
       - name: Wait for gRPC listener
@@ -449,6 +450,18 @@ jobs:
           done
           cat gcp-conformance.log
           exit 1
+
+      # AUD6-1: replays the committed real-GCP gRPC goldens (Cloud Datastore,
+      # Firestore, Logging, Monitoring) against the emulator's gRPC listener and
+      # diffs them with the shared normalize/triage engine. Offline and
+      # credential-free; strict mode fails on any open (real-bug) divergence.
+      - name: Run GCP gRPC differential replay (offline; strict)
+        env:
+          GCP_DIFFERENTIAL_STRICT: "1"
+          GCP_DIFFERENTIAL_STRICT_SEVERITY: "low"
+          GCP_DIFFERENTIAL_REQUIRE_GOLDENS: "1"
+          GCP_DIFFERENTIAL_GRPC_ENDPOINT: localhost:8081
+        run: go test -tags gcp_differential -count=1 -v -run 'TestReplayGRPC|TestGRPCGoldensAreClean|TestGRPCGoldensAreMarked|TestGRPCGoldenManifest|TestGRPCScenariosValid|TestGRPCNormalizerFoldsVolatile' ./tests/gcpdifferential/
 
       - name: Run gRPC message-level conformance (official clients)
         working-directory: tests/gcpconformance/grpc
@@ -510,6 +523,7 @@ jobs:
             tests/gcpconformance/grpc/testdata/report/
             tests/gcpconformance/gcloud/testdata/report/
             tests/gcpdifferential/testdata/report/
+            tests/gcpdifferential/testdata/report-grpc/
             tests/clients/python/report/
 
       - name: Upload GCP server log (on failure)
