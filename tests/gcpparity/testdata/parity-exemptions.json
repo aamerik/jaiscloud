@@ -1,10 +1,6 @@
 {
   "exemptions": [
     {
-      "service": "firestore",
-      "reason": "Like Datastore, Firestore documents are Value unions, and the REST surface uses the recursive {+parent} document path. A like-for-like comparison needs a projection; tracked as AUD3-3."
-    },
-    {
       "service": "storage",
       "reason": "The object/bucket surface needs the media-upload flow, and the official Go client module does not export the storage v2 proto the emulator serves (the gRPC conformance suite uses the emulator's own storagepb), so a raw cross-transport body diff needs its own harness work. Tracked as AUD3-4."
     },

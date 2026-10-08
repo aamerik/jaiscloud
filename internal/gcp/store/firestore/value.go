@@ -109,11 +109,16 @@ func (v *Value) UnmarshalJSON(data []byte) error {
 	for key, rv := range raw {
 		switch key {
 		case "nullValue":
-			var s string
-			if err := json.Unmarshal(rv, &s); err != nil {
-				return err
-			}
-			v.NullValue = &s
+			// The Value union's null variant is the google.protobuf.NullValue
+			// enum. A protojson-encoded body (and the Firestore REST reference)
+			// sends JSON null; the Discovery enum form is the string
+			// "NULL_VALUE". Both denote the same variant, so accept either and
+			// store the canonical enum name (mirroring the Datastore REST codec,
+			// which keys on the field's presence). Without this, a null written
+			// over REST was decoded as the empty string and read back as
+			// nullValue:"" — diverging from the gRPC path, which stores
+			// NULL_VALUE.
+			v.NullValue = strPtr(NullEnumValue)
 		case "booleanValue":
 			var b bool
 			if err := json.Unmarshal(rv, &b); err != nil {
