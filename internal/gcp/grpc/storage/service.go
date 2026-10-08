@@ -253,6 +253,10 @@ func bucketToProto(m map[string]any) *storagepb.Bucket {
 		Name:           bucketResourceName(name),
 		BucketId:       name,
 		Metageneration: genToInt64(gcs.BucketMetageneration(m)),
+		// The proto defines etag and locationType; real GCP populates both, so a
+		// gRPC client must see them, matching the REST storage#bucket body.
+		Etag:         "CAE=",
+		LocationType: "multi-region",
 	}
 	if v, _ := m["location"].(string); v != "" {
 		b.Location = v
@@ -306,6 +310,37 @@ func bucketToProto(m map[string]any) *storagepb.Bucket {
 		}
 		b.RetentionPolicy = policy
 	}
+	// iamConfig mirrors the REST iamConfiguration the provider derives (uniform
+	// bucket-level access disabled, public access prevention inherited). The
+	// proto defines iam_config, so real GCP returns it over gRPC too.
+	b.IamConfig = &storagepb.Bucket_IamConfig{
+		UniformBucketLevelAccess: &storagepb.Bucket_IamConfig_UniformBucketLevelAccess{Enabled: false},
+		PublicAccessPrevention:   "inherited",
+	}
+	// softDeletePolicy mirrors the REST default: real GCS enables soft delete on
+	// every bucket with a 7-day window, and effectiveTime defaults to the
+	// bucket's creation time when no policy was set explicitly.
+	sd := &storagepb.Bucket_SoftDeletePolicy{RetentionDuration: durationpb.New(604800 * time.Second)}
+	if sp, ok := m["softDeletePolicy"].(map[string]any); ok {
+		if v, _ := sp["retentionDurationSeconds"].(string); v != "" {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+				sd.RetentionDuration = durationpb.New(time.Duration(n) * time.Second)
+			}
+		}
+		if et, _ := sp["effectiveTime"].(string); et != "" {
+			if t, err := time.Parse(time.RFC3339Nano, et); err == nil {
+				sd.EffectiveTime = timestamppb.New(t)
+			}
+		}
+	}
+	if sd.EffectiveTime == nil {
+		if tc, _ := m["timeCreated"].(string); tc != "" {
+			if t, err := time.Parse(time.RFC3339Nano, tc); err == nil {
+				sd.EffectiveTime = timestamppb.New(t)
+			}
+		}
+	}
+	b.SoftDeletePolicy = sd
 	return b
 }
 
