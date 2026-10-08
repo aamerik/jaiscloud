@@ -1,8 +1,9 @@
 {
   "version": 1,
   "project": "<project>",
-  "ops": 15,
+  "ops": 17,
   "services": [
+    "dataproc",
     "datastore",
     "firestore",
     "logging",
@@ -97,6 +98,18 @@
       "file": "014-monitoring-mon_get_metric_descriptor_missing.json",
       "op": "mon_get_metric_descriptor_missing",
       "sha256": "a22c1dd21934bd4adcb2caca6aecee062b5a77bde832a0f908b3f7e79e38e565",
+      "status": 5
+    },
+    {
+      "file": "015-dataproc-operations_list.json",
+      "op": "operations_list",
+      "sha256": "d45958f4aa0da16c52da38c9dc4b2e2208571075f666c6b5848705115d4321db",
+      "status": 0
+    },
+    {
+      "file": "016-dataproc-operation_get_missing.json",
+      "op": "operation_get_missing",
+      "sha256": "58053eb91d45ef2772c8fc9f0fde616061ba4b6eb9e8245a5fac9611d44f5304",
       "status": 5
     }
   ]

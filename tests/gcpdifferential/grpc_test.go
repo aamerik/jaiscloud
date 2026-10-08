@@ -182,7 +182,7 @@ func TestGRPCScenariosValid(t *testing.T) {
 		seen[k] = true
 		have[sc.Service] = true
 	}
-	for _, svc := range []string{"datastore", "firestore", "logging", "monitoring"} {
+	for _, svc := range []string{"datastore", "firestore", "logging", "monitoring", "dataproc"} {
 		if !have[svc] {
 			t.Errorf("expected at least one %s gRPC scenario", svc)
 		}

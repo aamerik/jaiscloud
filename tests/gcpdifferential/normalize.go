@@ -23,10 +23,12 @@ var objectIDGeneration = regexp.MustCompile(`^(<bucket>/.*)/[0-9]+$`)
 var opaqueHexID = regexp.MustCompile(`^[0-9a-fA-F]+$`)
 
 // operationName matches a resolved google.longrunning Operation resource name
-// ("projects/<project>/locations/{location}/operations/{id}"). The id is
+// ("projects/<project>/{locations|regions}/{scope}/operations/{id}"). The id is
 // server-generated and random on both sides, so it is folded to <operation>.
-// It is applied to every string value; only this exact name shape matches.
-var operationName = regexp.MustCompile(`^projects/<project>/locations/([^/]+)/operations/[^/]+$`)
+// Dataproc publishes region-scoped names and every other service location-scoped,
+// so both segments are recognized (the scope segment is preserved). It is applied
+// to every string value; only this exact name shape matches.
+var operationName = regexp.MustCompile(`^projects/<project>/(locations|regions)/([^/]+)/operations/[^/]+$`)
 
 // Normalizer rewrites captured JSON so goldens are stable across runs and
 // contain no project-specific secrets. It performs two passes:
@@ -427,8 +429,9 @@ func (n *Normalizer) value(key string, v any, request bool) any {
 				return "<id>"
 			}
 		}
-		// Cloud Workflows long-running-operation names carry a random id.
-		s = operationName.ReplaceAllString(s, "projects/<project>/locations/$1/operations/<operation>")
+		// Cloud Workflows / Dataproc long-running-operation names carry a random
+		// id; fold it while preserving the location/region scope segment.
+		s = operationName.ReplaceAllString(s, "projects/<project>/$1/$2/operations/<operation>")
 		if looksLikeTimestamp(s) {
 			return "<time>"
 		}

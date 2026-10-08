@@ -28,13 +28,31 @@ func grpcReportDir() string {
 }
 
 // grpcServiceEndpoint maps a gRPC differential service to its real-GCP endpoint
-// host:port. In emulator mode every service is served from the single
-// GRPCTarget.Endpoint instead, so this map is only consulted when recording.
+// host:port. It is consulted when recording (and by the scenario contract); in
+// emulator mode every service is served from the single GRPCTarget.Endpoint, so
+// the :authority token comes from grpcServiceAuthority instead. Real GCP serves
+// google.longrunning.Operations on each service's own host, so an Operations
+// scenario's service is the host that owns it (e.g. "dataproc").
 var grpcServiceEndpoint = map[string]string{
 	"datastore":  "datastore.googleapis.com:443",
 	"firestore":  "firestore.googleapis.com:443",
 	"logging":    "logging.googleapis.com:443",
 	"monitoring": "monitoring.googleapis.com:443",
+	// AUD6-4: google.longrunning.Operations. Regional Dataproc operations are
+	// served only on the region-scoped host ({region}-dataproc.googleapis.com);
+	// the global host rejects the region and the other reachable endpoints deny
+	// the parity principal.
+	"dataproc": "us-central1-dataproc.googleapis.com:443",
+}
+
+// grpcServiceAuthority is the emulator :authority token for a service whose
+// google.longrunning.Operations the differential exercises. Real GCP serves
+// Dataproc operations on a region-scoped host, while the emulator's single
+// listener registers the service under "dataproc" (cmd/jaiscloud-gcp); setting
+// the authority makes the Operations request endpoint-scoped to that service.
+// Services without an entry are not endpoint-scoped (and never call Operations).
+var grpcServiceAuthority = map[string]string{
+	"dataproc": "dataproc",
 }
 
 // GRPCTarget is where a gRPC scenario run is sent: real GCP with Application
@@ -82,9 +100,20 @@ func EmulatorGRPCTarget(endpoint, project, suffix string, names ResourceNames) *
 // dial returns a client connection for one service. Emulator mode dials the
 // single plaintext listener with insecure credentials; record mode dials the
 // service's real-GCP endpoint with ADC.
+//
+// In emulator mode a service with an endpoint-scoped Operations surface is
+// dialed with its :authority token (grpcServiceAuthority). Real GCP serves
+// google.longrunning.Operations per service host, and the emulator's single
+// listener reproduces that split by :authority token
+// (internal/gcp/grpc/operations), so setting the authority makes an Operations
+// request addressed to the service answer as that service.
 func (t *GRPCTarget) dial(ctx context.Context, service string) (*grpc.ClientConn, error) {
 	if t.Emulator {
-		return grpc.NewClient(t.Endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+		if tok, ok := grpcServiceAuthority[service]; ok {
+			opts = append(opts, grpc.WithAuthority(tok))
+		}
+		return grpc.NewClient(t.Endpoint, opts...)
 	}
 	ep, ok := grpcServiceEndpoint[service]
 	if !ok {
