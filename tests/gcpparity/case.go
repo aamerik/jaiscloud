@@ -101,6 +101,7 @@ func Registry() []Scenario {
 	s = append(s, firestoreAdminScenario())
 	s = append(s, storageScenario())
 	s = append(s, storageBucketsScenario())
+	s = append(s, workflowExecutionsScenario())
 	return s
 }
 
