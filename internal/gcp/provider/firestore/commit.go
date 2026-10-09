@@ -63,8 +63,9 @@ type batchWriteRequestWire struct {
 }
 
 type batchGetRequestWire struct {
-	Documents   []string `json:"documents,omitempty"`
-	Transaction string   `json:"transaction,omitempty"`
+	Documents      []string        `json:"documents,omitempty"`
+	Transaction    string          `json:"transaction,omitempty"`
+	NewTransaction json.RawMessage `json:"newTransaction,omitempty"`
 }
 
 type rollbackRequestWire struct {

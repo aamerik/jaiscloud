@@ -821,7 +821,7 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 		}
 		lines = append(lines, string(b))
 	}
-	final := map[string]any{"done": true}
+	final := map[string]any{"done": true, "readTime": readTime.Format(time.RFC3339Nano)}
 	if req.StructuredQuery.Offset > 0 {
 		final["skippedResults"] = req.StructuredQuery.Offset
 	}
@@ -885,12 +885,24 @@ func (p *Provider) BatchGet(ctx context.Context, nr *model.NormalizedRequest) (*
 	if err != nil {
 		return nil, err
 	}
+	// Real Firestore starts a new transaction when newTransaction is set and
+	// returns its id on the first streamed response. The Node SDK's
+	// runTransaction begins transactions lazily through documents.batchGet.
+	if len(req.NewTransaction) > 0 && string(req.NewTransaction) != "null" {
+		txn, err = p.Service.BeginTransaction(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 	items, err := p.Service.BatchGet(ctx, req.Documents, txn)
 	if err != nil {
 		return nil, err
 	}
 	lines := make([]string, 0, len(items))
-	for _, item := range items {
+	for i, item := range items {
+		if i == 0 && len(txn) > 0 {
+			item["transaction"] = encodeTxn(txn)
+		}
 		b, err := json.Marshal(item)
 		if err != nil {
 			return nil, err
