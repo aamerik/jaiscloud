@@ -225,6 +225,36 @@ func strField(m map[string]any, path ...string) string {
 	return s
 }
 
+// pollRunOperation settles a Cloud Run mutation operation returned by the create
+// surface. Eventarc's own trigger operations are always synchronous, but its
+// Cloud Run destination service is created through the Run LRO: inline (done) in
+// the default mode, in flight under the demo's async-LRO pacing cue, where this
+// polls the location-scoped operations.get surface (GET /v2/{operation}).
+func pollRunOperation(t *testing.T, base string, op map[string]any, timeout time.Duration) map[string]any {
+	t.Helper()
+	if done, _ := op["done"].(bool); done {
+		return op
+	}
+	name, _ := op["name"].(string)
+	if name == "" {
+		t.Fatalf("in-flight run operation has no name to poll: %v", op)
+	}
+	pollURL := base + "/v2/" + name
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		code, settled, _ := api(t, httpClient, http.MethodGet, pollURL, nil)
+		if code != http.StatusOK {
+			t.Fatalf("poll run operation %s: HTTP %d: %v", name, code, settled)
+		}
+		if done, _ := settled["done"].(bool); done {
+			return settled
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("run operation %s did not settle within %s", name, timeout)
+	return nil
+}
+
 // applySink deploys the recording sink as a Pod + ClusterIP Service. The
 // manifest is applied as JSON through stdin so the inline script needs no YAML
 // quoting.
@@ -541,7 +571,8 @@ func assertCloudEvent(t *testing.T, rec sinkRecord, want map[string]string) {
 }
 
 // createRunSinkService creates a Cloud Run service that runs the recording sink
-// and returns its invocation uri. The create LRO is inline in k8s mode.
+// and returns its invocation uri. The create LRO is inline in the default mode
+// and settled through operations.get under async-LRO mode.
 func createRunSinkService(t *testing.T, base, id string) string {
 	t.Helper()
 	collection := "/v2/projects/" + testProject + "/locations/" + testLocation + "/services"
@@ -558,6 +589,10 @@ func createRunSinkService(t *testing.T, base, id string) string {
 	code, op, _ := api(t, createClient, http.MethodPost, base+collection+"?serviceId="+id, create)
 	if code != http.StatusOK {
 		t.Fatalf("create run service %s: HTTP %d: %v", id, code, op)
+	}
+	op = pollRunOperation(t, base, op, 2*time.Minute)
+	if done, _ := op["done"].(bool); !done {
+		t.Fatalf("create run service %s: operation never settled: %v", id, op)
 	}
 	created, _ := op["response"].(map[string]any)
 	if created == nil {

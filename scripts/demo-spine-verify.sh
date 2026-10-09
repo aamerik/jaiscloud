@@ -22,10 +22,10 @@
 #   JAISCLOUD_DATAPROC_HMS_ENDPOINT          pod-reachable Hive Metastore (SPK1)
 #   LRO mode = the emulator default (synchronous). The demo's async-LRO
 #   pending→running→done pacing beat (design §9) is a "use on cue" control, not a
-#   steady setting: the Run/Eventarc k3s gate harnesses assert the inline
-#   operation, so folding async LRO into the standing config makes them fail.
-#   It is separately gated by `make test-lro-async-gcp`; set SPINE_LRO_ASYNC=1 to
-#   include the cue (expect the Run/Eventarc suites to fail — see the baseline).
+#   steady setting. Since SPK9 the Run/Eventarc k3s gate harnesses poll
+#   operations.get, so the cue can be folded into the config without failing
+#   them: set SPINE_LRO_ASYNC=1 to include it. It is separately gated by
+#   `make test-lro-async-gcp`.
 #
 # Suites run on that instance, in order:
 #   1. Iceberg batch on HMS                   (SPK1)

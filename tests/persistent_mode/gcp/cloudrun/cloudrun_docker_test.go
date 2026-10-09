@@ -5,8 +5,8 @@
 // with JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=docker on the host:
 //
 //   - create a service whose template names a public image (nginx:latest) on a
-//     declared container port, and wait for the create LRO (which blocks until
-//     the revision container is running and its published port accepts TCP)
+//     declared container port, and settle the create LRO (inline in the default
+//     synchronous mode, polled through operations.get under async-LRO mode)
 //   - assert the returned Service shape (uri is http, latestReadyRevision,
 //     terminal condition, trafficStatuses[0] at 100%)
 //   - assert a labelled revision container exists on the local Docker daemon
@@ -132,15 +132,17 @@ func TestCloudRunDockerExecution(t *testing.T) {
 			},
 		},
 	}
-	// In docker mode the create LRO is inline and blocks until the revision
-	// container is ready, so the response is a done Operation carrying the
-	// Service.
+	// In docker mode the revision container is created inline (the runtime is
+	// ensured before the operation is recorded); the create operation is done
+	// inline in the default synchronous LRO mode and in flight under async-LRO
+	// mode, where pollRunOperation settles it.
 	code, op := api(t, createClient, http.MethodPost, base+collection+"?serviceId="+svcID, create)
 	if code != http.StatusOK {
 		t.Fatalf("create service: HTTP %d: %v", code, op)
 	}
+	op = pollRunOperation(t, base, op, 2*time.Minute)
 	if done, _ := op["done"].(bool); !done {
-		t.Fatalf("create service returned an in-flight operation: %v", op)
+		t.Fatalf("create service operation never settled: %v", op)
 	}
 	created, _ := op["response"].(map[string]any)
 	if created == nil {
