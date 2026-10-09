@@ -8,9 +8,22 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
+
+// sessionPath reduces a captured response-header URL to the path+query a later
+// scenario addresses through the target's service/origin mapping. A resumable
+// upload's Location header is absolute on both real GCP and the emulator, but
+// their hosts and path prefixes differ, so only the origin-independent part is
+// kept. A value that is not an absolute URL is returned unchanged.
+func sessionPath(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.IsAbs() {
+		return u.RequestURI()
+	}
+	return raw
+}
 
 // Target describes where a scenario run is sent. Record mode targets real GCP
 // with an ADC bearer token; replay targets the local emulator with no
@@ -44,6 +57,7 @@ func (t *Target) Run(scenarios []Scenario) ([]Exchange, error) {
 		path := expandVars(sc.Path, vars)
 		reqBody := expandVars(sc.Body, vars)
 
+		var respHeader http.Header
 		send := func() (int, []byte, error) {
 			url := t.URLFor(sc.Service, path)
 			var body io.Reader
@@ -61,6 +75,9 @@ func (t *Target) Run(scenarios []Scenario) ([]Exchange, error) {
 				}
 				req.Header.Set("Content-Type", ct)
 			}
+			for k, v := range sc.Headers {
+				req.Header.Set(k, v)
+			}
 			if t.Token != "" && !sc.NoAuth {
 				req.Header.Set("Authorization", "Bearer "+t.Token)
 			}
@@ -74,6 +91,7 @@ func (t *Target) Run(scenarios []Scenario) ([]Exchange, error) {
 			if readErr != nil {
 				return 0, nil, fmt.Errorf("%s %s: read body: %w", sc.Method, path, readErr)
 			}
+			respHeader = resp.Header
 			return resp.StatusCode, respBody, nil
 		}
 
@@ -102,10 +120,16 @@ func (t *Target) Run(scenarios []Scenario) ([]Exchange, error) {
 		if len(bytes.TrimSpace(respBody)) > 0 {
 			ex.Response = norm.Bytes(respBody)
 		}
-		if reqBody != "" {
+		if reqBody != "" && !sc.NoRequestCapture {
 			ex.Request = norm.RequestBytes([]byte(reqBody))
 		}
 		exs = append(exs, ex)
+
+		for name, header := range sc.SaveHeader {
+			if v := respHeader.Get(header); v != "" {
+				vars[name] = sessionPath(v)
+			}
+		}
 
 		if len(sc.Save) > 0 {
 			var decoded any

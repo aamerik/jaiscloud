@@ -843,6 +843,15 @@ record-gcp-differential-grpc: ## Capture gRPC differential goldens from REAL GCP
 	@echo "Recording gRPC differential goldens from real GCP (project: $${GCP_DIFFERENTIAL_PROJECT:-parity-diff-jaiscloud})..."
 	go test -tags gcp_differential -count=1 -v -run TestRecordGRPC ./tests/gcpdifferential/ -record
 
+# SDK-tour differential (demo/sdk-tour): records the exact operations the
+# official Go client tour issues against real GCP into testdata/golden-tour and
+# replays them offline against the emulator. Needs ADC and a project with the
+# Storage/BigQuery/Pub/Sub/KMS APIs enabled (the same parity project the curated
+# recorders use). The tour's KMS keys are fixed reusable names (non-deletable).
+record-gcp-differential-tour: ## Capture SDK-tour goldens from REAL GCP (needs ADC)
+	@echo "Recording SDK-tour goldens from real GCP (project: $${GCP_DIFFERENTIAL_PROJECT:-parity-diff-jaiscloud})..."
+	go test -tags gcp_differential -count=1 -v -run TestRecordTour ./tests/gcpdifferential/ -record
+
 test-gcp-differential: ## Offline differential replay vs an ephemeral emulator (REST + gRPC; no credentials; tag: gcp_differential)
 	@echo "Building jaiscloud-gcp..."
 	@go build -o /tmp/jc-differential ./cmd/jaiscloud-gcp/
@@ -858,7 +867,24 @@ test-gcp-differential: ## Offline differential replay vs an ephemeral emulator (
 	  n=0; until bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081' >/dev/null 2>&1; do \
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp gRPC not ready"; cat /tmp/jaiscloud-gcp-differential.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (gRPC :8081)"; \
-	  go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest|TestReplayGRPC|TestGRPCGoldensAreClean|TestGRPCGoldensAreMarked|TestGRPCGoldenManifest|TestGRPCScenariosValid|TestGRPCNormalizerFoldsVolatile' ./tests/gcpdifferential/
+	  go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest|TestTourGoldensAreClean|TestTourGoldenManifest|TestReplayGRPC|TestGRPCGoldensAreClean|TestGRPCGoldensAreMarked|TestGRPCGoldenManifest|TestGRPCScenariosValid|TestGRPCNormalizerFoldsVolatile|TestReplayTourGRPC|TestTourGRPCGoldensAreClean' ./tests/gcpdifferential/
+
+test-gcp-differential-tour: ## Offline SDK-tour replay vs an ephemeral emulator (no credentials; tag: gcp_differential)
+	@echo "Building jaiscloud-gcp..."
+	@go build -o /tmp/jc-differential-tour ./cmd/jaiscloud-gcp/
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@set -e; \
+	  /tmp/jc-differential-tour start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-differential-tour.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp (REST :8080)..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-differential-tour.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  n=0; until bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081' >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp gRPC not ready"; cat /tmp/jaiscloud-gcp-differential-tour.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (gRPC :8081)"; \
+	  GCP_DIFFERENTIAL_STRICT=1 go test -tags gcp_differential -count=1 -v -run 'TestReplayTour|TestTourGoldensAreClean|TestTourGoldenManifest|TestTourScenariosValid|TestReplayTourGRPC|TestTourGRPCGoldensAreClean|TestTourGRPCScenariosValid' ./tests/gcpdifferential/
 
 # Opt-in Terraform / OpenTofu compatibility suites — drive the real
 # hashicorp/google provider against the emulator (tests/integration/gcp/terraform/).

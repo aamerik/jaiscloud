@@ -43,6 +43,10 @@ var grpcServiceEndpoint = map[string]string{
 	// the global host rejects the region and the other reachable endpoints deny
 	// the parity principal.
 	"dataproc": "us-central1-dataproc.googleapis.com:443",
+	// SDK-tour differential: the gRPC surfaces the official Go tour drives.
+	"kms":           "cloudkms.googleapis.com:443",
+	"secretmanager": "secretmanager.googleapis.com:443",
+	"pubsub":        "pubsub.googleapis.com:443",
 }
 
 // grpcServiceAuthority is the emulator :authority token for a service whose
@@ -59,11 +63,15 @@ var grpcServiceAuthority = map[string]string{
 // Default Credentials (via the official gRPC dialer), or the emulator's single
 // insecure listener. The same scenario Call closures drive both.
 type GRPCTarget struct {
-	Name     string
-	Project  string
-	Suffix   string
-	Names    ResourceNames
-	Emulator bool
+	Name    string
+	Project string
+	// ProjectNumber, when set, is folded to the same <project> placeholder as
+	// the project id: some services (Secret Manager) canonicalize resource
+	// names to the number while others echo the id.
+	ProjectNumber string
+	Suffix        string
+	Names         ResourceNames
+	Emulator      bool
 	// Endpoint is the emulator's gRPC host:port (no scheme); ignored by real GCP.
 	Endpoint string
 	// Timeout bounds a single RPC (default 60s).
@@ -74,12 +82,19 @@ type GRPCTarget struct {
 // Application Default Credentials through the official dialer; no token is read
 // or held by this package.
 func RealGRPCTarget(project, suffix string, names ResourceNames) *GRPCTarget {
+	return RealGRPCTargetFor(project, "", suffix, names)
+}
+
+// RealGRPCTargetFor is RealGRPCTarget carrying the project number, so the
+// normalizer folds the number alias a service may canonicalize to.
+func RealGRPCTargetFor(project, projectNumber, suffix string, names ResourceNames) *GRPCTarget {
 	return &GRPCTarget{
-		Name:    "real-gcp-grpc",
-		Project: project,
-		Suffix:  suffix,
-		Names:   names,
-		Timeout: 60 * time.Second,
+		Name:          "real-gcp-grpc",
+		Project:       project,
+		ProjectNumber: projectNumber,
+		Suffix:        suffix,
+		Names:         names,
+		Timeout:       60 * time.Second,
 	}
 }
 
@@ -164,7 +179,7 @@ func (t *GRPCTarget) RunGRPC(ctx context.Context, scenarios []GRPCScenario) ([]E
 	if t.Timeout <= 0 {
 		t.Timeout = 60 * time.Second
 	}
-	norm := NewNormalizer(t.Project, "", t.Suffix, t.Names)
+	norm := NewNormalizer(t.Project, t.ProjectNumber, t.Suffix, t.Names)
 
 	exs := make([]Exchange, 0, len(scenarios))
 	for i, sc := range scenarios {

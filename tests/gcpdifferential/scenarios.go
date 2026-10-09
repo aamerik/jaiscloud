@@ -84,6 +84,24 @@ type Scenario struct {
 	// scalar value is captured for use by later scenarios (e.g. the ciphertext
 	// returned by KMS encrypt feeding KMS decrypt).
 	Save map[string]string
+	// Headers are extra request headers sent with the scenario (e.g. the
+	// Content-Range of a resumable-upload chunk, or X-Upload-Content-Type at
+	// session initiation). They are not recorded: the diff compares status and
+	// response body, and headers are transport plumbing.
+	Headers map[string]string
+	// SaveHeader maps a variable name to a response header whose value is
+	// captured for use by later scenarios. The storage resumable session URI
+	// arrives in the Location header, so it is the canonical use. When the
+	// header value is an absolute URL only its path and query are kept, so a
+	// later scenario can address the session through the target's normal
+	// service/origin mapping (real GCP and the emulator expose different hosts
+	// and path prefixes for the same session).
+	SaveHeader map[string]string
+	// NoRequestCapture suppresses recording the request body. It is used for
+	// binary chunk bodies (a resumable upload's 256 KiB chunks) that would
+	// otherwise bloat a committed golden by megabytes without adding diff
+	// signal: the chunk's status and the finalize response carry the parity.
+	NoRequestCapture bool
 	// Wait, when non-nil, makes the run poll this scenario's Path (GET) until
 	// the JSON response's Wait.Field is truthy, then record the final response.
 	// It lets a scenario observe the result of an asynchronous (LRO) mutation,
@@ -229,6 +247,21 @@ type ResourceNames struct {
 	NotifyDisplay string
 	AlertDisplay  string
 	DemoMetric    string
+
+	// SDK-tour differential (demo/sdk-tour): one run-suffixed resource per
+	// tour scenario. The tour's own fixed objects (its page-object prefix and
+	// its small download object) are constants and need no folding.
+	TourBucket    string
+	TourBQDataset string
+	TourBQTable   string
+	TourBQJob     string
+	TourTopic     string
+	TourSub       string
+	TourLog       string
+	TourSecret    string
+	TourFSCounter string
+	TourFSPage    string
+	TourDataproc  string
 }
 
 // Names derives the run's resource identifiers from suffix.
@@ -277,6 +310,19 @@ func Names(suffix string) ResourceNames {
 		NotifyDisplay: "jaiscloud differential notify",
 		AlertDisplay:  "conf-alert-" + suffix,
 		DemoMetric:    "custom.googleapis.com/jaiscloud_demo_" + suffix,
+
+		// SDK-tour differential.
+		TourBucket:    "tour-bucket-" + suffix,
+		TourBQDataset: "tour_ds_" + suffix,
+		TourBQTable:   "tour_tbl_" + suffix,
+		TourBQJob:     "tour_job_" + suffix,
+		TourTopic:     "tour-topic-" + suffix,
+		TourSub:       "tour-sub-" + suffix,
+		TourLog:       "tour-log-" + suffix,
+		TourSecret:    "tour-secret-" + suffix,
+		TourFSCounter: "tour_fs_tx_" + suffix,
+		TourFSPage:    "tour_fs_page_" + suffix,
+		TourDataproc:  "tour-cluster-" + suffix,
 	}
 }
 

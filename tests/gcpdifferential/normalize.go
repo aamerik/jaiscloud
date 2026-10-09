@@ -98,6 +98,7 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		// below also enforces longest-match ordering).
 		{FixedKMSKeyRingUS, "<keyRing>"},
 		{FixedKMSKeyRing, "<keyRing>"},
+		{FixedKMSCryptoKeyAsym, "<cryptoKey>"},
 		{FixedKMSCryptoKey, "<cryptoKey>"},
 		// Concrete run resources (longest first below).
 		{names.Bucket, "<bucket>"},
@@ -145,6 +146,20 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		{names.NotifyTopic, "<notifyTopic>"},
 		{names.AlertDisplay, "<alertDisplay>"},
 		{names.DemoMetric, "<demoMetric>"},
+		// SDK-tour differential resources. Each folds to the shared placeholder
+		// for its resource kind, so the tour goldens reuse the same list-scoping
+		// rules (e.g. a tour bucket list folds to the <bucket> element).
+		{names.TourBucket, "<bucket>"},
+		{names.TourBQDataset, "<dataset>"},
+		{names.TourBQTable, "<table>"},
+		{names.TourBQJob, "<jobId>"},
+		{names.TourTopic, "<topic>"},
+		{names.TourSub, "<subscription>"},
+		{names.TourLog, "<logName>"},
+		{names.TourSecret, "<secret>"},
+		{names.TourFSCounter, "<fsCollection>"},
+		{names.TourFSPage, "<fsCollection>"},
+		{names.TourDataproc, "<dataprocCluster>"},
 		// The scheduler job's OIDC service account is a project-shaped email
 		// (never a real account). Fold it so no golden carries an email address.
 		{"demo-runner@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
@@ -184,7 +199,20 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 // resource ids). Exchange.Path is a report label (matching is by Service/Op),
 // so folding only removes per-run churn from committed goldens.
 func (n *Normalizer) Path(p string) string {
-	return foldNames(n.substitute(p))
+	return foldSessionTokens(foldNames(n.substitute(p)))
+}
+
+// sessionTokenParam folds session/continuation tokens that appear as query
+// parameters in a report path — a resumable upload's upload_id, a list
+// pageToken, a resumable-session resumeToken — so a committed golden never
+// carries a server-issued token. The path is a report label (matching is by
+// Service/Op), so folding only removes per-run churn.
+var sessionTokenParam = regexp.MustCompile(`((?:pageToken|upload_id|resumeToken|sessionToken)=)[^&]*`)
+
+// foldSessionTokens folds the session/continuation query parameters in a
+// normalized path.
+func foldSessionTokens(s string) string {
+	return sessionTokenParam.ReplaceAllString(s, "${1}<token>")
 }
 
 // substitute applies textual replacements.
@@ -288,6 +316,18 @@ var volatileStringKeys = map[string]string{
 	"crc32c":        "<crc32c>",
 	"sha256Hash":    "<sha256Hash>",
 	"ciphertext":    "<ciphertext>",
+	// SDK-tour gRPC: KMS asymmetric material is key-specific (the emulator and
+	// real GCP hold different keys), so the PEM, the signature and their CRCs
+	// fold while the algorithm/protectionLevel (deterministic) survive.
+	"pem":             "<pem>",
+	"pemCrc32c":       "<crc32c>",
+	"signature":       "<signature>",
+	"signatureCrc32c": "<crc32c>",
+	// Firestore transaction ids are server-generated opaque bytes: they always
+	// originate in a BeginTransaction/BatchGetDocuments response and are echoed
+	// back in the read/commit requests that carry them, so (like a cursor) they
+	// fold on both sides. No harness-authored value uses the key.
+	"transaction":   "<transaction>",
 	"ackId":         "<ackId>",
 	"messageId":     "<messageId>",
 	"jobId":         "<jobId>",
@@ -367,7 +407,6 @@ var volatileResponseKeys = map[string]string{
 	"commitTime":       "<time>",
 	"skippedCursor":    "<cursor>",
 	"cursor":           "<cursor>",
-	"transaction":      "<transaction>",
 	"indexUpdates":     "<indexUpdates>",
 	"timestamp":        "<time>",
 	"receiveTimestamp": "<time>",

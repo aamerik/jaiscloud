@@ -211,12 +211,12 @@ func TestGRPCNormalizerFoldsVolatile(t *testing.T) {
 	}
 
 	// Response-only keys must NOT be folded in a request body, where a
-	// client-authored value (BigQuery's insertId dedup key, a transaction id)
-	// must survive verbatim. Request query cursors are the exception: a
-	// startCursor/endCursor a client sends back is always a token a previous
-	// response returned, so it folds on both sides.
+	// client-authored value (BigQuery's insertId dedup key) must survive
+	// verbatim. Request cursors and transaction ids are the exception: a
+	// startCursor/endCursor/transaction a client sends back always originated in
+	// a previous response, so they fold on both sides.
 	req := string(norm.RequestBytes([]byte(`{"insertId":"1","transaction":"abc","startCursor":"abc","endCursor":"def","indexUpdates":3}`)))
-	for _, want := range []string{`"insertId":"1"`, `"transaction":"abc"`, `"indexUpdates":3`, `"startCursor":"<cursor>"`, `"endCursor":"<cursor>"`} {
+	for _, want := range []string{`"insertId":"1"`, `"transaction":"<transaction>"`, `"indexUpdates":3`, `"startCursor":"<cursor>"`, `"endCursor":"<cursor>"`} {
 		if !strings.Contains(req, want) {
 			t.Errorf("normalized request body missing %s: %s", want, req)
 		}
