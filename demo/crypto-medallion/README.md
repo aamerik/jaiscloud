@@ -50,8 +50,15 @@ make demo-crypto-status      # endpoint, Kafka bootstrap, leaderboard URI
 make demo-crypto-preflight   # assert every link is live before a take
 make demo-crypto-rollup      # submit the Spark SQL rollup once by hand
 make demo-crypto-take        # LAN authority + record + narration + mux -> out/take.mp4
+make demo-crypto-take-split  # split screen: console (left) + leaderboard (right) -> out/take-split.mp4
 make demo-crypto-reset       # delete demo resources (FULL=1 also POST /_jaiscloud/reset)
 ```
+
+`demo-crypto-take-split` drives the console to each stage's resources as the
+narration plays (Storage/KMS/Secret/Pub-Sub at *provision*, Managed Kafka at
+*ingest*, Dataproc + the gold bucket at *process*, Cloud Run/Eventarc/Firestore/
+BigQuery at *serve*, Monitoring/Scheduler/Logging at *observe* — one route list
+per beat in `narration/beats.json`).
 
 Each stage is also a direct call, e.g.
 `python3 demo/crypto-medallion/scripts/democtl.py process`.
@@ -72,3 +79,10 @@ Each stage is also a direct call, e.g.
 - The take is captured from a local Xvfb + Chrome against the emulator host's
   LAN address under a `run.<lan-ip>.nip.io` authority (SPK7), so a browser
   resolves the synthesized Host with no `/etc/hosts` edit.
+- **The split take's console is served by the main emulator process**, not the
+  separate `jaiscloud-gcp-ui` Deployment: the console mounts the same in-process
+  providers, so it only shows the demo's resources when it runs where they live.
+  `democtl.py record-split` idempotently adds `--ui --ui-port 4567`, exposes the
+  port, and defaults the console to `crypto-medallion`. The console is navigated
+  client-side (React Router `pushState`) because a full page reload is too slow
+  to paint inside a beat's hold.

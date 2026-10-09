@@ -258,6 +258,14 @@ def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
 
 
+def state_emulator(args) -> tuple[Emulator, dict]:
+    """Load state and return an emulator client with the REST forward ensured."""
+    state = load_state()
+    base = ensure_port_forward(getattr(args, "port", 18080))
+    state["endpoint"] = base
+    return Emulator(base), state
+
+
 # ── stage 1: provision ───────────────────────────────────────────────────────
 def ensure_project(emu: Emulator) -> None:
     log(f"project {PROJECT}")
@@ -493,7 +501,7 @@ def job_state(emu: Emulator, job_id: str) -> str:
 
 
 def stage_process(args) -> None:
-    emu = Emulator(load_state()["endpoint"])
+    emu, _ = state_emulator(args)
     state = load_state()
     assets = stage_spark_assets(emu, state)
     ensure_dataproc_cluster(emu)
@@ -536,7 +544,7 @@ ORDER BY volume DESC""",
 
 
 def stage_rollup(args) -> None:
-    emu = Emulator(load_state()["endpoint"])
+    emu, _ = state_emulator(args)
     state = load_state()
     assets = state.get("spark") or stage_spark_assets(emu, state)
     ensure_dataproc_cluster(emu)
@@ -567,7 +575,7 @@ def build_image(name: str, dockerfile: Path, context: Path, sources: list) -> st
 
 def stage_bridge(args) -> None:
     state = load_state()
-    emu = Emulator(state["endpoint"])
+    emu, _ = state_emulator(args)
     image = build_image("crypto-medallion-bridge",
                         IMAGES_DIR / "bridge" / "Dockerfile", DEMO_DIR,
                         [IMAGES_DIR / "bridge" / "Dockerfile",
@@ -687,7 +695,7 @@ def ensure_scheduler_job(emu: Emulator) -> None:
 
 def stage_serve(args) -> None:
     state = load_state()
-    emu = Emulator(state["endpoint"])
+    emu, _ = state_emulator(args)
     if not state.get("spark"):
         state["spark"] = stage_spark_assets(emu, state)
     buckets = state["buckets"]
@@ -782,13 +790,13 @@ def ensure_monitoring(emu: Emulator) -> None:
 
 
 def stage_observe(args) -> None:
-    emu = Emulator(load_state()["endpoint"])
+    emu, _ = state_emulator(args)
     ensure_monitoring(emu)
     log("observe complete (metric is written by the publisher per delivery)")
 
 
 def stage_automate(args) -> None:
-    emu = Emulator(load_state()["endpoint"])
+    emu, _ = state_emulator(args)
     log("force Cloud Scheduler to fire once")
     emu.post("/_jaiscloud/scheduler-tick")
 
@@ -799,7 +807,7 @@ def stage_status(args) -> None:
     if not state:
         print("no state — run provision first")
         return
-    emu = Emulator(state["endpoint"])
+    emu, _ = state_emulator(args)
     print(json.dumps({
         "endpoint": state["endpoint"],
         "kafka": state["kafka"],
@@ -809,8 +817,7 @@ def stage_status(args) -> None:
 
 def stage_preflight(args) -> None:
     """Verify every link is live before a take (design §9)."""
-    state = load_state()
-    emu = Emulator(state["endpoint"] or ensure_port_forward(args.port))
+    emu, state = state_emulator(args)
     checks: list[tuple[str, bool, str]] = []
 
     ok = True
@@ -921,25 +928,79 @@ def mux(video: Path, narration: Path, out: Path) -> None:
         capture=False)
 
 
-def stage_record(args) -> None:
-    """Serve the leaderboard on the LAN nip.io authority and capture a take."""
-    state = load_state()
-    emu = Emulator(state["endpoint"])
-    ip = args.ip or lan_ip()
-    port = args.lan_port
-    suffix = f"run.{ip}.nip.io"
+def start_forward(local: int, remote: int) -> subprocess.Popen:
+    log(f"forward svc/jaiscloud-gcp {local}:{remote} on 0.0.0.0")
+    return subprocess.Popen(
+        ["kubectl", "-n", NS, "port-forward", "--address", "0.0.0.0",
+         "svc/jaiscloud-gcp", f"{local}:{remote}"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    stage_preflight(args)
+
+def enable_console() -> None:
+    """Serve the console from the main emulator process.
+
+    The console mounts the same in-process providers as the wire API, so it only
+    shows the demo's resources when it runs in the process that owns them (the
+    separate `jaiscloud-gcp-ui` Deployment is an ephemeral second emulator).
+    Idempotently add `--ui --ui-port 4567`, expose the port, and default the
+    console to the demo project (design §7).
+    """
+    log("enable the console on the main emulator (design §7)")
+    args = json.loads(kubectl(["get", "deploy", "jaiscloud-gcp", "-o",
+                               "jsonpath={.spec.template.spec.containers[0].args}"]))
+    if "--ui" not in args:
+        kubectl(["patch", "deploy", "jaiscloud-gcp", "--type=json", "-p",
+                 '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--ui"},'
+                 '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--ui-port"},'
+                 '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"4567"}]'])
+    ports = json.loads(kubectl(["get", "deploy", "jaiscloud-gcp", "-o",
+                                "jsonpath={.spec.template.spec.containers[0].ports}"]))
+    if not any(p.get("name") == "ui" for p in ports):
+        kubectl(["patch", "deploy", "jaiscloud-gcp", "--type=json", "-p",
+                 '[{"op":"add","path":"/spec/template/spec/containers/0/ports/-",'
+                 '"value":{"containerPort":4567,"name":"ui","protocol":"TCP"}}]'])
+    svc_ports = json.loads(kubectl(["get", "svc", "jaiscloud-gcp", "-o",
+                                    "jsonpath={.spec.ports}"]))
+    if not any(p.get("name") == "ui" for p in svc_ports):
+        kubectl(["patch", "svc", "jaiscloud-gcp", "--type=json", "-p",
+                 '[{"op":"add","path":"/spec/ports/-",'
+                 '"value":{"name":"ui","port":4567,"targetPort":4567,"protocol":"TCP"}}]'])
+    kubectl(["set", "env", "deployment/jaiscloud-gcp",
+             f"JAISCLOUD_GCP_PROJECT_ID={PROJECT}"])
+    kubectl(["rollout", "status", "deployment/jaiscloud-gcp", "--timeout=240s"])
+
+
+def _leaderboard_url(emu: Emulator, suffix: str, port: int) -> str:
+    svc, _ = emu.get(f"/v2/projects/{PROJECT}/locations/{REGION}/services/{RUN_LEADERBOARD}")
+    # The stored uri was minted under the previous suffix; rewrite its authority
+    # to the LAN suffix the emulator now routes on.
+    u = urllib.parse.urlsplit(svc.get("uri", ""))
+    labels = (u.hostname or "").split(".")
+    authority = f"{labels[0]}.{labels[1]}.{suffix}:{port}"
+    url = f"{u.scheme}://{authority}/"
+    log(f"leaderboard URL: {url}")
+    req = urllib.request.Request(url + "api/leaderboard")
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        if resp.status != 200:
+            raise SystemExit(f"LAN authority {authority} did not route (HTTP {resp.status})")
+    info(f"LAN authority routed ({authority})")
+    return url
+
+
+def setup_lan_authority(args, port: int, suffix: str) -> tuple[str, subprocess.Popen]:
+    """Switch the Cloud Run authority to the LAN suffix; return (url, forward)."""
+    state = load_state()
     log(f"switch the Cloud Run authority to {suffix}:{port}")
     run(["pkill", "-f", "port-forward svc/jaiscloud-gcp"], check=False)
     kubectl(["set", "env", "deployment/jaiscloud-gcp",
              f"JAISCLOUD_CLOUDRUN_URL_SUFFIX={suffix}",
              f"JAISCLOUD_CLOUDRUN_URL_PORT={port}"])
     kubectl(["rollout", "status", "deployment/jaiscloud-gcp", "--timeout=180s"])
-
-    # The stored service uri was minted under the previous suffix, and the
-    # runtime registers revisions under the authority current at ensure time, so
-    # re-deploy the demo services after the switch.
+    pf = start_forward(port, 8080)
+    wait_healthy(f"http://localhost:{port}", timeout=40)
+    emu = Emulator(f"http://localhost:{port}")
+    # The runtime registers revisions under the authority current at ensure time,
+    # so re-deploy the demo services after the switch.
     log("re-deploy Cloud Run services under the LAN authority")
     buckets = state["buckets"]
     deploy_run_service(emu, RUN_PUBLISHER, state["images"]["publisher"], 8080, {
@@ -951,45 +1012,211 @@ def stage_record(args) -> None:
     deploy_run_service(emu, RUN_LEADERBOARD, state["images"]["leaderboard"], 8080, {
         "PROJECT": PROJECT, "EMULATOR": IN_CLUSTER_EMULATOR,
         "FIRESTORE_COLLECTION": FIRESTORE_COLLECTION})
+    return _leaderboard_url(emu, suffix, port), pf
 
-    log(f"forward svc/jaiscloud-gcp {port}:8080 on 0.0.0.0")
-    pf = subprocess.Popen(
-        ["kubectl", "-n", NS, "port-forward", "--address", "0.0.0.0",
-         "svc/jaiscloud-gcp", f"{port}:8080"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def ffprobe_seconds(path: Path) -> float:
+    data = json.loads(run(["ffprobe", "-v", "error", "-show_entries",
+                           "format=duration", "-of", "json", str(path)]))
+    return float(data["format"]["duration"])
+
+
+def build_narration(narration: Path) -> None:
+    run([sys.executable, str(DEMO_DIR / "scripts" / "make-narration.py"),
+         "--out", str(narration)], capture=False)
+
+
+def stage_record(args) -> None:
+    """Serve the leaderboard on the LAN nip.io authority and capture a take."""
+    ip = args.ip or lan_ip()
+    port = args.lan_port
+    stage_preflight(args)
+    url, pf = setup_lan_authority(args, port, f"run.{ip}.nip.io")
     try:
-        wait_healthy(f"http://localhost:{port}", timeout=40)
-        svc, _ = emu.get(f"/v2/projects/{PROJECT}/locations/{REGION}/services/{RUN_LEADERBOARD}")
-        # The stored uri was minted under the previous suffix; rewrite its
-        # authority to the LAN suffix the emulator now routes on.
-        u = urllib.parse.urlsplit(svc.get("uri", ""))
-        labels = (u.hostname or "").split(".")
-        authority = f"{labels[0]}.{labels[1]}.{suffix}:{port}"
-        url = f"{u.scheme}://{authority}/"
-        log(f"leaderboard URL: {url}")
-
-        # Prove the emulator routes the synthesized authority before recording.
-        req = urllib.request.Request(url + "api/leaderboard")
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            if resp.status != 200:
-                raise SystemExit(f"LAN authority {authority} did not route (HTTP {resp.status})")
-        info(f"LAN authority routed ({authority})")
-
         narration = Path(args.narration)
-        run([sys.executable, str(DEMO_DIR / "scripts" / "make-narration.py"),
-             "--out", str(narration)], capture=False)
-        import json as _json
-        # narration length + a small tail so -shortest cuts to the voice track.
-        dur = _json.loads(run(["ffprobe", "-v", "error", "-show_entries",
-                               "format=duration", "-of", "json", str(narration)]))
-        seconds = float(dur["format"]["duration"])
-        capture = args.out
+        build_narration(narration)
+        seconds = ffprobe_seconds(narration)
         run([str(REPO_ROOT / "scripts" / "demo-record.sh"), "--url", url,
-             "--duration", str(int(seconds + 8)), "--out", capture], capture=False)
-        mux(Path(capture), narration, Path(args.out_muxed))
+             "--duration", str(int(seconds + 8)), "--out", args.out], capture=False)
+        mux(Path(args.out), narration, Path(args.out_muxed))
         log(f"take ready: {args.out_muxed}")
     finally:
         pf.terminate()
+
+
+# ── stage 7b: split-screen take (console | leaderboard) ──────────────────────
+def _find_chrome() -> str:
+    for c in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        if shutil.which(c):
+            return shutil.which(c)
+    raise SystemExit("no google-chrome/chromium on PATH")
+
+
+def _cdp_pages() -> list:
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:9222/json/list", timeout=5) as r:
+            return [t for t in json.load(r) if t.get("type") == "page"]
+    except Exception:
+        return []
+
+
+def _cdp_ws_url(app_prefix: str = "") -> str:
+    pages = _cdp_pages()
+    if app_prefix:
+        for t in pages:
+            if app_prefix in (t.get("url") or ""):
+                return t["webSocketDebuggerUrl"]
+    return pages[0]["webSocketDebuggerUrl"] if pages else ""
+
+
+async def _cdp_eval(ws_url: str, expression: str) -> None:
+    import websockets
+    async with websockets.connect(ws_url, max_size=None) as ws:
+        await ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
+                                  "params": {"expression": expression,
+                                             "returnByValue": True}}))
+        await ws.recv()
+
+
+def cdp_eval(app_prefix: str, expression: str) -> bool:
+    """Run JS in the console app target. React Router is driven client-side so a
+    route change is instant (a full Page.navigate reload is too slow to paint
+    inside a beat's hold)."""
+    ws = _cdp_ws_url(app_prefix)
+    if not ws:
+        return False
+    import asyncio
+    asyncio.run(_cdp_eval(ws, expression))
+    return True
+
+
+def stage_record_split(args) -> None:
+    """Record a take with the console left and the leaderboard right, driving the
+    console to each stage's resources as the narration plays (design §7/§8)."""
+    import tempfile
+    import time as _time
+
+    ip = args.ip or lan_ip()
+    port = args.lan_port
+    console_port = args.console_port
+    width, height = 960, 1080
+    total_w, total_h = width * 2, height
+
+    stage_preflight(args)
+    enable_console()
+    url, pf = setup_lan_authority(args, port, f"run.{ip}.nip.io")
+    console_pf = start_forward(console_port, 4567)
+    chrome = None
+    xvfb = None
+    ff = None
+    profile_console = profile_leader = ""
+    try:
+        console_base = f"http://{ip}:{console_port}"
+        meta = None
+        for _ in range(40):
+            try:
+                meta, _ = Emulator(console_base).get("/api/ui/v1/meta")
+                break
+            except Exception:
+                _time.sleep(1)
+        if not meta:
+            raise SystemExit(f"console not reachable at {console_base}")
+        if meta.get("accountId") != PROJECT:
+            raise SystemExit(f"console is on {meta.get('accountId')}, expected {PROJECT}")
+        info(f"console at {console_base}/ui on {PROJECT}")
+
+        narration = Path(args.narration)
+        build_narration(narration)
+        spec = json.loads((DEMO_DIR / "narration" / "beats.json").read_text())
+        clips = DEMO_DIR / "narration" / "clips"
+        durations = {b["id"]: ffprobe_seconds(clips / f"{b['id']}.mp3") for b in spec["beats"]}
+
+        log(f"start Xvfb :{args.display_num} ({total_w}x{total_h})")
+        xvfb = subprocess.Popen(
+            ["Xvfb", f":{args.display_num}", "-screen", "0",
+             f"{total_w}x{total_h}x24", "-nolisten", "tcp"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(60):
+            if Path(f"/tmp/.X11-unix/X{args.display_num}").exists():
+                break
+            _time.sleep(0.2)
+        env_display = {**os.environ, "DISPLAY": f":{args.display_num}"}
+        env_display.pop("WAYLAND_DISPLAY", None)
+
+        chrome = _find_chrome()
+        profile_console = tempfile.mkdtemp(prefix="/tmp/opencode/cm-console-")
+        profile_leader = tempfile.mkdtemp(prefix="/tmp/opencode/cm-leader-")
+        common = ["--ozone-platform=x11", "--no-first-run", "--no-default-browser-check",
+                  "--disable-dev-shm-usage", "--disable-features=Translate"]
+
+        out_dir = Path(args.out).parent
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        def launch(profile, pos, app, logname, debug=False):
+            cmd = [chrome, f"--user-data-dir={profile}", *common,
+                   f"--window-position={pos}", f"--window-size={width},{height}",
+                   f"--app={app}"]
+            if debug:
+                cmd += ["--remote-debugging-port=9222", "--remote-allow-origins=*"]
+            logf = open(out_dir / logname, "w")
+            return subprocess.Popen(cmd, env=env_display, stdout=logf,
+                                    stderr=subprocess.STDOUT)
+
+        log("open the console (left)")
+        launch(profile_console, "0,0", f"{console_base}/ui/gcp",
+               "console-chrome.log", debug=True)
+        for _ in range(60):
+            if _cdp_ws_url(console_base + "/ui"):
+                break
+            _time.sleep(0.5)
+        else:
+            clog_path = out_dir / "console-chrome.log"
+            if clog_path.exists():
+                print(clog_path.read_text()[-800:])
+            raise SystemExit("console Chrome DevTools endpoint not reachable on :9222")
+        log("open the leaderboard (right)")
+        launch(profile_leader, f"{width},0", url, "leaderboard-chrome.log")
+        _time.sleep(args.warmup)
+
+        run_total = sum(durations.values())
+        lead = 1.0
+        out = Path(args.out)
+        log(f"capture {run_total + lead:.0f}s ({total_w}x{total_h}@{args.framerate}) -> {out}")
+        ff = subprocess.Popen(
+            ["ffmpeg", "-y", "-loglevel", "error", "-f", "x11grab", "-draw_mouse", "1",
+             "-video_size", f"{total_w}x{total_h}", "-framerate", str(args.framerate),
+             "-i", f":{args.display_num}", "-t", str(int(run_total + lead)),
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+             "-pix_fmt", "yuv420p", str(out)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _time.sleep(lead)
+        for beat in spec["beats"]:
+            dur = durations[beat["id"]]
+            stops = beat.get("console") or [{"route": "/gcp", "weight": 1.0}]
+            wsum = sum(s.get("weight", 1.0) for s in stops) or 1.0
+            for stop in stops:
+                route = stop["route"]
+                js = (f"history.pushState({{}}, '', '/ui{route}');"
+                      "window.dispatchEvent(new PopStateEvent('popstate'));")
+                if not cdp_eval(console_base + "/ui", js):
+                    raise SystemExit("CDP eval failed")
+                info(f"console -> {route} ({dur * stop.get('weight', 1.0) / wsum:.1f}s)")
+                _time.sleep(dur * stop.get("weight", 1.0) / wsum)
+        ff.wait()
+        if ff.returncode != 0:
+            raise SystemExit("ffmpeg capture failed")
+        mux(out, narration, Path(args.out_muxed))
+        log(f"take ready: {args.out_muxed}")
+    finally:
+        pf.terminate()
+        console_pf.terminate()
+        if ff and ff.poll() is None:
+            ff.terminate()
+        for profile in (profile_console, profile_leader):
+            if profile:
+                subprocess.run(["pkill", "-f", profile], check=False)
+        if xvfb:
+            xvfb.terminate()
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
@@ -998,7 +1225,7 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("stage", choices=[
         "provision", "bridge", "process", "rollup", "serve", "observe",
-        "automate", "up", "status", "preflight", "record", "reset"])
+        "automate", "up", "status", "preflight", "record", "record-split", "reset"])
     ap.add_argument("--port", type=int, default=18080,
                     help="host port for the emulator REST port-forward")
     ap.add_argument("--no-observe", action="store_true", help="up: skip observe")
@@ -1007,18 +1234,29 @@ def main() -> None:
     ap.add_argument("--ip", default="", help="record: emulator-host LAN IP")
     ap.add_argument("--lan-port", type=int, default=18080,
                     help="record: host port forwarded on 0.0.0.0 for the LAN authority")
+    ap.add_argument("--console-port", type=int, default=4567,
+                    help="record-split: host port forwarded on 0.0.0.0 for the console")
+    ap.add_argument("--display-num", type=int, default=99,
+                    help="record-split: Xvfb display number")
+    ap.add_argument("--framerate", type=int, default=30)
+    ap.add_argument("--warmup", type=float, default=6.0)
     ap.add_argument("--narration", default=str(DEMO_DIR / "narration" / "narration.mp3"))
     ap.add_argument("--out", default=str(DEMO_DIR / "out" / "take-browser.mp4"),
                     help="record: raw capture path")
     ap.add_argument("--out-muxed", default=str(DEMO_DIR / "out" / "take.mp4"),
                     help="record: muxed take path")
     args = ap.parse_args()
+    if args.stage == "record-split" and args.out == str(DEMO_DIR / "out" / "take-browser.mp4"):
+        args.out = str(DEMO_DIR / "out" / "take-split-browser.mp4")
+    if args.stage == "record-split" and args.out_muxed == str(DEMO_DIR / "out" / "take.mp4"):
+        args.out_muxed = str(DEMO_DIR / "out" / "take-split.mp4")
     {
         "provision": stage_provision, "bridge": stage_bridge,
         "process": stage_process, "rollup": stage_rollup, "serve": stage_serve,
         "observe": stage_observe, "automate": stage_automate, "up": stage_up,
         "status": stage_status, "preflight": stage_preflight,
-        "record": stage_record, "reset": stage_reset,
+        "record": stage_record, "record-split": stage_record_split,
+        "reset": stage_reset,
     }[args.stage](args)
 
 

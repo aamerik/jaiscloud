@@ -167,7 +167,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         demo-crypto-jars demo-crypto-provision demo-crypto-bridge demo-crypto-process \
         demo-crypto-rollup demo-crypto-serve demo-crypto-observe demo-crypto-automate \
         demo-crypto-up demo-crypto-status demo-crypto-preflight demo-crypto-take \
-        demo-crypto-reset \
+        demo-crypto-take-split demo-crypto-reset \
         test-e2e-dataproc-docker \
         test-e2e-eventarc-k8s \
         test-e2e-scheduler-k8s \
@@ -1191,6 +1191,8 @@ record-gcp-demo: ## Capture a real-browser demo take from an isolated Xvfb displ
 DEMOCTL ?= python3 demo/crypto-medallion/scripts/democtl.py
 # Host port forwarded on 0.0.0.0 for the recording's nip.io authority (SPK7).
 DEMO_CRYPTO_PORT ?= 18080
+# Host port forwarded on 0.0.0.0 for the console in the split-screen take.
+DEMO_CRYPTO_CONSOLE_PORT ?= 4567
 
 demo-crypto-jars: ## Fetch the Iceberg + Kafka connector jars the demo stages on GCS (cached)
 	demo/crypto-medallion/spark/download-jars.sh
@@ -1227,6 +1229,9 @@ demo-crypto-preflight: ## Crypto-medallion: assert every link is live before a t
 
 demo-crypto-take: ## Crypto-medallion: LAN authority + Xvfb/Chrome capture + narration + mux -> out/take.mp4 (design §8)
 	$(DEMOCTL) record --port $(DEMO_CRYPTO_PORT) --lan-port $(DEMO_CRYPTO_PORT)
+
+demo-crypto-take-split: ## Crypto-medallion: split-screen take — console (left) + leaderboard (right), console driven per beat -> out/take-split.mp4 (design §7/§8)
+	$(DEMOCTL) record-split --port $(DEMO_CRYPTO_PORT) --lan-port $(DEMO_CRYPTO_PORT) --console-port $(DEMO_CRYPTO_CONSOLE_PORT)
 
 demo-crypto-reset: ## Crypto-medallion: tear the demo down (PP=1 also terraform destroy, FULL=1 also POST /_jaiscloud/reset)
 	$(DEMOCTL) reset --port $(DEMO_CRYPTO_PORT) $(if $(filter 1,$(PP)),--pp) $(if $(filter 1,$(FULL)),--full)

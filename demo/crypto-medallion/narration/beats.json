@@ -4,27 +4,60 @@
   "beats": [
     {
       "id": "01-intro",
-      "text": "This is jaiscloud, a local emulator for Google Cloud. We point real Google clients, and real Terraform, at it, and run one crypto data product through its whole life."
+      "text": "This is jaiscloud, a local emulator for Google Cloud. We point real Google clients, and real Terraform, at it, and run one crypto data product through its whole life.",
+      "console": [
+        { "route": "/gcp", "weight": 0.5 },
+        { "route": "/gcp/resourcemanager/projects", "weight": 0.5 }
+      ]
     },
     {
       "id": "02-provision",
-      "text": "Provision. Terraform creates the buckets, the KMS key, the feed secret and the Pub/Sub topic. Then gcloud creates the Managed Kafka cluster, the Dataproc cluster and the rest of the data platform."
+      "text": "Provision. Terraform creates the buckets, the KMS key, the feed secret and the Pub/Sub topic. Then gcloud creates the Managed Kafka cluster, the Dataproc cluster and the rest of the data platform.",
+      "console": [
+        { "route": "/gcp/storage/buckets", "weight": 0.3 },
+        { "route": "/gcp/kms/keyrings", "weight": 0.2 },
+        { "route": "/gcp/secretmanager/secrets", "weight": 0.2 },
+        { "route": "/gcp/pubsub/topics", "weight": 0.15 },
+        { "route": "/gcp/iam/service-accounts", "weight": 0.15 }
+      ]
     },
     {
       "id": "03-ingest",
-      "text": "Ingest. A bridge pod reads a live public trade feed, normalizes every trade, and produces it to Managed Kafka, a real Redpanda broker running inside the cluster."
+      "text": "Ingest. A bridge pod reads a live public trade feed, normalizes every trade, and produces it to Managed Kafka, a real Redpanda broker running inside the cluster.",
+      "console": [
+        { "route": "/gcp/managedkafka/clusters", "weight": 0.45 },
+        { "route": "/gcp/managedkafka/topics", "weight": 0.35 },
+        { "route": "/gcp/storage/buckets/crypto-medallion-capture", "weight": 0.2 }
+      ]
     },
     {
       "id": "04-process",
-      "text": "Process. One always-on Spark job on Dataproc reads Kafka and writes the medallion: raw bronze, parsed and deduplicated silver, and a windowed gold table in Iceberg on the Hive Metastore."
+      "text": "Process. One always-on Spark job on Dataproc reads Kafka and writes the medallion: raw bronze, parsed and deduplicated silver, and a windowed gold table in Iceberg on the Hive Metastore.",
+      "console": [
+        { "route": "/gcp/dataproc/clusters", "weight": 0.3 },
+        { "route": "/gcp/dataproc/jobs", "weight": 0.4 },
+        { "route": "/gcp/storage/buckets/crypto-medallion-gold", "weight": 0.3 }
+      ]
     },
     {
       "id": "05-serve",
-      "text": "Serve. Every gold rollup fires Eventarc, which drives a Cloud Run publisher into Firestore and BigQuery, and this leaderboard re-sorts live as each window lands."
+      "text": "Serve. Every gold rollup fires Eventarc, which drives a Cloud Run publisher into Firestore and BigQuery, and this leaderboard re-sorts live as each window lands.",
+      "console": [
+        { "route": "/gcp/run/services", "weight": 0.3 },
+        { "route": "/gcp/eventarc/triggers", "weight": 0.25 },
+        { "route": "/gcp/firestore/collections/leaderboard", "weight": 0.25 },
+        { "route": "/gcp/bigquery/datasets/crypto_medallion", "weight": 0.2 }
+      ]
     },
     {
       "id": "06-observe",
-      "text": "Observe and automate. A custom metric crosses an alert policy and opens an incident on Pub/Sub, while Cloud Scheduler submits the batch rollup on a cron. All of it, locally."
+      "text": "Observe and automate. A custom metric crosses an alert policy and opens an incident on Pub/Sub, while Cloud Scheduler submits the batch rollup on a cron. All of it, locally.",
+      "console": [
+        { "route": "/gcp/monitoring/alerting", "weight": 0.3 },
+        { "route": "/gcp/monitoring/metrics", "weight": 0.25 },
+        { "route": "/gcp/scheduler/jobs", "weight": 0.25 },
+        { "route": "/gcp/logging/entries", "weight": 0.2 }
+      ]
     }
   ]
 }
