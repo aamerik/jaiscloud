@@ -3,9 +3,23 @@ package dataproc
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 )
+
+// jsonEqual reports whether two JSON documents are semantically equal, ignoring
+// object key order and whitespace. The memory store keeps raw bytes while
+// Postgres stores config as JSONB (which canonicalizes both), so byte equality
+// is not part of the store contract — value equality is.
+func jsonEqual(a, b string) bool {
+	var av, bv any
+	if json.Unmarshal([]byte(a), &av) != nil || json.Unmarshal([]byte(b), &bv) != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
+}
 
 // runStoreTests exercises a Store against the shared test matrix. Backend tests
 // (memory/postgres) call this so both implement the identical contract.
@@ -40,10 +54,10 @@ func runStoreTests(t *testing.T, s Store) {
 	if got.Status.State != "CREATING" || got.ClusterUUID != "uuid-1" {
 		t.Fatalf("cluster fields lost: %+v", got)
 	}
-	if string(got.Config) != `{"gceClusterConfig":{"zoneUri":"us-central1-a"},"softwareConfig":{"imageVersion":"2.2"}}` {
+	if !jsonEqual(string(got.Config), `{"gceClusterConfig":{"zoneUri":"us-central1-a"},"softwareConfig":{"imageVersion":"2.2"}}`) {
 		t.Fatalf("config not verbatim: %s", got.Config)
 	}
-	if !got.IsGKEBacked() || string(got.VirtualClusterConfig) != vccJSON {
+	if !got.IsGKEBacked() || !jsonEqual(string(got.VirtualClusterConfig), vccJSON) {
 		t.Fatalf("virtualClusterConfig not verbatim: %s", got.VirtualClusterConfig)
 	}
 

@@ -3,8 +3,22 @@ package metastore
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"reflect"
 	"testing"
 )
+
+// jsonEqual reports whether two JSON documents are semantically equal, ignoring
+// object key order and whitespace. The memory store keeps raw bytes while
+// Postgres stores config as JSONB (which canonicalizes both), so byte equality
+// is not part of the store contract — value equality is.
+func jsonEqual(a, b string) bool {
+	var av, bv any
+	if json.Unmarshal([]byte(a), &av) != nil || json.Unmarshal([]byte(b), &bv) != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
+}
 
 // runStoreTests exercises a Store against the shared test matrix. Backend tests
 // (memory/postgres) call this so both implement the identical contract.
@@ -37,7 +51,7 @@ func runStoreTests(t *testing.T, s Store) {
 	if got.State != "ACTIVE" || got.Labels["env"] != "dev" {
 		t.Fatalf("service fields lost: %+v", got)
 	}
-	if string(got.Config) != `{"network":"default","hiveMetastoreConfig":{"version":"3.1.2"}}` {
+	if !jsonEqual(string(got.Config), `{"network":"default","hiveMetastoreConfig":{"version":"3.1.2"}}`) {
 		t.Fatalf("config not verbatim: %s", got.Config)
 	}
 	if len(got.StateHistory) != 1 || got.StateHistory[0].State != "CREATING" {
@@ -113,7 +127,7 @@ func runStoreTests(t *testing.T, s Store) {
 		t.Fatalf("expected federation ErrAlreadyExists, got %v", err)
 	}
 	gotFed, err := s.GetFederation(ctx, "proj", "us-central1", "fed-1")
-	if err != nil || gotFed.Labels["env"] != "dev" || string(gotFed.Config) != `{"version":"3.1.2"}` {
+	if err != nil || gotFed.Labels["env"] != "dev" || !jsonEqual(string(gotFed.Config), `{"version":"3.1.2"}`) {
 		t.Fatalf("get federation: %v %+v", err, gotFed)
 	}
 	if _, err := s.UpdateFederationAtomic(ctx, "proj", "us-central1", "fed-1", func(cur Federation) (Federation, error) {
@@ -189,7 +203,7 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("restore: %v", err)
 	}
 	got, err := s2.GetService(ctx, "p", "r", "s")
-	if err != nil || got.State != "ACTIVE" || string(got.Config) != `{"network":"n"}` {
+	if err != nil || got.State != "ACTIVE" || !jsonEqual(string(got.Config), `{"network":"n"}`) {
 		t.Fatalf("service lost after restore: %v %+v", err, got)
 	}
 	gotB, err := s2.GetBackup(ctx, "p", "r", "s", "b")
@@ -201,7 +215,7 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("import lost after restore: %v %+v", err, gotM)
 	}
 	gotF, err := s2.GetFederation(ctx, "p", "r", "f")
-	if err != nil || gotF.State != "ACTIVE" || string(gotF.Config) != `{"version":"3.1.2"}` {
+	if err != nil || gotF.State != "ACTIVE" || !jsonEqual(string(gotF.Config), `{"version":"3.1.2"}`) {
 		t.Fatalf("federation lost after restore: %v %+v", err, gotF)
 	}
 	gotOp, err := s2.GetOperation(ctx, "p", "r", "op")
