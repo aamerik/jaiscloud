@@ -12,8 +12,10 @@ import (
 
 // objectIDGeneration matches a GCS object id of the form
 // <bucket>/<object>/<generation> after project/resource substitution, folding
-// the embedded generation so it is stable across runs.
-var objectIDGeneration = regexp.MustCompile(`^(<bucket>/.*)/[0-9]+$`)
+// the embedded generation so it is stable across runs. The bucket segment is
+// generic (not just the curated <bucket>) so a run-scoped load bucket's object
+// id folds too.
+var objectIDGeneration = regexp.MustCompile(`^([^/]+/.+)/[0-9]+$`)
 
 // opaqueHexID matches a scalar id that is entirely hexadecimal/decimal. Such
 // ids are server-generated and differ between real GCP and the emulator (e.g.
@@ -29,6 +31,44 @@ var opaqueHexID = regexp.MustCompile(`^[0-9a-fA-F]+$`)
 // so both segments are recognized (the scope segment is preserved). It is applied
 // to every string value; only this exact name shape matches.
 var operationName = regexp.MustCompile(`^projects/<project>/(locations|regions)/([^/]+)/operations/[^/]+$`)
+
+// genericOperationID folds a trailing long-running-operation id of any shape the
+// location/region-scoped operationName pattern does not cover — Service Usage's
+// top-level / projects-scoped "operations/{id}" names, for example — while
+// preserving any scope segment. It matches at the end of the string only.
+var genericOperationID = regexp.MustCompile(`(^|/)operations/[^/]+$`)
+
+// alertPolicyName and notificationChannelName fold the server-generated
+// Monitoring resource id that follows the project in a full resource name, so a
+// create response name and the subsequent get path are stable across runs.
+// alertPolicyRef / notificationChannelRef fold the server-generated Monitoring
+// resource id wherever it appears in a name (including a policy condition name,
+// ".../alertPolicies/{p}/conditions/{c}"). alertPolicyConditionRef folds the
+// trailing condition id.
+var alertPolicyRef = regexp.MustCompile(`(projects/<project>/alertPolicies)/[^/]+`)
+var alertPolicyConditionRef = regexp.MustCompile(`(/conditions)/[^/]+$`)
+var notificationChannelRef = regexp.MustCompile(`(projects/<project>/notificationChannels)/[^/]+`)
+
+// runRevisionName folds the server-generated Cloud Run revision suffix in a
+// ".../services/{svc}/revisions/{svc}-{gen}-{hash}" name; runServiceURL folds a
+// Cloud Run service URL (the emulator's hash authority and real GCP's differ).
+var runRevisionName = regexp.MustCompile(`^(projects/<project>/locations/[^/]+/services/[^/]+/revisions)/[^/]+$`)
+var runServiceURL = regexp.MustCompile(`^https?://[^/]*\.run\.app(/.*)?$`)
+
+// foldNames applies the shape-based string folds (operation ids, Monitoring
+// resource ids and Cloud Run revision/URL values) on top of the textual
+// substitution.
+func foldNames(s string) string {
+	s = genericOperationID.ReplaceAllString(s, "${1}operations/<operation>")
+	s = alertPolicyRef.ReplaceAllString(s, "${1}/<alertPolicyId>")
+	s = alertPolicyConditionRef.ReplaceAllString(s, "${1}/<condition>")
+	s = notificationChannelRef.ReplaceAllString(s, "${1}/<notificationChannelId>")
+	s = runRevisionName.ReplaceAllString(s, "${1}/<revision>")
+	if runServiceURL.MatchString(s) {
+		return "<runUrl>"
+	}
+	return s
+}
 
 // Normalizer rewrites captured JSON so goldens are stable across runs and
 // contain no project-specific secrets. It performs two passes:
@@ -53,7 +93,10 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		// project, so they collapse to a single placeholder — otherwise the
 		// alias difference manufactures a false divergence.
 		{projectNumber, "<project>"},
-		// Fixed KMS names are stable but still project resources.
+		// Fixed KMS names are stable but still project resources. The US
+		// keyring is longer than the global one and is replaced first (the sort
+		// below also enforces longest-match ordering).
+		{FixedKMSKeyRingUS, "<keyRing>"},
 		{FixedKMSKeyRing, "<keyRing>"},
 		{FixedKMSCryptoKey, "<cryptoKey>"},
 		// Concrete run resources (longest first below).
@@ -86,6 +129,25 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		{names.DataprocCluster, "<dataprocCluster>"},
 		{names.LogName, "<logName>"},
 		{names.MetricType, "<metricType>"},
+		// crypto-medallion demo parity (D1). Run-suffixed resources created by
+		// the demo mutations, each folded to a stable placeholder. The CMEK
+		// bucket folds to the shared <bucket> placeholder (it is a bucket); the
+		// BigQuery job id folds to <jobId> so a jobs.list response can be scoped
+		// to this run's job by the embedded id.
+		{names.CMEKBucket, "<bucket>"},
+		{names.LoadBucket, "<loadBucket>"},
+		{names.EventBucket, "<eventBucket>"},
+		{names.RunService, "<runService>"},
+		{names.Trigger, "<trigger>"},
+		{names.SchedJob, "<schedulerJob>"},
+		{names.BQJob, "<jobId>"},
+		{names.CryptoKey, "<cryptoKey>"},
+		{names.NotifyTopic, "<notifyTopic>"},
+		{names.AlertDisplay, "<alertDisplay>"},
+		{names.DemoMetric, "<demoMetric>"},
+		// The scheduler job's OIDC service account is a project-shaped email
+		// (never a real account). Fold it so no golden carries an email address.
+		{"demo-runner@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
 		// AUD6-1 gRPC differential: the Datastore kind and the entity written
 		// into it are run-suffixed, so both fold to placeholders.
 		{names.DSEntity, "<dsEntity>"},
@@ -117,18 +179,12 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 	return &Normalizer{repls: repls}
 }
 
-// operationIDSuffix matches a trailing long-running-operation id in a request
-// path (e.g. ".../operations/operation-1789941434240-..."). Real GCP mints a
-// fresh id per operation, so an LRO poll path would otherwise churn the golden
-// on every recording.
-var operationIDSuffix = regexp.MustCompile(`/operations/[^/]+$`)
-
-// Path normalizes a request path: textual resource substitution plus folding a
-// trailing long-running-operation id. Exchange.Path is a report label (matching
-// is by Service/Op), so folding only removes per-run churn from committed
-// goldens.
+// Path normalizes a request path: textual resource substitution plus the
+// shape-based folds (a trailing long-running-operation id and Monitoring
+// resource ids). Exchange.Path is a report label (matching is by Service/Op),
+// so folding only removes per-run churn from committed goldens.
 func (n *Normalizer) Path(p string) string {
-	return operationIDSuffix.ReplaceAllString(n.substitute(p), "/operations/<operation>")
+	return foldNames(n.substitute(p))
 }
 
 // substitute applies textual replacements.
@@ -240,6 +296,18 @@ var volatileStringKeys = map[string]string{
 	// oauth2ClientId empty), so fold both sides to a placeholder.
 	"uniqueId":       "<uniqueId>",
 	"oauth2ClientId": "<oauth2ClientId>",
+	// Cloud Run / Eventarc resources carry a server-generated uid (a UUID on
+	// real GCP, a random hex on the emulator), and Cloud Run an
+	// observedGeneration and condition lastTransitionTime. Cloud Run's
+	// creator/lastModifier are the caller's email on real GCP, so fold them to
+	// keep emails out of committed goldens.
+	"uid":                "<uid>",
+	"observedGeneration": "<observedGeneration>",
+	"lastTransitionTime": "<time>",
+	"creator":            "<userEmail>",
+	"lastModifier":       "<userEmail>",
+	// Monitoring mutation records name the mutating principal's email.
+	"mutatedBy": "<userEmail>",
 	// Cloud Workflows reports a defaulted serviceAccount (a project SA email);
 	// fold it so no golden carries an email address.
 	"serviceAccount": "<serviceAccount>",
@@ -248,6 +316,13 @@ var volatileStringKeys = map[string]string{
 	"endTime":     "<time>",
 	"queryId":     "<queryId>",
 	"totalSlotMs": "<totalSlotMs>",
+	// BigQuery jobs carry the creating principal's email / subject.
+	"user_email":        "<userEmail>",
+	"principal_subject": "<principalSubject>",
+	// Cloud Scheduler timestamps are wall-clock dependent.
+	"lastAttemptTime": "<time>",
+	"scheduleTime":    "<time>",
+	"userUpdateTime":  "<time>",
 	// CRC32C of random/opaque payloads is itself random.
 	"dataCrc32c":       "<crc32c>",
 	"ciphertextCrc32c": "<crc32c>",
@@ -357,6 +432,10 @@ var sortArrayKeys = map[string]bool{
 	"entityResults":     true,
 	"metricDescriptors": true,
 	"entries":           true,
+	// crypto-medallion demo parity (D1): a BigQuery jobs.list response is a
+	// project-wide history, so its element order is unspecified and the list is
+	// scoped below to this run's job.
+	"jobs": true,
 }
 
 // scopedListPlaceholders maps a collection field to the placeholder that
@@ -406,6 +485,10 @@ var scopedListPlaceholders = map[string]string{
 	"queues":    "<queue>",
 	"services":  "<service>",
 	"functions": "<function>",
+	// crypto-medallion demo parity (D1): a BigQuery jobs.list is a project-wide
+	// job history; keep only this run's job, whose generated `id` embeds the
+	// run-suffixed job id that folds to <jobId>.
+	"jobs": "<jobId>",
 }
 
 // value normalizes a decoded JSON value, rewriting volatile fields and sorting
@@ -443,6 +526,9 @@ func (n *Normalizer) value(key string, v any, request bool) any {
 		// Cloud Workflows / Dataproc long-running-operation names carry a random
 		// id; fold it while preserving the location/region scope segment.
 		s = operationName.ReplaceAllString(s, "projects/<project>/$1/$2/operations/<operation>")
+		// Any other operation-name shape (Service Usage) and the Monitoring
+		// server-generated resource ids.
+		s = foldNames(s)
 		if looksLikeTimestamp(s) {
 			return "<time>"
 		}

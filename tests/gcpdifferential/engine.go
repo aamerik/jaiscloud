@@ -24,6 +24,10 @@ type Target struct {
 	Token         string
 	HTTP          *http.Client
 	URLFor        func(service, path string) string
+	// SavedVars holds the last Run's captured ${name} variables (e.g. a
+	// server-generated alert-policy or notification-channel name) so Cleanup can
+	// delete the exact resources a capture created. It is nil until Run.
+	SavedVars map[string]string
 }
 
 // Run executes every scenario against the target in order, capturing a
@@ -114,6 +118,7 @@ func (t *Target) Run(scenarios []Scenario) ([]Exchange, error) {
 			}
 		}
 	}
+	t.SavedVars = vars
 	return exs, nil
 }
 

@@ -55,6 +55,11 @@ const RealProjectNumberDefault = "978644905877"
 const (
 	FixedKMSKeyRing   = "jaiscloud-differential"
 	FixedKMSCryptoKey = "differential-key"
+	// FixedKMSKeyRingUS is a second fixed keyring in the `us` multi-region,
+	// required because GCS refuses a `global` keyring for a `US` bucket
+	// ("Cloud KMS region 'global' not available for use with GCS region 'US'").
+	// Like the global pair it is non-deletable and reused.
+	FixedKMSKeyRingUS = "jaiscloud-differential-us"
 )
 
 // Scenario is one curated request. Path and Body may reference ${name}
@@ -147,6 +152,10 @@ var serviceBaseURL = map[string]string{
 	"functions":       "https://cloudfunctions.googleapis.com",
 	"metastore":       "https://metastore.googleapis.com",
 	"managedkafka":    "https://managedkafka.googleapis.com",
+	// crypto-medallion demo parity (D1): Cloud Scheduler v1, added on top of the
+	// AUD6-2 breadth because the demo's `cm-rollup` job is a REST call against
+	// cloudscheduler.googleapis.com.
+	"scheduler": "https://cloudscheduler.googleapis.com",
 }
 
 // runSuffix returns a per-run unique, resource-name-safe suffix. Record and
@@ -200,6 +209,26 @@ type ResourceNames struct {
 	// canonical-key order agree and the page boundary is deterministic.
 	DSPageKind   string
 	DSPagePrefix string
+
+	// crypto-medallion demo parity (D1). One run-suffixed resource per mutation
+	// the demo performs that the curated set did not already cover: a CMEK GCS
+	// bucket, a GCS bucket + NDJSON object used as a BigQuery load source, a
+	// Cloud Run v2 service, an Eventarc trigger, a Cloud Scheduler job, a
+	// BigQuery load job, a KMS crypto key, a Pub/Sub topic for the Monitoring
+	// notification channel, the alert policy display name, and the custom
+	// metric type the demo writes.
+	CMEKBucket    string
+	LoadBucket    string
+	EventBucket   string
+	RunService    string
+	Trigger       string
+	SchedJob      string
+	BQJob         string
+	CryptoKey     string
+	NotifyTopic   string
+	NotifyDisplay string
+	AlertDisplay  string
+	DemoMetric    string
 }
 
 // Names derives the run's resource identifiers from suffix.
@@ -234,6 +263,20 @@ func Names(suffix string) ResourceNames {
 		DSEntity:         "conf_ds_entity_" + suffix,
 		DSPageKind:       "conf_ds_pg_kind_" + suffix,
 		DSPagePrefix:     "conf_ds_pg_" + suffix + "_",
+
+		// crypto-medallion demo parity (D1).
+		CMEKBucket:    "conf-bucket-cmek-" + suffix,
+		LoadBucket:    "conf-load-" + suffix,
+		EventBucket:   "conf-evt-" + suffix,
+		RunService:    "conf-run-" + suffix,
+		Trigger:       "conf-trigger-" + suffix,
+		SchedJob:      "conf-sched-" + suffix,
+		BQJob:         "conf_job_" + suffix,
+		CryptoKey:     "conf-key-" + suffix,
+		NotifyTopic:   "conf-notify-" + suffix,
+		NotifyDisplay: "jaiscloud differential notify",
+		AlertDisplay:  "conf-alert-" + suffix,
+		DemoMetric:    "custom.googleapis.com/jaiscloud_demo_" + suffix,
 	}
 }
 
@@ -371,6 +414,23 @@ func Scenarios(project, suffix string) []Scenario {
 		Scenario{Op: "tabledata_insert_all", Service: "bigquery", Method: "POST", Path: bqBase + "/datasets/" + n.DS + "/tables/" + n.Table + "/insertAll",
 			Body: `{"rows":[{"insertId":"1","json":{"id":"1"}}]}`},
 		Scenario{Op: "tabledata_list", Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/" + n.DS + "/tables/" + n.Table + "/data"},
+		// crypto-medallion demo parity (D1): a jobs.insert load from a gs://
+		// NDJSON object (the Spark rollup load path) plus jobs.list. The source
+		// bucket/object are created here because the curated GCS bucket above is
+		// already deleted by this point; cleanup removes them best-effort.
+		Scenario{Op: "bq_load_bucket_create", Service: "storage", Method: "POST", Path: "/storage/v1/b?project=" + project,
+			Body: fmt.Sprintf(`{"name":%q}`, n.LoadBucket)},
+		Scenario{Op: "bq_load_object_upload", Service: "storage", Method: "POST",
+			Path:        "/upload/storage/v1/b/" + n.LoadBucket + "/o?uploadType=media&name=data.ndjson",
+			Body:        "{\"id\":2}\n",
+			ContentType: "application/x-ndjson"},
+		Scenario{Op: "job_insert_load", Service: "bigquery", Method: "POST", Path: bqBase + "/jobs",
+			Body: fmt.Sprintf(`{"jobReference":{"projectId":%q,"jobId":%q,"location":"US"},"configuration":{"load":{"sourceUris":["gs://%s/data.ndjson"],"destinationTable":{"projectId":%q,"datasetId":%q,"tableId":%q},"sourceFormat":"NEWLINE_DELIMITED_JSON","writeDisposition":"WRITE_APPEND"}}}`,
+				project, n.BQJob, n.LoadBucket, project, n.DS, n.Table)},
+		Scenario{Op: "jobs_list", Service: "bigquery", Method: "GET", Path: bqBase + "/jobs?projection=full&maxResults=10",
+			// The job index is eventually consistent on real GCP; poll until this
+			// run's job id appears so the golden is stable.
+			Wait: &WaitSpec{Field: "jobs", Contains: n.BQJob, Interval: time.Second, Timeout: 60 * time.Second}},
 		Scenario{Op: "query_bad_sql", Service: "bigquery", Method: "POST", Path: bqBase + "/queries", Body: `{"query":"SELECT FROM"}`},
 		Scenario{Op: "query", Service: "bigquery", Method: "POST", Path: bqBase + "/queries", Body: `{"query":"SELECT 1"}`},
 		Scenario{Op: "dataset_get_missing", Service: "bigquery", Method: "GET", Path: bqBase + "/datasets/missing_" + suffix},
@@ -477,6 +537,11 @@ func Scenarios(project, suffix string) []Scenario {
 		Scenario{Op: "fs_doc_create_dup", Service: "firestore", Method: "POST",
 			Path: fsBase + "?documentId=" + n.FSDoc,
 			Body: `{"fields":{"greeting":{"stringValue":"hello"},"count":{"integerValue":"1"}}}`},
+		// crypto-medallion demo parity (D1): the publisher upserts each symbol
+		// with an update-less documents.patch (full-document replace), the
+		// Firestore read-model write path the demo depends on.
+		Scenario{Op: "fs_doc_upsert", Service: "firestore", Method: "PATCH", Path: fsDoc,
+			Body: `{"fields":{"greeting":{"stringValue":"hi"},"count":{"integerValue":"2"}}}`},
 		Scenario{Op: "fs_doc_get", Service: "firestore", Method: "GET", Path: fsDoc},
 		Scenario{Op: "fs_docs_list", Service: "firestore", Method: "GET", Path: fsBase},
 		Scenario{Op: "fs_doc_get_missing", Service: "firestore", Method: "GET", Path: fsBase + "/missing-" + suffix},
@@ -548,6 +613,14 @@ func Scenarios(project, suffix string) []Scenario {
 		Scenario{Op: "log_entry_write", Service: "logging", Method: "POST", Path: "/v2/entries:write",
 			Body: fmt.Sprintf(`{"entries":[{"logName":%q,"resource":{"type":"global"},"severity":"INFO","textPayload":"hello jaiscloud"}]}`,
 				"projects/"+project+"/logs/"+n.LogName)},
+		// crypto-medallion demo parity (D1): the publisher's structured log
+		// entry read path (entries.list scoped to the log just written). Real
+		// GCP's entry index is eventually consistent, so poll until the entry
+		// appears.
+		Scenario{Op: "log_entries_list", Service: "logging", Method: "POST", Path: "/v2/entries:list",
+			Body: fmt.Sprintf(`{"resourceNames":["projects/%s"],"filter":"logName=\"projects/%s/logs/%s\"","orderBy":"timestamp desc","pageSize":10}`,
+				project, project, n.LogName),
+			Wait: &WaitSpec{Field: "entries", Contains: n.LogName, Interval: time.Second, Timeout: 60 * time.Second}},
 		Scenario{Op: "log_names_list", Service: "logging", Method: "GET",
 			Path: "/v2/projects/" + project + "/logs?resourceNames=projects%2F" + project,
 			// The project log-name index is eventually consistent on real GCP
@@ -634,6 +707,132 @@ func Scenarios(project, suffix string) []Scenario {
 			Path: "/v1/projects/" + project + "/locations/us-central1/clusters"},
 		Scenario{Op: "managedkafka_cluster_get_missing", Service: "managedkafka", Method: "GET",
 			Path: "/v1/projects/" + project + "/locations/us-central1/clusters/missing-" + suffix},
+	)
+
+	// ─── crypto-medallion demo parity (D1) ───────────────────────────────────
+	// The exact REST mutations the crypto-medallion demo's Terraform + democtl
+	// perform that the curated set above did not already cover: Service Usage
+	// enable (google_project_service), a KMS crypto key, a CMEK GCS bucket, a
+	// Cloud Run v2 service (create/patch/get), an Eventarc trigger, a Cloud
+	// Scheduler job, the Monitoring notification channel / alert policy /
+	// timeSeries write, and a BigQuery load job (covered in the BigQuery block).
+	// Everything created here is run-suffixed and torn down best-effort; the KMS
+	// key is the one unavoidable residue (GCP cannot delete crypto keys — see
+	// Cleanup).
+
+	// Service Usage: services.enable is what Terraform's google_project_service
+	// calls for every API the demo enables.
+	sc = append(sc,
+		Scenario{Op: "service_enable", Service: "serviceusage", Method: "POST",
+			Path: "/v1/projects/" + project + "/services/run.googleapis.com:enable"},
+	)
+
+	// Cloud KMS: cryptoKeys.create (Terraform google_kms_crypto_key). The key is
+	// created in the fixed, reusable differential keyring so no second keyring
+	// is minted; the crypto key itself cannot be deleted by GCP.
+	kmsRing := "/v1/projects/" + project + "/locations/global/keyRings/" + FixedKMSKeyRing
+	demoKey := kmsRing + "/cryptoKeys/" + n.CryptoKey
+	sc = append(sc,
+		Scenario{Op: "cryptokey_create", Service: "kms", Method: "POST",
+			Path: kmsRing + "/cryptoKeys?cryptoKeyId=" + n.CryptoKey,
+			Body: `{"purpose":"ENCRYPT_DECRYPT"}`},
+		Scenario{Op: "cryptokey_create_get", Service: "kms", Method: "GET", Path: demoKey},
+	)
+
+	// GCS CMEK: the demo's gold/curated bucket carries
+	// encryption.default_kms_key_name. A `us` multi-region fixed key is used
+	// because a US bucket rejects a `global` keyring; the GCS service account is
+	// granted encrypter/decrypter on it by EnsureKMS.
+	cmekKey := "projects/" + project + "/locations/us/keyRings/" + FixedKMSKeyRingUS + "/cryptoKeys/" + FixedKMSCryptoKey
+	sc = append(sc,
+		Scenario{Op: "bucket_create_cmek", Service: "storage", Method: "POST", Path: "/storage/v1/b?project=" + project,
+			Body: fmt.Sprintf(`{"name":%q,"location":"US","encryption":{"defaultKmsKeyName":%q}}`, n.CMEKBucket, cmekKey)},
+		Scenario{Op: "bucket_get_cmek", Service: "storage", Method: "GET", Path: "/storage/v1/b/" + n.CMEKBucket},
+		Scenario{Op: "bucket_delete_cmek", Service: "storage", Method: "DELETE", Path: "/storage/v1/b/" + n.CMEKBucket},
+	)
+
+	// Cloud Scheduler: jobs.create with an httpTarget + retryConfig + oidcToken
+	// (the demo's cm-rollup job). The OIDC service account is a project-shaped,
+	// run-constant email that the normalizer folds so no golden carries an email.
+	schedBase := "/v1/projects/" + project + "/locations/us-central1/jobs"
+	// The job resource name in the body is project-relative (no /v1 prefix),
+	// while the get path carries the /v1 prefix.
+	schedName := "projects/" + project + "/locations/us-central1/jobs/" + n.SchedJob
+	schedBody := fmt.Sprintf(`{"name":%q,"description":"jaiscloud differential","schedule":"*/2 * * * *","timeZone":"UTC","httpTarget":{"uri":"https://example.com/rollup","httpMethod":"POST","body":"eyJraW5kIjoicm9sbHVwIn0=","oidcToken":{"serviceAccountEmail":%q,"audience":"https://example.com/rollup"}},"retryConfig":{"retryCount":1,"minBackoffDuration":"15s","maxBackoffDuration":"3600s","maxDoublings":5}}`,
+		// The project's App Engine default service account exists in both the
+		// parity project and the emulator's synthesized project, and folds
+		// cleanly via the <project> substitution (no golden carries an email).
+		schedName, project+"@appspot.gserviceaccount.com")
+	sc = append(sc,
+		Scenario{Op: "scheduler_job_create", Service: "scheduler", Method: "POST", Path: schedBase, Body: schedBody},
+		Scenario{Op: "scheduler_job_get", Service: "scheduler", Method: "GET", Path: schedBase + "/" + n.SchedJob},
+	)
+
+	// Cloud Monitoring: the notification channel, the custom time-series write
+	// (the publisher's trades_per_min metric), and the alert policy that watches
+	// it. A dedicated Pub/Sub topic backs the pubsub channel.
+	monBase := "/v3/projects/" + project
+	notifyTopic := "projects/" + project + "/topics/" + n.NotifyTopic
+	alertFilter := fmt.Sprintf(`metric.type = %q AND resource.type = %q`, n.DemoMetric, "global")
+	sc = append(sc,
+		Scenario{Op: "mon_notify_topic_create", Service: "pubsub", Method: "PUT",
+			Path: "/v1/projects/" + project + "/topics/" + n.NotifyTopic,
+			Body: fmt.Sprintf(`{"name":%q}`, notifyTopic)},
+		Scenario{Op: "mon_notification_channel_create", Service: "monitoring", Method: "POST", Path: monBase + "/notificationChannels",
+			Body: fmt.Sprintf(`{"type":"pubsub","displayName":%q,"enabled":true,"labels":{"topic":%q}}`, n.NotifyDisplay, notifyTopic),
+			Save: map[string]string{"notifyChannel": "name"}},
+		Scenario{Op: "mon_notification_channel_get", Service: "monitoring", Method: "GET", Path: "/v3/${notifyChannel}"},
+		// The endTime is folded by the normalizer; a fresh timestamp keeps real
+		// GCP from rejecting an out-of-retention point.
+		Scenario{Op: "mon_time_series_create", Service: "monitoring", Method: "POST", Path: monBase + "/timeSeries",
+			Body: fmt.Sprintf(`{"timeSeries":[{"metric":{"type":%q},"resource":{"type":"global","labels":{"project_id":%q}},"points":[{"interval":{"endTime":%q},"value":{"doubleValue":10}}]}]}`,
+				n.DemoMetric, project, time.Now().UTC().Add(-time.Minute).Format("2006-01-02T15:04:05Z07:00"))},
+		Scenario{Op: "mon_alert_policy_create", Service: "monitoring", Method: "POST", Path: monBase + "/alertPolicies",
+			Body: fmt.Sprintf(`{"displayName":%q,"combiner":"OR","enabled":true,"notificationChannels":["${notifyChannel}"],"conditions":[{"displayName":"trades per minute high","conditionThreshold":{"filter":%q,"comparison":"COMPARISON_GT","thresholdValue":5,"duration":"0s"}}]}`,
+				n.AlertDisplay, alertFilter),
+			Save: map[string]string{"alertPolicy": "name"}},
+		Scenario{Op: "mon_alert_policy_get", Service: "monitoring", Method: "GET", Path: "/v3/${alertPolicy}"},
+	)
+
+	// Cloud Run v2: services.create + patch + get (the demo's publisher and
+	// leaderboard). A tiny public scale-to-zero image keeps the real-GCP deploy
+	// cheap; create/update are LROs, so each is awaited before the read.
+	runBase := "/v2/projects/" + project + "/locations/us-central1/services"
+	runSvc := runBase + "/" + n.RunService
+	runImage := "us-docker.pkg.dev/cloudrun/container/hello"
+	sc = append(sc,
+		Scenario{Op: "run_service_create", Service: "run", Method: "POST", Path: runBase + "?serviceId=" + n.RunService,
+			Body: fmt.Sprintf(`{"template":{"containers":[{"image":%q,"ports":[{"containerPort":8080}]}]}}`, runImage)},
+		// Poll for readiness (not just existence): Eventarc's later create
+		// requires the destination service to be Ready.
+		Scenario{Op: "run_service_get", Service: "run", Method: "GET", Path: runSvc,
+			Wait: &WaitSpec{Field: "terminalCondition", Contains: "CONDITION_SUCCEEDED", Interval: 3 * time.Second, Timeout: 240 * time.Second}},
+		Scenario{Op: "run_service_patch", Service: "run", Method: "PATCH", Path: runSvc + "?updateMask=template",
+			Body: fmt.Sprintf(`{"template":{"containers":[{"image":%q,"ports":[{"containerPort":8080}],"env":[{"name":"DEMO","value":"parity"}]}]}}`, runImage),
+			Save: map[string]string{"runPatchOp": "name"}},
+		Scenario{Op: "run_service_patch_wait", Service: "run", Method: "GET", Path: "/v2/${runPatchOp}",
+			Wait: &WaitSpec{Field: "done", Interval: 3 * time.Second, Timeout: 240 * time.Second}},
+		Scenario{Op: "run_service_get_after_patch", Service: "run", Method: "GET", Path: runSvc,
+			Wait: &WaitSpec{Field: "terminalCondition", Contains: "CONDITION_SUCCEEDED", Interval: 3 * time.Second, Timeout: 120 * time.Second}},
+	)
+
+	// Eventarc: triggers.create (GCS object.finalized filter -> the Cloud Run
+	// service above) + get, the demo's cm-leaderboard-live trigger. Real GCP
+	// requires a regional filter bucket whose location matches the trigger
+	// region, an explicit trigger service account, and the bare Cloud Run
+	// service name (verified against real GCP; the demo's full-resource-path
+	// destination form is rejected — recorded as a report finding).
+	evBase := "/v1/projects/" + project + "/locations/us-central1/triggers"
+	sc = append(sc,
+		Scenario{Op: "eventarc_bucket_create", Service: "storage", Method: "POST", Path: "/storage/v1/b?project=" + project,
+			Body: fmt.Sprintf(`{"name":%q,"location":"us-central1"}`, n.EventBucket)},
+		Scenario{Op: "eventarc_trigger_create", Service: "eventarc", Method: "POST", Path: evBase + "?triggerId=" + n.Trigger,
+			Body: fmt.Sprintf(`{"name":%q,"serviceAccount":%q,"destination":{"cloudRun":{"service":%q,"region":"us-central1"}},"eventFilters":[{"attribute":"type","value":"google.cloud.storage.object.v1.finalized"},{"attribute":"bucket","value":%q}]}`,
+				"projects/"+project+"/locations/us-central1/triggers/"+n.Trigger, project+"@appspot.gserviceaccount.com", n.RunService, n.EventBucket)},
+		// The create is an LRO; poll the trigger itself until it exists rather
+		// than the (eventarc-specific, not generically served) operation.
+		Scenario{Op: "eventarc_trigger_get", Service: "eventarc", Method: "GET", Path: evBase + "/" + n.Trigger,
+			Wait: &WaitSpec{Field: "name", Interval: 3 * time.Second, Timeout: 240 * time.Second}},
 	)
 
 	// ─── Authz paths (G6 / G1) ────────────────────────────────────────────────

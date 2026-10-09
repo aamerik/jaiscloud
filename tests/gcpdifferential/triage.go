@@ -292,6 +292,173 @@ var triageRules = []TriageRule{
 		Op:      "su_service_get_unknown",
 		Reason:  "the emulator does not maintain the Service Usage catalog: it synthesizes any service name as DISABLED instead of reporting real GCP's 403 PERMISSION_DENIED for a service the caller cannot see; the divergence is the documented catalog/authz gap (G1), not a wire-shape bug",
 	},
+
+	// ── crypto-medallion demo parity (D1) ────────────────────────────────────
+	// Accepted differences for the demo's REST mutations. Each is an output-only
+	// or defaulted field real GCP materializes and the emulator does not echo,
+	// an additive field, or an accepted LRO-completion/authorship-timing
+	// difference — the same classes the rules above record. Nothing here changes
+	// a value the demo reads.
+
+	// Cloud Run v2 Service: the emulator models a control-plane subset of the
+	// Service resource (the demo reads only `uri` and `terminalCondition.state`,
+	// which match). Real GCP's output-only/defaulted read fields the emulator
+	// omits are creator/lastModifier/launchStage/ingress/scaling/sshEnabled and
+	// the defaulted template sub-fields (resources/startupProbe/port name/
+	// timeout/serviceAccount/maxInstanceRequestConcurrency); real GCP's
+	// `traffic` allocation is the emulator's `trafficStatuses`.
+	{
+		Service: "run",
+		Kind:    "missing_field",
+		Reason:  "Cloud Run v2 Service control-plane subset: real GCP's output-only/defaulted read fields (creator/lastModifier/launchStage/ingress/scaling/sshEnabled, defaulted template resources/startupProbe/port name/timeout/serviceAccount/maxInstanceRequestConcurrency, and `traffic`, which the emulator exposes as `trafficStatuses`) are omitted; the demo-read fields (uri, terminalCondition) match",
+	},
+	{
+		Service: "run",
+		Kind:    "array_length_mismatch",
+		Reason:  "Cloud Run v2 Service control-plane subset: the emulator synthesizes a single Ready condition (real GCP also reports RoutesReady/ConfigurationsReady) and one service URL; the demo does not iterate these arrays",
+	},
+	{
+		Service:  "run",
+		Kind:     "value_mismatch",
+		Location: ".conditions[0].type",
+		Reason:   "Cloud Run v2 Service control-plane subset: the emulator's single condition is the terminal Ready condition while real GCP's conditions array starts with RoutesReady; both express the same reconciled state",
+	},
+	{
+		Service:  "run",
+		Kind:     "value_mismatch",
+		Location: ".trafficStatuses[0].revision",
+		Reason:   "Cloud Run v2 Service control-plane subset: real GCP's trafficStatuses[].revision is the short revision id while the emulator returns the full revision resource name; both name the same revision (the full name also appears in latestReadyRevision on both sides)",
+	},
+	{
+		Service:  "run",
+		Kind:     "value_mismatch",
+		Location: ".reconciling",
+		Reason:   "accepted LRO-completion timing: real GCP reports reconciling=true while the operation is in flight; the emulator completes create/update synchronously (reconciling=false)",
+	},
+	{
+		Service:  "run",
+		Kind:     "value_mismatch",
+		Location: ".terminalCondition.state",
+		Reason:   "accepted LRO-completion timing: real GCP reports the terminal condition as PENDING/RECONCILING while the operation is in flight; the emulator completes synchronously (CONDITION_SUCCEEDED)",
+	},
+
+	// BigQuery load job + jobs.list. The emulator evaluates loads synchronously
+	// and does not echo real GCP's output-only job metadata.
+	{
+		Service: "bigquery",
+		Op:      "job_insert_load",
+		Kind:    "missing_field",
+		Reason:  "output-only BigQuery job metadata the emulator does not echo (load schema, jobCreationReason, principal_subject, statistics.reservation_id, user_email); the load configuration and destination match",
+	},
+	{
+		Service:  "bigquery",
+		Op:       "job_insert_load",
+		Kind:     "value_mismatch",
+		Location: "response.id",
+		Reason:   "output-only job identity: real GCP's job `id` embeds the job location (`<project>:US.<jobId>`) while the emulator emits `<project>:<jobId>`; the canonical identity is jobReference.jobId, which matches",
+	},
+	{
+		Service: "bigquery",
+		Op:      "jobs_list",
+		Kind:    "missing_field",
+		Reason:  "output-only BigQuery job metadata the emulator does not echo for a listed job (load schema, principal_subject, job-level state, statistics.reservation_id, user_email), plus a nextPageToken for unrelated jobs in the project history; the scoped job matches",
+	},
+	{
+		Service:  "bigquery",
+		Op:       "jobs_list",
+		Kind:     "value_mismatch",
+		Location: "jobs[0].id",
+		Reason:   "output-only job identity: real GCP's job `id` embeds the job location (`<project>:US.<jobId>`) while the emulator emits `<project>:<jobId>`; the canonical identity is jobReference.jobId, which matches",
+	},
+	{
+		Service:  "bigquery",
+		Kind:     "value_mismatch",
+		Location: ".status.state",
+		Reason:   "accepted LRO-completion timing: real GCP reports a freshly submitted load job as RUNNING; the emulator evaluates the load synchronously and reports DONE",
+	},
+
+	// Eventarc trigger: create is an LRO (done=false on real GCP) and real GCP
+	// defaults eventDataContentType.
+	{
+		Service:  "eventarc",
+		Op:       "eventarc_trigger_create",
+		Kind:     "value_mismatch",
+		Location: "response.done",
+		Reason:   "accepted LRO-completion timing: real GCP returns the create operation in flight (done=false); the emulator completes it synchronously (done=true)",
+	},
+	{
+		Service: "eventarc",
+		Op:      "eventarc_trigger_get",
+		Kind:    "missing_field",
+		Reason:  "output-only default: real GCP sets eventDataContentType=application/json on a GCS trigger; the emulator omits the defaulted field",
+	},
+
+	// Cloud Logging: real GCP auto-fills the global resource's project_id label.
+	{
+		Service:  "logging",
+		Op:       "log_entries_list",
+		Kind:     "missing_field",
+		Location: "resource.labels",
+		Reason:   "output-only default: real GCP auto-fills the global monitored resource's project_id label; the emulator stores the resource type only",
+	},
+
+	// Cloud Monitoring: mutation-record/condition sub-resource metadata.
+	{
+		Service: "monitoring",
+		Op:      "mon_alert_policy_create",
+		Kind:    "missing_field",
+		Reason:  "output-only Monitoring metadata: the server-generated condition name and the creationRecord/mutationRecord audit records real GCP returns are not echoed by the emulator; the policy identity, conditions, channels and enabled state match",
+	},
+	{
+		Service: "monitoring",
+		Op:      "mon_alert_policy_get",
+		Kind:    "missing_field",
+		Reason:  "output-only Monitoring metadata: the server-generated condition name and the creationRecord/mutationRecord audit records real GCP returns are not echoed by the emulator; the policy identity, conditions, channels and enabled state match",
+	},
+
+	// Cloud Scheduler: defaulted/attempt-status fields.
+	{
+		Service: "scheduler",
+		Op:      "scheduler_job_create",
+		Kind:    "missing_field",
+		Reason:  "output-only Cloud Scheduler fields the emulator does not echo (defaulted attemptDeadline, the synthesized httpTarget headers, retryConfig.maxRetryDuration, and the job's last-attempt status); the schedule, target, OIDC token and retry config match",
+	},
+	{
+		Service: "scheduler",
+		Op:      "scheduler_job_get",
+		Kind:    "missing_field",
+		Reason:  "output-only Cloud Scheduler fields the emulator does not echo (defaulted attemptDeadline, the synthesized httpTarget headers, retryConfig.maxRetryDuration, and the job's last-attempt status); the schedule, target, OIDC token and retry config match",
+	},
+
+	// Service Usage: the returned service's catalog config sub-fields are output-only.
+	{
+		Service: "serviceusage",
+		Op:      "service_enable",
+		Kind:    "missing_field",
+		Reason:  "output-only Service Usage catalog metadata real GCP returns on the enabled service's config (title/documentation/monitoring/quota/usage/authentication/monitoredResources); the service name and ENABLED state match",
+	},
+	{
+		Service:  "serviceusage",
+		Op:       "service_enable",
+		Kind:     "value_mismatch",
+		Location: "response.done",
+		Reason:   "accepted LRO-completion timing: real GCP returns the enable operation in flight (done=false); the emulator completes it synchronously (done=true)",
+	},
+
+	// GCS: a regional bucket's location is canonicalized to uppercase.
+	{
+		Service: "storage",
+		Op:      "eventarc_bucket_create",
+		Kind:    "missing_field",
+		Reason:  "output-only bucket metadata: the defaulted satisfiesPZI flag real GCP returns is not echoed by the emulator",
+	},
+	{
+		Service:  "storage",
+		Op:       "eventarc_bucket_create",
+		Kind:     "value_mismatch",
+		Location: "response.location",
+		Reason:   "GCS canonicalizes a bucket location to uppercase (US-CENTRAL1); the emulator echoes the requested form (us-central1); the location and locationType are otherwise the same geography",
+	},
 }
 
 // bigQueryQueryStatFields are the output-only job-statistics/timing members of a

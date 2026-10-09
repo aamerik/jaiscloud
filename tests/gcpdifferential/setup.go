@@ -53,12 +53,18 @@ func (t *Target) request(method, service, path, body, contentType string) (int, 
 func (t *Target) EnsureKMS() error {
 	base := "/v1/projects/" + t.Project + "/locations/global/keyRings"
 	ring := base + "/" + FixedKMSKeyRing
+	usBase := "/v1/projects/" + t.Project + "/locations/us/keyRings"
+	usRing := usBase + "/" + FixedKMSKeyRingUS
 
 	steps := []struct {
 		desc, method, path, body string
 	}{
 		{"keyring", http.MethodPost, base + "?keyRingId=" + FixedKMSKeyRing, "{}"},
 		{"cryptokey", http.MethodPost, ring + "/cryptoKeys?cryptoKeyId=" + FixedKMSCryptoKey, `{"purpose":"ENCRYPT_DECRYPT"}`},
+		// The CMEK GCS bucket needs a US-multiregion key; a `global` keyring is
+		// rejected for a US bucket.
+		{"us keyring", http.MethodPost, usBase + "?keyRingId=" + FixedKMSKeyRingUS, "{}"},
+		{"us cryptokey", http.MethodPost, usRing + "/cryptoKeys?cryptoKeyId=" + FixedKMSCryptoKey, `{"purpose":"ENCRYPT_DECRYPT"}`},
 	}
 	for _, s := range steps {
 		status, body, err := t.request(s.method, "kms", s.path, s.body, "application/json")
@@ -75,6 +81,24 @@ func (t *Target) EnsureKMS() error {
 				break
 			}
 			return fmt.Errorf("ensure kms %s: status %d: %s", s.desc, status, trimBody(body))
+		}
+	}
+
+	// GCS reads/writes a CMEK object through the Cloud Storage service agent,
+	// which must hold cloudkms.cryptoKeyEncrypterDecrypter on the key. Real GCP
+	// does not auto-grant it for an API-created bucket, so do it here. The
+	// emulator has no project number and enforces no authz, so this is a no-op
+	// in replay.
+	if t.ProjectNumber != "" {
+		sa := "service-" + t.ProjectNumber + "@gs-project-accounts.iam.gserviceaccount.com"
+		policy := fmt.Sprintf(`{"policy":{"bindings":[{"role":"roles/cloudkms.cryptoKeyEncrypterDecrypter","members":["serviceAccount:%s"]}]}}`, sa)
+		status, body, err := t.request(http.MethodPost, "kms",
+			usRing+"/cryptoKeys/"+FixedKMSCryptoKey+":setIamPolicy", policy, "application/json")
+		if err != nil {
+			return fmt.Errorf("ensure kms us key iam: %w", err)
+		}
+		if status != http.StatusOK {
+			return fmt.Errorf("ensure kms us key iam: status %d: %s", status, trimBody(body))
 		}
 	}
 	return nil
@@ -106,6 +130,30 @@ func (t *Target) Cleanup() []string {
 			"/dns/v1/projects/" + t.Project + "/managedZones/" + n.DNSZone + "/changes",
 			fmt.Sprintf(`{"deletions":[{"name":%q,"type":"A","ttl":300,"rrdatas":["192.0.2.1"]}]}`, n.DNSRRSet)},
 		{"dns", "managed zone", http.MethodDelete, "/dns/v1/projects/" + t.Project + "/managedZones/" + n.DNSZone, ""},
+		// crypto-medallion demo parity (D1). Delete the demo mutations in
+		// reverse dependency order. The Monitoring alert policy / notification
+		// channel names are server-generated, so they come from the capture's
+		// SavedVars (populated by Run).
+		{"run", "service", http.MethodDelete, "/v2/projects/" + t.Project + "/locations/us-central1/services/" + n.RunService, ""},
+		{"eventarc", "trigger", http.MethodDelete, "/v1/projects/" + t.Project + "/locations/us-central1/triggers/" + n.Trigger, ""},
+		{"scheduler", "job", http.MethodDelete, "/v1/projects/" + t.Project + "/locations/us-central1/jobs/" + n.SchedJob, ""},
+		{"monitoring", "time series", http.MethodDelete, "/v3/projects/" + t.Project + "/timeSeries", ""},
+		{"storage", "bq load object", http.MethodDelete, "/storage/v1/b/" + n.LoadBucket + "/o/data.ndjson", ""},
+		{"storage", "bq load bucket", http.MethodDelete, "/storage/v1/b/" + n.LoadBucket, ""},
+		{"storage", "eventarc bucket", http.MethodDelete, "/storage/v1/b/" + n.EventBucket, ""},
+		{"storage", "cmek bucket", http.MethodDelete, "/storage/v1/b/" + n.CMEKBucket, ""},
+		{"pubsub", "notify topic", http.MethodDelete, "/v1/projects/" + t.Project + "/topics/" + n.NotifyTopic, ""},
+		// A crypto key cannot be deleted by GCP; destroy its primary version so
+		// the billable active version does not persist (the key object itself is
+		// the documented, unavoidable residue, like the fixed differential key).
+		{"kms", "crypto key version", http.MethodPost,
+			"/v1/projects/" + t.Project + "/locations/global/keyRings/" + FixedKMSKeyRing + "/cryptoKeys/" + n.CryptoKey + "/cryptoKeyVersions/1:destroy", ""},
+	}
+	if v := t.SavedVars["alertPolicy"]; v != "" {
+		ops = append(ops, del{"monitoring", "alert policy", http.MethodDelete, "/v3/" + v, ""})
+	}
+	if v := t.SavedVars["notifyChannel"]; v != "" {
+		ops = append(ops, del{"monitoring", "notification channel", http.MethodDelete, "/v3/" + v, ""})
 	}
 	var log []string
 	for _, op := range ops {
@@ -136,6 +184,14 @@ func (t *Target) VerifyAbsent() []string {
 		{"firestore", "document", "/v1/projects/" + t.Project + "/databases/(default)/documents/" + n.FSCollection + "/" + n.FSDoc},
 		{"dns", "managed zone", "/dns/v1/projects/" + t.Project + "/managedZones/" + n.DNSZone},
 		{"workflows", "workflow", "/v1/projects/" + t.Project + "/locations/us-central1/workflows/" + n.Workflow},
+		// crypto-medallion demo parity (D1).
+		{"storage", "cmek bucket", "/storage/v1/b/" + n.CMEKBucket},
+		{"storage", "bq load bucket", "/storage/v1/b/" + n.LoadBucket},
+		{"storage", "eventarc bucket", "/storage/v1/b/" + n.EventBucket},
+		{"run", "service", "/v2/projects/" + t.Project + "/locations/us-central1/services/" + n.RunService},
+		{"eventarc", "trigger", "/v1/projects/" + t.Project + "/locations/us-central1/triggers/" + n.Trigger},
+		{"scheduler", "job", "/v1/projects/" + t.Project + "/locations/us-central1/jobs/" + n.SchedJob},
+		{"pubsub", "notify topic", "/v1/projects/" + t.Project + "/topics/" + n.NotifyTopic},
 	}
 	var log []string
 	for _, c := range checks {
