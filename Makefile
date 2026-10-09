@@ -164,6 +164,10 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-e2e-cloudrun-k8s test-e2e-cloudrun-java test-e2e-cloudrun-docker \
         test-e2e-cloudrun-browser test-e2e-cloudrun-browser-lan \
         demo-browser-lan record-gcp-demo \
+        demo-crypto-jars demo-crypto-provision demo-crypto-bridge demo-crypto-process \
+        demo-crypto-rollup demo-crypto-serve demo-crypto-observe demo-crypto-automate \
+        demo-crypto-up demo-crypto-status demo-crypto-preflight demo-crypto-take \
+        demo-crypto-take-split demo-crypto-reset \
         test-e2e-dataproc-docker \
         test-e2e-eventarc-k8s \
         test-e2e-scheduler-k8s \
@@ -1179,6 +1183,59 @@ demo-browser-lan: ## Serve the Cloud Run data plane on the host LAN address for 
 
 record-gcp-demo: ## Capture a real-browser demo take from an isolated Xvfb display (SPK7) — scripts/demo-record.sh; DEMO_RECORD_URL=<leaderboard url> and DEMO_RECORD_DURATION=<secs>
 	DEMO_RECORD_URL="$(DEMO_RECORD_URL)" scripts/demo-record.sh --duration $(DEMO_RECORD_DURATION)
+
+# ─── Crypto-medallion demo (demo/crypto-medallion) ────────────────────────────
+# A demo/build effort, not GCP parity work: the design doc
+# plan_docs/gcp-demo-crypto-medallion-design.md is deliberately excluded from the
+# ledger, and these targets never touch `make gcp-status*`.
+DEMOCTL ?= python3 demo/crypto-medallion/scripts/democtl.py
+# Host port forwarded on 0.0.0.0 for the recording's nip.io authority (SPK7).
+DEMO_CRYPTO_PORT ?= 18080
+# Host port forwarded on 0.0.0.0 for the console in the split-screen take.
+DEMO_CRYPTO_CONSOLE_PORT ?= 4567
+
+demo-crypto-jars: ## Fetch the Iceberg + Kafka connector jars the demo stages on GCS (cached)
+	demo/crypto-medallion/spark/download-jars.sh
+
+demo-crypto-provision: ## Crypto-medallion: project + Terraform infra subset + data-platform resources (design §5.1)
+	$(DEMOCTL) provision
+
+demo-crypto-bridge: ## Crypto-medallion: build+roll the WS->Kafka bridge (design §5.2)
+	$(DEMOCTL) bridge --port $(DEMO_CRYPTO_PORT)
+
+demo-crypto-process: ## Crypto-medallion: stage jars + submit the streaming medallion job (design §5.3)
+	$(DEMOCTL) process --port $(DEMO_CRYPTO_PORT)
+
+demo-crypto-rollup: ## Crypto-medallion: submit the Spark SQL rollup once (design §5.3/§5.4)
+	$(DEMOCTL) rollup --port $(DEMO_CRYPTO_PORT)
+
+demo-crypto-serve: ## Crypto-medallion: Cloud Run publisher + leaderboard, Eventarc, Scheduler (design §5.4)
+	$(DEMOCTL) serve --port $(DEMO_CRYPTO_PORT)
+
+demo-crypto-observe: ## Crypto-medallion: custom metric + alert policy + notification channel (design §5.5)
+	$(DEMOCTL) observe --port $(DEMO_CRYPTO_PORT)
+
+demo-crypto-automate: ## Crypto-medallion: fire the Cloud Scheduler tick once (design §5.6)
+	$(DEMOCTL) automate --port $(DEMO_CRYPTO_PORT)
+
+demo-crypto-up: ## Crypto-medallion: provision + bridge + process + serve + observe (design §5)
+	$(DEMOCTL) up --port $(DEMO_CRYPTO_PORT)
+
+demo-crypto-status: ## Crypto-medallion: endpoint, Kafka bootstrap and leaderboard URI
+	$(DEMOCTL) status --port $(DEMO_CRYPTO_PORT)
+
+demo-crypto-preflight: ## Crypto-medallion: assert every link is live before a take (design §9)
+	$(DEMOCTL) preflight --port $(DEMO_CRYPTO_PORT)
+
+demo-crypto-take: ## Crypto-medallion: LAN authority + Xvfb/Chrome capture + narration + mux -> out/take.mp4 (design §8)
+	$(DEMOCTL) record --port $(DEMO_CRYPTO_PORT) --lan-port $(DEMO_CRYPTO_PORT)
+
+demo-crypto-take-split: ## Crypto-medallion: split-screen take — console (left) + leaderboard (right), console driven per beat -> out/take-split.mp4 (design §7/§8)
+	$(DEMOCTL) record-split --port $(DEMO_CRYPTO_PORT) --lan-port $(DEMO_CRYPTO_PORT) --console-port $(DEMO_CRYPTO_CONSOLE_PORT)
+
+demo-crypto-reset: ## Crypto-medallion: tear the demo down (PP=1 also terraform destroy, FULL=1 also POST /_jaiscloud/reset)
+	$(DEMOCTL) reset --port $(DEMO_CRYPTO_PORT) $(if $(filter 1,$(PP)),--pp) $(if $(filter 1,$(FULL)),--full)
+
 
 test-e2e-dataproc-docker: _check-docker-prereq _check-iceberg-gcp-prereq build-gcp ## Dataproc Spark jobs under Docker — tests/persistent_mode/gcp/dataproc/ (tag: dataproc_docker_e2e; needs the local Docker daemon + the docker group, and the GCS-connector Spark image)
 	go clean -testcache
