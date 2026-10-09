@@ -3,9 +3,35 @@ package eventarc
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 )
+
+// jsonEqual compares two JSON documents by value. The memory store keeps raw
+// bytes while Postgres stores JSONB (which canonicalizes whitespace and key
+// order), so byte equality is not part of the store contract — value equality
+// is. Both backends must agree semantically. Numbers are decoded as
+// json.Number so "1" and "1.0" stay distinct (no float64 coercion).
+func jsonEqual(a, b []byte) bool {
+	av, aok := decodeJSON(a)
+	bv, bok := decodeJSON(b)
+	if !aok || !bok {
+		return string(a) == string(b)
+	}
+	return reflect.DeepEqual(av, bv)
+}
+
+func decodeJSON(b []byte) (any, bool) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, false
+	}
+	return v, true
+}
 
 // runStoreTests exercises a Store against the shared test matrix. Backend tests
 // (memory/postgres) call this so both implement the identical contract.
@@ -41,7 +67,7 @@ func runStoreTests(t *testing.T, s Store) {
 	if got.Labels["env"] != "dev" || got.UID != "uid-1" || got.Etag != "etag-1" {
 		t.Fatalf("trigger fields lost: %+v", got)
 	}
-	if string(got.Config) != `{"destination":{"workflow":"projects/proj/locations/us-central1/workflows/w1"},"eventFilters":[{"attribute":"type","value":"google.cloud.pubsub.topic.v1.messagePublished"}]}` {
+	if !jsonEqual(got.Config, []byte(`{"destination":{"workflow":"projects/proj/locations/us-central1/workflows/w1"},"eventFilters":[{"attribute":"type","value":"google.cloud.pubsub.topic.v1.messagePublished"}]}`)) {
 		t.Fatalf("config not verbatim: %s", got.Config)
 	}
 
