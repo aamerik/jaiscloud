@@ -37,8 +37,13 @@ publisher that backs it).
 - `terraform`, `gcloud`, `kubectl`, `docker`, `ffmpeg`/`ffprobe`, `python3`, and
   (for the take) `google-chrome` + `Xvfb`.
 - The Spark jars: `spark/download-jars.sh` (cached under `spark/jars/`).
-- Narration uses `edge-tts` (`python3 -m pip install --user --break-system-packages edge-tts`)
-  unless `GOOGLE_APPLICATION_CREDENTIALS` + a Text-to-Speech quota project are set.
+- Narration uses **Google Cloud Text-to-Speech** by default (`make-narration.py
+  --tts auto`, voice `en-US-Journey-F`) with the active `gcloud` credentials and
+  the quota project from `--quota-project` / `$DEMO_TTS_QUOTA_PROJECT` / the ADC
+  file / the active gcloud project. Enable `texttospeech.googleapis.com` on that
+  project. If a call fails the whole track rebuilds with `edge-tts` instead
+  (`python3 -m pip install --user --break-system-packages edge-tts`), so
+  narration never mixes voices.
 
 ## Run
 
