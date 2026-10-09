@@ -1143,6 +1143,19 @@ def route_hrefs(route: str) -> list:
     return ["/ui/" + "/".join(parts[:i]) for i in range(len(parts), 0, -1)]
 
 
+# Routes that are sidebar destinations (collection pages). Anything else is a
+# detail page, which loads slower and gets a longer head start in the recording.
+COLLECTION_ROUTES = {
+    "/gcp", "/gcp/storage/buckets", "/gcp/kms/keyrings",
+    "/gcp/secretmanager/secrets", "/gcp/pubsub/topics", "/gcp/pubsub/subscriptions",
+    "/gcp/iam/service-accounts", "/gcp/managedkafka/clusters", "/gcp/managedkafka/topics",
+    "/gcp/dataproc/clusters", "/gcp/dataproc/jobs", "/gcp/run/services",
+    "/gcp/eventarc/triggers", "/gcp/firestore/collections", "/gcp/bigquery/datasets",
+    "/gcp/bigquery/jobs", "/gcp/monitoring/metrics", "/gcp/monitoring/alerting",
+    "/gcp/scheduler/jobs", "/gcp/logging/entries",
+}
+
+
 def nav_link_center(app_prefix: str, route: str):
     """Center of the sidebar link for a route (or its nearest section), scrolled
     into view, plus whether the link is the exact route (a detail route matches
@@ -1278,7 +1291,11 @@ def stage_record_split(args) -> None:
                     t = starts[b["id"]] + bmarks[stop["mark"]]
                 else:
                     t = starts[b["id"]] + durations[b["id"]] * k / n
-                events.append((t, resolve(stop["route"])))
+                route = resolve(stop["route"])
+                # Detail pages load slower, so switch them a touch earlier so they
+                # are painted by the time the word is spoken.
+                preload = 0.7 if route in COLLECTION_ROUTES else 1.3
+                events.append((max(0.0, t - preload), route))
         events.sort(key=lambda e: e[0])
 
         out = Path(args.out)

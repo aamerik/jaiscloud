@@ -1,7 +1,7 @@
 {
   "voice": "en-US-AriaNeural",
   "google_voice": "en-US-Journey-F",
-  "rate": "-4%",
+  "rate": "-6%",
   "beats": [
     {
       "id": "01-intro",
@@ -13,11 +13,11 @@
     },
     {
       "id": "02-provision",
-      "text": "Provision starts with Terraform. It creates the project's Cloud Storage buckets, a Cloud KMS key, the Secret Manager entry the bridge reads, and a Pub/Sub topic for events. gcloud adds the demo service account.",
-      "ssml": "Provision starts with Terraform. It creates the project's <mark name=\"buckets\"/>Cloud Storage buckets, a <mark name=\"kms\"/>Cloud KMS key, the <mark name=\"secret\"/>Secret Manager entry the bridge reads, and a <mark name=\"pubsub\"/>Pub/Sub topic for events. gcloud adds the demo <mark name=\"iam\"/>service account.",
+      "text": "Provision starts with Terraform. It creates the project's Cloud Storage buckets, then a Cloud KMS key ring and key for encryption, then the Secret Manager entry the bridge reads, a Pub/Sub topic for events, and the demo service account.",
+      "ssml": "Provision starts with Terraform. It creates the project's <mark name=\"buckets\"/>Cloud Storage buckets, then a <mark name=\"kms\"/>Cloud KMS key ring and key for encryption, then the <mark name=\"secret\"/>Secret Manager entry the bridge reads, a <mark name=\"pubsub\"/>Pub/Sub topic for events, and the demo <mark name=\"iam\"/>service account.",
       "console": [
         { "mark": "buckets", "route": "/gcp/storage/buckets" },
-        { "mark": "kms", "route": "/gcp/kms/keyrings" },
+        { "mark": "kms", "route": "/gcp/kms/keyrings/us-central1/crypto-medallion" },
         { "mark": "secret", "route": "/gcp/secretmanager/secrets" },
         { "mark": "pubsub", "route": "/gcp/pubsub/topics" },
         { "mark": "iam", "route": "/gcp/iam/service-accounts" }
@@ -53,8 +53,8 @@
     },
     {
       "id": "06-serve",
-      "text": "Serve. Every gold rollup fires Eventarc, which drives a Cloud Run publisher into Firestore and BigQuery. This leaderboard re-sorts as each window lands.",
-      "ssml": "Serve. Every gold rollup fires <mark name=\"eventarc\"/>Eventarc, which drives a <mark name=\"run\"/>Cloud Run publisher into <mark name=\"firestore\"/>Firestore and <mark name=\"bigquery\"/>BigQuery. This leaderboard re-sorts as each window lands.",
+      "text": "Serve. Every gold rollup fires Eventarc, which drives a Cloud Run publisher into Firestore for the live read model, and into BigQuery for the warehouse. This leaderboard re-sorts as each window lands.",
+      "ssml": "Serve. Every gold rollup fires <mark name=\"eventarc\"/>Eventarc, which drives a <mark name=\"run\"/>Cloud Run publisher into <mark name=\"firestore\"/>Firestore for the live read model, and into <mark name=\"bigquery\"/>BigQuery for the warehouse. This leaderboard re-sorts as each window lands.",
       "console": [
         { "mark": "eventarc", "route": "/gcp/eventarc/triggers" },
         { "mark": "run", "route": "/gcp/run/services" },
