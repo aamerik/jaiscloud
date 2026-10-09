@@ -377,12 +377,9 @@ def stage_spark_assets(emu: Emulator, state: dict) -> dict:
         info(f"gs://{jobs_bucket}/jars/{name}")
     driver = (SPARK_DIR / "stream_medallion.py").read_bytes()
     gcs_upload_object(emu, jobs_bucket, "jobs/stream_medallion.py", driver, "text/x-python")
-    rollup = (SPARK_DIR / "rollup.py").read_bytes()
-    gcs_upload_object(emu, jobs_bucket, "jobs/rollup.py", rollup, "text/x-python")
     return {
         "jar_uris": jar_uris,
         "driver_uri": f"gs://{jobs_bucket}/jobs/stream_medallion.py",
-        "rollup_uri": f"gs://{jobs_bucket}/jobs/rollup.py",
     }
 
 
@@ -420,11 +417,12 @@ def ensure_dataproc_cluster(emu: Emulator) -> None:
 
 def spark_properties(state: dict, extra: dict | None = None) -> dict:
     jobs = state["buckets"]["jobs"]
+    gold = state["buckets"]["gold"]
     props = {
         "spark.sql.catalog.hms": "org.apache.iceberg.spark.SparkCatalog",
         "spark.sql.catalog.hms.catalog-impl": "org.apache.iceberg.hive.HiveCatalog",
         "spark.sql.catalog.hms.uri": f"thrift://{HMS}",
-        "spark.sql.catalog.hms.warehouse": f"gs://{jobs}/warehouse/",
+        "spark.sql.catalog.hms.warehouse": f"gs://{gold}/warehouse/",
         "spark.sql.catalog.hms.io-impl": "org.apache.iceberg.hadoop.HadoopFileIO",
         "spark.driver.memory": "450m",
         "spark.executor.memory": "450m",
@@ -449,7 +447,24 @@ def submit_pyspark(emu: Emulator, job_id: str, main_uri: str, jar_uris: list,
             "args": args or [],
         },
     }}
-    resp, _ = emu.post(f"/v1/projects/{PROJECT}/regions/{REGION}/jobs:submit", payload)
+    resp, _ = emu.post(f"/v1/projects/{PROJECT}/regions/{REGION}/jobs:submit", payload,
+                       expect=(200, 201))
+    return resp
+
+
+def submit_sparksql(emu: Emulator, job_id: str, queries: list, jar_uris: list,
+                    props: dict) -> dict:
+    payload = {"job": {
+        "reference": {"jobId": job_id},
+        "placement": {"clusterName": DATAPROC_CLUSTER},
+        "sparkSqlJob": {
+            "queryList": {"queries": queries},
+            "jarFileUris": jar_uris,
+            "properties": props,
+        },
+    }}
+    resp, _ = emu.post(f"/v1/projects/{PROJECT}/regions/{REGION}/jobs:submit", payload,
+                       expect=(200, 201))
     return resp
 
 
@@ -479,15 +494,29 @@ def stage_process(args) -> None:
         "--iceberg-table", ICE_TABLE,
         "--group", "cm-medallion",
     ]
-    job_id = "cm-streaming"
-    if job_state(emu, job_id) in ("RUNNING", "PENDING", "SETUP_DONE"):
-        info(f"streaming job {job_id} already {job_state(emu, job_id)}")
-    else:
-        log(f"submit streaming job {job_id}")
-        submit_pyspark(emu, job_id, assets["driver_uri"], assets["jar_uris"],
-                       spark_properties(state), stream_args)
+    job_id = f"cm-streaming-{int(time.time())}"
+    log(f"submit streaming job {job_id}")
+    submit_pyspark(emu, job_id, assets["driver_uri"], assets["jar_uris"],
+                   spark_properties(state), stream_args)
     state["spark"] = assets
+    state["streaming_job"] = job_id
     save_state(state)
+
+
+def rollup_queries(state: dict) -> list:
+    rollup = f"gs://{state['buckets']['rollup']}/rollup"
+    return [
+        f"""INSERT OVERWRITE DIRECTORY '{rollup}' USING json
+SELECT symbol,
+       ROUND(MAX(vwap), 4) AS vwap,
+       ROUND(SUM(volume), 6) AS volume,
+       SUM(trades) AS trades,
+       MIN(window_start) AS window_start,
+       MAX(window_end) AS window_end
+FROM hms.{ICE_DB}.{ICE_TABLE}
+GROUP BY symbol
+ORDER BY volume DESC""",
+    ]
 
 
 def stage_rollup(args) -> None:
@@ -495,14 +524,10 @@ def stage_rollup(args) -> None:
     state = load_state()
     assets = state.get("spark") or stage_spark_assets(emu, state)
     ensure_dataproc_cluster(emu)
-    rollup_args = [
-        "--iceberg-db", ICE_DB,
-        "--iceberg-table", ICE_TABLE,
-        "--rollup", f"gs://{state['buckets']['rollup']}/rollup",
-    ]
-    log("submit Spark SQL rollup")
-    submit_pyspark(emu, f"cm-rollup-{int(time.time())}", assets["rollup_uri"],
-                   assets["jar_uris"], spark_properties(state), rollup_args)
+    job_id = f"cm-rollup-{int(time.time())}"
+    log(f"submit Spark SQL rollup {job_id}")
+    submit_sparksql(emu, job_id, rollup_queries(state), assets["jar_uris"],
+                    spark_properties(state))
 
 
 # ── image build/push ─────────────────────────────────────────────────────────
