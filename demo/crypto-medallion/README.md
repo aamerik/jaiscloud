@@ -72,6 +72,13 @@ Dataproc at *platform*, the topic + capture bucket at *ingest*, the Dataproc job
 the metric/alert policy/Pub-Sub subscription at *observe*, and the Scheduler,
 BigQuery jobs and Cloud Logging at *automate*.
 
+The right half is a live **market board** — price (last), change vs the previous
+window, notional volume in USD (comparable across symbols), VWAP, trades and the
+window, with Volume/Movers tabs and stable share-of-total bars — over a scrolling
+**application-log tail** from Cloud Logging (`[bridge]` ingest, `[publisher]`
+deliveries, `[spark]` window commits, `[scheduler]`/`[bigquery]` batch), so the
+page shows the pipeline working, not just its results.
+
 Each stage is also a direct call, e.g.
 `python3 demo/crypto-medallion/scripts/democtl.py process`.
 

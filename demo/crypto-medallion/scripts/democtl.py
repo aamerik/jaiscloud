@@ -317,8 +317,11 @@ def ensure_bigquery(emu: Emulator) -> None:
              {"datasetReference": {"projectId": PROJECT, "datasetId": BQ_DATASET}})
     schema = {"fields": [
         {"name": "symbol", "type": "STRING", "mode": "REQUIRED"},
+        {"name": "price", "type": "FLOAT", "mode": "NULLABLE"},
+        {"name": "change_pct", "type": "FLOAT", "mode": "NULLABLE"},
         {"name": "vwap", "type": "FLOAT", "mode": "NULLABLE"},
         {"name": "volume", "type": "FLOAT", "mode": "NULLABLE"},
+        {"name": "quote_volume", "type": "FLOAT", "mode": "NULLABLE"},
         {"name": "trades", "type": "INTEGER", "mode": "NULLABLE"},
         {"name": "window_start", "type": "TIMESTAMP", "mode": "NULLABLE"},
         {"name": "window_end", "type": "TIMESTAMP", "mode": "NULLABLE"},
@@ -517,6 +520,8 @@ def stage_process(args) -> None:
         "--iceberg-db", ICE_DB,
         "--iceberg-table", ICE_TABLE,
         "--group", "cm-medallion",
+        "--emulator", IN_CLUSTER_EMULATOR,
+        "--project", PROJECT,
     ]
     job_id = f"cm-streaming-{int(time.time())}"
     log(f"submit streaming job {job_id}")

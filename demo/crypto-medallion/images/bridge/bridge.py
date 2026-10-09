@@ -50,6 +50,8 @@ FLUSH_INTERVAL = float(os.environ.get("CAPTURE_FLUSH_SECONDS", "5"))
 _lock = threading.Lock()
 _capture: list[str] = []
 _last_event = 0.0
+_produced = 0
+_flushed = 0
 _active_source = ""      # "live" | "replay" — which producer's events count
 _live_stop = threading.Event()
 _shutdown = threading.Event()
@@ -87,16 +89,37 @@ def producer() -> KafkaProducer:
 
 
 def record(normalized: dict) -> None:
+    global _produced
     with _lock:
         _capture.append(json.dumps(normalized, separators=(",", ":")))
+        _produced += 1
+
+
+def write_log(event: str, **fields) -> None:
+    """Structured app log to Cloud Logging (best effort)."""
+    body = {"entries": [{
+        "logName": f"projects/{PROJECT}/logs/crypto-medallion",
+        "resource": {"type": "global", "labels": {"project_id": PROJECT}},
+        "severity": "INFO",
+        "jsonPayload": {"event": event, **fields},
+    }]}
+    req = urllib.request.Request(
+        EMULATOR + "/v2/entries:write", data=json.dumps(body).encode(), method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        urllib.request.urlopen(req, timeout=8).read()
+    except Exception as exc:
+        log(f"log write failed: {exc}")
 
 
 def flush_capture() -> None:
+    global _flushed
     with _lock:
         if not _capture:
             return
         body = ("\n".join(_capture) + "\n").encode()
         _capture.clear()
+        produced, total = _produced - _flushed, _produced
     name = f"captures/{RUN_ID}/raw.jsonl"
     url = (f"{EMULATOR}/upload/storage/v1/b/{CAPTURE_BUCKET}/o"
            f"?uploadType=media&name={urllib.parse.quote(name, safe='')}")
@@ -104,7 +127,10 @@ def flush_capture() -> None:
     req.add_header("Content-Type", "application/json")
     try:
         urllib.request.urlopen(req, timeout=15).read()
+        _flushed = total
         log(f"shadow capture flushed ({len(body)} bytes) -> gs://{CAPTURE_BUCKET}/{name}")
+        write_log("bridge.ingest", produced=produced, total=total,
+                  symbols=len(SYMBOLS), topic=TOPIC, mode=_active_source or "live")
     except Exception as exc:
         log(f"capture flush failed: {exc}")
 

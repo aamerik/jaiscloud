@@ -56,6 +56,16 @@ def http(method: str, path: str, body=None) -> tuple[int, object]:
         return exc.code, exc.read().decode(errors="replace")
 
 
+def write_log(event: str, **fields) -> None:
+    """Structured app log to Cloud Logging (best effort)."""
+    http("POST", "/v2/entries:write", {"entries": [{
+        "logName": f"projects/{PROJECT}/logs/crypto-medallion",
+        "resource": {"type": "global", "labels": {"project_id": PROJECT}},
+        "severity": "INFO",
+        "jsonPayload": {"event": event, **fields},
+    }]})
+
+
 def submit_rollup(job_id: str) -> int:
     payload = {"job": {
         "reference": {"jobId": job_id},
@@ -68,6 +78,8 @@ def submit_rollup(job_id: str) -> int:
     }}
     status, resp = http("POST", f"/v1/projects/{PROJECT}/regions/{REGION}/jobs:submit", payload)
     log(f"submit rollup {job_id} -> {status}")
+    if status in (200, 201):
+        write_log("rollup.submit", job=job_id, source="scheduler", table=BQ_TABLE)
     return 0 if status in (200, 201) else 1
 
 
@@ -83,6 +95,10 @@ def load_bigquery(slot: str) -> None:
             }}}
     status, resp = http("POST", f"/bigquery/v2/projects/{PROJECT}/jobs", body)
     log(f"bigquery load {job_id} from {ROLLUP_PREFIX}/*.json -> {status} {resp}")
+    rows = (resp or {}).get("statistics", {}).get("load", {}).get("outputRows") \
+        if isinstance(resp, dict) else None
+    write_log("bigquery.load", job=job_id, table=f"{BQ_DATASET}.{BQ_TABLE}",
+              source=ROLLUP_PREFIX, rows=rows)
 
 
 def rollup_then_load(job_id: str, slot: str) -> None:

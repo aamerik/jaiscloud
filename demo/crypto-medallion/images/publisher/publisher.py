@@ -60,7 +60,7 @@ def read_object(bucket: str, name: str) -> list[dict]:
 
 def firestore_fields(row: dict) -> dict:
     def num(v):
-        return {"doubleValue": float(v)}
+        return {"doubleValue": float(v)} if v is not None else {"nullValue": None}
 
     def ts(v) -> str:
         v = v or ""
@@ -70,8 +70,11 @@ def firestore_fields(row: dict) -> dict:
 
     return {
         "symbol": {"stringValue": str(row["symbol"])},
-        "vwap": num(row.get("vwap", 0)),
-        "volume": num(row.get("volume", 0)),
+        "price": num(row.get("price")),
+        "change_pct": num(row.get("change_pct")),
+        "vwap": num(row.get("vwap")),
+        "quote_volume": num(row.get("quote_volume")),
+        "base_volume": num(row.get("base_volume")),
         "trades": {"integerValue": str(int(row.get("trades", 0)))},
         "window_start": {"timestampValue": ts(row.get("window_start"))},
         "window_end": {"timestampValue": ts(row.get("window_end"))},
@@ -95,8 +98,11 @@ def insert_bigquery(rows: list[dict]) -> None:
             "insertId": f"{row['symbol']}-{row.get('updated_at', '')}".replace(":", "-"),
             "json": {
                 "symbol": row["symbol"],
+                "price": row.get("price"),
+                "change_pct": row.get("change_pct"),
                 "vwap": row.get("vwap"),
-                "volume": row.get("volume"),
+                "quote_volume": row.get("quote_volume"),
+                "volume": row.get("base_volume"),
                 "trades": row.get("trades"),
                 "window_start": row.get("window_start"),
                 "window_end": row.get("window_end"),

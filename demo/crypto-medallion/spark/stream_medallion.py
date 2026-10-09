@@ -47,6 +47,10 @@ def parse_args():
     p.add_argument("--iceberg-db", required=True)
     p.add_argument("--iceberg-table", required=True)
     p.add_argument("--group", required=True)
+    # Optional: the emulator REST base + project, so the driver can write the
+    # medallion window commits to Cloud Logging (the leaderboard log tail).
+    p.add_argument("--emulator", default="")
+    p.add_argument("--project", default="crypto-medallion")
     return p.parse_args()
 
 
@@ -66,6 +70,48 @@ def write_gcs_text(uri: str, text: str) -> None:
     out.close()
 
 
+def read_gcs_text(uri: str) -> str:
+    """Read one object from a gs:// path through the wired GCS connector."""
+    jvm = spark._jvm
+    conf = spark._jsc.hadoopConfiguration()
+    path = jvm.org.apache.hadoop.fs.Path(uri)
+    fs = path.getFileSystem(conf)
+    if not fs.exists(path):
+        return ""
+    stream = fs.open(path)
+    reader = jvm.java.io.BufferedReader(
+        jvm.java.io.InputStreamReader(stream, "UTF-8"))
+    lines = []
+    while True:
+        line = reader.readLine()
+        if line is None:
+            break
+        lines.append(str(line))
+    reader.close()
+    return "\n".join(lines)
+
+
+def write_log(event: str, **fields) -> None:
+    """Structured app log to Cloud Logging (best effort; never fatal)."""
+    if not ARGS.emulator:
+        return
+    import urllib.request
+    body = {"entries": [{
+        "logName": f"projects/{ARGS.project}/logs/crypto-medallion",
+        "resource": {"type": "global", "labels": {"project_id": ARGS.project}},
+        "severity": "INFO",
+        "jsonPayload": {"event": event, **fields},
+    }]}
+    req = urllib.request.Request(
+        ARGS.emulator + "/v2/entries:write",
+        data=json.dumps(body).encode(), method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        urllib.request.urlopen(req, timeout=5).read()
+    except Exception:
+        pass
+
+
 # ── gold table (Iceberg on the HMS catalog) ──────────────────────────────────
 gold_table = f"hms.{ARGS.iceberg_db}.{ARGS.iceberg_table}"
 spark.sql(f"CREATE DATABASE IF NOT EXISTS hms.{ARGS.iceberg_db}")
@@ -80,6 +126,7 @@ CREATE TABLE IF NOT EXISTS {gold_table} (
   close double,
   vwap double,
   volume double,
+  quote_volume double,
   trades bigint
 ) USING iceberg
 """)
@@ -139,7 +186,8 @@ def gold_batch(batch_df, epoch_id):
     out = (batch_df
            .select(F.col("window.start").alias("window_start"),
                    F.col("window.end").alias("window_end"),
-                   "symbol", "open", "high", "low", "close", "vwap", "volume", "trades")
+                   "symbol", "open", "high", "low", "close", "vwap",
+                   "volume", "quote_volume", "trades")
            .withColumn("trades", F.col("trades").cast("bigint")))
     out.writeTo(gold_table).append()
 
@@ -147,21 +195,48 @@ def gold_batch(batch_df, epoch_id):
     def iso(ts):
         # Firestore timestampValue needs an RFC3339 offset; Spark timestamps are UTC.
         return ts.strftime("%Y-%m-%dT%H:%M:%SZ") if ts else None
-    rows = out.orderBy(F.col("volume").desc()).collect()
-    lines = []
-    for r in rows:
-        lines.append(json.dumps({
+
+    # Merge the finalized windows into the previous snapshot so every pinned
+    # symbol keeps a fresh row (the windowed batch only carries the windows that
+    # closed in this micro-batch) and window-over-window change can be computed.
+    prev = {}
+    for line in read_gcs_text(ARGS.leaderboard).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            t = json.loads(line)
+            prev[t["symbol"]] = t
+        except Exception:
+            pass
+    merged = dict(prev)
+    new_rows = out.collect()
+    for r in new_rows:
+        price = round(float(r["close"] or 0.0), 6)
+        old = (prev.get(r["symbol"]) or {}).get("price")
+        merged[r["symbol"]] = {
             "symbol": r["symbol"],
-            "vwap": round(float(r["vwap"] or 0.0), 4),
-            "volume": round(float(r["volume"] or 0.0), 6),
+            "price": price,
+            "change_pct": round((price - old) / old * 100, 4) if old else None,
+            "open": round(float(r["open"] or 0.0), 6),
+            "high": round(float(r["high"] or 0.0), 6),
+            "low": round(float(r["low"] or 0.0), 6),
+            "vwap": round(float(r["vwap"] or 0.0), 6),
+            "quote_volume": round(float(r["quote_volume"] or 0.0), 2),
+            "base_volume": round(float(r["volume"] or 0.0), 6),
             "trades": int(r["trades"] or 0),
             "window_start": iso(r["window_start"]),
             "window_end": iso(r["window_end"]),
             "updated_at": now,
-        }, separators=(",", ":")))
-    if lines:
-        write_gcs_text(ARGS.leaderboard, "\n".join(lines) + "\n")
-    print(f"GOLD_BATCH epoch={epoch_id} windows={len(rows)}", flush=True)
+        }
+    ordered = sorted(merged.values(),
+                     key=lambda x: -(x.get("quote_volume") or 0.0))
+    write_gcs_text(ARGS.leaderboard,
+                   "\n".join(json.dumps(x, separators=(",", ":")) for x in ordered) + "\n")
+    top = ordered[0]["symbol"] if ordered else None
+    write_log("medallion.window", symbols=len(merged), committed=len(new_rows), top=top)
+    print(f"GOLD_BATCH epoch={epoch_id} committed={len(new_rows)} symbols={len(merged)}",
+          flush=True)
 
 
 gold = (valid
@@ -173,6 +248,7 @@ gold = (valid
              F.last("price").alias("close"),
              (F.sum(F.col("price") * F.col("size")) / F.sum("size")).alias("vwap"),
              F.sum("size").alias("volume"),
+             F.sum(F.col("price") * F.col("size")).alias("quote_volume"),
              F.count("*").alias("trades")))
 
 gold_query = (gold.writeStream
