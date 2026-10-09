@@ -78,7 +78,8 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <div id="logwrap"><div class="logtitle">app logs · Cloud Logging</div><div id="logs"></div></div>
 <script>
 const ROW=68, board=document.getElementById('board'), logEl=document.getElementById('logs'), state={};
-let tab='volume', rotate=Date.now(), seen=new Set();
+let tab='volume', rotate=Date.now(), seen=new Set(), follow=true;
+logEl.addEventListener('scroll',()=>{ follow=(logEl.scrollHeight-logEl.scrollTop-logEl.clientHeight)<40; });
 const el=(t,c,x)=>{const e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e;};
 const fmtPrice=v=>v==null?'—':Number(v).toLocaleString(undefined,{maximumFractionDigits:Number(v)>=1000?2:4});
 const fmtNot=v=>{v=+v||0; return v>=1e6?(v/1e6).toFixed(2)+'M':v>=1e3?(v/1e3).toFixed(1)+'k':v.toFixed(0);};
@@ -139,7 +140,7 @@ async function logTick(){
       ln.appendChild(el('span','sev-'+r.severity, r.msg));
       logEl.appendChild(ln); added=true; }
     if(added){ while(logEl.childElementCount>300) logEl.removeChild(logEl.firstChild);
-      if(logEl.scrollHeight-logEl.scrollTop-logEl.clientHeight<60) logEl.scrollTop=logEl.scrollHeight; }
+      if(follow) logEl.scrollTop=logEl.scrollHeight; }
   }catch(e){}
 }
 setInterval(()=>{ if(Date.now()-rotate>10000) setTab(tab==='volume'?'movers':'volume'); },1000);
