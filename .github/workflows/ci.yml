@@ -620,3 +620,63 @@ jobs:
           JAISCLOUD_DSN: postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud
           JAISCLOUD_GCP_BIN: ${{ github.workspace }}/jaiscloud-gcp
         run: go test -tags gcp_persistence -p 1 -count=1 -timeout 300s ./...
+
+  # The opt-in async long-running-operation mode is a different code path from
+  # the synchronous default (operations are persisted in flight and settled on
+  # operations.get), and nothing else in CI turns it on. Run the live async-LRO
+  # gate (mirrors `make test-lro-async-gcp`) so a regression in the async surface
+  # is caught without a k3d cluster.
+  test-gcp-lro-async:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-gcp-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-gcp-
+            ${{ runner.os }}-go-
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Build jaiscloud-gcp
+        run: go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/
+
+      - name: Start jaiscloud-gcp (async LRO, background)
+        run: |
+          JAISCLOUD_LRO_MODE=async JAISCLOUD_LRO_DELAY=2s JAISCLOUD_GCP_PROJECT_ID=proj \
+            ./jaiscloud-gcp start --port 8080 --grpc-port 8081 --ephemeral > gcp-lro.log 2>&1 & echo $! > gcp-lro.pid
+
+      - name: Wait for GCP server health
+        run: |
+          for i in {1..60}; do
+            if curl -sfS http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; then
+              echo "gcp server healthy (async LRO, delay 2s)"; exit 0
+            fi
+            sleep 1
+          done
+          cat gcp-lro.log
+          exit 1
+
+      - name: Run async-LRO integration tests
+        env:
+          JAISCLOUD_LRO_ASYNC: '1'
+        run: go test -race -count=1 -timeout 120s ./tests/integration/gcp/ -run TestLROAsync
+
+      - name: Upload server log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-lro-server-log
+          path: gcp-lro.log

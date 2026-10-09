@@ -249,10 +249,20 @@ func TestLROAsyncOperationsRegistry(t *testing.T) {
 	_, err = client.GetOperation(ctx, &longrunningpb.GetOperationRequest{Name: "operations/does-not-exist"})
 	require.Equal(t, codes.NotFound, status.Code(err), "GetOperation(unknown)")
 
-	// The top-level parent lists the persisted operation. The make target sets
-	// JAISCLOUD_GCP_PROJECT_ID=proj so the registry resolves the same project
-	// the REST create used.
-	list, err := client.ListOperations(ctx, &longrunningpb.ListOperationsRequest{Name: "operations"})
+	// The top-level parent lists the persisted operation. The generic
+	// google.longrunning.Operations service is endpoint-scoped (GA14/GA15): a
+	// client addressed at a service's endpoint sees only that service's
+	// operations, and an untokened request lists no endpoint-scoped service. So
+	// list at the Service Usage endpoint, the owner of this operation. The make
+	// target sets JAISCLOUD_GCP_PROJECT_ID=proj so the registry resolves the
+	// same project the REST create used.
+	suConn, err := grpc.NewClient(lroGRPCEndpoint,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithAuthority("serviceusage."+lroGRPCEndpoint))
+	require.NoError(t, err, "dial gRPC (serviceusage endpoint)")
+	t.Cleanup(func() { _ = suConn.Close() })
+	suClient := longrunningpb.NewOperationsClient(suConn)
+	list, err := suClient.ListOperations(ctx, &longrunningpb.ListOperationsRequest{Name: "operations"})
 	require.NoError(t, err, "ListOperations")
 	found := false
 	for _, listed := range list.GetOperations() {
