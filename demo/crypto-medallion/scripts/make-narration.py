@@ -28,6 +28,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -83,14 +84,16 @@ def rate_pct(rate: str) -> float:
         return 0.0
 
 
-def synth_google(text: str, voice: str, rate: str, quota: str) -> bytes:
+def synth_google(beat: dict, voice: str, rate: str, quota: str) -> bytes:
+    """Synthesize one beat as plain text (Journey voices reject SSML). Mark times
+    are estimated from word position by estimate_marks."""
     if not quota:
         raise RuntimeError("no Google TTS quota project")
     token = access_token()
     if not token:
         raise RuntimeError("no gcloud access token")
     lang = "-".join(voice.split("-")[:2])  # en-US-Journey-F -> en-US
-    body = {"input": {"text": text},
+    body = {"input": {"text": beat["text"]},
             "voice": {"languageCode": lang, "name": voice},
             "audioConfig": {"audioEncoding": "MP3",
                             "speakingRate": max(0.25, min(4.0, 1.0 + rate_pct(rate) / 100.0))}}
@@ -108,6 +111,24 @@ def synth_google(text: str, voice: str, rate: str, quota: str) -> bytes:
     return base64.b64decode(payload["audioContent"])
 
 
+def estimate_marks(beat: dict, duration: float) -> dict:
+    """Approximate each <mark> time (seconds) by its word position in the beat."""
+    ssml = beat.get("ssml") or beat["text"]
+    token = re.compile(r'<mark name="([^"]+)"/>')
+    prefixes = {}
+    parts = []
+    pos = 0
+    for m in token.finditer(ssml):
+        parts.append(ssml[pos:m.start()])
+        prefixes[m.group(1)] = "".join(parts)
+        pos = m.end()
+    parts.append(ssml[pos:])
+    full = re.sub(r"<[^>]+>", "", "".join(parts))
+    total = max(1, len(full.split()))
+    return {name: round(duration * len(re.sub(r"<[^>]+>", "", p).split()) / total, 3)
+            for name, p in prefixes.items()}
+
+
 def synth_edge(text: str, voice: str, rate: str) -> bytes:
     tmp = CLIPS_DIR / ".edge.mp3"
     cmd = [sys.executable, "-m", "edge_tts", "--voice", voice, f"--rate={rate}",
@@ -121,17 +142,19 @@ def synth_edge(text: str, voice: str, rate: str) -> bytes:
 
 
 def synth_all(engine: str, beats: list, google_voice: str, edge_voice: str,
-              rate: str, quota: str) -> list:
+              rate: str, quota: str):
+    """Return (clips, {beat_id: {mark: seconds}})."""
     clips = []
+    marks_by_beat = {}
     for beat in beats:
         clip = CLIPS_DIR / f"{beat['id']}.mp3"
         last = None
         for attempt in range(3):
             try:
-                if engine == "google":
-                    clip.write_bytes(synth_google(beat["text"], google_voice, rate, quota))
-                else:
-                    clip.write_bytes(synth_edge(beat["text"], edge_voice, rate))
+                data = (synth_google(beat, google_voice, rate, quota)
+                        if engine == "google"
+                        else synth_edge(beat["text"], edge_voice, rate))
+                clip.write_bytes(data)
                 last = None
                 break
             except Exception as exc:  # retry a transient quota/propagation 403
@@ -140,8 +163,9 @@ def synth_all(engine: str, beats: list, google_voice: str, edge_voice: str,
         if last is not None:
             raise RuntimeError(f"{beat['id']}: {last}")
         clips.append(clip)
+        marks_by_beat[beat["id"]] = estimate_marks(beat, ffprobe_duration(clip))
         print(f"  {beat['id']}: {ffprobe_duration(clip):.1f}s  {beat['text'][:48]}…")
-    return clips
+    return clips, marks_by_beat
 
 
 def main() -> None:
@@ -161,6 +185,7 @@ def main() -> None:
     CLIPS_DIR.mkdir(parents=True, exist_ok=True)
 
     engine = args.tts
+    marks_by_beat = {}
     if engine in ("auto", "google"):
         if not quota:
             if engine == "google":
@@ -169,7 +194,8 @@ def main() -> None:
         else:
             try:
                 print(f"google TTS: voice={google_voice} quota={quota}")
-                clips = synth_all("google", beats, google_voice, edge_voice, rate, quota)
+                clips, marks_by_beat = synth_all("google", beats, google_voice,
+                                                 edge_voice, rate, quota)
                 engine = "google"
             except Exception as exc:
                 if args.tts == "google":
@@ -177,7 +203,10 @@ def main() -> None:
                 print(f"google TTS failed ({exc}); rebuilding every beat with edge-tts")
                 engine = "edge"
     if engine == "edge":
-        clips = synth_all("edge", beats, google_voice, edge_voice, rate, quota)
+        clips, marks_by_beat = synth_all("edge", beats, google_voice, edge_voice, rate, quota)
+
+    (NARRATION_DIR / "timepoints.json").write_text(
+        json.dumps({"engine": engine, "beats": marks_by_beat}, indent=2) + "\n")
 
     listing = CLIPS_DIR / "concat.txt"
     listing.write_text("".join(f"file '{c.resolve()}'\n" for c in clips))

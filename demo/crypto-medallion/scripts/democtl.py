@@ -1245,44 +1245,84 @@ def stage_record_split(args) -> None:
         launch(profile_leader, f"{width},0", url, "leaderboard-chrome.log")
         _time.sleep(args.warmup)
 
-        run_total = sum(durations.values())
-        lead = 1.0
+        # Console-switch schedule: each stop fires when the voice names it (mark
+        # time within the beat), falling back to even spacing and, for a beat
+        # with no marks, to the beat start.
+        state = load_state()
+        app_prefix = console_base + "/ui"
+        display = f":{args.display_num}"
+        cursor = bool(shutil.which("xdotool"))
+        tp_path = DEMO_DIR / "narration" / "timepoints.json"
+        marks = json.loads(tp_path.read_text()).get("beats", {}) if tp_path.exists() else {}
+
+        def resolve(route: str) -> str:
+            if "{streaming_job}" in route:
+                jid = state.get("streaming_job", "")
+                return route.replace("{streaming_job}", jid) if jid else "/gcp/dataproc/jobs"
+            return route
+
+        starts, run_total = {}, 0.0
+        for b in spec["beats"]:
+            starts[b["id"]] = run_total
+            run_total += durations[b["id"]]
+        events = []
+        for b in spec["beats"]:
+            stops = b.get("console") or [{"route": "/gcp"}]
+            bmarks = marks.get(b["id"], {})
+            n = len(stops)
+            for k, stop in enumerate(stops):
+                if stop.get("mark") and stop["mark"] in bmarks:
+                    t = starts[b["id"]] + bmarks[stop["mark"]]
+                else:
+                    t = starts[b["id"]] + durations[b["id"]] * k / n
+                events.append((t, resolve(stop["route"])))
+        events.sort(key=lambda e: e[0])
+
         out = Path(args.out)
-        log(f"capture {run_total + lead:.0f}s ({total_w}x{total_h}@{args.framerate}) -> {out}")
+        progress = out.with_suffix(".progress")
+        if progress.exists():
+            progress.unlink()
+        log(f"capture {run_total + 1:.0f}s ({total_w}x{total_h}@{args.framerate}) -> {out}")
         ff = subprocess.Popen(
             ["ffmpeg", "-y", "-loglevel", "error", "-f", "x11grab", "-draw_mouse", "1",
              "-video_size", f"{total_w}x{total_h}", "-framerate", str(args.framerate),
-             "-i", f":{args.display_num}", "-t", str(int(run_total + lead)),
+             "-i", f":{args.display_num}", "-t", str(int(run_total + 1)),
              "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-             "-pix_fmt", "yuv420p", str(out)],
+             "-pix_fmt", "yuv420p", "-progress", str(progress), "-nostats", str(out)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        _time.sleep(lead)
-        display = f":{args.display_num}"
-        cursor = bool(shutil.which("xdotool"))
-        app_prefix = console_base + "/ui"
-        for beat in spec["beats"]:
-            dur = durations[beat["id"]]
-            stops = beat.get("console") or [{"route": "/gcp", "weight": 1.0}]
-            wsum = sum(s.get("weight", 1.0) for s in stops) or 1.0
-            for stop in stops:
-                hold = dur * stop.get("weight", 1.0) / wsum
-                t0 = _time.monotonic()
-                route = stop["route"]
-                # Hand-driven look: glide to the sidebar link and click it, then
-                # guarantee the exact route client-side (detail pages have no
-                # direct nav link).
-                if cursor and route != "/gcp":
-                    pos = nav_link_center(app_prefix, route)
-                    if pos and 0 <= pos.get("x", width) < width:
-                        move_cursor(display, pos["x"], pos["y"])
-                        click_cursor(display)
-                        _time.sleep(0.25)
-                js = (f"history.pushState({{}}, '', '/ui{route}');"
-                      "window.dispatchEvent(new PopStateEvent('popstate'));")
-                if not cdp_eval(app_prefix, js):
-                    raise SystemExit("CDP eval failed")
-                info(f"console -> {route} ({hold:.1f}s)")
-                _time.sleep(max(0.0, hold - (_time.monotonic() - t0)))
+
+        # Anchor t=0 to the first captured frame so audio time lines up with video
+        # time (x11grab takes a moment to start).
+        w0 = None
+        deadline = _time.monotonic() + 25
+        while _time.monotonic() < deadline and w0 is None:
+            if progress.exists():
+                for line in progress.read_text().splitlines():
+                    if line.startswith("out_time_us="):
+                        raw = line.split("=", 1)[1].strip()
+                        if raw.isdigit() and int(raw) > 0:
+                            w0 = _time.monotonic() - int(raw) / 1_000_000
+                            break
+            _time.sleep(0.03)
+        w0 = w0 if w0 is not None else _time.monotonic()
+        info("capture anchored to the first frame")
+
+        for t, route in events:
+            wait = w0 + t - _time.monotonic()
+            if wait > 0:
+                _time.sleep(wait)
+            # Switch first (synced to the voice), then move the cursor — the
+            # click is cosmetic and lands on the now-active nav item.
+            js = (f"history.pushState({{}}, '', '/ui{route}');"
+                  "window.dispatchEvent(new PopStateEvent('popstate'));")
+            if not cdp_eval(app_prefix, js):
+                raise SystemExit("CDP eval failed")
+            info(f"console -> {route} @ {t:.1f}s")
+            if cursor and route != "/gcp":
+                pos = nav_link_center(app_prefix, route)
+                if pos and 0 <= pos.get("x", width) < width:
+                    move_cursor(display, pos["x"], pos["y"], steps=6)
+                    click_cursor(display)
         ff.wait()
         if ff.returncode != 0:
             raise SystemExit("ffmpeg capture failed")

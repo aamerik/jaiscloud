@@ -60,12 +60,17 @@ make demo-crypto-reset       # delete demo resources (FULL=1 also POST /_jaisclo
 ```
 
 `demo-crypto-take-split` drives the console to each stage's resources as the
-narration plays (Storage/KMS/Secret/Pub-Sub at *provision*, Managed Kafka at
-*ingest*, Dataproc + the gold bucket at *process*, Cloud Run/Eventarc/Firestore/
-BigQuery at *serve*, Monitoring/Scheduler/Logging at *observe* — one route list
-per beat in `narration/beats.json`). The pointer is choreographed with `xdotool`:
-it glides to the sidebar link for each resource and clicks it, then the route is
-confirmed client-side (so detail pages with no own nav link still land).
+narration plays. The switch times come from `narration/timepoints.json` (each
+resource's `<mark>` position estimated from its word offset in the beat, scaled
+to the clip), so a page appears when its name is spoken rather than on an even
+split; the schedule is anchored to the first captured frame so audio and video
+line up. The pointer is choreographed with `xdotool`: the page switches first,
+then the cursor glides to the sidebar link and clicks it (cosmetic). Pages shown:
+Storage/KMS/Secret/Pub-Sub/IAM at *provision*, Managed Kafka cluster + topic and
+Dataproc at *platform*, the topic + capture bucket at *ingest*, the Dataproc job
++ gold bucket at *process*, Eventarc/Cloud Run/Firestore/BigQuery at *serve*,
+the metric/alert policy/Pub-Sub subscription at *observe*, and the Scheduler,
+BigQuery jobs and Cloud Logging at *automate*.
 
 Each stage is also a direct call, e.g.
 `python3 demo/crypto-medallion/scripts/democtl.py process`.

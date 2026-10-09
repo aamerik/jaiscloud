@@ -5,59 +5,81 @@
   "beats": [
     {
       "id": "01-intro",
-      "text": "This is jaiscloud, a local emulator for Google Cloud. We point real Google clients, and real Terraform, at it, and run one crypto data product through its whole life.",
+      "text": "This is jaiscloud, a local emulator for Google Cloud. We point real Google clients and real Terraform at it, and run one crypto data product through its whole life: provision, ingest, process, serve, observe and automate.",
+      "ssml": "This is jaiscloud, a local emulator for Google Cloud. We point real Google clients and real Terraform at it, and run one crypto data product through its whole life: provision, ingest, process, serve, observe and automate.",
       "console": [
-        { "route": "/gcp", "weight": 0.5 },
-        { "route": "/gcp/resourcemanager/projects", "weight": 0.5 }
+        { "route": "/gcp" }
       ]
     },
     {
       "id": "02-provision",
-      "text": "Provision. Terraform creates the buckets, the KMS key, the feed secret and the Pub/Sub topic. Then gcloud creates the Managed Kafka cluster, the Dataproc cluster and the rest of the data platform.",
+      "text": "Provision starts with Terraform. It creates the project's Cloud Storage buckets, a Cloud KMS key, the Secret Manager entry the bridge reads, and a Pub/Sub topic for events. gcloud adds the demo service account.",
+      "ssml": "Provision starts with Terraform. It creates the project's <mark name=\"buckets\"/>Cloud Storage buckets, a <mark name=\"kms\"/>Cloud KMS key, the <mark name=\"secret\"/>Secret Manager entry the bridge reads, and a <mark name=\"pubsub\"/>Pub/Sub topic for events. gcloud adds the demo <mark name=\"iam\"/>service account.",
       "console": [
-        { "route": "/gcp/storage/buckets", "weight": 0.3 },
-        { "route": "/gcp/kms/keyrings", "weight": 0.2 },
-        { "route": "/gcp/secretmanager/secrets", "weight": 0.2 },
-        { "route": "/gcp/pubsub/topics", "weight": 0.15 },
-        { "route": "/gcp/iam/service-accounts", "weight": 0.15 }
+        { "mark": "buckets", "route": "/gcp/storage/buckets" },
+        { "mark": "kms", "route": "/gcp/kms/keyrings" },
+        { "mark": "secret", "route": "/gcp/secretmanager/secrets" },
+        { "mark": "pubsub", "route": "/gcp/pubsub/topics" },
+        { "mark": "iam", "route": "/gcp/iam/service-accounts" }
       ]
     },
     {
-      "id": "03-ingest",
-      "text": "Ingest. A bridge pod reads a live public trade feed, normalizes every trade, and produces it to Managed Kafka, a real Redpanda broker running inside the cluster.",
+      "id": "03-platform",
+      "text": "Then gcloud creates the data platform: the Managed Kafka cluster and its trades topic, and the Dataproc cluster the Spark jobs run on.",
+      "ssml": "Then gcloud creates the data platform: the <mark name=\"kafka\"/>Managed Kafka cluster and its <mark name=\"topic\"/>trades topic, and the <mark name=\"dataproc\"/>Dataproc cluster the Spark jobs run on.",
       "console": [
-        { "route": "/gcp/managedkafka/clusters", "weight": 0.45 },
-        { "route": "/gcp/managedkafka/topics", "weight": 0.35 },
-        { "route": "/gcp/storage/buckets/crypto-medallion-capture", "weight": 0.2 }
+        { "mark": "kafka", "route": "/gcp/managedkafka/clusters/us-central1/cm-trades" },
+        { "mark": "topic", "route": "/gcp/managedkafka/clusters/us-central1/cm-trades/topics/trades" },
+        { "mark": "dataproc", "route": "/gcp/dataproc/clusters" }
       ]
     },
     {
-      "id": "04-process",
-      "text": "Process. One always-on Spark job on Dataproc reads Kafka and writes the medallion: raw bronze, parsed and deduplicated silver, and a windowed gold table in Iceberg on the Hive Metastore.",
+      "id": "04-ingest",
+      "text": "Ingest. A bridge pod reads a live public trade feed, normalizes every trade, and produces it to Managed Kafka. Every run also writes the raw stream to this capture bucket.",
+      "ssml": "Ingest. A bridge pod reads a live public trade feed, normalizes every trade, and produces it to <mark name=\"topic\"/>Managed Kafka. Every run also writes the raw stream to this <mark name=\"capture\"/>capture bucket.",
       "console": [
-        { "route": "/gcp/dataproc/clusters", "weight": 0.3 },
-        { "route": "/gcp/dataproc/jobs", "weight": 0.4 },
-        { "route": "/gcp/storage/buckets/crypto-medallion-gold", "weight": 0.3 }
+        { "mark": "topic", "route": "/gcp/managedkafka/clusters/us-central1/cm-trades/topics/trades" },
+        { "mark": "capture", "route": "/gcp/storage/buckets/crypto-medallion-capture" }
       ]
     },
     {
-      "id": "05-serve",
-      "text": "Serve. Every gold rollup fires Eventarc, which drives a Cloud Run publisher into Firestore and BigQuery, and this leaderboard re-sorts live as each window lands.",
+      "id": "05-process",
+      "text": "Process. One always-on Dataproc job reads the topic and writes the medallion: raw bronze, parsed silver, and a windowed gold table in Iceberg on the Hive Metastore.",
+      "ssml": "Process. One always-on <mark name=\"job\"/>Dataproc job reads the topic and writes the medallion: raw bronze, parsed silver, and a windowed <mark name=\"gold\"/>gold table in Iceberg on the Hive Metastore.",
       "console": [
-        { "route": "/gcp/run/services", "weight": 0.3 },
-        { "route": "/gcp/eventarc/triggers", "weight": 0.25 },
-        { "route": "/gcp/firestore/collections/leaderboard", "weight": 0.25 },
-        { "route": "/gcp/bigquery/datasets/crypto_medallion", "weight": 0.2 }
+        { "mark": "job", "route": "/gcp/dataproc/jobs/us-central1/{streaming_job}" },
+        { "mark": "gold", "route": "/gcp/storage/buckets/crypto-medallion-gold" }
       ]
     },
     {
-      "id": "06-observe",
-      "text": "Observe and automate. A custom metric crosses an alert policy and opens an incident on Pub/Sub, while Cloud Scheduler submits the batch rollup on a cron. All of it, locally.",
+      "id": "06-serve",
+      "text": "Serve. Every gold rollup fires Eventarc, which drives a Cloud Run publisher into Firestore and BigQuery. This leaderboard re-sorts as each window lands.",
+      "ssml": "Serve. Every gold rollup fires <mark name=\"eventarc\"/>Eventarc, which drives a <mark name=\"run\"/>Cloud Run publisher into <mark name=\"firestore\"/>Firestore and <mark name=\"bigquery\"/>BigQuery. This leaderboard re-sorts as each window lands.",
       "console": [
-        { "route": "/gcp/monitoring/alerting", "weight": 0.3 },
-        { "route": "/gcp/monitoring/metrics", "weight": 0.25 },
-        { "route": "/gcp/scheduler/jobs", "weight": 0.25 },
-        { "route": "/gcp/logging/entries", "weight": 0.2 }
+        { "mark": "eventarc", "route": "/gcp/eventarc/triggers" },
+        { "mark": "run", "route": "/gcp/run/services" },
+        { "mark": "firestore", "route": "/gcp/firestore/collections/leaderboard" },
+        { "mark": "bigquery", "route": "/gcp/bigquery/datasets/crypto_medallion" }
+      ]
+    },
+    {
+      "id": "07-observe",
+      "text": "Observe. A custom metric, trades per minute, crosses an alert policy and opens an incident, delivered as a message on the Pub/Sub subscription.",
+      "ssml": "Observe. A custom <mark name=\"metric\"/>metric, trades per minute, crosses an <mark name=\"alert\"/>alert policy and opens an incident, delivered as a <mark name=\"message\"/>message on the Pub/Sub subscription.",
+      "console": [
+        { "mark": "metric", "route": "/gcp/monitoring/metrics" },
+        { "mark": "alert", "route": "/gcp/monitoring/alerting" },
+        { "mark": "message", "route": "/gcp/pubsub/subscriptions/crypto-medallion-events-sub" }
+      ]
+    },
+    {
+      "id": "08-automate",
+      "text": "Automate. Cloud Scheduler submits the batch rollup on a cron, the load job lands it in BigQuery, and every component writes structured entries to Cloud Logging. And it all runs locally.",
+      "ssml": "Automate. <mark name=\"scheduler\"/>Cloud Scheduler submits the batch rollup on a cron, the <mark name=\"bqjobs\"/>load job lands it in BigQuery, and every component writes structured entries to <mark name=\"logging\"/>Cloud Logging. And it all runs locally.",
+      "console": [
+        { "mark": "scheduler", "route": "/gcp/scheduler/jobs" },
+        { "mark": "bqjobs", "route": "/gcp/bigquery/jobs" },
+        { "mark": "logging", "route": "/gcp/logging/entries" }
       ]
     }
   ]

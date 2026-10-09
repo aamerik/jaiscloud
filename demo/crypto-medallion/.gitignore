@@ -9,3 +9,4 @@ capture/
 out/
 narration/clips/
 narration/narration.mp3
+narration/timepoints.json

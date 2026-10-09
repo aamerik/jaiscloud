@@ -122,6 +122,26 @@ def write_metric(trades: float) -> None:
     log(f"metric {METRIC} = {trades}")
 
 
+def write_log(rows: list[dict], trades: float) -> None:
+    """Structured app log to Cloud Logging (design §5.5)."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"
+    http("POST", "/v2/entries:write", {"entries": [{
+        "logName": f"projects/{PROJECT}/logs/crypto-medallion",
+        "resource": {"type": "global", "labels": {"project_id": PROJECT}},
+        "severity": "INFO",
+        "timestamp": now,
+        "jsonPayload": {
+            "event": "publisher.delivery",
+            "object": "leaderboard/latest.json",
+            "symbols": len(rows),
+            "trades": trades,
+            "top": (max(rows, key=lambda r: r.get("volume", 0))["symbol"]
+                    if rows else None),
+        },
+    }]})
+    log(f"logged publisher.delivery symbols={len(rows)} trades={trades}")
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # keep the Cloud Run log clean
         return
@@ -151,7 +171,9 @@ class Handler(BaseHTTPRequestHandler):
             rows = read_object(bucket, name)
             upsert_firestore(rows)
             insert_bigquery(rows)
-            write_metric(float(sum(r.get("trades", 0) for r in rows)))
+            trades = float(sum(r.get("trades", 0) for r in rows))
+            write_metric(trades)
+            write_log(rows, trades)
         except Exception as exc:  # a delivery must not wedge the trigger
             log(f"delivery error: {exc}")
             self._reply(500, json.dumps({"error": str(exc)}).encode())
