@@ -58,7 +58,9 @@ make demo-crypto-reset       # delete demo resources (FULL=1 also POST /_jaisclo
 narration plays (Storage/KMS/Secret/Pub-Sub at *provision*, Managed Kafka at
 *ingest*, Dataproc + the gold bucket at *process*, Cloud Run/Eventarc/Firestore/
 BigQuery at *serve*, Monitoring/Scheduler/Logging at *observe* — one route list
-per beat in `narration/beats.json`).
+per beat in `narration/beats.json`). The pointer is choreographed with `xdotool`:
+it glides to the sidebar link for each resource and clicks it, then the route is
+confirmed client-side (so detail pages with no own nav link still land).
 
 Each stage is also a direct call, e.g.
 `python3 demo/crypto-medallion/scripts/democtl.py process`.

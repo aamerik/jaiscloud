@@ -1090,6 +1090,73 @@ def cdp_eval(app_prefix: str, expression: str) -> bool:
     return True
 
 
+async def _cdp_eval_value(ws_url: str, expression: str):
+    import websockets
+    async with websockets.connect(ws_url, max_size=None) as ws:
+        await ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
+                                  "params": {"expression": expression,
+                                             "returnByValue": True}}))
+        while True:
+            msg = json.loads(await ws.recv())
+            if msg.get("id") == 1:
+                return (msg.get("result", {}).get("result", {}) or {}).get("value")
+
+
+def cdp_eval_value(app_prefix: str, expression: str):
+    ws = _cdp_ws_url(app_prefix)
+    if not ws:
+        return None
+    import asyncio
+    return asyncio.run(_cdp_eval_value(ws, expression))
+
+
+# ── OS pointer choreography (xdotool) ────────────────────────────────────────
+def _xdo(display: str, args: list) -> None:
+    subprocess.run(["xdotool", *args], env={**os.environ, "DISPLAY": display},
+                   check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def move_cursor(display: str, x: int, y: int, steps: int = 10) -> None:
+    """Glide the pointer to (x, y) so x11grab shows real motion."""
+    import time as _time
+    try:
+        out = subprocess.run(["xdotool", "getmouselocation", "--shell"],
+                             env={**os.environ, "DISPLAY": display},
+                             capture_output=True, text=True, check=True).stdout
+        cur = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+        cx, cy = int(cur.get("X", 0)), int(cur.get("Y", 0))
+    except Exception:
+        cx, cy = 0, 0
+    for i in range(1, steps + 1):
+        _xdo(display, ["mousemove", str(int(cx + (x - cx) * i / steps)),
+                       str(int(cy + (y - cy) * i / steps))])
+        _time.sleep(0.012)
+
+
+def click_cursor(display: str) -> None:
+    _xdo(display, ["click", "1"])
+
+
+def route_hrefs(route: str) -> list:
+    """Sidebar link candidates for a route: itself then each ancestor section."""
+    parts = [p for p in route.split("/") if p]
+    return ["/ui/" + "/".join(parts[:i]) for i in range(len(parts), 0, -1)]
+
+
+def nav_link_center(app_prefix: str, route: str):
+    """Center of the sidebar link for a route (or its nearest section), scrolled
+    into view. Restricted to the left sidebar so the header logo never matches."""
+    bases = route_hrefs(route)
+    js = ("(() => { const bs=%s; for (const b of bs) {"
+          " const a=Array.from(document.querySelectorAll('a')).find(x => {"
+          "   const h=x.getAttribute('href')||''; return h===b || h.startsWith(b+'/'); });"
+          " if (a) { a.scrollIntoView({block:'center'}); const r=a.getBoundingClientRect();"
+          "   if (r.width>0 && r.height>0 && r.left<260 && r.top>60)"
+          "     return {x: Math.round(r.left+r.width/2), y: Math.round(r.top+r.height/2)};"
+          " } } return null; })()" % json.dumps(bases))
+    return cdp_eval_value(app_prefix, js)
+
+
 def stage_record_split(args) -> None:
     """Record a take with the console left and the leaderboard right, driving the
     console to each stage's resources as the narration plays (design §7/§8)."""
@@ -1190,18 +1257,32 @@ def stage_record_split(args) -> None:
              "-pix_fmt", "yuv420p", str(out)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         _time.sleep(lead)
+        display = f":{args.display_num}"
+        cursor = bool(shutil.which("xdotool"))
+        app_prefix = console_base + "/ui"
         for beat in spec["beats"]:
             dur = durations[beat["id"]]
             stops = beat.get("console") or [{"route": "/gcp", "weight": 1.0}]
             wsum = sum(s.get("weight", 1.0) for s in stops) or 1.0
             for stop in stops:
+                hold = dur * stop.get("weight", 1.0) / wsum
+                t0 = _time.monotonic()
                 route = stop["route"]
+                # Hand-driven look: glide to the sidebar link and click it, then
+                # guarantee the exact route client-side (detail pages have no
+                # direct nav link).
+                if cursor and route != "/gcp":
+                    pos = nav_link_center(app_prefix, route)
+                    if pos and 0 <= pos.get("x", width) < width:
+                        move_cursor(display, pos["x"], pos["y"])
+                        click_cursor(display)
+                        _time.sleep(0.25)
                 js = (f"history.pushState({{}}, '', '/ui{route}');"
                       "window.dispatchEvent(new PopStateEvent('popstate'));")
-                if not cdp_eval(console_base + "/ui", js):
+                if not cdp_eval(app_prefix, js):
                     raise SystemExit("CDP eval failed")
-                info(f"console -> {route} ({dur * stop.get('weight', 1.0) / wsum:.1f}s)")
-                _time.sleep(dur * stop.get("weight", 1.0) / wsum)
+                info(f"console -> {route} ({hold:.1f}s)")
+                _time.sleep(max(0.0, hold - (_time.monotonic() - t0)))
         ff.wait()
         if ff.returncode != 0:
             raise SystemExit("ffmpeg capture failed")
