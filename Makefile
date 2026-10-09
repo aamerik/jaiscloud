@@ -94,6 +94,15 @@ CLOUDRUN_URL_PORT    ?= 4588
 # REST port to the host. The gate dials the synthesized hostname directly.
 CLOUDRUN_BROWSER_SUFFIX ?= run.localhost
 CLOUDRUN_BROWSER_PORT   ?= 18080
+# SPK7 LAN capture path: serve the demo URL on the emulator host's LAN address
+# under a nip.io wildcard authority (run.<lan-ip>.nip.io) so a *remote* recording
+# browser can resolve the synthesized host. A *.localhost authority (SPK4) only
+# resolves to loopback on the emulator host itself.
+CLOUDRUN_BROWSER_LAN_IP   ?= $(shell hostname -I 2>/dev/null | awk '{print $$1}')
+CLOUDRUN_BROWSER_LAN_PORT ?= 8080
+# SPK7 recording take length (seconds); scripts/demo-record.sh also verifies the
+# result with ffprobe.
+DEMO_RECORD_DURATION ?= 20
 # Bound the full floci Java suite so a hung test cannot wedge the target.
 CLOUDRUN_JAVA_TIMEOUT ?= 2400
 
@@ -153,7 +162,8 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-managedkafka-broker-k8s \
         test-managedkafka-broker-docker \
         test-e2e-cloudrun-k8s test-e2e-cloudrun-java test-e2e-cloudrun-docker \
-        test-e2e-cloudrun-browser \
+        test-e2e-cloudrun-browser test-e2e-cloudrun-browser-lan \
+        demo-browser-lan record-gcp-demo \
         test-e2e-dataproc-docker \
         test-e2e-eventarc-k8s \
         test-e2e-scheduler-k8s \
@@ -1143,6 +1153,32 @@ test-e2e-cloudrun-browser: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud
 	K8S_NAMESPACE=$(K8S_NAMESPACE) CLOUDRUN_E2E_BROWSER=1 \
 	  CLOUDRUN_BROWSER_SUFFIX=$(CLOUDRUN_BROWSER_SUFFIX) CLOUDRUN_BROWSER_PORT=$(CLOUDRUN_BROWSER_PORT) \
 	  go test -v -tags cloudrun_e2e -run TestCloudRunBrowserReachability -timeout 15m ./tests/persistent_mode/gcp/cloudrun/
+
+# SPK7 — LAN capture path. SPK4's *.localhost authority only resolves on the
+# emulator host, so a remote recording browser cannot reach the data plane.
+# Serve it on the host LAN address under a nip.io wildcard authority
+# (run.<lan-ip>.nip.io): the public resolver maps any authority under it to the
+# LAN IP, so the browser sends the routing Host with no hosts edit and no proxy.
+# The gate dials the authority with no Host override through a 0.0.0.0
+# port-forward bound to the same port.
+test-e2e-cloudrun-browser-lan: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud Run data-plane LAN (nip.io) browser reachability on k3d (SPK7) — tests/persistent_mode/gcp/cloudrun/ (tag: cloudrun_e2e; implements the recording take's LAN path; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
+	@test -n "$(CLOUDRUN_BROWSER_LAN_IP)" || (echo "ERROR: could not determine the host LAN IP; pass CLOUDRUN_BROWSER_LAN_IP=<ip>"; exit 1)
+	go clean -testcache
+	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp \
+	  JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=k8s \
+	  JAISCLOUD_CLOUDRUN_URL_SUFFIX=run.$(CLOUDRUN_BROWSER_LAN_IP).nip.io \
+	  JAISCLOUD_CLOUDRUN_URL_PORT=$(CLOUDRUN_BROWSER_LAN_PORT)
+	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
+	K8S_NAMESPACE=$(K8S_NAMESPACE) CLOUDRUN_E2E_BROWSER_LAN=1 \
+	  CLOUDRUN_BROWSER_LAN_IP=$(CLOUDRUN_BROWSER_LAN_IP) CLOUDRUN_BROWSER_LAN_PORT=$(CLOUDRUN_BROWSER_LAN_PORT) \
+	  go test -v -tags cloudrun_e2e -run TestCloudRunBrowserLANReachability -timeout 15m ./tests/persistent_mode/gcp/cloudrun/
+
+demo-browser-lan: ## Serve the Cloud Run data plane on the host LAN address for the recording browser (SPK7) — scripts/demo-browser-lan.sh (keeps the 0.0.0.0 forward up)
+	K8S_NAMESPACE=$(K8S_NAMESPACE) DEMO_LAN_PORT=$(CLOUDRUN_BROWSER_LAN_PORT) DEMO_LAN_IP=$(CLOUDRUN_BROWSER_LAN_IP) \
+	  scripts/demo-browser-lan.sh --check
+
+record-gcp-demo: ## Capture a real-browser demo take from an isolated Xvfb display (SPK7) — scripts/demo-record.sh; DEMO_RECORD_URL=<leaderboard url> and DEMO_RECORD_DURATION=<secs>
+	DEMO_RECORD_URL="$(DEMO_RECORD_URL)" scripts/demo-record.sh --duration $(DEMO_RECORD_DURATION)
 
 test-e2e-dataproc-docker: _check-docker-prereq _check-iceberg-gcp-prereq build-gcp ## Dataproc Spark jobs under Docker — tests/persistent_mode/gcp/dataproc/ (tag: dataproc_docker_e2e; needs the local Docker daemon + the docker group, and the GCS-connector Spark image)
 	go clean -testcache
