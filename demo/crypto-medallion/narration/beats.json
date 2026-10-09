@@ -1,0 +1,30 @@
+{
+  "voice": "en-US-AriaNeural",
+  "rate": "-4%",
+  "beats": [
+    {
+      "id": "01-intro",
+      "text": "This is jaiscloud, a local emulator for Google Cloud. We point real Google clients, and real Terraform, at it, and run one crypto data product through its whole life."
+    },
+    {
+      "id": "02-provision",
+      "text": "Provision. Terraform creates the buckets, the KMS key, the feed secret and the Pub/Sub topic. Then gcloud creates the Managed Kafka cluster, the Dataproc cluster and the rest of the data platform."
+    },
+    {
+      "id": "03-ingest",
+      "text": "Ingest. A bridge pod reads a live public trade feed, normalizes every trade, and produces it to Managed Kafka, a real Redpanda broker running inside the cluster."
+    },
+    {
+      "id": "04-process",
+      "text": "Process. One always-on Spark job on Dataproc reads Kafka and writes the medallion: raw bronze, parsed and deduplicated silver, and a windowed gold table in Iceberg on the Hive Metastore."
+    },
+    {
+      "id": "05-serve",
+      "text": "Serve. Every gold rollup fires Eventarc, which drives a Cloud Run publisher into Firestore and BigQuery, and this leaderboard re-sorts live as each window lands."
+    },
+    {
+      "id": "06-observe",
+      "text": "Observe and automate. A custom metric crosses an alert policy and opens an incident on Pub/Sub, while Cloud Scheduler submits the batch rollup on a cron. All of it, locally."
+    }
+  ]
+}

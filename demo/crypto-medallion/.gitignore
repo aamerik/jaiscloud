@@ -7,3 +7,5 @@ terraform.tfstate
 terraform.tfstate.backup
 capture/
 out/
+narration/clips/
+narration/narration.mp3

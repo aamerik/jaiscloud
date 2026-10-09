@@ -794,33 +794,97 @@ def stage_status(args) -> None:
     }, indent=2))
 
 
+def stage_preflight(args) -> None:
+    """Verify every link is live before a take (design §9)."""
+    state = load_state()
+    emu = Emulator(state["endpoint"] or ensure_port_forward(args.port))
+    checks: list[tuple[str, bool, str]] = []
+
+    ok = True
+    try:
+        emu.get("/_jaiscloud/health")
+    except SystemExit:
+        ok = False
+    checks.append(("emulator healthy", ok, emu.base))
+
+    jid = state.get("streaming_job", "")
+    st = job_state(emu, jid) if jid else ""
+    checks.append(("streaming job RUNNING", st == "RUNNING", f"{jid}={st}"))
+
+    try:
+        bridge = kubectl(["get", "deploy", "cm-bridge", "-o",
+                          "jsonpath={.status.readyReplicas}"], check=False)
+    except SystemExit:
+        bridge = "0"
+    checks.append(("bridge ready", bridge == "1", f"ready={bridge}"))
+
+    for svc in (RUN_PUBLISHER, RUN_LEADERBOARD):
+        svc_obj, status = emu.get(f"/v2/projects/{PROJECT}/locations/{REGION}/services/{svc}",
+                                  expect=(200, 404))
+        ready = bool(svc_obj and svc_obj.get("uri"))
+        checks.append((f"Cloud Run {svc} ready", ready, (svc_obj or {}).get("uri", "")))
+
+    obj, status = emu.get(f"/storage/v1/b/{state['buckets']['leaderboard']}/o/latest.json",
+                          expect=(200, 404))
+    checks.append(("latest.json present", status == 200, (obj or {}).get("updated", "")))
+
+    print(json.dumps({"leaderboard_uri": run_authority(emu),
+                      "kafka_bootstrap": state["kafka"]["bootstrap"]}, indent=2))
+    failed = 0
+    for name, passed, detail in checks:
+        print(f"  {'PASS' if passed else 'FAIL'}  {name}  ({detail})")
+        failed += 0 if passed else 1
+    if failed:
+        raise SystemExit(f"{failed} pre-flight check(s) failed")
+
+
 def stage_reset(args) -> None:
     state = load_state()
     endpoint = state.get("endpoint") or f"http://localhost:{args.port}"
     emu = Emulator(endpoint)
     log("delete demo resources")
+
+    # Dataproc jobs: this run's streaming job and every Scheduler-submitted rollup.
+    jobs, _ = emu.get(f"/v1/projects/{PROJECT}/regions/{REGION}/jobs", expect=(200, 404))
+    for job in (jobs or {}).get("jobs", []):
+        job_id = job.get("reference", {}).get("jobId", "")
+        if job_id.startswith("cm-"):
+            emu.delete(f"/v1/projects/{PROJECT}/regions/{REGION}/jobs/{job_id}",
+                       expect=(200, 204, 404, 405))
+
     for path in (
         f"/v1/projects/{PROJECT}/locations/{REGION}/triggers/{EVENTARC_TRIGGER}",
         f"/v1/projects/{PROJECT}/locations/{REGION}/jobs/{SCHEDULER_JOB}",
         f"/v2/projects/{PROJECT}/locations/{REGION}/services/{RUN_PUBLISHER}",
         f"/v2/projects/{PROJECT}/locations/{REGION}/services/{RUN_LEADERBOARD}",
-        f"/v1/projects/{PROJECT}/regions/{REGION}/jobs/cm-streaming",
         f"/v1/projects/{PROJECT}/regions/{REGION}/clusters/{DATAPROC_CLUSTER}",
         f"/v1/projects/{PROJECT}/locations/{REGION}/clusters/{KAFKA_CLUSTER}",
+        f"/bigquery/v2/projects/{PROJECT}/datasets/{BQ_DATASET}?deleteContents=true",
     ):
-        emu.delete(path, expect=(200, 204, 404))
+        emu.delete(path, expect=(200, 204, 404, 405))
+
+    # Firestore read model.
+    docs, _ = emu.get(f"/v1/projects/{PROJECT}/databases/(default)/documents/"
+                      f"{FIRESTORE_COLLECTION}", expect=(200, 404))
+    for doc in (docs or {}).get("documents", []):
+        emu.delete(f"/{doc['name']}", expect=(200, 204, 404))
+
     kubectl(["delete", "deployment", "cm-bridge", "cm-submitter", "--ignore-not-found"])
+    kubectl(["delete", "service", "cm-submitter", "--ignore-not-found"])
+    kubectl(["delete", "configmap", "cm-submitter", "--ignore-not-found"], check=False)
+
     if args.pp:
         log("terraform destroy")
         env = {"GOOGLE_OAUTH_ACCESS_TOKEN": "demo-token", "GOOGLE_CLOUD_PROJECT": PROJECT}
         run(["terraform", f"-chdir={TF_DIR}", "destroy", "-input=false",
              "-auto-approve", "-no-color", f"-var=endpoint={endpoint}",
-             f"-var=project={PROJECT}", f"-var=region={REGION}"], env=env)
+             f"-var=project={PROJECT}", f"-var=region={REGION}"], env=env, check=False)
     if args.full:
         log("POST /_jaiscloud/reset")
         emu.post("/_jaiscloud/reset")
         if STATE_FILE.exists():
             STATE_FILE.unlink()
+    log("reset complete")
 
 
 def stage_up(args) -> None:
@@ -832,24 +896,115 @@ def stage_up(args) -> None:
         stage_observe(args)
 
 
+# ── stage 7: record the take (design §8) ─────────────────────────────────────
+def lan_ip() -> str:
+    return os.environ.get("DEMO_LAN_IP") or run(["hostname", "-I"]).split()[0]
+
+
+def mux(video: Path, narration: Path, out: Path) -> None:
+    log(f"mux {out}")
+    run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(video), "-i",
+         str(narration), "-c:v", "copy", "-c:a", "aac", "-shortest", str(out)],
+        capture=False)
+
+
+def stage_record(args) -> None:
+    """Serve the leaderboard on the LAN nip.io authority and capture a take."""
+    state = load_state()
+    emu = Emulator(state["endpoint"])
+    ip = args.ip or lan_ip()
+    port = args.lan_port
+    suffix = f"run.{ip}.nip.io"
+
+    log(f"switch the Cloud Run authority to {suffix}:{port}")
+    run(["pkill", "-f", "port-forward svc/jaiscloud-gcp"], check=False)
+    kubectl(["set", "env", "deployment/jaiscloud-gcp",
+             f"JAISCLOUD_CLOUDRUN_URL_SUFFIX={suffix}",
+             f"JAISCLOUD_CLOUDRUN_URL_PORT={port}"])
+    kubectl(["rollout", "status", "deployment/jaiscloud-gcp", "--timeout=180s"])
+
+    # The stored service uri was minted under the previous suffix, and the
+    # runtime registers revisions under the authority current at ensure time, so
+    # re-deploy the demo services after the switch.
+    log("re-deploy Cloud Run services under the LAN authority")
+    buckets = state["buckets"]
+    deploy_run_service(emu, RUN_PUBLISHER, state["images"]["publisher"], 8080, {
+        "PROJECT": PROJECT, "EMULATOR": IN_CLUSTER_EMULATOR,
+        "BQ_DATASET": BQ_DATASET, "BQ_TABLE": BQ_TABLE,
+        "FIRESTORE_COLLECTION": FIRESTORE_COLLECTION,
+        "LEADERBOARD_BUCKET": buckets["leaderboard"],
+        "MONITORING_METRIC": METRIC_TYPE})
+    deploy_run_service(emu, RUN_LEADERBOARD, state["images"]["leaderboard"], 8080, {
+        "PROJECT": PROJECT, "EMULATOR": IN_CLUSTER_EMULATOR,
+        "FIRESTORE_COLLECTION": FIRESTORE_COLLECTION})
+
+    log(f"forward svc/jaiscloud-gcp {port}:8080 on 0.0.0.0")
+    pf = subprocess.Popen(
+        ["kubectl", "-n", NS, "port-forward", "--address", "0.0.0.0",
+         "svc/jaiscloud-gcp", f"{port}:8080"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_healthy(f"http://localhost:{port}", timeout=40)
+        svc, _ = emu.get(f"/v2/projects/{PROJECT}/locations/{REGION}/services/{RUN_LEADERBOARD}")
+        # The stored uri was minted under the previous suffix; rewrite its
+        # authority to the LAN suffix the emulator now routes on.
+        u = urllib.parse.urlsplit(svc.get("uri", ""))
+        labels = (u.hostname or "").split(".")
+        authority = f"{labels[0]}.{labels[1]}.{suffix}:{port}"
+        url = f"{u.scheme}://{authority}/"
+        log(f"leaderboard URL: {url}")
+
+        # Prove the emulator routes the synthesized authority before recording.
+        req = urllib.request.Request(url + "api/leaderboard")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status != 200:
+                raise SystemExit(f"LAN authority {authority} did not route (HTTP {resp.status})")
+        info(f"LAN authority routed ({authority})")
+
+        narration = Path(args.narration)
+        run([sys.executable, str(DEMO_DIR / "scripts" / "make-narration.py"),
+             "--out", str(narration)], capture=False)
+        import json as _json
+        # narration length + a small tail so -shortest cuts to the voice track.
+        dur = _json.loads(run(["ffprobe", "-v", "error", "-show_entries",
+                               "format=duration", "-of", "json", str(narration)]))
+        seconds = float(dur["format"]["duration"])
+        capture = args.out
+        run([str(REPO_ROOT / "scripts" / "demo-record.sh"), "--url", url,
+             "--duration", str(int(seconds + 8)), "--out", capture], capture=False)
+        mux(Path(capture), narration, Path(args.out_muxed))
+        log(f"take ready: {args.out_muxed}")
+    finally:
+        pf.terminate()
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("stage", choices=[
         "provision", "bridge", "process", "rollup", "serve", "observe",
-        "automate", "up", "status", "reset"])
+        "automate", "up", "status", "preflight", "record", "reset"])
     ap.add_argument("--port", type=int, default=18080,
                     help="host port for the emulator REST port-forward")
     ap.add_argument("--no-observe", action="store_true", help="up: skip observe")
     ap.add_argument("--pp", action="store_true", help="reset: also terraform destroy")
     ap.add_argument("--full", action="store_true", help="reset: POST /_jaiscloud/reset")
+    ap.add_argument("--ip", default="", help="record: emulator-host LAN IP")
+    ap.add_argument("--lan-port", type=int, default=18080,
+                    help="record: host port forwarded on 0.0.0.0 for the LAN authority")
+    ap.add_argument("--narration", default=str(DEMO_DIR / "narration" / "narration.mp3"))
+    ap.add_argument("--out", default=str(DEMO_DIR / "out" / "take-browser.mp4"),
+                    help="record: raw capture path")
+    ap.add_argument("--out-muxed", default=str(DEMO_DIR / "out" / "take.mp4"),
+                    help="record: muxed take path")
     args = ap.parse_args()
     {
         "provision": stage_provision, "bridge": stage_bridge,
         "process": stage_process, "rollup": stage_rollup, "serve": stage_serve,
         "observe": stage_observe, "automate": stage_automate, "up": stage_up,
-        "status": stage_status, "reset": stage_reset,
+        "status": stage_status, "preflight": stage_preflight,
+        "record": stage_record, "reset": stage_reset,
     }[args.stage](args)
 
 
