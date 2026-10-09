@@ -315,14 +315,14 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	if err != nil || got.Status.State != "RUNNING" {
 		t.Fatalf("cluster lost after restore: %v %+v", err, got)
 	}
-	if !got.IsGKEBacked() || string(got.VirtualClusterConfig) != vcc {
+	if !got.IsGKEBacked() || !jsonEqual(string(got.VirtualClusterConfig), vcc) {
 		t.Fatalf("virtualClusterConfig lost after restore: %s", got.VirtualClusterConfig)
 	}
 	if gce, _ := s2.GetCluster(ctx, "p", "r", "gce"); gce.IsGKEBacked() {
 		t.Fatal("GCE cluster became GKE-backed after restore")
 	}
 	gotJob, err := s2.GetJob(ctx, "p", "r", "j")
-	if err != nil || string(gotJob.TypeJob) != `{"mainJarFileUri":"gs://b/a.jar"}` {
+	if err != nil || !jsonEqual(string(gotJob.TypeJob), `{"mainJarFileUri":"gs://b/a.jar"}`) {
 		t.Fatalf("job lost after restore: %v %+v", err, gotJob)
 	}
 	gotOp, err := s2.GetOperation(ctx, "p", "r", "op")
