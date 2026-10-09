@@ -40,6 +40,22 @@ target.
 - Anything behind a `preview` service (no engine ships locally), or the data plane of a
   metadata-only service.
 
+**CI coverage (infra decision).** GitHub Actions runs on hosted `ubuntu-latest`
+with no cluster, so the unit, conformance, persistence (`gcp_persistence` against
+a Postgres service), SDK and async-LRO gates run in CI; the executor-backed
+`*_e2e` suites do not. Two decisions stand:
+
+- The **Docker-executor** e2e suites (`test-e2e-cloudrun-docker`,
+  `test-e2e-functions-docker`, `test-e2e-dataproc-docker`,
+  `test-e2e-managedkafka-broker-docker`) are intentionally **not** wired into CI.
+  They re-assert the same control-plane flow as the k3s suites, their
+  docker-specific logic already has unit coverage (`internal/gcp/runexec`,
+  `internal/executor/container`, `internal/sparkhelpers`,
+  `internal/gcp/broker/kafka`), and they need multi-GB images on a hosted runner
+  — a duplicate signal at a high cost, and historically not where breakage is.
+- The **k3s/k3d** e2e suites stay local-only by decision: gating them in CI would
+  need a self-hosted cluster runner.
+
 A local green run is evidence about the **wire contract**, not about real GCP
 behaviour. Treat this document as the checklist for the gap.
 
