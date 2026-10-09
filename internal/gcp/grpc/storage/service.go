@@ -249,6 +249,7 @@ func objectToProto(m gcs.ObjectMeta) *storagepb.Object {
 // bucketToProto converts a stored bucket map into the proto Bucket.
 func bucketToProto(m map[string]any) *storagepb.Bucket {
 	name, _ := m["name"].(string)
+	location, _ := m["location"].(string)
 	b := &storagepb.Bucket{
 		Name:           bucketResourceName(name),
 		BucketId:       name,
@@ -256,10 +257,10 @@ func bucketToProto(m map[string]any) *storagepb.Bucket {
 		// The proto defines etag and locationType; real GCP populates both, so a
 		// gRPC client must see them, matching the REST storage#bucket body.
 		Etag:         "CAE=",
-		LocationType: "multi-region",
+		LocationType: storageprovider.BucketLocationType(location),
 	}
-	if v, _ := m["location"].(string); v != "" {
-		b.Location = v
+	if location != "" {
+		b.Location = location
 	}
 	if v, _ := m["storageClass"].(string); v != "" {
 		b.StorageClass = v
