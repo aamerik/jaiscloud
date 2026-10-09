@@ -2,6 +2,7 @@
   "voice": "en-US-AriaNeural",
   "google_voice": "en-US-Journey-F",
   "rate": "-6%",
+  "pronounce": { "jaiscloud": "Jays cloud" },
   "beats": [
     {
       "id": "01-intro",

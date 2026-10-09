@@ -84,7 +84,7 @@ def rate_pct(rate: str) -> float:
         return 0.0
 
 
-def synth_google(beat: dict, voice: str, rate: str, quota: str) -> bytes:
+def synth_google(text: str, voice: str, rate: str, quota: str) -> bytes:
     """Synthesize one beat as plain text (Journey voices reject SSML). Mark times
     are estimated from word position by estimate_marks."""
     if not quota:
@@ -93,7 +93,7 @@ def synth_google(beat: dict, voice: str, rate: str, quota: str) -> bytes:
     if not token:
         raise RuntimeError("no gcloud access token")
     lang = "-".join(voice.split("-")[:2])  # en-US-Journey-F -> en-US
-    body = {"input": {"text": beat["text"]},
+    body = {"input": {"text": text},
             "voice": {"languageCode": lang, "name": voice},
             "audioConfig": {"audioEncoding": "MP3",
                             "speakingRate": max(0.25, min(4.0, 1.0 + rate_pct(rate) / 100.0))}}
@@ -141,19 +141,27 @@ def synth_edge(text: str, voice: str, rate: str) -> bytes:
     return data
 
 
+def apply_pronounce(text: str, mapping: dict) -> str:
+    """Respell brand/technical words the TTS voice would say wrong."""
+    for k, v in (mapping or {}).items():
+        text = re.sub(re.escape(k), v, text, flags=re.IGNORECASE)
+    return text
+
+
 def synth_all(engine: str, beats: list, google_voice: str, edge_voice: str,
-              rate: str, quota: str):
+              rate: str, quota: str, pronounce: dict):
     """Return (clips, {beat_id: {mark: seconds}})."""
     clips = []
     marks_by_beat = {}
     for beat in beats:
         clip = CLIPS_DIR / f"{beat['id']}.mp3"
+        say = apply_pronounce(beat["text"], pronounce)
         last = None
         for attempt in range(3):
             try:
-                data = (synth_google(beat, google_voice, rate, quota)
+                data = (synth_google(say, google_voice, rate, quota)
                         if engine == "google"
-                        else synth_edge(beat["text"], edge_voice, rate))
+                        else synth_edge(say, edge_voice, rate))
                 clip.write_bytes(data)
                 last = None
                 break
@@ -181,6 +189,7 @@ def main() -> None:
     edge_voice = spec.get("voice", "en-US-AriaNeural")
     google_voice = spec.get("google_voice", "en-US-Journey-F")
     rate = spec.get("rate", "+0%")
+    pronounce = spec.get("pronounce", {})
     quota = quota_project(args.quota_project)
     CLIPS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -195,7 +204,7 @@ def main() -> None:
             try:
                 print(f"google TTS: voice={google_voice} quota={quota}")
                 clips, marks_by_beat = synth_all("google", beats, google_voice,
-                                                 edge_voice, rate, quota)
+                                                 edge_voice, rate, quota, pronounce)
                 engine = "google"
             except Exception as exc:
                 if args.tts == "google":
@@ -203,7 +212,7 @@ def main() -> None:
                 print(f"google TTS failed ({exc}); rebuilding every beat with edge-tts")
                 engine = "edge"
     if engine == "edge":
-        clips, marks_by_beat = synth_all("edge", beats, google_voice, edge_voice, rate, quota)
+        clips, marks_by_beat = synth_all("edge", beats, google_voice, edge_voice, rate, quota, pronounce)
 
     (NARRATION_DIR / "timepoints.json").write_text(
         json.dumps({"engine": engine, "beats": marks_by_beat}, indent=2) + "\n")
