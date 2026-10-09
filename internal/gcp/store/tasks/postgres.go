@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 
+	"jaiscloud/internal/gcp/storeutil"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -111,6 +113,14 @@ func (s *PostgresStore) UpdateQueue(ctx context.Context, projectID, location str
 }
 
 func (s *PostgresStore) UpdateQueueAtomic(ctx context.Context, projectID, location, name string, mutate func(Queue) (Queue, error)) (Queue, error) {
+	// Retry a transient transaction conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Queue, error) {
+		return s.updateQueueAtomicOnce(ctx, projectID, location, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateQueueAtomicOnce(ctx context.Context, projectID, location, name string, mutate func(Queue) (Queue, error)) (Queue, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Queue{}, err
@@ -293,6 +303,12 @@ func (s *PostgresStore) GetTask(ctx context.Context, projectID, location, queue,
 }
 
 func (s *PostgresStore) UpdateTaskAtomic(ctx context.Context, projectID, location, queue, name string, mutate func(Task) (Task, error)) (Task, error) {
+	return storeutil.RetrySerializable(ctx, func() (Task, error) {
+		return s.updateTaskAtomicOnce(ctx, projectID, location, queue, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateTaskAtomicOnce(ctx context.Context, projectID, location, queue, name string, mutate func(Task) (Task, error)) (Task, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Task{}, err

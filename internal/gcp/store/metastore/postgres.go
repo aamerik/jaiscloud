@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -97,6 +98,12 @@ func (s *PostgresStore) UpdateService(ctx context.Context, projectID, location s
 // so a concurrent writer can't land between the read and the write. See
 // store/secretmanager/postgres.go's UpdateSecretAtomic for the reference shape.
 func (s *PostgresStore) UpdateServiceAtomic(ctx context.Context, projectID, location, name string, mutate func(Service) (Service, error)) (Service, error) {
+	return storeutil.RetrySerializable(ctx, func() (Service, error) {
+		return s.updateServiceAtomicOnce(ctx, projectID, location, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateServiceAtomicOnce(ctx context.Context, projectID, location, name string, mutate func(Service) (Service, error)) (Service, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Service{}, err
@@ -321,6 +328,12 @@ func (s *PostgresStore) UpdateMetadataImport(ctx context.Context, projectID, loc
 
 // UpdateMetadataImportAtomic mirrors UpdateServiceAtomic for a metadata import.
 func (s *PostgresStore) UpdateMetadataImportAtomic(ctx context.Context, projectID, location, serviceName, name string, mutate func(MetadataImport) (MetadataImport, error)) (MetadataImport, error) {
+	return storeutil.RetrySerializable(ctx, func() (MetadataImport, error) {
+		return s.updateMetadataImportAtomicOnce(ctx, projectID, location, serviceName, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateMetadataImportAtomicOnce(ctx context.Context, projectID, location, serviceName, name string, mutate func(MetadataImport) (MetadataImport, error)) (MetadataImport, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return MetadataImport{}, err
@@ -427,6 +440,12 @@ func (s *PostgresStore) GetFederation(ctx context.Context, projectID, location, 
 // UpdateFederationAtomic mirrors UpdateServiceAtomic: a Serializable transaction
 // with SELECT ... FOR UPDATE row-locks the federation for the duration of mutate.
 func (s *PostgresStore) UpdateFederationAtomic(ctx context.Context, projectID, location, name string, mutate func(Federation) (Federation, error)) (Federation, error) {
+	return storeutil.RetrySerializable(ctx, func() (Federation, error) {
+		return s.updateFederationAtomicOnce(ctx, projectID, location, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateFederationAtomicOnce(ctx context.Context, projectID, location, name string, mutate func(Federation) (Federation, error)) (Federation, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Federation{}, err

@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -93,6 +94,12 @@ func (s *PostgresStore) UpdateCluster(ctx context.Context, projectID, location s
 // racing to silently overwrite this call's write. See
 // store/firestore/postgres.go's Commit for the same convention.
 func (s *PostgresStore) UpdateClusterAtomic(ctx context.Context, projectID, location, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error) {
+	return storeutil.RetrySerializable(ctx, func() (Cluster, error) {
+		return s.updateClusterAtomicOnce(ctx, projectID, location, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateClusterAtomicOnce(ctx context.Context, projectID, location, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Cluster{}, err
@@ -265,6 +272,12 @@ func (s *PostgresStore) UpdateTopic(ctx context.Context, projectID, location, cl
 // silently overwrite this call's write. See store/firestore/postgres.go's
 // Commit for the same convention.
 func (s *PostgresStore) UpdateTopicAtomic(ctx context.Context, projectID, location, clusterName, topicName string, mutate func(Topic) (Topic, error)) (Topic, error) {
+	return storeutil.RetrySerializable(ctx, func() (Topic, error) {
+		return s.updateTopicAtomicOnce(ctx, projectID, location, clusterName, topicName, mutate)
+	})
+}
+
+func (s *PostgresStore) updateTopicAtomicOnce(ctx context.Context, projectID, location, clusterName, topicName string, mutate func(Topic) (Topic, error)) (Topic, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Topic{}, err
@@ -476,6 +489,12 @@ func (s *PostgresStore) UpdateAcl(ctx context.Context, projectID, location, clus
 }
 
 func (s *PostgresStore) UpdateAclAtomic(ctx context.Context, projectID, location, clusterName, name string, mutate func(Acl) (Acl, error)) (Acl, error) {
+	return storeutil.RetrySerializable(ctx, func() (Acl, error) {
+		return s.updateAclAtomicOnce(ctx, projectID, location, clusterName, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateAclAtomicOnce(ctx context.Context, projectID, location, clusterName, name string, mutate func(Acl) (Acl, error)) (Acl, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Acl{}, err

@@ -94,3 +94,34 @@ func TestRetrySerializable_StopsOnContextCancel(t *testing.T) {
 		t.Fatalf("attempts=%d, want 1", attempts)
 	}
 }
+
+func TestRetrySerializable_RetriesDeadlock(t *testing.T) {
+	attempts := 0
+	err := RetrySerializableErr(context.Background(), func() error {
+		attempts++
+		if attempts < 2 {
+			return pgErr("40P01")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RetrySerializableErr: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts=%d, want 2", attempts)
+	}
+}
+
+func TestRetrySerializableErr_SurfacesPersistent(t *testing.T) {
+	attempts := 0
+	err := RetrySerializableErr(context.Background(), func() error {
+		attempts++
+		return pgErr("40001")
+	})
+	if err == nil {
+		t.Fatalf("expected a persistent serialization failure to surface")
+	}
+	if attempts != SerializableMaxAttempts {
+		t.Fatalf("attempts=%d, want %d", attempts, SerializableMaxAttempts)
+	}
+}

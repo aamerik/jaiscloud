@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"jaiscloud/internal/gcp/storeutil"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -279,6 +281,14 @@ func (s *PostgresStore) UpdateAlertPolicy(ctx context.Context, project string, p
 // racing to silently overwrite this call's write. See
 // store/firestore/postgres.go's Commit for the same convention.
 func (s *PostgresStore) UpdateAlertPolicyAtomic(ctx context.Context, project, id string, mutate func(AlertPolicy) (AlertPolicy, error)) (AlertPolicy, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (AlertPolicy, error) {
+		return s.updateAlertPolicyAtomicOnce(ctx, project, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateAlertPolicyAtomicOnce(ctx context.Context, project, id string, mutate func(AlertPolicy) (AlertPolicy, error)) (AlertPolicy, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return AlertPolicy{}, err
@@ -410,6 +420,12 @@ func (s *PostgresStore) ListNotificationChannels(ctx context.Context, project st
 }
 
 func (s *PostgresStore) UpdateNotificationChannelAtomic(ctx context.Context, project, id string, mutate func(NotificationChannel) (NotificationChannel, error)) (NotificationChannel, error) {
+	return storeutil.RetrySerializable(ctx, func() (NotificationChannel, error) {
+		return s.updateNotificationChannelAtomicOnce(ctx, project, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateNotificationChannelAtomicOnce(ctx context.Context, project, id string, mutate func(NotificationChannel) (NotificationChannel, error)) (NotificationChannel, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return NotificationChannel{}, err
@@ -481,6 +497,14 @@ func scanIncident(scan func(...any) error) (Incident, error) {
 const incidentCols = "id, project_id, policy_id, condition_name, state, started_at, ended_at, reason, notifications"
 
 func (s *PostgresStore) CreateIncident(ctx context.Context, inc Incident) error {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign check-then-insert race as a 500.
+	return storeutil.RetrySerializableErr(ctx, func() error {
+		return s.createIncidentOnce(ctx, inc)
+	})
+}
+
+func (s *PostgresStore) createIncidentOnce(ctx context.Context, inc Incident) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return err
@@ -554,6 +578,12 @@ func (s *PostgresStore) FindOpenIncident(ctx context.Context, project, policyID 
 }
 
 func (s *PostgresStore) UpdateIncidentAtomic(ctx context.Context, project, id string, mutate func(Incident) (Incident, error)) (Incident, error) {
+	return storeutil.RetrySerializable(ctx, func() (Incident, error) {
+		return s.updateIncidentAtomicOnce(ctx, project, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateIncidentAtomicOnce(ctx context.Context, project, id string, mutate func(Incident) (Incident, error)) (Incident, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Incident{}, err
@@ -659,6 +689,12 @@ func (s *PostgresStore) ListServices(ctx context.Context, project string) ([]Ser
 }
 
 func (s *PostgresStore) UpdateServiceAtomic(ctx context.Context, project, id string, mutate func(Service) (Service, error)) (Service, error) {
+	return storeutil.RetrySerializable(ctx, func() (Service, error) {
+		return s.updateServiceAtomicOnce(ctx, project, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateServiceAtomicOnce(ctx context.Context, project, id string, mutate func(Service) (Service, error)) (Service, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Service{}, err
@@ -700,6 +736,14 @@ func (s *PostgresStore) UpdateServiceAtomic(ctx context.Context, project, id str
 }
 
 func (s *PostgresStore) DeleteService(ctx context.Context, project, id string) error {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializableErr(ctx, func() error {
+		return s.deleteServiceOnce(ctx, project, id)
+	})
+}
+
+func (s *PostgresStore) deleteServiceOnce(ctx context.Context, project, id string) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return err
@@ -793,6 +837,12 @@ func (s *PostgresStore) ListServiceLevelObjectives(ctx context.Context, project,
 }
 
 func (s *PostgresStore) UpdateServiceLevelObjectiveAtomic(ctx context.Context, project, serviceID, id string, mutate func(ServiceLevelObjective) (ServiceLevelObjective, error)) (ServiceLevelObjective, error) {
+	return storeutil.RetrySerializable(ctx, func() (ServiceLevelObjective, error) {
+		return s.updateServiceLevelObjectiveAtomicOnce(ctx, project, serviceID, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateServiceLevelObjectiveAtomicOnce(ctx context.Context, project, serviceID, id string, mutate func(ServiceLevelObjective) (ServiceLevelObjective, error)) (ServiceLevelObjective, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return ServiceLevelObjective{}, err

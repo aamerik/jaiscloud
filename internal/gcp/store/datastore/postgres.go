@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 
+	"jaiscloud/internal/gcp/storeutil"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -166,6 +168,14 @@ func (s *PostgresStore) Delete(ctx context.Context, project, key string) error {
 // on the same entity can't land in between. See
 // store/firestore/postgres.go's Commit for the same convention.
 func (s *PostgresStore) ApplyMutation(ctx context.Context, project string, kind MutationKind, e Entity, precondition *Precondition) (Entity, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Entity, error) {
+		return s.applyMutationOnce(ctx, project, kind, e, precondition)
+	})
+}
+
+func (s *PostgresStore) applyMutationOnce(ctx context.Context, project string, kind MutationKind, e Entity, precondition *Precondition) (Entity, error) {
 	entKind, nameOrID, err := splitKeyCols(e)
 	if err != nil {
 		return Entity{}, err
@@ -226,6 +236,14 @@ func (s *PostgresStore) ApplyMutation(ctx context.Context, project string, kind 
 
 // DeleteConflictChecked mirrors ApplyMutation's locking convention.
 func (s *PostgresStore) DeleteConflictChecked(ctx context.Context, project, key string, precondition *Precondition) error {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializableErr(ctx, func() error {
+		return s.deleteConflictCheckedOnce(ctx, project, key, precondition)
+	})
+}
+
+func (s *PostgresStore) deleteConflictCheckedOnce(ctx context.Context, project, key string, precondition *Precondition) error {
 	kind, nameOrID, ok := keyCols(key)
 	if !ok {
 		return ErrInvalidKey
@@ -264,6 +282,17 @@ func (s *PostgresStore) DeleteConflictChecked(ctx context.Context, project, key 
 // can slip in between them. See Store.Commit's doc comment for the error
 // contract.
 func (s *PostgresStore) Commit(ctx context.Context, project string, reads []ReadRef, writes []Write) ([]Entity, error) {
+	// An explicit client transaction that loses a serialization race must
+	// report ABORTED (the client retries with a fresh read-set), not a raw
+	// Postgres 40001/40P01 that would otherwise surface as a 500.
+	applied, err := s.commitOnce(ctx, project, reads, writes)
+	if storeutil.IsSerializationFailure(err) {
+		return nil, ErrAborted
+	}
+	return applied, err
+}
+
+func (s *PostgresStore) commitOnce(ctx context.Context, project string, reads []ReadRef, writes []Write) ([]Entity, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return nil, err
