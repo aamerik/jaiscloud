@@ -1178,7 +1178,9 @@ test-e2e-scheduler-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud Sc
 # composed gates (Iceberg batch/streaming, lakehouse medallion, Cloud Run
 # browser, Eventarc, Scheduler hop, Monitoring) against ONE emulator instance
 # configured with the demo's combined config (real k8s Spark + Kafka + Cloud Run
-# with the *.localhost authority + async LRO + throttle off). See
+# with the *.localhost authority + synchronous LRO + throttle off). The demo's
+# async-LRO pacing cue is opt-in via SPINE_LRO_ASYNC=1 (SPK9 made the Run/Eventarc
+# harnesses poll operations.get so both modes pass). See
 # scripts/demo-spine-verify.sh for the config and the per-suite order.
 test-e2e-demo-spine-k3d: _check-gcp-samples-prereq _refresh-gcp-image ## Whole-spine verification on the demo's combined config (SPK6) — scripts/demo-spine-verify.sh; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator
 	K8S_NAMESPACE=$(K8S_NAMESPACE) \

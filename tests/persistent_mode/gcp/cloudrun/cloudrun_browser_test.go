@@ -148,8 +148,11 @@ func TestCloudRunBrowserReachability(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("create service: HTTP %d: %v", code, op)
 	}
+	// The create is done inline in the default synchronous LRO mode; settle it
+	// through operations.get when the demo's async-LRO pacing cue is applied.
+	op = pollRunOperation(t, base, op, 2*time.Minute)
 	if done, _ := op["done"].(bool); !done {
-		t.Fatalf("create service returned an in-flight operation: %v", op)
+		t.Fatalf("create service operation never settled: %v", op)
 	}
 	created, _ := op["response"].(map[string]any)
 	if created == nil {

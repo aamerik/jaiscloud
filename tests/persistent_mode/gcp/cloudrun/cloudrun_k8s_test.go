@@ -5,8 +5,8 @@
 // deployed emulator running with JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=k8s:
 //
 //   - create a service whose template names a public image (nginx:latest) on a
-//     declared container port, and wait for the create LRO (which blocks until
-//     the revision Pod + ClusterIP Service are ready)
+//     declared container port, and settle the create LRO (inline in the default
+//     synchronous mode, polled through operations.get under async-LRO mode)
 //   - assert the returned Service shape (uri, latestReadyRevision, Ready
 //     terminal condition, trafficStatuses[0] at 100%)
 //   - assert the revision's Pod and Service exist in the cluster
@@ -174,6 +174,37 @@ func strField(m map[string]any, path ...string) string {
 	return s
 }
 
+// pollRunOperation settles a Cloud Run mutation operation returned by the
+// create/delete surface. In the default synchronous LRO mode the operation is
+// already done (the resource is in response); under the demo's async-LRO pacing
+// cue (JAISCLOUD_LRO_MODE=async) it comes back done:false and the harness must
+// poll the location-scoped operations.get surface (GET /v2/{operation}) until it
+// settles, exactly as the official client does. It returns the settled operation.
+func pollRunOperation(t *testing.T, base string, op map[string]any, timeout time.Duration) map[string]any {
+	t.Helper()
+	if done, _ := op["done"].(bool); done {
+		return op
+	}
+	name, _ := op["name"].(string)
+	if name == "" {
+		t.Fatalf("in-flight run operation has no name to poll: %v", op)
+	}
+	pollURL := base + "/v2/" + name
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		code, settled := api(t, httpClient, http.MethodGet, pollURL, nil)
+		if code != http.StatusOK {
+			t.Fatalf("poll run operation %s: HTTP %d: %v", name, code, settled)
+		}
+		if done, _ := settled["done"].(bool); done {
+			return settled
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("run operation %s did not settle within %s", name, timeout)
+	return nil
+}
+
 // workloadSelector matches a service's revision Pod and Service by label.
 func workloadSelector(svcID string) string {
 	return "app=jaiscloud-cloudrun,jaiscloud.io/run-service=" + svcID
@@ -181,8 +212,8 @@ func workloadSelector(svcID string) string {
 
 // waitForWorkloads polls until both a Pod and a Service carrying the service's
 // labels exist. Their existence proves the k8s runtime manager created the
-// revision workload (and, because create is a synchronous LRO, that it was
-// ready when the create response returned).
+// revision workload (EnsureRevision runs inline before the create operation is
+// recorded, so the workload exists once the operation settles).
 func waitForWorkloads(t *testing.T, svcID string, timeout time.Duration) (pod, svc string) {
 	t.Helper()
 	sel := workloadSelector(svcID)
@@ -246,8 +277,10 @@ func TestCloudRunK8sExecution(t *testing.T) {
 	deleteService(t, base, svcPath)
 
 	// Create a service whose template declares nginx and a container port. In k8s
-	// mode the create LRO is inline and blocks until the revision runtime is
-	// ready, so the response is a done Operation carrying the Service.
+	// mode the revision runtime is created inline (EnsureRevision runs before the
+	// operation is recorded), so the workload is ready once the operation settles.
+	// The operation itself is done inline in the default synchronous LRO mode and
+	// in flight under async-LRO mode, where pollRunOperation settles it.
 	create := map[string]any{
 		"template": map[string]any{
 			"containers": []any{
@@ -262,9 +295,9 @@ func TestCloudRunK8sExecution(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("create service: HTTP %d: %v", code, op)
 	}
-	done, _ := op["done"].(bool)
-	if !done {
-		t.Fatalf("create service returned an in-flight operation: %v", op)
+	op = pollRunOperation(t, base, op, 2*time.Minute)
+	if done, _ := op["done"].(bool); !done {
+		t.Fatalf("create service operation never settled: %v", op)
 	}
 	created, _ := op["response"].(map[string]any)
 	if created == nil {

@@ -639,9 +639,10 @@ Combined config applied (one instance):
 - `JAISCLOUD_DATAPROC_HMS_ENDPOINT` — the pod-reachable Hive Metastore (SPK1);
 - LRO at the emulator default (synchronous). The demo's async-LRO
   pending→running→done beat is a "use on cue" pacing control (design §9), not a
-  steady setting: the Run/Eventarc k3s gate harnesses assert the inline operation,
-  so the cue is exercised separately (`make test-lro-async-gcp`). Set
-  `SPINE_LRO_ASYNC=1` to fold it into the run.
+  steady setting. Since SPK9 the Run/Eventarc k3s gate harnesses poll
+  `operations.get`, so the cue can be folded in without failing them: set
+  `SPINE_LRO_ASYNC=1`. It is also exercised separately by
+  `make test-lro-async-gcp`.
 
 The harness settles between suites so the previous suite's Spark/Kafka
 driver+executor+broker pods drain before the next suite needs the same ~6 GiB k3d
