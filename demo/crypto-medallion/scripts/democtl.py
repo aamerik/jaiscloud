@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -425,7 +426,9 @@ def spark_properties(state: dict, extra: dict | None = None) -> dict:
         "spark.sql.catalog.hms.warehouse": f"gs://{gold}/warehouse/",
         "spark.sql.catalog.hms.io-impl": "org.apache.iceberg.hadoop.HadoopFileIO",
         "spark.driver.memory": "450m",
-        "spark.executor.memory": "450m",
+        "spark.driver.memoryOverhead": "768m",
+        "spark.executor.memory": "512m",
+        "spark.executor.memoryOverhead": "1g",
         "spark.executor.instances": "1",
         "spark.sql.shuffle.partitions": "1",
         "spark.sql.streaming.checkpointLocation": f"gs://{jobs}/checkpoints/",
@@ -531,8 +534,17 @@ def stage_rollup(args) -> None:
 
 
 # ── image build/push ─────────────────────────────────────────────────────────
-def build_image(name: str, dockerfile: Path, context: Path) -> str:
-    image = f"{DOCKER_REGISTRY}/{name}:{IMAGE_TAG}"
+def build_image(name: str, dockerfile: Path, context: Path, sources: list) -> str:
+    """Build+push an image tagged by the content hash of its sources.
+
+    k8s defaults to IfNotPresent for a non-:latest tag, so a rebuilt image under
+    a fixed tag would keep running the cached old layer. A content hash forces a
+    fresh pull exactly when the sources change, and stays stable when they do not.
+    """
+    digest = hashlib.sha1()
+    for src in sources:
+        digest.update(Path(src).read_bytes())
+    image = f"{DOCKER_REGISTRY}/{name}:demo-{digest.hexdigest()[:12]}"
     log(f"build+push {image}")
     run(["docker", "build", "-t", image, "-f", str(dockerfile), str(context)],
         capture=False)
@@ -544,7 +556,11 @@ def stage_bridge(args) -> None:
     state = load_state()
     emu = Emulator(state["endpoint"])
     image = build_image("crypto-medallion-bridge",
-                        IMAGES_DIR / "bridge" / "Dockerfile", DEMO_DIR)
+                        IMAGES_DIR / "bridge" / "Dockerfile", DEMO_DIR,
+                        [IMAGES_DIR / "bridge" / "Dockerfile",
+                         IMAGES_DIR / "bridge" / "bridge.py",
+                         IMAGES_DIR / "bridge" / "requirements.txt",
+                         DEMO_DIR / "feed" / "replay.jsonl.gz"])
     state["images"] = {**state.get("images", {}), "bridge": image}
     save_state(state)
     render_k8s(emu, "bridge.yaml", state, extra={"BRIDGE_IMAGE": image})
@@ -584,10 +600,31 @@ def deploy_run_service(emu: Emulator, service_id: str, image: str, port: int,
     body = {"template": {"containers": [{
         "image": image, "ports": [{"containerPort": port}], "env": env_list,
     }]}}
-    # Reconcile: delete then create keeps the demo deterministic.
-    emu.delete(f"{path}/{service_id}", expect=(200, 204, 404))
-    resp, _ = emu.post(f"{path}?serviceId={service_id}", body)
-    return resp
+    existing, status = emu.get(f"{path}/{service_id}", expect=(200, 404))
+    if status == 200:
+        # Update in place so the emulator rolls a new revision instead of a
+        # delete/create race that can reap the fresh pod.
+        emu.patch(f"{path}/{service_id}?updateMask=template", body)
+    else:
+        emu.post(f"{path}?serviceId={service_id}", body)
+    return wait_run_ready(emu, service_id)
+
+
+def wait_run_ready(emu: Emulator, service_id: str, timeout=120) -> str:
+    path = f"/v2/projects/{PROJECT}/locations/{REGION}/services/{service_id}"
+    deadline = time.time() + timeout
+    last = ""
+    while time.time() < deadline:
+        svc, _ = emu.get(path, expect=(200, 404))
+        if svc:
+            last = svc.get("uri", "")
+            cond = svc.get("terminalCondition", {})
+            if last and cond.get("state") == "CONDITION_SUCCEEDED":
+                return last
+            if cond.get("state") in ("CONDITION_FAILED",):
+                raise SystemExit(f"Cloud Run service {service_id} not ready: {cond}")
+        time.sleep(2)
+    raise SystemExit(f"Cloud Run service {service_id} not ready (uri={last})")
 
 
 def run_authority(emu: Emulator) -> str:
@@ -638,16 +675,24 @@ def ensure_scheduler_job(emu: Emulator) -> None:
 def stage_serve(args) -> None:
     state = load_state()
     emu = Emulator(state["endpoint"])
+    if not state.get("spark"):
+        state["spark"] = stage_spark_assets(emu, state)
     buckets = state["buckets"]
     publisher_image = build_image("crypto-medallion-publisher",
                                   IMAGES_DIR / "publisher" / "Dockerfile",
-                                  IMAGES_DIR / "publisher")
+                                  IMAGES_DIR / "publisher",
+                                  [IMAGES_DIR / "publisher" / "Dockerfile",
+                                   IMAGES_DIR / "publisher" / "publisher.py"])
     leaderboard_image = build_image("crypto-medallion-leaderboard",
                                     IMAGES_DIR / "leaderboard" / "Dockerfile",
-                                    IMAGES_DIR / "leaderboard")
+                                    IMAGES_DIR / "leaderboard",
+                                    [IMAGES_DIR / "leaderboard" / "Dockerfile",
+                                     IMAGES_DIR / "leaderboard" / "leaderboard.py"])
     submitter_image = build_image("crypto-medallion-submitter",
                                   IMAGES_DIR / "submitter" / "Dockerfile",
-                                  IMAGES_DIR / "submitter")
+                                  IMAGES_DIR / "submitter",
+                                  [IMAGES_DIR / "submitter" / "Dockerfile",
+                                   IMAGES_DIR / "submitter" / "submitter.py"])
     state["images"] = {**state.get("images", {}),
                        "publisher": publisher_image,
                        "leaderboard": leaderboard_image,
@@ -671,7 +716,19 @@ def stage_serve(args) -> None:
         "FIRESTORE_COLLECTION": FIRESTORE_COLLECTION,
     })
 
-    render_k8s(emu, "submitter.yaml", state, extra={"SUBMITTER_IMAGE": submitter_image})
+    props_json = json.dumps(spark_properties(state), separators=(",", ":"))
+    rollup_sql = rollup_queries(state)[0]
+    render_k8s(emu, "submitter.yaml", state, extra={
+        "SUBMITTER_IMAGE": submitter_image,
+        "CLUSTER": DATAPROC_CLUSTER,
+        "JARS": ",".join(state["spark"]["jar_uris"]),
+        "PROPERTIES_B64": base64.b64encode(props_json.encode()).decode(),
+        "ROLLUP_SQL_B64": base64.b64encode(rollup_sql.encode()).decode(),
+        "BQ_DATASET": BQ_DATASET,
+        "BQ_TABLE": BQ_TABLE,
+        "ROLLUP_PREFIX": f"gs://{state['buckets']['rollup']}/rollup",
+    })
+    kubectl(["rollout", "status", "deployment/cm-submitter", "--timeout=180s"])
     ensure_eventarc_trigger(emu)
     ensure_scheduler_job(emu)
     log("serve complete")

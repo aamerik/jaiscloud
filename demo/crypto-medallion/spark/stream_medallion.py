@@ -132,7 +132,9 @@ bronze_silver = (parsed.writeStream
                  .start())
 
 
-# ── gold: per-minute OHLC windows -> Iceberg ─────────────────────────────────
+# ── gold: per-minute OHLC windows -> Iceberg + leaderboard/latest.json ───────
+# One windowed query feeds both the Iceberg table and the serving rollup, so
+# only a single stateful aggregation runs on the memory-tight k3d node.
 def gold_batch(batch_df, epoch_id):
     out = (batch_df
            .select(F.col("window.start").alias("window_start"),
@@ -140,12 +142,31 @@ def gold_batch(batch_df, epoch_id):
                    "symbol", "open", "high", "low", "close", "vwap", "volume", "trades")
            .withColumn("trades", F.col("trades").cast("bigint")))
     out.writeTo(gold_table).append()
-    print(f"GOLD_BATCH epoch={epoch_id} windows={batch_df.count()}", flush=True)
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    def iso(ts):
+        # Firestore timestampValue needs an RFC3339 offset; Spark timestamps are UTC.
+        return ts.strftime("%Y-%m-%dT%H:%M:%SZ") if ts else None
+    rows = out.orderBy(F.col("volume").desc()).collect()
+    lines = []
+    for r in rows:
+        lines.append(json.dumps({
+            "symbol": r["symbol"],
+            "vwap": round(float(r["vwap"] or 0.0), 4),
+            "volume": round(float(r["volume"] or 0.0), 6),
+            "trades": int(r["trades"] or 0),
+            "window_start": iso(r["window_start"]),
+            "window_end": iso(r["window_end"]),
+            "updated_at": now,
+        }, separators=(",", ":")))
+    if lines:
+        write_gcs_text(ARGS.leaderboard, "\n".join(lines) + "\n")
+    print(f"GOLD_BATCH epoch={epoch_id} windows={len(rows)}", flush=True)
 
 
 gold = (valid
-        .withWatermark("event_ts", "30 seconds")
-        .groupBy(F.window("event_ts", "60 seconds"), "symbol")
+        .withWatermark("event_ts", "20 seconds")
+        .groupBy(F.window("event_ts", "30 seconds"), "symbol")
         .agg(F.first("price").alias("open"),
              F.max("price").alias("high"),
              F.min("price").alias("low"),
@@ -158,44 +179,7 @@ gold_query = (gold.writeStream
               .foreachBatch(gold_batch)
               .outputMode("append")
               .option("checkpointLocation", f"{ARGS.iceberg_db}/gold/_checkpoint")
-              .trigger(processingTime="10 seconds")
-              .start())
-
-
-# ── live: per-symbol running aggregate -> leaderboard/latest.json ────────────
-def live_batch(batch_df, epoch_id):
-    rows = (batch_df.orderBy(F.col("volume").desc()).collect())
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    lines = []
-    for r in rows:
-        lines.append(json.dumps({
-            "symbol": r["symbol"],
-            "vwap": round(float(r["vwap"] or 0.0), 4),
-            "volume": round(float(r["volume"] or 0.0), 6),
-            "trades": int(r["trades"] or 0),
-            "window_start": r["window_start"].isoformat() if r["window_start"] else None,
-            "window_end": r["window_end"].isoformat() if r["window_end"] else None,
-            "updated_at": now,
-        }, separators=(",", ":")))
-    if lines:
-        write_gcs_text(ARGS.leaderboard, "\n".join(lines) + "\n")
-    print(f"LATEST_BATCH epoch={epoch_id} symbols={len(lines)}", flush=True)
-
-
-live = (valid
-        .withWatermark("event_ts", "30 seconds")
-        .groupBy("symbol")
-        .agg((F.sum(F.col("price") * F.col("size")) / F.sum("size")).alias("vwap"),
-             F.sum("size").alias("volume"),
-             F.count("*").alias("trades"),
-             F.min("event_ts").alias("window_start"),
-             F.max("event_ts").alias("window_end")))
-
-live_query = (live.writeStream
-              .foreachBatch(live_batch)
-              .outputMode("update")
-              .option("checkpointLocation", f"{ARGS.iceberg_db}/live/_checkpoint")
-              .trigger(processingTime="5 seconds")
+              .trigger(processingTime="15 seconds")
               .start())
 
 print("MEDALLION_RUNNING", flush=True)
