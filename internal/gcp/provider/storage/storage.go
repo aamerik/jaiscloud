@@ -3459,6 +3459,22 @@ func notificationToMap(cfg notificationConfig) map[string]any {
 	return m
 }
 
+// BucketLocationType reports the GCS locationType for a bucket location. The
+// multi-region locations (and the empty default, which GCS treats as US) are
+// "multi-region"; a dual-region location ("X+Y") is "dual-region"; any other
+// named location is a single "region".
+func BucketLocationType(location string) string {
+	loc := strings.ToUpper(strings.TrimSpace(location))
+	switch loc {
+	case "", "US", "EU", "ASIA":
+		return "multi-region"
+	}
+	if strings.Contains(loc, "+") {
+		return "dual-region"
+	}
+	return "region"
+}
+
 // toBucketMap converts a bucketMeta struct into a map for JSON-encoding.
 func toBucketMap(nr *model.NormalizedRequest, b bucketMeta) map[string]any {
 	versioning := b.Versioning
@@ -3474,7 +3490,7 @@ func toBucketMap(nr *model.NormalizedRequest, b bucketMeta) map[string]any {
 		"id":             b.Name,
 		"name":           b.Name,
 		"location":       b.Location,
-		"locationType":   "multi-region",
+		"locationType":   BucketLocationType(b.Location),
 		"storageClass":   b.StorageClass,
 		"timeCreated":    b.TimeCreated,
 		"updated":        b.Updated,
