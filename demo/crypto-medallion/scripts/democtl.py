@@ -322,9 +322,22 @@ def ensure_bigquery(emu: Emulator) -> None:
               "schema": schema})
 
 
+def configure_emulator() -> None:
+    """Apply the demo's combined emulator config (design §5, SPK6 baseline)."""
+    log("configure the emulator (k8s Spark + Kafka + Cloud Run, throttle off)")
+    kubectl(["set", "env", "deployment/jaiscloud-gcp",
+             "JAISCLOUD_SPARK_EXECUTOR_MODE=k8s",
+             "JAISCLOUD_KAFKA_BROKER_MODE=k8s",
+             "JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=k8s",
+             "JAISCLOUD_PLATFORM_TLS_ENABLED=false",
+             "JAISCLOUD_GCP_THROTTLE="])
+    kubectl(["rollout", "status", "deployment/jaiscloud-gcp", "--timeout=240s"])
+
+
 def stage_provision(args) -> None:
     emu = Emulator(ensure_port_forward(args.port))
     ensure_project(emu)
+    configure_emulator()
     outputs = terraform_apply(emu)
     ensure_metastore(emu)
     kafka = ensure_kafka(emu)
@@ -916,6 +929,7 @@ def stage_record(args) -> None:
     port = args.lan_port
     suffix = f"run.{ip}.nip.io"
 
+    stage_preflight(args)
     log(f"switch the Cloud Run authority to {suffix}:{port}")
     run(["pkill", "-f", "port-forward svc/jaiscloud-gcp"], check=False)
     kubectl(["set", "env", "deployment/jaiscloud-gcp",
