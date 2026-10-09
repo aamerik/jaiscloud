@@ -1145,15 +1145,18 @@ def route_hrefs(route: str) -> list:
 
 def nav_link_center(app_prefix: str, route: str):
     """Center of the sidebar link for a route (or its nearest section), scrolled
-    into view. Restricted to the left sidebar so the header logo never matches."""
+    into view, plus whether the link is the exact route (a detail route matches
+    only its ancestor section). Restricted to the left sidebar."""
     bases = route_hrefs(route)
-    js = ("(() => { const bs=%s; for (const b of bs) {"
+    exact = "/ui" + route
+    js = ("(() => { const bs=%s, exact=%s; for (const b of bs) {"
           " const a=Array.from(document.querySelectorAll('a')).find(x => {"
           "   const h=x.getAttribute('href')||''; return h===b || h.startsWith(b+'/'); });"
           " if (a) { a.scrollIntoView({block:'center'}); const r=a.getBoundingClientRect();"
           "   if (r.width>0 && r.height>0 && r.left<260 && r.top>60)"
-          "     return {x: Math.round(r.left+r.width/2), y: Math.round(r.top+r.height/2)};"
-          " } } return null; })()" % json.dumps(bases))
+          "     return {x: Math.round(r.left+r.width/2), y: Math.round(r.top+r.height/2),"
+          "             exact: a.getAttribute('href')===exact};"
+          " } } return null; })()" % (json.dumps(bases), json.dumps(exact)))
     return cdp_eval_value(app_prefix, js)
 
 
@@ -1322,7 +1325,11 @@ def stage_record_split(args) -> None:
                 pos = nav_link_center(app_prefix, route)
                 if pos and 0 <= pos.get("x", width) < width:
                     move_cursor(display, pos["x"], pos["y"], steps=6)
-                    click_cursor(display)
+                    # Click only when the link is the exact route; for a detail
+                    # route the matched link is an ancestor section, and clicking
+                    # it would navigate away from the detail.
+                    if pos.get("exact"):
+                        click_cursor(display)
         ff.wait()
         if ff.returncode != 0:
             raise SystemExit("ffmpeg capture failed")
