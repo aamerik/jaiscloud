@@ -165,8 +165,8 @@ def gold_batch(batch_df, epoch_id):
 
 
 gold = (valid
-        .withWatermark("event_ts", "20 seconds")
-        .groupBy(F.window("event_ts", "30 seconds"), "symbol")
+        .withWatermark("event_ts", "5 seconds")
+        .groupBy(F.window("event_ts", "10 seconds"), "symbol")
         .agg(F.first("price").alias("open"),
              F.max("price").alias("high"),
              F.min("price").alias("low"),
@@ -179,7 +179,7 @@ gold_query = (gold.writeStream
               .foreachBatch(gold_batch)
               .outputMode("append")
               .option("checkpointLocation", f"{ARGS.iceberg_db}/gold/_checkpoint")
-              .trigger(processingTime="15 seconds")
+              .trigger(processingTime="5 seconds")
               .start())
 
 print("MEDALLION_RUNNING", flush=True)

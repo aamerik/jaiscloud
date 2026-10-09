@@ -2,8 +2,10 @@
 """crypto-medallion leaderboard — Cloud Run page + JSON API (design §5.4).
 
 Reads the per-symbol Firestore documents the publisher writes and serves a live
-leaderboard. The page re-fetches `/api/leaderboard` once a second and re-sorts,
-so the recording never has a still second (design §9).
+leaderboard. The page polls `/api/leaderboard` twice a second and updates the
+rows in place — tweened numbers, animated volume bars, a smooth reorder and a
+flash when a value actually changes — so the recording always has motion even
+between data windows (design §9).
 """
 
 from __future__ import annotations
@@ -22,48 +24,96 @@ PORT = int(os.environ.get("PORT", "8080"))
 PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <title>crypto medallion · live leaderboard</title>
 <style>
- body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0b1220;color:#e6edf3}
- header{padding:20px 28px;border-bottom:1px solid #1e2a44;display:flex;align-items:baseline;gap:14px}
- h1{font-size:20px;margin:0;font-weight:650}
+ :root{--row:64px}
+ body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0b1220;color:#e6edf3;overflow:hidden}
+ header{padding:18px 24px;border-bottom:1px solid #1e2a44;display:flex;align-items:baseline;gap:12px}
+ h1{font-size:19px;margin:0;font-weight:650}
  .tag{font-size:12px;color:#7d8db1}
- .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#2ecc71;margin-right:6px;
-      animation:pulse 1.2s infinite}
- @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
- table{border-collapse:collapse;width:100%}
- th,td{text-align:right;padding:12px 22px;border-bottom:1px solid #16203a;font-variant-numeric:tabular-nums}
- th:first-child,td:first-child{text-align:left}
- th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#7d8db1;font-weight:600}
- td{font-size:16px}
- tr.up{animation:flash .8s ease-out}
- @keyframes flash{from{background:#12233f}to{background:transparent}}
- .sym{font-weight:650}
- footer{padding:12px 28px;color:#7d8db1;font-size:12px}
+ .dot{width:9px;height:9px;border-radius:50%;background:#2ecc71;display:inline-block;margin-right:6px;
+      box-shadow:0 0 0 0 rgba(46,204,113,.7);animation:pulse 1.1s infinite}
+ @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(46,204,113,.7);opacity:1}
+                  70%{box-shadow:0 0 0 9px rgba(46,204,113,0);opacity:.9}
+                  100%{box-shadow:0 0 0 0 rgba(46,204,113,0);opacity:1}}
+ .grid{display:grid;grid-template-columns:120px 1fr 140px 130px 90px 160px;align-items:center}
+ .head{padding:10px 24px;color:#7d8db1;font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+ .head div:nth-child(n+3){text-align:right}
+ #board{position:relative;margin:2px 0}
+ .row{position:absolute;left:0;right:0;height:var(--row);padding:0 24px;box-sizing:border-box;
+      display:grid;grid-template-columns:120px 1fr 140px 130px 90px 160px;align-items:center;
+      border-bottom:1px solid #16203a;background:#0b1220;
+      transition:transform .65s cubic-bezier(.2,.8,.2,1),background .5s ease}
+ .row.flash{background:#12233f}
+ .sym{font-weight:650;letter-spacing:.02em}
+ .barwrap{height:8px;background:#16203a;border-radius:6px;overflow:hidden;margin-right:22px}
+ .bar{height:100%;width:0;background:linear-gradient(90deg,#2563eb,#22d3ee);
+      transition:width .7s cubic-bezier(.2,.8,.2,1)}
+ .num{text-align:right;font-variant-numeric:tabular-nums}
+ .vwap{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+ .tr{text-align:right}
+ .delta{font-size:11px;margin-left:6px}
+ .up{color:#2ecc71}.down{color:#f87171}
+ .we{text-align:right;color:#7d8db1;font-size:12px}
+ footer{padding:12px 24px;color:#7d8db1;font-size:12px}
 </style></head>
-<body><header><span class="dot"></span><h1>Live crypto leaderboard</h1>
+<body>
+<header><span class="dot"></span><h1>Live crypto leaderboard</h1>
 <span class="tag">jaiscloud-gcp · Firestore read model · Eventarc-driven</span></header>
-<table><thead><tr><th>Symbol</th><th>VWAP</th><th>Volume</th><th>Trades</th><th>Window end</th></tr></thead>
-<tbody id="rows"><tr><td colspan="5" style="text-align:center;color:#7d8db1">waiting for the first window…</td></tr></tbody></table>
-<footer id="stamp">updated —</footer>
+<div class="grid head"><div>Symbol</div><div>Volume</div><div>VWAP</div><div>Volume</div><div>Trades</div><div>Window end</div></div>
+<div id="board"></div>
+<footer id="stamp">live · waiting for data…</footer>
 <script>
-let prev={};
+const ROW=64, board=document.getElementById('board'), state={};
+let lastData=0, seen=0;
+const el=(t,c,x)=>{const e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e;};
+function makeRow(sym){
+  const r=el('div','row'); r.style.transform='translateY(-200px)';
+  r.appendChild(el('div','sym',sym));
+  const bw=el('div','barwrap'), b=el('div','bar'); bw.appendChild(b); r.appendChild(bw);
+  const vwap=el('div','vwap','—'); r.appendChild(vwap);
+  const vol=el('div','num','—'), d=el('span','delta',''); vol.appendChild(d); r.appendChild(vol);
+  const tr=el('div','tr','—'); r.appendChild(tr);
+  const we=el('div','we','—'); r.appendChild(we);
+  board.appendChild(r);
+  state[sym]={el:r,bar:b,vwap,vwapVal:0,vol,volVal:0,d,tr,we,prev:null};
+}
+function tween(st,key,to,apply){
+  const from=st[key]; st[key]=to;
+  if(from===to){apply(to);return;}
+  const t0=performance.now();
+  (function step(t){const k=Math.min(1,(t-t0)/700), e=k*(2-k);
+    apply(from+(to-from)*e); if(k<1)requestAnimationFrame(step);})(t0);
+}
 async function tick(){
   try{
-    const r=await fetch('/api/leaderboard',{cache:'no-store'});
-    const rows=await r.json();
-    const tb=document.getElementById('rows');
-    tb.innerHTML=rows.map(x=>{
-      const moved = prev[x.symbol]!==undefined && prev[x.symbol]!==x.volume;
-      return `<tr class="${moved?'up':''}"><td class="sym">${x.symbol}</td>`+
-        `<td>${Number(x.vwap).toLocaleString(undefined,{maximumFractionDigits:4})}</td>`+
-        `<td>${Number(x.volume).toLocaleString(undefined,{maximumFractionDigits:4})}</td>`+
-        `<td>${x.trades}</td><td>${(x.window_end||'').replace('T',' ').slice(0,19)}</td></tr>`;
-    }).join('')||document.getElementById('rows').innerHTML;
-    rows.forEach(x=>prev[x.symbol]=x.volume);
-    document.getElementById('stamp').textContent='updated '+new Date().toLocaleTimeString()+
-      ' · '+rows.length+' symbols';
+    const rows=await (await fetch('/api/leaderboard',{cache:'no-store'})).json();
+    rows.sort((a,b)=>b.volume-a.volume);
+    const maxVol=Math.max(1,...rows.map(x=>x.volume));
+    rows.forEach((x,i)=>{
+      if(!state[x.symbol]) makeRow(x.symbol);
+      const st=state[x.symbol];
+      st.el.style.transform=`translateY(${i*ROW}px)`;
+      st.bar.style.width=Math.max(2,100*x.volume/maxVol)+'%';
+      tween(st,'vwapVal',Number(x.vwap), v=>st.vwap.textContent=v.toLocaleString(undefined,{maximumFractionDigits:4}));
+      tween(st,'volVal',Number(x.volume), v=>st.vol.firstChild.nodeValue=v.toLocaleString(undefined,{maximumFractionDigits:4}));
+      st.tr.textContent=x.trades;
+      st.we.textContent=(x.window_end||'').replace('T',' ').slice(0,19);
+      if(st.prev!==null && Number(x.volume)!==st.prev){
+        st.el.classList.add('flash'); setTimeout(()=>st.el.classList.remove('flash'),600);
+        st.d.textContent=Number(x.volume)>st.prev?'▲':'▼';
+        st.d.className='delta '+(Number(x.volume)>st.prev?'up':'down');
+      }
+      st.prev=Number(x.volume);
+    });
+    board.style.height=(rows.length*ROW)+'px';
+    if(rows.length){lastData=Date.now(); seen=rows.length;}
   }catch(e){document.getElementById('stamp').textContent='feed error: '+e;}
 }
-tick();setInterval(tick,1000);
+setInterval(tick,500); tick();
+setInterval(()=>{
+  const s=lastData?Math.round((Date.now()-lastData)/1000):null;
+  document.getElementById('stamp').textContent='live · '+seen+' symbols · last data '+
+    (s===null?'—':s+'s ago')+' · '+new Date().toLocaleTimeString();
+},250);
 </script></body></html>"""
 
 
@@ -90,8 +140,7 @@ def leaderboard_rows() -> list[dict]:
     data = http_get(path)
     rows = []
     for doc in data.get("documents", []):
-        fields = {k: value(v) for k, v in doc.get("fields", {}).items()}
-        rows.append(fields)
+        rows.append({k: value(v) for k, v in doc.get("fields", {}).items()})
     rows.sort(key=lambda r: float(r.get("volume") or 0), reverse=True)
     return rows
 
