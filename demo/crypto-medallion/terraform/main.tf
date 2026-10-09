@@ -47,7 +47,7 @@ resource "google_secret_manager_secret" "feed" {
 
 resource "google_secret_manager_secret_version" "feed" {
   secret      = google_secret_manager_secret.feed.id
-  secret_data = "wss://stream.binance.com:9443/stream?streams=btcusdt@trade/ethusdt@trade/solusdt@trade/xrpusdt@trade/adausdt@trade"
+  secret_data = "wss://ws-feed.exchange.coinbase.com"
 
   depends_on = [google_secret_manager_secret.feed]
 }

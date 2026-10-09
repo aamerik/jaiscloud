@@ -506,10 +506,10 @@ def stage_rollup(args) -> None:
 
 
 # ── image build/push ─────────────────────────────────────────────────────────
-def build_image(name: str, ctx: Path) -> str:
+def build_image(name: str, dockerfile: Path, context: Path) -> str:
     image = f"{DOCKER_REGISTRY}/{name}:{IMAGE_TAG}"
     log(f"build+push {image}")
-    run(["docker", "build", "-t", image, "-f", str(ctx / "Dockerfile"), str(ctx)],
+    run(["docker", "build", "-t", image, "-f", str(dockerfile), str(context)],
         capture=False)
     run(["docker", "push", image], capture=False)
     return image
@@ -518,7 +518,8 @@ def build_image(name: str, ctx: Path) -> str:
 def stage_bridge(args) -> None:
     state = load_state()
     emu = Emulator(state["endpoint"])
-    image = build_image("crypto-medallion-bridge", IMAGES_DIR / "bridge")
+    image = build_image("crypto-medallion-bridge",
+                        IMAGES_DIR / "bridge" / "Dockerfile", DEMO_DIR)
     state["images"] = {**state.get("images", {}), "bridge": image}
     save_state(state)
     render_k8s(emu, "bridge.yaml", state, extra={"BRIDGE_IMAGE": image})
@@ -613,9 +614,15 @@ def stage_serve(args) -> None:
     state = load_state()
     emu = Emulator(state["endpoint"])
     buckets = state["buckets"]
-    publisher_image = build_image("crypto-medallion-publisher", IMAGES_DIR / "publisher")
-    leaderboard_image = build_image("crypto-medallion-leaderboard", IMAGES_DIR / "leaderboard")
-    submitter_image = build_image("crypto-medallion-submitter", IMAGES_DIR / "submitter")
+    publisher_image = build_image("crypto-medallion-publisher",
+                                  IMAGES_DIR / "publisher" / "Dockerfile",
+                                  IMAGES_DIR / "publisher")
+    leaderboard_image = build_image("crypto-medallion-leaderboard",
+                                    IMAGES_DIR / "leaderboard" / "Dockerfile",
+                                    IMAGES_DIR / "leaderboard")
+    submitter_image = build_image("crypto-medallion-submitter",
+                                  IMAGES_DIR / "submitter" / "Dockerfile",
+                                  IMAGES_DIR / "submitter")
     state["images"] = {**state.get("images", {}),
                        "publisher": publisher_image,
                        "leaderboard": leaderboard_image,
