@@ -212,3 +212,49 @@ func TestEnsureNamespaceRBACCreatesRoleBinding(t *testing.T) {
 		t.Fatalf("second EnsureNamespaceRBAC: %v", err)
 	}
 }
+
+// TestEnsureManagedNamespaceRecreatesTerminating covers the fast-delete/recreate
+// race: a Dataproc cluster (or Kafka broker) with a derived namespace name is
+// deleted and immediately recreated, and the old namespace is still Terminating.
+// The create must wait for it to disappear and recreate it rather than adopting
+// a Terminating namespace (which would reject every later create in it).
+func TestEnsureManagedNamespaceRecreatesTerminating(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	ctx := context.Background()
+	name := "gcp-dataproc-proj-c1-feedface"
+	now := metav1.Now()
+	if _, err := client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              name,
+			Labels:            OwnerNamespaceLabels("dataproc"),
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"kubernetes"},
+		},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed terminating namespace: %v", err)
+	}
+
+	// The first Get observes the Terminating namespace; once the wait loop polls,
+	// terminate it (delete from the tracker) and report NotFound.
+	gets := 0
+	client.PrependReactor("get", "namespaces", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		gets++
+		if gets == 2 {
+			_ = client.Tracker().Delete(schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}, "", name)
+			return true, nil, k8serrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, name)
+		}
+		return false, nil, nil
+	})
+
+	created, err := EnsureManagedNamespace(ctx, client, name, "dataproc")
+	if err != nil || !created {
+		t.Fatalf("EnsureManagedNamespace over a terminating namespace = %v, %v; want true, nil", created, err)
+	}
+	ns, err := client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("recreated namespace not found: %v", err)
+	}
+	if ns.DeletionTimestamp != nil {
+		t.Fatalf("namespace is still Terminating after recreate: %+v", ns.DeletionTimestamp)
+	}
+}

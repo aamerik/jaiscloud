@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -122,6 +123,15 @@ func (s *PostgresStore) UpdateCluster(ctx context.Context, projectID, region str
 // of racing to silently overwrite this call's write. See
 // store/firestore/postgres.go's Commit for the same convention.
 func (s *PostgresStore) UpdateClusterAtomic(ctx context.Context, projectID, region, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error) {
+	// A SERIALIZABLE read-modify-write can be aborted by a concurrent writer on
+	// the same row (40001/40P01) — a benign race. Retry the whole transaction
+	// instead of surfacing it as a 500 (see storeutil.RetrySerializable).
+	return storeutil.RetrySerializable(ctx, func() (Cluster, error) {
+		return s.updateClusterAtomicOnce(ctx, projectID, region, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateClusterAtomicOnce(ctx context.Context, projectID, region, name string, mutate func(Cluster) (Cluster, error)) (Cluster, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Cluster{}, err
@@ -325,6 +335,15 @@ func (s *PostgresStore) UpdateJob(ctx context.Context, projectID, region string,
 // each other's terminal-state transition. See store/firestore/postgres.go's
 // Commit for the same convention.
 func (s *PostgresStore) UpdateJobAtomic(ctx context.Context, projectID, region, jobID string, mutate func(Job) (Job, error)) (Job, error) {
+	// advanceJob (called by every GetJob) races the job-state reconciler; a
+	// concurrent-write abort (40001/40P01) is a benign race, so retry the whole
+	// transaction rather than surfacing it as a 500 (see storeutil.RetrySerializable).
+	return storeutil.RetrySerializable(ctx, func() (Job, error) {
+		return s.updateJobAtomicOnce(ctx, projectID, region, jobID, mutate)
+	})
+}
+
+func (s *PostgresStore) updateJobAtomicOnce(ctx context.Context, projectID, region, jobID string, mutate func(Job) (Job, error)) (Job, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Job{}, err
@@ -485,6 +504,12 @@ func (s *PostgresStore) GetWorkflowTemplate(ctx context.Context, projectID, regi
 // transaction with SELECT ... FOR UPDATE row-locks the template for the
 // duration of mutate, so concurrent version bumps serialize.
 func (s *PostgresStore) UpdateWorkflowTemplateAtomic(ctx context.Context, projectID, region, templateID string, mutate func(WorkflowTemplate) (WorkflowTemplate, error)) (WorkflowTemplate, error) {
+	return storeutil.RetrySerializable(ctx, func() (WorkflowTemplate, error) {
+		return s.updateWorkflowTemplateAtomicOnce(ctx, projectID, region, templateID, mutate)
+	})
+}
+
+func (s *PostgresStore) updateWorkflowTemplateAtomicOnce(ctx context.Context, projectID, region, templateID string, mutate func(WorkflowTemplate) (WorkflowTemplate, error)) (WorkflowTemplate, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return WorkflowTemplate{}, err
@@ -636,6 +661,12 @@ func (s *PostgresStore) UpdateOperation(ctx context.Context, projectID, region s
 // duration of mutate, so a metadata refresh cannot race a concurrent
 // completion into a last-write-wins regression.
 func (s *PostgresStore) UpdateOperationAtomic(ctx context.Context, projectID, region, id string, mutate func(Operation) (Operation, error)) (Operation, error) {
+	return storeutil.RetrySerializable(ctx, func() (Operation, error) {
+		return s.updateOperationAtomicOnce(ctx, projectID, region, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateOperationAtomicOnce(ctx context.Context, projectID, region, id string, mutate func(Operation) (Operation, error)) (Operation, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Operation{}, err

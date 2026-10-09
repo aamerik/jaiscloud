@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -59,6 +60,12 @@ const (
 	// namespaceSweepCap bounds a sweep so a mislabelled cluster cannot trigger
 	// unbounded deletes (mirrors defaultWorkloadSweepCap).
 	defaultNamespaceSweepCap = 2000
+
+	// namespaceTerminateWait bounds how long ensureNamespaceRaw waits for a
+	// Terminating namespace to disappear before recreating it (see below).
+	namespaceTerminateWait = 60 * time.Second
+	// namespaceTerminatePoll is the poll interval while waiting.
+	namespaceTerminatePoll = 200 * time.Millisecond
 )
 
 // OwnerNamespaceLabels returns the ownership labels stamped on a service's
@@ -139,14 +146,23 @@ func ensureNamespaceRaw(ctx context.Context, client kubernetes.Interface, namesp
 	if namespace == "" {
 		return false, fmt.Errorf("k8shelpers: namespace name is required")
 	}
-	_, err := client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
-	if err == nil {
-		return false, nil // already present; adopted, not created by us
-	}
-	if k8serrors.IsForbidden(err) {
+	ns, err := client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	switch {
+	case err == nil:
+		if ns.DeletionTimestamp == nil {
+			return false, nil // already present; adopted, not created by us
+		}
+		// The namespace exists but is Terminating — its prior owner (a Dataproc
+		// cluster or Kafka broker with the same derived name) was just deleted,
+		// and the namespace teardown is asynchronous. Wait for it to disappear
+		// and recreate it: adopting a Terminating namespace makes every later
+		// create in it fail ("... is being terminated").
+		if waitErr := waitNamespaceGone(ctx, client, namespace); waitErr != nil {
+			return false, waitErr
+		}
+	case k8serrors.IsForbidden(err):
 		return false, fmt.Errorf("%w: get %s", ErrNamespaceForbidden, namespace)
-	}
-	if !k8serrors.IsNotFound(err) {
+	case !k8serrors.IsNotFound(err):
 		return false, err
 	}
 	if labels == nil {
@@ -165,6 +181,30 @@ func ensureNamespaceRaw(ctx context.Context, client kubernetes.Interface, namesp
 		return false, err
 	}
 	return true, nil
+}
+
+// waitNamespaceGone polls until a Terminating namespace is fully removed, so
+// ensureNamespaceRaw can recreate it. It is bounded by namespaceTerminateWait
+// (or the caller's earlier deadline) and returns ctx.Err() on timeout.
+func waitNamespaceGone(ctx context.Context, client kubernetes.Interface, namespace string) error {
+	ctx, cancel := context.WithTimeout(ctx, namespaceTerminateWait)
+	defer cancel()
+	ticker := time.NewTicker(namespaceTerminatePoll)
+	defer ticker.Stop()
+	for {
+		_, err := client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // DeleteManagedNamespace deletes namespace only when the emulator owns it

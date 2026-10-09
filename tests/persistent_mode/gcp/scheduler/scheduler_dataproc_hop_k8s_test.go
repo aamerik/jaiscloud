@@ -336,6 +336,41 @@ func applySubmitter(t *testing.T, name, cluster string) {
 		kubectl(t, string(raw), "apply", "-f", "-")
 	}
 	kubectl(t, "", "wait", "--for=condition=Ready", "pod/"+name, "--timeout=180s")
+	waitServiceEndpoint(t, name)
+}
+
+// waitServiceEndpoint blocks until the Service has a published ready endpoint and
+// then settles briefly. A Ready pod does not mean kube-proxy has programmed the
+// Service's ClusterIP yet; a tick that races that programming gets "connection
+// refused", and a job with no retryConfig delivers exactly once, so the hop would
+// be lost. Waiting for the endpoint (plus a short settle) removes the race.
+func waitServiceEndpoint(t *testing.T, name string) {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		out, _ := kubectlQuiet("get", "endpoints", name, "-o", "jsonpath={.subsets[0].addresses[0].ip}")
+		if strings.TrimSpace(out) != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("service %s has no ready endpoint after 60s", name)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	time.Sleep(3 * time.Second)
+}
+
+// kubectlQuiet runs kubectl and returns stdout plus a folded error without
+// failing the test, for polling reads.
+func kubectlQuiet(args ...string) (string, error) {
+	cmd := exec.Command("kubectl", append([]string{"-n", namespace()}, args...)...)
+	var out, errb bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		return out.String(), fmt.Errorf("%w: %s", err, strings.TrimSpace(errb.String()))
+	}
+	return out.String(), nil
 }
 
 func deleteSubmitter(t *testing.T, name string) {

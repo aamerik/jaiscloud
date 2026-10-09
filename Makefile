@@ -157,6 +157,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-e2e-dataproc-docker \
         test-e2e-eventarc-k8s \
         test-e2e-scheduler-k8s \
+        test-e2e-demo-spine-k3d \
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all test-all-gcp \
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
         _start-k8s _stop-k8s \
@@ -1172,6 +1173,18 @@ test-e2e-scheduler-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud Sc
 	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
 	K8S_NAMESPACE=$(K8S_NAMESPACE) SCHEDULER_E2E_K8S=1 \
 	  go test -v -tags scheduler_e2e -timeout 15m ./tests/persistent_mode/gcp/scheduler/
+
+# SPK6 — whole-spine verification on the demo's exact combined config. Runs the
+# composed gates (Iceberg batch/streaming, lakehouse medallion, Cloud Run
+# browser, Eventarc, Scheduler hop, Monitoring) against ONE emulator instance
+# configured with the demo's combined config (real k8s Spark + Kafka + Cloud Run
+# with the *.localhost authority + async LRO + throttle off). See
+# scripts/demo-spine-verify.sh for the config and the per-suite order.
+test-e2e-demo-spine-k3d: _check-gcp-samples-prereq _refresh-gcp-image ## Whole-spine verification on the demo's combined config (SPK6) — scripts/demo-spine-verify.sh; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator
+	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	  CLOUDRUN_BROWSER_SUFFIX=$(CLOUDRUN_BROWSER_SUFFIX) \
+	  CLOUDRUN_BROWSER_PORT=$(CLOUDRUN_BROWSER_PORT) \
+	  scripts/demo-spine-verify.sh
 
 test-e2e-cloudrun-java: _check-gcp-samples-prereq _refresh-gcp-image ## OPTIONAL floci-gcp Java interop smoke (not a compliance gate) against the k3d emulator with Cloud Run k8s execution, through the in-cluster portmux (asserts CloudRunTest 7/7; JAVA_HOME/mvn on PATH — see AGENTS.md)
 	@test -d $(FLOCI_COMPAT_DIR)/sdk-test-java || (echo "ERROR: $(FLOCI_COMPAT_DIR)/sdk-test-java not found — set FLOCI_COMPAT_DIR"; exit 1)
