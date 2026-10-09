@@ -184,6 +184,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-persistence-parity \
         test-gcp-rest-grpc-parity \
         test-gcp-gcloud-conformance test-gcp-python-conformance \
+        demo-sdk-tour \
         test-gcp-differential record-gcp-differential record-gcp-differential-grpc \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
@@ -950,6 +951,9 @@ test-gcp-python-conformance: ## Python google-cloud-* client-conformance suite v
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-python-conformance.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080, gRPC :8081)"; \
 	  tests/clients/python/.venv/bin/python -m pytest -v tests/clients/python
+
+demo-sdk-tour: ## Official-client SDK tour (Go/Python/Java/Node) vs ephemeral jaiscloud-gcp -> PASS/FAIL matrix (demo/sdk-tour)
+	@demo/sdk-tour/run.sh
 
 gen-gcp-fidelity-matrix: ## Regenerate docs/fidelity/* (fidelity matrix) from the registry + conformance evidence
 	go run -tags gcp_conformance ./tools/fidelitygen -out docs/fidelity

@@ -309,6 +309,7 @@ func (s *Service) RunQuery(req *firestorepb.RunQueryRequest, stream firestorepb.
 		}
 	}
 	return stream.Send(&firestorepb.RunQueryResponse{
+		ReadTime:             readTime,
 		ContinuationSelector: &firestorepb.RunQueryResponse_Done{Done: true},
 	})
 }
@@ -319,13 +320,28 @@ func (s *Service) RunQuery(req *firestorepb.RunQueryRequest, stream firestorepb.
 // projection, so req.Mask is ignored.
 func (s *Service) BatchGetDocuments(req *firestorepb.BatchGetDocumentsRequest, stream firestorepb.Firestore_BatchGetDocumentsServer) error {
 	ctx := stream.Context()
-	items, err := s.svc.BatchGet(ctx, req.GetDocuments(), req.GetTransaction())
+	txn := req.GetTransaction()
+	// Real Firestore starts a new transaction when new_transaction is set and
+	// returns its id on the first response in the stream. Clients that begin
+	// transactions lazily through a read (e.g. the Node SDK's runTransaction)
+	// rely on this; without it they cannot obtain a transaction id.
+	if req.GetNewTransaction() != nil {
+		var err error
+		txn, err = s.svc.BeginTransaction(ctx)
+		if err != nil {
+			return mapError(err)
+		}
+	}
+	items, err := s.svc.BatchGet(ctx, req.GetDocuments(), txn)
 	if err != nil {
 		return mapError(err)
 	}
 	readTime := timestamppb.New(clock.Now())
-	for _, item := range items {
+	for i, item := range items {
 		resp := &firestorepb.BatchGetDocumentsResponse{ReadTime: readTime}
+		if i == 0 && len(txn) > 0 {
+			resp.Transaction = txn
+		}
 		if name, ok := item["missing"].(string); ok {
 			resp.Result = &firestorepb.BatchGetDocumentsResponse_Missing{Missing: name}
 		} else if found, ok := item["found"].(map[string]any); ok {
