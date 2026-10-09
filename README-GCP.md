@@ -619,6 +619,57 @@ Deliberately **not** modelled: the org/folder **hierarchy** itself (only each pr
 
 ---
 
+## Demo spine verification baseline (SPK6)
+
+The crypto-medallion demo follows one data product through provision → ingest →
+process → serve → observe → automate against a single `jaiscloud-gcp` instance on
+k3d. Every link is gated individually, but no single run used the demo's combined
+config. `make test-e2e-demo-spine-k3d` (`scripts/demo-spine-verify.sh`) is that
+run: it configures the deployment **once** with the combined config and runs the
+composed gates against that one instance, recording the acceptance baseline the
+recording is built on.
+
+Combined config applied (one instance):
+
+- `JAISCLOUD_SPARK_EXECUTOR_MODE=k8s` — real client-mode Spark pods;
+- `JAISCLOUD_KAFKA_BROKER_MODE=k8s` — real Redpanda broker;
+- `JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=k8s` with `JAISCLOUD_CLOUDRUN_URL_SUFFIX=run.localhost`
+  and `JAISCLOUD_CLOUDRUN_URL_PORT=18080` — browser-reachable revisions (SPK4);
+- `JAISCLOUD_GCP_THROTTLE` unset — throttle off;
+- `JAISCLOUD_DATAPROC_HMS_ENDPOINT` — the pod-reachable Hive Metastore (SPK1);
+- LRO at the emulator default (synchronous). The demo's async-LRO
+  pending→running→done beat is a "use on cue" pacing control (design §9), not a
+  steady setting: the Run/Eventarc k3s gate harnesses assert the inline operation,
+  so the cue is exercised separately (`make test-lro-async-gcp`). Set
+  `SPINE_LRO_ASYNC=1` to fold it into the run.
+
+The harness settles between suites so the previous suite's Spark/Kafka
+driver+executor+broker pods drain before the next suite needs the same ~6 GiB k3d
+node (a heavy suite started into a still-draining one leaves the next Spark
+driver unschedulable). Suites run in order:
+
+| Stage | Suite | Baseline evidence |
+|---|---|---|
+| Process | Iceberg batch on HMS (SPK1) | write job DONE, 3 rows, ≥1 snapshot; real `metadata/*.json` + `data/*.parquet` under the table `LOCATION` |
+| Process | Iceberg Structured Streaming sink (SPK2) | wave 1 → snapshots=1/data=3, wave 2 → snapshots=2/data=6 while RUNNING; cancel + driver reap; read-back 9 rows |
+| Process | Lakehouse medallion | real `pysparkJob` + `sparkSqlJob`; 100 input rows → 1 published object, orders reproduce the ingested distribution |
+| Serve | Cloud Run browser reachability (SPK4) | synthesized `*.run.localhost` authority loads the service page with no `Host` override |
+| Serve | Eventarc delivery | GCS-sourced trigger → Cloud Run / HTTP sink delivers the CloudEvent |
+| Automate | Scheduler → Dataproc hop (SPK3) | `httpTarget` tick → in-cluster submitter → `dataproc.jobs.submit` reaches DONE, with the real Cloud Scheduler headers |
+| Observe | Monitoring metric → alert incident (SPK5) | `CreateTimeSeries` crosses a `condition_threshold` policy → incident fires → notification pulled from the topic subscription |
+
+The verification run found and fixed two real defects: a Dataproc Postgres
+`UpdateJobAtomic` surfaced a benign SERIALIZABLE conflict (SQLSTATE 40001) as an
+HTTP 500 under the real Spark job-state reconciler (now retried, via the shared
+`storeutil.RetrySerializable`), and recreating a Dataproc cluster / Kafka broker
+whose derived namespace was still `Terminating` failed all subsequent creates in
+it (the shared namespace create now waits for the old namespace to disappear).
+The Scheduler hop gate also gained a Service-endpoint readiness wait, because a
+Ready submitter pod does not guarantee kube-proxy has programmed the ClusterIP and
+a no-`retryConfig` job delivers exactly once.
+
+---
+
 ## Contributing
 
 See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) and [CLAUDE.md](CLAUDE.md) for build setup, architecture conventions, and the AWS-vs-GCP isolation model. Please open an issue before starting large changes.
