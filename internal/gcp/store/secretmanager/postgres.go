@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -98,6 +99,14 @@ func (s *PostgresStore) UpdateSecret(ctx context.Context, projectID, id string, 
 // instead of racing to silently roll back the other's write. See
 // store/firestore/postgres.go's Commit for the same convention.
 func (s *PostgresStore) UpdateSecretAtomic(ctx context.Context, projectID, id string, mutate func(Secret) (Secret, error)) (Secret, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Secret, error) {
+		return s.updateSecretAtomicOnce(ctx, projectID, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateSecretAtomicOnce(ctx context.Context, projectID, id string, mutate func(Secret) (Secret, error)) (Secret, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Secret{}, err

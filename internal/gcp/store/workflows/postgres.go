@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -166,6 +167,14 @@ func (s *PostgresStore) UpdateWorkflow(ctx context.Context, projectID, location,
 // racing to silently overwrite this call's write. See
 // store/firestore/postgres.go's Commit for the same convention.
 func (s *PostgresStore) UpdateWorkflowAtomic(ctx context.Context, projectID, location, id string, mutate func(Workflow) (Workflow, error)) (Workflow, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Workflow, error) {
+		return s.updateWorkflowAtomicOnce(ctx, projectID, location, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateWorkflowAtomicOnce(ctx context.Context, projectID, location, id string, mutate func(Workflow) (Workflow, error)) (Workflow, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Workflow{}, err

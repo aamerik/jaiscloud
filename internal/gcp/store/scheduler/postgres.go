@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 
+	"jaiscloud/internal/gcp/storeutil"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -95,6 +97,14 @@ func (s *PostgresStore) UpdateJob(ctx context.Context, projectID, location strin
 }
 
 func (s *PostgresStore) UpdateJobAtomic(ctx context.Context, projectID, location, name string, mutate func(Job) (Job, error)) (Job, error) {
+	// Retry a transient transaction conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Job, error) {
+		return s.updateJobAtomicOnce(ctx, projectID, location, name, mutate)
+	})
+}
+
+func (s *PostgresStore) updateJobAtomicOnce(ctx context.Context, projectID, location, name string, mutate func(Job) (Job, error)) (Job, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Job{}, err

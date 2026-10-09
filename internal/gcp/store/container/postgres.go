@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 
+	"jaiscloud/internal/gcp/storeutil"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -99,6 +101,14 @@ func (s *PostgresStore) GetCluster(ctx context.Context, projectID, location, nam
 // back in a single transaction so concurrent mutations cannot lose an update
 // (the memory store serializes the same way under its mutex).
 func (s *PostgresStore) MutateCluster(ctx context.Context, projectID, location, cluster string, fn func(*Cluster) error) error {
+	// Retry a transient transaction conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializableErr(ctx, func() error {
+		return s.mutateClusterOnce(ctx, projectID, location, cluster, fn)
+	})
+}
+
+func (s *PostgresStore) mutateClusterOnce(ctx context.Context, projectID, location, cluster string, fn func(*Cluster) error) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err

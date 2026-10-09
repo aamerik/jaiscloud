@@ -6,6 +6,8 @@ import (
 	"errors"
 	"sort"
 
+	"jaiscloud/internal/gcp/storeutil"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -105,6 +107,14 @@ func (s *PostgresStore) NamespaceExists(ctx context.Context, namespace string) (
 }
 
 func (s *PostgresStore) UpdateNamespaceProperties(ctx context.Context, namespace string, removals []string, updates map[string]string) (NamespacePropertiesUpdate, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (NamespacePropertiesUpdate, error) {
+		return s.updateNamespacePropertiesOnce(ctx, namespace, removals, updates)
+	})
+}
+
+func (s *PostgresStore) updateNamespacePropertiesOnce(ctx context.Context, namespace string, removals []string, updates map[string]string) (NamespacePropertiesUpdate, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return NamespacePropertiesUpdate{}, err
@@ -239,6 +249,14 @@ func (s *PostgresStore) DropTable(ctx context.Context, namespace, name string) e
 // concurrent commit to the same table blocks instead of silently losing the
 // other's update.
 func (s *PostgresStore) CommitTable(ctx context.Context, namespace, name string, mutate func(Table) (Table, error)) (Table, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Table, error) {
+		return s.commitTableOnce(ctx, namespace, name, mutate)
+	})
+}
+
+func (s *PostgresStore) commitTableOnce(ctx context.Context, namespace, name string, mutate func(Table) (Table, error)) (Table, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Table{}, err
@@ -277,6 +295,14 @@ func (s *PostgresStore) CommitTable(ctx context.Context, namespace, name string,
 // RenameTable is atomic: a Serializable transaction row-locks the source (and
 // probes the destination) so a concurrent commit/rename can't race it.
 func (s *PostgresStore) RenameTable(ctx context.Context, srcNamespace, srcName, dstNamespace, dstName string) (Table, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Table, error) {
+		return s.renameTableOnce(ctx, srcNamespace, srcName, dstNamespace, dstName)
+	})
+}
+
+func (s *PostgresStore) renameTableOnce(ctx context.Context, srcNamespace, srcName, dstNamespace, dstName string) (Table, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Table{}, err

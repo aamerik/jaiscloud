@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -79,6 +80,15 @@ func (s *PostgresStore) GetTrigger(ctx context.Context, projectID, location, id 
 // this call's write. See store/firestore/postgres.go's Commit for the same
 // convention.
 func (s *PostgresStore) UpdateTriggerAtomic(ctx context.Context, projectID, location, id string, mutate func(Trigger) (Trigger, error)) (Trigger, error) {
+	// A concurrent writer on the same row can abort the SERIALIZABLE
+	// read-modify-write (SQLSTATE 40001/40P01) — a benign race, so retry the
+	// whole transaction instead of surfacing it as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Trigger, error) {
+		return s.updateTriggerAtomicOnce(ctx, projectID, location, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateTriggerAtomicOnce(ctx context.Context, projectID, location, id string, mutate func(Trigger) (Trigger, error)) (Trigger, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Trigger{}, err
@@ -136,6 +146,14 @@ func (s *PostgresStore) DeleteTrigger(ctx context.Context, projectID, location, 
 // so an etag precondition checked in guard is evaluated against a snapshot no
 // concurrent update can invalidate before the DELETE commits.
 func (s *PostgresStore) DeleteTriggerAtomic(ctx context.Context, projectID, location, id string, guard func(Trigger) error) error {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializableErr(ctx, func() error {
+		return s.deleteTriggerAtomicOnce(ctx, projectID, location, id, guard)
+	})
+}
+
+func (s *PostgresStore) deleteTriggerAtomicOnce(ctx context.Context, projectID, location, id string, guard func(Trigger) error) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return err
@@ -265,6 +283,14 @@ func (s *PostgresStore) GetChannel(ctx context.Context, projectID, location, id 
 // so a concurrent UpdateChannelAtomic on the same channel blocks until this
 // transaction commits or rolls back. See store/firestore/postgres.go's Commit.
 func (s *PostgresStore) UpdateChannelAtomic(ctx context.Context, projectID, location, id string, mutate func(Channel) (Channel, error)) (Channel, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) instead of
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (Channel, error) {
+		return s.updateChannelAtomicOnce(ctx, projectID, location, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateChannelAtomicOnce(ctx context.Context, projectID, location, id string, mutate func(Channel) (Channel, error)) (Channel, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Channel{}, err
@@ -319,6 +345,12 @@ func (s *PostgresStore) DeleteChannel(ctx context.Context, projectID, location, 
 
 // DeleteChannelAtomic mirrors DeleteTriggerAtomic for channels.
 func (s *PostgresStore) DeleteChannelAtomic(ctx context.Context, projectID, location, id string, guard func(Channel) error) error {
+	return storeutil.RetrySerializableErr(ctx, func() error {
+		return s.deleteChannelAtomicOnce(ctx, projectID, location, id, guard)
+	})
+}
+
+func (s *PostgresStore) deleteChannelAtomicOnce(ctx context.Context, projectID, location, id string, guard func(Channel) error) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return err

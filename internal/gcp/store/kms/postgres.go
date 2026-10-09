@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/storeutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -263,6 +264,14 @@ func (s *PostgresStore) ListCryptoKeys(ctx context.Context, projectID, location,
 // mutate, so a concurrent update on the same key blocks until this transaction
 // commits or rolls back instead of racing to a lost update.
 func (s *PostgresStore) UpdateCryptoKeyAtomic(ctx context.Context, projectID, location, keyringID, id string, mutate func(CryptoKey) (CryptoKey, error)) (CryptoKey, error) {
+	// Retry a transient SERIALIZABLE conflict (40001/40P01) rather than
+	// surfacing a benign race as a 500.
+	return storeutil.RetrySerializable(ctx, func() (CryptoKey, error) {
+		return s.updateCryptoKeyAtomicOnce(ctx, projectID, location, keyringID, id, mutate)
+	})
+}
+
+func (s *PostgresStore) updateCryptoKeyAtomicOnce(ctx context.Context, projectID, location, keyringID, id string, mutate func(CryptoKey) (CryptoKey, error)) (CryptoKey, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return CryptoKey{}, err
