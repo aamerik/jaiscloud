@@ -370,6 +370,35 @@ var triageRules = []TriageRule{
 		Location: "jobs[0].id",
 		Reason:   "output-only job identity: real GCP's job `id` embeds the job location (`<project>:US.<jobId>`) while the emulator emits `<project>:<jobId>`; the canonical identity is jobReference.jobId, which matches",
 	},
+	// SDK-tour BigQuery load job (demo/sdk-tour): the same output-only job
+	// metadata the emulator does not echo, reachable through the tour's own op
+	// ids (which differ from the curated job_insert_load/jobs_list set).
+	{
+		Service: "bigquery",
+		Op:      "tour_bq_load_insert",
+		Kind:    "missing_field",
+		Reason:  "output-only BigQuery job metadata the emulator does not echo (load schema, jobCreationReason, principal_subject, statistics.reservation_id, user_email); the load configuration and destination match",
+	},
+	{
+		Service: "bigquery",
+		Op:      "tour_bq_load_poll",
+		Kind:    "missing_field",
+		Reason:  "output-only BigQuery job metadata the emulator does not echo (load schema, jobCreationReason, principal_subject, and the statistics the emulator does not synthesize: completionRatio/finalExecutionDurationMs/timeline/reservation_id/totalSlotMs, user_email); the load configuration, destination and DONE state match",
+	},
+	{
+		Service:  "bigquery",
+		Op:       "tour_bq_load_insert",
+		Kind:     "value_mismatch",
+		Location: "response.id",
+		Reason:   "output-only job identity: real GCP's job `id` embeds the job location (`<project>:US.<jobId>`) while the emulator emits `<project>:<jobId>`; the canonical identity is jobReference.jobId, which matches",
+	},
+	{
+		Service:  "bigquery",
+		Op:       "tour_bq_load_poll",
+		Kind:     "value_mismatch",
+		Location: "response.id",
+		Reason:   "output-only job identity: real GCP's job `id` embeds the job location (`<project>:US.<jobId>`) while the emulator emits `<project>:<jobId>`; the canonical identity is jobReference.jobId, which matches",
+	},
 	{
 		Service:  "bigquery",
 		Kind:     "value_mismatch",
@@ -459,6 +488,22 @@ var triageRules = []TriageRule{
 		Location: "response.location",
 		Reason:   "GCS canonicalizes a bucket location to uppercase (US-CENTRAL1); the emulator echoes the requested form (us-central1); the location and locationType are otherwise the same geography",
 	},
+
+	// SDK-tour Secret Manager: output-only per-version metadata the emulator
+	// does not echo (etag, replicationStatus); the version identity and state
+	// match real GCP.
+	{
+		Service: "secretmanager",
+		Op:      "tour_secret_add_version",
+		Kind:    "missing_field",
+		Reason:  "output-only Secret Manager version metadata the emulator does not echo (etag, replicationStatus); the version name and state match",
+	},
+	{
+		Service: "secretmanager",
+		Op:      "tour_secret_list_versions",
+		Kind:    "missing_field",
+		Reason:  "output-only Secret Manager version metadata the emulator does not echo (etag, replicationStatus); the version name and state match",
+	},
 }
 
 // bigQueryQueryStatFields are the output-only job-statistics/timing members of a
@@ -482,14 +527,16 @@ var bigQueryQueryStatFields = []string{
 }
 
 func init() {
-	for _, loc := range bigQueryQueryStatFields {
-		triageRules = append(triageRules, TriageRule{
-			Service:  "bigquery",
-			Op:       "query",
-			Kind:     "missing_field",
-			Location: loc,
-			Reason:   "output-only job-statistics/timing field the emulator does not synthesize; executed rows/schema/statementType match real GCP",
-		})
+	for _, op := range []string{"query", "tour_bq_query"} {
+		for _, loc := range bigQueryQueryStatFields {
+			triageRules = append(triageRules, TriageRule{
+				Service:  "bigquery",
+				Op:       op,
+				Kind:     "missing_field",
+				Location: loc,
+				Reason:   "output-only job-statistics/timing field the emulator does not synthesize; executed rows/schema/statementType match real GCP",
+			})
+		}
 	}
 }
 
