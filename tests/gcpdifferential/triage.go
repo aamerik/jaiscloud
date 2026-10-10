@@ -135,6 +135,52 @@ var triageRules = []TriageRule{
 		Location: "response.status",
 		Reason:   "DNS changes are applied asynchronously; real GCP reports status=pending at submit time while the emulator applies synchronously (done)",
 	},
+	// ── Cloud Dataproc cluster LRO (SDK-tour) ────────────────────────────────
+	// Real GCP materializes the cluster's output-only/defaulted fields on the
+	// operation and cluster responses (materialized config: master/worker
+	// imageUri + minCpuPlatform/preemptibility, networkUri/serviceAccountScopes/
+	// shieldedInstanceConfig/resourceManagerTags, softwareConfig properties,
+	// endpointConfig and the staging/temp bucket names; plus labels, the
+	// response @type and the operation's description/warnings/innerState). The
+	// emulator stores and echoes the requested config verbatim and omits those
+	// defaults. The rule is scoped to missing_field only, so a value regression
+	// in the cluster identity/name or a wrong operation name/done still
+	// surfaces as open.
+	{
+		Service: "dataproc",
+		Kind:    "missing_field",
+		Reason:  "real Dataproc materializes output-only/defaulted cluster fields (materialized config: imageUri/minCpuPlatform/preemptibility, networkUri/serviceAccountScopes/shieldedInstanceConfig/resourceManagerTags, softwareConfig properties, endpointConfig, config/temp buckets; plus labels, @type and the operation description/warnings/innerState); the emulator stores and echoes the requested config verbatim and omits them — the cluster identity/name and a wrong operation name/done remain value-checked",
+	},
+	// The freshly submitted Dataproc create operation reports its metadata
+	// status PENDING on real GCP; the emulator begins provisioning immediately
+	// (RUNNING). The operation name, its done flag and the settled cluster's
+	// identity match; only the transient operation-status label differs.
+	{
+		Service:  "dataproc",
+		Op:       "tour_dataproc_cluster_create",
+		Kind:     "value_mismatch",
+		Location: "response.metadata.status.state",
+		Reason:   "Dataproc cluster create is an LRO: real GCP's freshly submitted operation metadata reports status PENDING while the emulator starts provisioning immediately (RUNNING); the operation name/done and the settled cluster identity are checked",
+	},
+	// Real GCP resolves the requested Dataproc imageVersion alias to the current
+	// qualified build (e.g. "2.2" -> "2.2.88-debian12"); the emulator echoes the
+	// requested alias so a committed golden does not track a moving image build.
+	{
+		Service:  "dataproc",
+		Kind:     "value_mismatch",
+		Location: "softwareConfig.imageVersion",
+		Reason:   "real GCP resolves the requested Dataproc imageVersion alias to the current qualified build (e.g. 2.2 -> 2.2.88-debian12); the emulator echoes the requested alias, an output-only resolved value",
+	},
+	// The cluster's statusHistory is an output-only state log: real GCP records
+	// the full CREATING -> RUNNING sequence while the emulator records the
+	// states it observed (and adds the operation's terminal DONE entry on the
+	// poll). The current status.state is still value-checked.
+	{
+		Service:  "dataproc",
+		Kind:     "array_length_mismatch",
+		Location: ".statusHistory",
+		Reason:   "Dataproc cluster/operation statusHistory is an output-only state log; real GCP and the emulator record slightly different state sequences (the operation poll adds a terminal DONE entry). status.state itself is value-checked",
+	},
 	// Real GCP derives totalRows from table metadata that lags a just-streamed
 	// insert (it returned 0); the emulator's 1 is the stored row the preview
 	// contract promises, so the emulator is the more correct side here.

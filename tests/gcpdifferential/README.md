@@ -44,7 +44,24 @@ make record-gcp-differential-bigquery # BigQuery SQL corpus from real GCP (needs
 
 The BigQuery SQL corpus classifies each query against a declared expectation
 (`match`/`gap`/`bug`) instead of failing on every open divergence; see
-[README-bigquery.md](README-bigquery.md).
+[README-bigquery.md](README-bigquery.md). Its replay also emits the committed
+gap/bug frontier at `testdata/report-bigquery/backlog.md`.
+
+## CI coverage
+
+`.github/workflows/ci.yml` runs two anchored differential steps against the
+already-running emulator (strict, `GCP_DIFFERENTIAL_REQUIRE_GOLDENS=1`):
+
+* the **REST** step replays the curated, SDK-tour, error-tour and BigQuery sets
+  and runs their golden-hygiene/contract guards — `TestReplay*`,
+  `Test*GoldensAreClean`, `Test*GoldenManifest`, `Test*ScenariosValid` for each
+  set (the shared `assertGoldensClean` credential/identifier guard included);
+* the **gRPC** step runs after the "Wait for gRPC listener" step and replays the
+  curated and SDK-tour gRPC sets (`TestReplayGRPC`, `TestReplayTourGRPC`) with
+  their guards.
+
+Both `-run` regexes are anchored (`^(…)$`) so a gRPC-only replay cannot run
+incidentally before the gRPC listener is up.
 
 Record mode needs Application Default Credentials (`gcloud auth
 application-default login`) and a project with the relevant APIs enabled
@@ -73,6 +90,7 @@ shapes) is diffed field by field.
 | `tour_page_upload_00..06` / `tour_list_page_1..4` | `objects.list` pagination (`maxResults=2` over 7 objects → 2+2+2+1) |
 | `tour_bq_dataset_create` / `tour_bq_table_create` / `tour_bq_insertall` / `tour_bq_query` | BigQuery `insertAll` + Standard SQL query |
 | `tour_bq_load_object_upload` / `tour_bq_load_table_create` / `tour_bq_load_insert` / `tour_bq_load_poll` / `tour_bq_load_tabledata` | `gs://` load job to `DONE` + row read |
+| `tour_dataproc_cluster_create` / `tour_dataproc_cluster_poll` / `tour_dataproc_cluster_get` | Dataproc cluster create `google.longrunning.Operation` (`done=false` at submit) → `operations.get` poll to `DONE` → settled `clusters.get` |
 
 Chunk request bodies are 256 KiB binary and are deliberately **not** captured
 (`NoRequestCapture`); the chunk status and the finalize response carry the
@@ -127,10 +145,15 @@ normalizer (`normalize.go`) and adds:
   only the delivered messages are golden. The frame boundaries themselves are a
   documented deferral — real GCP emits a properties-only frame before the data
   frame, which the emulator combines.
-* **Dataproc LRO create/poll** — creating a real Dataproc cluster is
-  heavyweight (minutes; cost) and the emulator completes LROs synchronously.
-  The curated set deliberately excludes a real Dataproc create for the same
-  reason; the SDK tour still covers the gax LRO poller against the emulator.
+* **Dataproc LRO create/poll** — the REST tour covers it (`tour_dataproc_cluster_*`:
+  create → `operations.get` poll → settled `clusters.get`). Real GCP returns the
+  create operation `done=false` and reports its metadata status `PENDING`; the
+  emulator begins provisioning immediately (`RUNNING`) and settles on the first
+  poll (`clusterReadyDelay`). Real provisioning is minutes-long and the parity
+  project's Dataproc disk quota is small, so the scenario pins an `n1-standard-4`
+  / `pd-standard` 100 GiB shape; the triage rules accept only the output-only
+  materialized defaults (see `triage.go`), keeping the cluster identity and
+  settled `status.state` value-checked.
 * **Resumable multi-chunk** — the golden covers session start, one non-final
   chunk and the finalizing chunk (512 KiB total); larger transfers differ only
   in chunk count.

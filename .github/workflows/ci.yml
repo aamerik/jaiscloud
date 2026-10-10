@@ -432,13 +432,17 @@ jobs:
       # against the already-running emulator and writes a divergence report.
       # Offline and credential-free; strict mode fails the build on any open
       # (real-bug) divergence at any severity, so a regression against
-      # real GCP can't merge silently.
+      # real GCP can't merge silently. The regex is anchored so this REST step
+      # runs only the REST sets; the gRPC-only replays run after the gRPC
+      # listener is up (below). It also runs the golden-hygiene/contract guards
+      # (assertGoldensClean, manifest, scenario-validity) for the curated, tour,
+      # error-tour and BigQuery sets.
       - name: Run GCP differential replay (offline; strict)
         env:
           GCP_DIFFERENTIAL_STRICT: "1"
           GCP_DIFFERENTIAL_STRICT_SEVERITY: "low"
           GCP_DIFFERENTIAL_REQUIRE_GOLDENS: "1"
-        run: go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest' ./tests/gcpdifferential/
+        run: go test -tags gcp_differential -count=1 -v -run '^(TestReplay|TestGoldensAreClean|TestGoldenManifest|TestReplayTour|TestTourGoldensAreClean|TestTourGoldenManifest|TestTourScenariosValid|TestReplayErrors|TestErrorGoldensAreClean|TestErrorGoldenManifest|TestErrorScenariosValid|TestReplayBQSQL|TestBQSQLGoldensAreClean|TestBQSQLGoldenManifest|TestBQSQLScenariosValid)$' ./tests/gcpdifferential/
 
       - name: Wait for gRPC listener
         run: |
@@ -455,13 +459,15 @@ jobs:
       # Firestore, Logging, Monitoring) against the emulator's gRPC listener and
       # diffs them with the shared normalize/triage engine. Offline and
       # credential-free; strict mode fails on any open (real-bug) divergence.
+      # It also runs the gRPC SDK-tour replay (REST-tour replay is in the step
+      # above) plus its hygiene/contract guards.
       - name: Run GCP gRPC differential replay (offline; strict)
         env:
           GCP_DIFFERENTIAL_STRICT: "1"
           GCP_DIFFERENTIAL_STRICT_SEVERITY: "low"
           GCP_DIFFERENTIAL_REQUIRE_GOLDENS: "1"
           GCP_DIFFERENTIAL_GRPC_ENDPOINT: localhost:8081
-        run: go test -tags gcp_differential -count=1 -v -run 'TestReplayGRPC|TestGRPCGoldensAreClean|TestGRPCGoldensAreMarked|TestGRPCGoldenManifest|TestGRPCScenariosValid|TestGRPCNormalizerFoldsVolatile' ./tests/gcpdifferential/
+        run: go test -tags gcp_differential -count=1 -v -run '^(TestReplayGRPC|TestGRPCGoldensAreClean|TestGRPCGoldensAreMarked|TestGRPCGoldenManifest|TestGRPCScenariosValid|TestGRPCNormalizerFoldsVolatile|TestReplayTourGRPC|TestTourGRPCGoldensAreClean|TestTourGRPCScenariosValid)$' ./tests/gcpdifferential/
 
       - name: Run gRPC message-level conformance (official clients)
         working-directory: tests/gcpconformance/grpc

@@ -194,8 +194,9 @@ func TestReplayBQSQL(t *testing.T) {
 	}
 
 	logBQSQLTable(t, results, pending)
-	t.Logf("replayed %d BigQuery SQL queries (%d pending recording) -> %d divergences (%d open, %d accepted); report at %s/report.{json,md}",
-		len(results), len(pending), rep.Total, rep.OpenCount, rep.AcceptedCount, bqsqlReportDir())
+	writeBQSQLBacklog(t, bqsqlReportDir(), results, openByOp, pending)
+	t.Logf("replayed %d BigQuery SQL queries (%d pending recording) -> %d divergences (%d open, %d accepted); report at %s/report.{json,md}, frontier at %s/%s",
+		len(results), len(pending), rep.Total, rep.OpenCount, rep.AcceptedCount, bqsqlReportDir(), bqsqlReportDir(), bqsqlBacklogFile)
 
 	if len(stale) > 0 {
 		sort.Strings(stale)

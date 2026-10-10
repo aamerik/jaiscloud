@@ -165,6 +165,35 @@ func TourScenarios(project, suffix string) []Scenario {
 			Path: bqBase + "/datasets/" + n.TourBQDataset + "/tables/" + n.TourBQTable + "_load/data"},
 	)
 
+	// ─── Cloud Dataproc: cluster-create LRO, its operation poll, and read ───
+	// Dataproc's cluster create is a google.longrunning.Operation: real GCP
+	// returns done=false at submit and the cluster settles asynchronously, so
+	// the create response's operation name is saved and polled with
+	// operations.get until done; a clusters.get then reads the settled cluster
+	// back. Mirrors tests/integration/gcp/sdk-dataproc (create -> operation poll
+	// -> get). The machine type and disks are pinned (pd-standard, 100 GiB) to
+	// stay inside the parity project's Dataproc disk quota and to let the
+	// emulator echo them verbatim; the zone is given as a full resource URL so
+	// real GCP's canonicalized zoneUri matches.
+	dpBase := "/v1/projects/" + project + "/regions/us-central1"
+	dpMachine := "https://www.googleapis.com/compute/v1/projects/" + project +
+		"/zones/us-central1-a/machineTypes/n1-standard-4"
+	dpDisk := `{"bootDiskSizeGb":100,"bootDiskType":"pd-standard"}`
+	dpConfig := fmt.Sprintf(
+		`{"gceClusterConfig":{"zoneUri":"https://www.googleapis.com/compute/v1/projects/%s/zones/us-central1-a"},"softwareConfig":{"imageVersion":"2.2"},"masterConfig":{"machineTypeUri":%q,"diskConfig":%s},"workerConfig":{"numInstances":2,"machineTypeUri":%q,"diskConfig":%s}}`,
+		project, dpMachine, dpDisk, dpMachine, dpDisk)
+	sc = append(sc,
+		Scenario{Op: "tour_dataproc_cluster_create", Service: "dataproc", Method: http.MethodPost,
+			Path: dpBase + "/clusters",
+			Body: fmt.Sprintf(`{"projectId":%q,"clusterName":%q,"config":%s}`, project, n.TourDataproc, dpConfig),
+			Save: map[string]string{"dpOp": "name"}},
+		Scenario{Op: "tour_dataproc_cluster_poll", Service: "dataproc", Method: http.MethodGet,
+			Path: "/v1/${dpOp}",
+			Wait: &WaitSpec{Field: "done", Interval: 2 * time.Second, Timeout: 15 * time.Minute}},
+		Scenario{Op: "tour_dataproc_cluster_get", Service: "dataproc", Method: http.MethodGet,
+			Path: dpBase + "/clusters/" + n.TourDataproc},
+	)
+
 	// The tour's IAM read-modify-write drives the Pub/Sub topic's IAM policy
 	// over gRPC (google.iam.v1.IAMPolicy); the emulator exposes that surface
 	// only on gRPC, so it lives in the gRPC tour set (tour_scenarios_grpc.go).
@@ -224,6 +253,10 @@ func (t *Target) CleanupTour() []string {
 	ops := []del{
 		{"bigquery", "load table", http.MethodDelete, bqBase + "/datasets/" + n.TourBQDataset + "/tables/" + n.TourBQTable + "_load", ""},
 		{"bigquery", "dataset", http.MethodDelete, bqBase + "/datasets/" + n.TourBQDataset + "?deleteContents=true", ""},
+		// Dataproc cluster (the create scenario's LRO subject). Deleting also
+		// tears down the cluster's VMs; the returned operation is not waited on
+		// (best-effort cleanup, like the other deletes).
+		{"dataproc", "cluster", http.MethodDelete, "/v1/projects/" + t.Project + "/regions/us-central1/clusters/" + n.TourDataproc, ""},
 	}
 	for _, o := range objects {
 		ops = append(ops, del{"storage", "object " + o, http.MethodDelete, "/storage/v1/b/" + bucket + "/o/" + o, ""})
