@@ -1,7 +1,7 @@
 {
   "version": 1,
   "project": "<project>",
-  "ops": 27,
+  "ops": 28,
   "services": [
     "dataproc",
     "datastore",
@@ -171,6 +171,12 @@
       "file": "026-pubsub-msg_grpc_streaming_pull.json",
       "op": "msg_grpc_streaming_pull",
       "sha256": "ecde6b393a6942bc6f2ff958ef1c7777aafd0e5aec7e2e96038d703a56afcd8d",
+      "status": 0
+    },
+    {
+      "file": "027-pubsub-msg_grpc_dead_letter.json",
+      "op": "msg_grpc_dead_letter",
+      "sha256": "026bf016323f130226ca2d93cf26575e306e27273ae98884280261226d4da78e",
       "status": 0
     }
   ]

@@ -120,10 +120,6 @@ normalizer (`normalize.go`) and adds:
   only the delivered messages are golden. The frame boundaries themselves are a
   documented deferral — real GCP emits a properties-only frame before the data
   frame, which the emulator combines.
-* **Pub/Sub dead-letter republish** is a documented deferral (see the
-  `gcp-pubsub-messaging-oracle` plan's PSM2): forwarding is delivery-count/timing
-  dependent and the emulator omits real GCP's `CloudPubSubDeadLetterSource*`
-  attributes on the forwarded message.
 * **Dataproc LRO create/poll** — creating a real Dataproc cluster is
   heavyweight (minutes; cost) and the emulator completes LROs synchronously.
   The curated set deliberately excludes a real Dataproc create for the same
@@ -131,6 +127,23 @@ normalizer (`normalize.go`) and adds:
 * **Resumable multi-chunk** — the golden covers session start, one non-final
   chunk and the finalizing chunk (512 KiB total); larger transfers differ only
   in chunk count.
+
+### Setup-driven captures
+
+Some contract-bearing behavior depends on server-side state that is reached
+through a best-effort sequence, so the sequence itself is not a stable golden.
+A `Scenario.Setup` runs such a request in both record and replay but records no
+golden and is not diffed; the captured scenario that follows asserts the
+contract. The only current use is **Pub/Sub dead-letter republish** (PSM2,
+`dlq_redelivered` REST / `msg_grpc_dead_letter` gRPC): the dead-letter and source
+resources, the publish, and the nack loop that forces the forward are setup, and
+only the final dead-letter pull is golden. That golden pins the four
+`CloudPubSubDeadLetterSource*` attribute names/presence (source subscription
+short id, project) plus the preserved publisher attributes; the numeric
+`DeliveryCount` and the `TopicPublishTime` value both fold (real GCP forwards on
+a best-effort schedule §"Track delivery attempts", and the harness normalizes
+the timestamp), so the exact millisecond `+00:00` layout is pinned by the unit
+tests rather than the golden.
 
 ## Error / retry tour differential (demo/sdk-tour errors mode)
 

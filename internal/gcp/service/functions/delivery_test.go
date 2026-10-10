@@ -242,10 +242,11 @@ func TestDispatchForwardToDeadLetter(t *testing.T) {
 	})
 	setDeliverySubscription(t, fs, "fn", "eventarc-us-central1-functions-fn")
 
+	occurredAt := time.Date(2026, 10, 10, 4, 24, 54, 929_000_000, time.UTC)
 	s.DispatchEvent(ctx, eventing.Event{
 		Project: "proj", EventType: eventing.TypePubSubPublish,
 		Resource: "projects/proj/topics/t", Source: eventing.SourcePubSub,
-		EventID: "m1", Data: []byte("payload"),
+		EventID: "m1", Data: []byte("payload"), OccurredAt: occurredAt,
 	})
 
 	got := deliveries(t, s)
@@ -264,6 +265,11 @@ func TestDispatchForwardToDeadLetter(t *testing.T) {
 	}
 	if subs.lastAttrs["CloudPubSubDeadLetterSourceDeliveryCount"] != "2" {
 		t.Fatalf("delivery count attr = %q", subs.lastAttrs["CloudPubSubDeadLetterSourceDeliveryCount"])
+	}
+	// The fourth attribute (the one the emulator previously omitted) carries the
+	// original publish time in real GCP's layout.
+	if subs.lastAttrs["CloudPubSubDeadLetterSourceTopicPublishTime"] != "2026-10-10T04:24:54.929+00:00" {
+		t.Fatalf("source publish time attr = %q", subs.lastAttrs["CloudPubSubDeadLetterSourceTopicPublishTime"])
 	}
 }
 

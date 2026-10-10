@@ -351,9 +351,16 @@ var volatileStringKeys = map[string]string{
 	// originate in a BeginTransaction/BatchGetDocuments response and are echoed
 	// back in the read/commit requests that carry them, so (like a cursor) they
 	// fold on both sides. No harness-authored value uses the key.
-	"transaction":   "<transaction>",
-	"ackId":         "<ackId>",
-	"messageId":     "<messageId>",
+	"transaction": "<transaction>",
+	"ackId":       "<ackId>",
+	"messageId":   "<messageId>",
+	// Pub/Sub dead-lettering (PSM2): real GCP forwards a message to its
+	// dead-letter topic on a best-effort basis — the docs say it "might forward
+	// a message after fewer attempts than configured, or ... a few more times"
+	// — so the source delivery count is not a stable contract. Fold the value
+	// while still asserting the attribute is present; the element/attribute
+	// shape and the other three source attributes remain diffed.
+	"CloudPubSubDeadLetterSourceDeliveryCount": "<deadLetterDeliveryCount>",
 	"jobId":         "<jobId>",
 	"temporaryHold": "<temporaryHold>",
 	// IAM service accounts generate these server-side (the emulator leaves

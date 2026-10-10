@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -233,6 +234,14 @@ func TestSDKPubSubDLQ(t *testing.T) {
 	_, err = svc.Projects.Topics.Create(dlq, &pubsub.Topic{Name: dlq}).Do()
 	require.NoError(t, err)
 
+	// A subscription on the dead-letter topic so the forwarded copy lands in a
+	// readable queue (a topic with no subscription drops its messages).
+	dlqSub := "projects/proj/subscriptions/" + unique("dlq-sub")
+	_, err = svc.Projects.Subscriptions.Create(dlqSub, &pubsub.Subscription{
+		Name: dlqSub, Topic: dlq, AckDeadlineSeconds: 10,
+	}).Do()
+	require.NoError(t, err)
+
 	sub := "projects/proj/subscriptions/" + unique("sub")
 	_, err = svc.Projects.Subscriptions.Create(sub, &pubsub.Subscription{
 		Name:  sub,
@@ -275,4 +284,17 @@ func TestSDKPubSubDLQ(t *testing.T) {
 	}
 	n, _ := pull()
 	require.Equal(t, 0, n)
+
+	// The forwarded copy carries real GCP's CloudPubSubDeadLetterSource*
+	// attributes: the source subscription's short id + project, the delivery
+	// count, and the original publish time.
+	dr, err := svc.Projects.Subscriptions.Pull(dlqSub, &pubsub.PullRequest{MaxMessages: 1}).Do()
+	require.NoError(t, err)
+	require.Len(t, dr.ReceivedMessages, 1)
+	attrs := dr.ReceivedMessages[0].Message.Attributes
+	subID := sub[strings.LastIndex(sub, "/")+1:]
+	require.Equal(t, subID, attrs["CloudPubSubDeadLetterSourceSubscription"])
+	require.Equal(t, "proj", attrs["CloudPubSubDeadLetterSourceSubscriptionProject"])
+	require.Equal(t, "5", attrs["CloudPubSubDeadLetterSourceDeliveryCount"])
+	require.NotEmpty(t, attrs["CloudPubSubDeadLetterSourceTopicPublishTime"])
 }

@@ -11,8 +11,10 @@ import (
 
 // TestRecordGRPC captures the gRPC goldens from real GCP. It is skipped unless
 // -record (or GCP_DIFFERENTIAL_RECORD=1) is set, and requires Application
-// Default Credentials. It never reads or prints a token itself — the official
-// gRPC dialer obtains ADC — and it cleans up every resource it creates.
+// Default Credentials. The gRPC dialer obtains ADC itself; the one exception is
+// the dead-letter forwarding IAM grant (a REST project-policy call, see
+// EnsureDLQForwarding), for which a token is read but never printed. It cleans
+// up every resource it creates.
 func TestRecordGRPC(t *testing.T) {
 	if !*recordFlag && os.Getenv("GCP_DIFFERENTIAL_RECORD") != "1" {
 		t.Skip("set -record (or GCP_DIFFERENTIAL_RECORD=1) to capture gRPC goldens from real GCP")
@@ -24,6 +26,19 @@ func TestRecordGRPC(t *testing.T) {
 	names := Names(suffix)
 	target := RealGRPCTarget(project, suffix, names)
 	scenarios := GRPCScenarios(project, suffix)
+
+	// Real GCP requires the Pub/Sub service agent to hold publisher/subscriber
+	// before it will forward to a dead-letter topic; grant them (REST surface)
+	// before the dead-letter scenario records. ADC is only read here, never
+	// printed.
+	if token, err := ADCToken(); err != nil {
+		t.Fatalf("ADC: %v", err)
+	} else {
+		projectNumber := envOr("GCP_DIFFERENTIAL_PROJECT_NUMBER", RealProjectNumberDefault)
+		if err := RealTarget(project, projectNumber, suffix, names, token).EnsureDLQForwarding(); err != nil {
+			t.Fatalf("ensure DLQ forwarding roles: %v", err)
+		}
+	}
 
 	// Cleanup always runs, even if the capture aborts partway.
 	defer func() {

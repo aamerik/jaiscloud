@@ -4,6 +4,7 @@ package gcpdifferential
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -104,6 +105,74 @@ func (t *Target) EnsureKMS() error {
 	return nil
 }
 
+// EnsureDLQForwarding grants the Pub/Sub service agent the roles real GCP
+// requires before it will forward a message to a dead-letter topic: publisher
+// on the dead-letter topics and subscriber on the source subscriptions. Real
+// GCP does not grant these for API-created resources, so without them the
+// dead-letter golden captures an empty forward. The grant is applied at the
+// project level (inherited by every topic/subscription the recorder creates)
+// with a read-modify-write of the existing policy, so unrelated bindings and
+// conditions survive. It is idempotent and a no-op in replay (the emulator
+// enforces no authz and carries no project number).
+func (t *Target) EnsureDLQForwarding() error {
+	if t.ProjectNumber == "" {
+		return nil
+	}
+	sa := "serviceAccount:service-" + t.ProjectNumber + "@gcp-sa-pubsub.iam.gserviceaccount.com"
+	status, body, err := t.request(http.MethodPost, "resourcemanager",
+		"/v1/projects/"+t.Project+":getIamPolicy", "{}", "application/json")
+	if err != nil {
+		return fmt.Errorf("dlq forwarding iam get: %w", err)
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("dlq forwarding iam get: status %d: %s", status, trimBody(body))
+	}
+	var pol map[string]any
+	if err := json.Unmarshal(body, &pol); err != nil {
+		return fmt.Errorf("dlq forwarding iam get: parse: %w", err)
+	}
+	bindings, _ := pol["bindings"].([]any)
+
+	// Only add a role if the service agent is not already a member of it.
+	want := map[string]bool{"roles/pubsub.publisher": true, "roles/pubsub.subscriber": true}
+	for _, b := range bindings {
+		bm, ok := b.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := bm["role"].(string)
+		if !want[role] {
+			continue
+		}
+		if members, ok := bm["members"].([]any); ok {
+			for _, m := range members {
+				if s, _ := m.(string); s == sa {
+					delete(want, role)
+					break
+				}
+			}
+		}
+	}
+	for role := range want {
+		bindings = append(bindings, map[string]any{"role": role, "members": []any{sa}})
+	}
+	pol["bindings"] = bindings
+
+	out, err := json.Marshal(map[string]any{"policy": pol})
+	if err != nil {
+		return fmt.Errorf("dlq forwarding iam set: encode: %w", err)
+	}
+	status, body, err = t.request(http.MethodPost, "resourcemanager",
+		"/v1/projects/"+t.Project+":setIamPolicy", string(out), "application/json")
+	if err != nil {
+		return fmt.Errorf("dlq forwarding iam set: %w", err)
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("dlq forwarding iam set: status %d: %s", status, trimBody(body))
+	}
+	return nil
+}
+
 // Cleanup deletes every resource the scenario set creates on the target so a
 // capture leaves nothing behind. It is best-effort and idempotent: runs after
 // both success and failure, and 404/missing resources are ignored. KMS is
@@ -130,6 +199,12 @@ func (t *Target) Cleanup() []string {
 		{"pubsub", "order topic", http.MethodDelete, "/v1/projects/" + t.Project + "/topics/" + n.OrderTopic, ""},
 		{"pubsub", "redel topic", http.MethodDelete, "/v1/projects/" + t.Project + "/topics/" + n.RedelTopic, ""},
 		{"pubsub", "redel2 topic", http.MethodDelete, "/v1/projects/" + t.Project + "/topics/" + n.Redel2Topic, ""},
+		// PSM2 dead-letter resources (subscriptions before topics): the source
+		// subscription and its dead-letter topic/subscription.
+		{"pubsub", "dlq source subscription", http.MethodDelete, "/v1/projects/" + t.Project + "/subscriptions/" + n.DLQMainSub, ""},
+		{"pubsub", "dlq subscription", http.MethodDelete, "/v1/projects/" + t.Project + "/subscriptions/" + n.DLQSub, ""},
+		{"pubsub", "dlq source topic", http.MethodDelete, "/v1/projects/" + t.Project + "/topics/" + n.DLQMainTopic, ""},
+		{"pubsub", "dlq topic", http.MethodDelete, "/v1/projects/" + t.Project + "/topics/" + n.DLQTopic, ""},
 		{"secretmanager", "secret", http.MethodDelete, "/v1/projects/" + t.Project + "/secrets/" + n.Secret, ""},
 		{"iam", "service account", http.MethodDelete, "/v1/projects/" + t.Project + "/serviceAccounts/" + n.ServiceAccount + "@" + t.Project + ".iam.gserviceaccount.com", ""},
 		{"firestore", "document", http.MethodDelete, "/v1/projects/" + t.Project + "/databases/(default)/documents/" + n.FSCollection + "/" + n.FSDoc, ""},
@@ -199,6 +274,10 @@ func (t *Target) VerifyAbsent() []string {
 		{"pubsub", "redel subscription", "/v1/projects/" + t.Project + "/subscriptions/" + n.RedelSub},
 		{"pubsub", "redel2 topic", "/v1/projects/" + t.Project + "/topics/" + n.Redel2Topic},
 		{"pubsub", "redel2 subscription", "/v1/projects/" + t.Project + "/subscriptions/" + n.Redel2Sub},
+		{"pubsub", "dlq source topic", "/v1/projects/" + t.Project + "/topics/" + n.DLQMainTopic},
+		{"pubsub", "dlq source subscription", "/v1/projects/" + t.Project + "/subscriptions/" + n.DLQMainSub},
+		{"pubsub", "dlq topic", "/v1/projects/" + t.Project + "/topics/" + n.DLQTopic},
+		{"pubsub", "dlq subscription", "/v1/projects/" + t.Project + "/subscriptions/" + n.DLQSub},
 		{"secretmanager", "secret", "/v1/projects/" + t.Project + "/secrets/" + n.Secret},
 		{"bigquery", "dataset", "/bigquery/v2/projects/" + t.Project + "/datasets/" + n.DS},
 		{"iam", "service account", "/v1/projects/" + t.Project + "/serviceAccounts/" + n.ServiceAccount + "@" + t.Project + ".iam.gserviceaccount.com"},

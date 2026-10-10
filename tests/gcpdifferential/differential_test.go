@@ -66,6 +66,11 @@ func TestRecord(t *testing.T) {
 	if err := target.EnsureKMS(); err != nil {
 		t.Fatalf("ensure KMS resources: %v", err)
 	}
+	// Real GCP needs the Pub/Sub service agent to hold publisher/subscriber for
+	// dead-letter forwarding; grant it before the DLQ scenario records.
+	if err := target.EnsureDLQForwarding(); err != nil {
+		t.Fatalf("ensure DLQ forwarding roles: %v", err)
+	}
 
 	// Cleanup always runs, even if the capture aborts partway.
 	defer func() {
@@ -142,11 +147,19 @@ func TestReplay(t *testing.T) {
 		t.Logf("pending recording: %s", p)
 	}
 
-	// Run only the scenarios that have a golden. Pending scenarios are skipped
-	// so the offline gate stays green until the user records them.
-	runScenarios := make([]Scenario, 0, len(matched))
+	// Run the matched scenarios plus every Setup scenario, in scenario order so
+	// a setup op precedes the golden that depends on it. Pending (unrecorded)
+	// scenarios are skipped so the offline gate stays green until the user
+	// records them.
+	hasGolden := make(map[string]bool, len(matched))
 	for _, m := range matched {
-		runScenarios = append(runScenarios, m.Scenario)
+		hasGolden[scenarioKey(m.Scenario.Service, m.Scenario.Op)] = true
+	}
+	runScenarios := make([]Scenario, 0, len(matched))
+	for _, sc := range scenarios {
+		if sc.Setup || hasGolden[scenarioKey(sc.Service, sc.Op)] {
+			runScenarios = append(runScenarios, sc)
+		}
 	}
 	actual, err := target.Run(runScenarios)
 	if err != nil {

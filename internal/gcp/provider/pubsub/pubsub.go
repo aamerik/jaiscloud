@@ -803,9 +803,15 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 		// greater threshold).
 		if dlqTopic != "" && maxDeliveryAttempts > 0 && m.DeliveryAttempt > maxDeliveryAttempts {
 			_ = p.messages.Delete(ctx, s, m.MessageID)
+			// Republish with real GCP's CloudPubSubDeadLetterSource* attributes.
+			// DeliveryAttempt was incremented by this (non-delivering) claim, so
+			// the delivery count actually made to the source subscription is one
+			// less — the configured maxDeliveryAttempts, which is what real GCP
+			// reports.
+			dlqAttrs := pubsubstore.DeadLetterMessageAttributes(nr.AccountID, s, m.DeliveryAttempt-1, m.PublishTime, m.Attributes)
 			for _, sid := range p.pullSubscriptionIDs(ctx, nr.AccountID, dlqTopic) {
 				_ = p.messages.Put(ctx, pubsubstore.Message{
-					Topic: dlqTopic, Subscription: sid, MessageID: m.MessageID, Data: m.Data, Attributes: m.Attributes,
+					Topic: dlqTopic, Subscription: sid, MessageID: m.MessageID, Data: m.Data, Attributes: dlqAttrs,
 					PublishTime: m.PublishTime, DeliveryAttempt: 0,
 					KmsKeyName: m.KmsKeyName, WrappedDEK: m.WrappedDEK,
 				})

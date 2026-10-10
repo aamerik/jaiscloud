@@ -1,7 +1,7 @@
 {
   "version": 1,
   "project": "<project>",
-  "ops": 204,
+  "ops": 205,
   "services": [
     "bigquery",
     "compute",
@@ -1254,6 +1254,12 @@
       "file": "203-pubsub-redel2_repull_empty.json",
       "op": "redel2_repull_empty",
       "sha256": "54c6539f72bde564f1faea5b9f0f5879c0ef4eb231a6e2a6e01303dd5ae2e40b",
+      "status": 200
+    },
+    {
+      "file": "223-pubsub-dlq_redelivered.json",
+      "op": "dlq_redelivered",
+      "sha256": "d55e18f7eb7473f82fba586e6263d31e164831dd0d23a5b545defb6d3042ba25",
       "status": 200
     }
   ]
