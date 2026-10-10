@@ -90,6 +90,7 @@ type Instance struct {
 	CreateTime        string            `json:"createTime,omitempty"`
 	RedisConfigs      map[string]string `json:"redisConfigs,omitempty"`
 	Labels            map[string]string `json:"labels,omitempty"`
+	ReplicaCount      int64             `json:"replicaCount,omitempty"`
 	ID                string            `json:"id,omitempty"`
 	CreationTimestamp string            `json:"creationTimestamp,omitempty"`
 }
@@ -339,6 +340,9 @@ func applyInstanceUpdate(inst *Instance, body map[string]any, mask string) error
 			inst.RedisConfigs = incoming.RedisConfigs
 			break
 		}
+	}
+	if (apply("replicaCount") || apply("replica_count")) && bodyHas(body, "replicaCount") {
+		inst.ReplicaCount = incoming.ReplicaCount
 	}
 	return nil
 }
