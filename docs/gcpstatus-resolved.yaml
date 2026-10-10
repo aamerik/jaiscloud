@@ -232,3 +232,13 @@ entries:
     match: "404 UnsupportedOperation"
     pr: 415
     note: "resolved: serviceusage services:batchGet served, closing R35 (#415, GA1)"
+
+  # DGT1 — Cloud Tasks batchCreate/batchDelete now return a done
+  # google.longrunning.Operation (BatchCreateTasksResponse / google.protobuf.Empty)
+  # instead of the synchronous {"tasks":[…]} / {}. The row is a deferred item in
+  # the finalized GTC9 test-coverage wave plan (plan_docs is gitignored scratch),
+  # so this commits the closure; evidence-gated on #509.
+  - source: "GTC9-gcp-test-coverage"
+    match: "DGT1"
+    pr: 509
+    note: "resolved: tasks:batchCreate/batchDelete return a done google.longrunning.Operation (DGT1, #509)"
