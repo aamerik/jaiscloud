@@ -1,9 +1,10 @@
 {
   "version": 1,
   "project": "<project>",
-  "ops": 27,
+  "ops": 30,
   "services": [
     "bigquery",
+    "dataproc",
     "storage"
   ],
   "files": [
@@ -160,13 +161,31 @@
     {
       "file": "025-bigquery-tour_bq_load_poll.json",
       "op": "tour_bq_load_poll",
-      "sha256": "b4ab45006c71d69eb13b073941d0c29402f2c92a092df9a4d9629d773a06a796",
+      "sha256": "bc52ad7ea605c08ebd4e17c418039b34f7dd38b5ec883190255a1fec92baaa6a",
       "status": 200
     },
     {
       "file": "026-bigquery-tour_bq_load_tabledata.json",
       "op": "tour_bq_load_tabledata",
       "sha256": "ecdbf0ce4d0eb641df517f65a21678378d02d80bb59044a527c1b379fb054661",
+      "status": 200
+    },
+    {
+      "file": "027-dataproc-tour_dataproc_cluster_create.json",
+      "op": "tour_dataproc_cluster_create",
+      "sha256": "fbbf5fb8759d2699c33f2b5ca1bc21126d3ab0f7498704a4c136cad7eef9de46",
+      "status": 200
+    },
+    {
+      "file": "028-dataproc-tour_dataproc_cluster_poll.json",
+      "op": "tour_dataproc_cluster_poll",
+      "sha256": "e98c4b93c5c7e64dff4efc8835949649f2d52fd8f481ffb9104d9b1b3333269a",
+      "status": 200
+    },
+    {
+      "file": "029-dataproc-tour_dataproc_cluster_get.json",
+      "op": "tour_dataproc_cluster_get",
+      "sha256": "a24233b8ee2bb2639e47068162453a5ebd4240dfecc27cfbef4b4ea345689958",
       "status": 200
     }
   ]

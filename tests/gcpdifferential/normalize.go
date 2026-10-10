@@ -374,6 +374,9 @@ var volatileStringKeys = map[string]string{
 	// keep emails out of committed goldens.
 	"uid":                "<uid>",
 	"observedGeneration": "<observedGeneration>",
+	// Dataproc server-generates a clusterUuid on both sides (a UUID on real
+	// GCP, a random hex in the emulator); it is an output-only identifier.
+	"clusterUuid":        "<clusterUuid>",
 	"lastTransitionTime": "<time>",
 	"creator":            "<userEmail>",
 	"lastModifier":       "<userEmail>",
