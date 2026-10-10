@@ -174,15 +174,41 @@ func (c *JSONCodec) EncodeError(nr *model.NormalizedRequest, perr *model.Provide
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json; charset=UTF-8")
 	statusStr, _ := gcperr.Resolve(perr)
-	env := map[string]any{
-		"error": map[string]any{
-			"code":    status,
-			"message": perr.Message,
-			"status":  statusStr,
-		},
+	errObj := map[string]any{
+		"code":    status,
+		"message": perr.Message,
+		"status":  statusStr,
 	}
+	if details := gcpErrorDetails(perr.Details); len(details) > 0 {
+		errObj["details"] = details
+	}
+	env := map[string]any{"error": errObj}
 	out, _ := json.Marshal(env)
 	return status, headers, out
+}
+
+// gcpErrorDetails renders ProviderError.Details as the GCP error envelope's
+// "details" array (each entry tagged with its google.rpc @type). It currently
+// models google.rpc.ErrorInfo.
+func gcpErrorDetails(details []model.ErrorDetail) []map[string]any {
+	out := make([]map[string]any, 0, len(details))
+	for _, d := range details {
+		if d.Type == "" {
+			continue
+		}
+		entry := map[string]any{"@type": "type.googleapis.com/" + d.Type}
+		if d.Reason != "" {
+			entry["reason"] = d.Reason
+		}
+		if d.Domain != "" {
+			entry["domain"] = d.Domain
+		}
+		if len(d.Metadata) > 0 {
+			entry["metadata"] = d.Metadata
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // detectResourceType returns the GCP resource-type marker from the path

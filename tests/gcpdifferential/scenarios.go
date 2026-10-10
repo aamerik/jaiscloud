@@ -295,6 +295,8 @@ type ResourceNames struct {
 	SeekSnap     string
 	StreamTopic  string
 	StreamSub    string
+	EODTopic     string
+	EODSub       string
 }
 
 // Names derives the run's resource identifiers from suffix.
@@ -378,6 +380,8 @@ func Names(suffix string) ResourceNames {
 		SeekSnap:     "conf-pubsub-seek-snap-" + suffix,
 		StreamTopic:  "conf-pubsub-stream-" + suffix,
 		StreamSub:    "conf-pubsub-stream-sub-" + suffix,
+		EODTopic:     "conf-pubsub-eod-" + suffix,
+		EODSub:       "conf-pubsub-eod-sub-" + suffix,
 	}
 }
 

@@ -621,6 +621,16 @@ func (n *Normalizer) value(key string, v any, request bool) any {
 		}
 		return out
 	case map[string]any:
+		if key == "metadata" && isExactlyOnceMetadata(t) {
+			// The google.rpc.ErrorInfo metadata of an exactly-once ack failure
+			// keys each entry by the opaque ackId. Fold the key like the ackId
+			// field so real GCP and the emulator compare equal.
+			out := make(map[string]any, 1)
+			for _, e := range t {
+				out["<ackId>"] = e
+			}
+			return out
+		}
 		out := make(map[string]any, len(t))
 		for k, e := range t {
 			out[k] = n.value(k, e, request)
@@ -629,6 +639,22 @@ func (n *Normalizer) value(key string, v any, request bool) any {
 	default:
 		return v
 	}
+}
+
+// isExactlyOnceMetadata reports whether a JSON object is a google.rpc.ErrorInfo
+// metadata map from an exactly-once ack/modack failure (each value is a
+// permanent/transient per-ack status).
+func isExactlyOnceMetadata(m map[string]any) bool {
+	if len(m) == 0 {
+		return false
+	}
+	for _, v := range m {
+		s, ok := v.(string)
+		if !ok || !(s == "PERMANENT_FAILURE_INVALID_ACK_ID" || strings.HasPrefix(s, "TRANSIENT_")) {
+			return false
+		}
+	}
+	return true
 }
 
 func looksLikeTimestamp(s string) bool {

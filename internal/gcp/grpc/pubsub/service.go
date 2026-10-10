@@ -687,7 +687,7 @@ func (s *Service) buildReceivedMessages(ctx context.Context, project, queue, dlq
 			attempt = int32(m.DeliveryAttempt)
 		}
 		received = append(received, &pubsubpb.ReceivedMessage{
-			AckId:           encodeAckID(queue, m.MessageID),
+			AckId:           pubsubstore.EncodeAckID(queue, m.MessageID, m.DeliveryAttempt),
 			Message:         pm,
 			DeliveryAttempt: attempt,
 		})
@@ -808,10 +808,10 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 	flow := newStreamFlowControl(first.GetMaxOutstandingMessages(), first.GetMaxOutstandingBytes())
 
 	// Handle the initial request's control fields.
-	for _, id := range s.applyStreamAcks(ctx, sub, first) {
+	for _, id := range s.applyStreamAcks(ctx, sub, exactlyOnce, first) {
 		flow.release(id)
 	}
-	for _, id := range s.applyStreamModifyDeadlines(ctx, sub, first) {
+	for _, id := range s.applyStreamModifyDeadlines(ctx, sub, exactlyOnce, first) {
 		flow.release(id)
 	}
 
@@ -825,10 +825,10 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 				recvErr <- err
 				return
 			}
-			for _, id := range s.applyStreamAcks(ctx, sub, r) {
+			for _, id := range s.applyStreamAcks(ctx, sub, exactlyOnce, r) {
 				flow.release(id)
 			}
-			for _, id := range s.applyStreamModifyDeadlines(ctx, sub, r) {
+			for _, id := range s.applyStreamModifyDeadlines(ctx, sub, exactlyOnce, r) {
 				flow.release(id)
 			}
 		}
@@ -888,10 +888,8 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 				}
 				// Claimed but over the byte budget: make it visible again
 				// immediately instead of stranding it until the ack deadline.
-				if decoded, ok := decodeAckID(rm.GetAckId()); ok {
-					if parts := strings.SplitN(decoded, "/", 2); len(parts) == 2 {
-						_ = s.messages.ModifyAckDeadline(ctx, sub, []string{decoded}, 0, clock.Now())
-					}
+				if q, msgID, _, ok := pubsubstore.DecodeAckID(rm.GetAckId()); ok && q == sub {
+					_ = s.messages.ModifyAckDeadline(ctx, sub, []string{sub + "/" + msgID}, 0, clock.Now())
 				}
 			}
 			if len(sendable) > 0 {
@@ -932,25 +930,36 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 // outstanding flow-control set. Each successful ack also tombstones the message
 // in the subscription-scoped registry so another stream cannot redeliver an
 // already-claimed copy.
-func (s *Service) applyStreamAcks(ctx context.Context, queue string, req *pubsubpb.StreamingPullRequest) []string {
+func (s *Service) applyStreamAcks(ctx context.Context, queue string, eod bool, req *pubsubpb.StreamingPullRequest) []string {
 	reg := s.registry(queue)
+	var byID map[string]pubsubstore.Message
+	if eod {
+		byID = s.messageIndex(ctx, queue)
+	}
+	now := clock.Now()
 	var acked []string
 	for _, a := range req.GetAckIds() {
-		decoded, ok := decodeAckID(a)
-		if !ok {
-			continue
-		}
-		parts := strings.SplitN(decoded, "/", 2)
+		q, msgID, attempt, ok := pubsubstore.DecodeAckID(a)
 		// An ackId is valid only for the subscription that issued it.
-		if len(parts) != 2 || parts[0] != queue {
+		if !ok || q != queue {
 			continue
 		}
-		if err := s.messages.Delete(ctx, queue, parts[1]); err != nil {
+		// On an exactly-once subscription a superseded/expired id must not ack
+		// the live delivery. The streaming path does not populate
+		// acknowledge_confirmation.invalid_ack_ids (the official clients resolve
+		// the result from the unary RPC's ErrorInfo), so it drops the id instead
+		// of mutating state.
+		if eod {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, attempt, now) {
+				continue
+			}
+		}
+		if err := s.messages.Delete(ctx, queue, msgID); err != nil {
 			// Leave it untombstoned so a later retry can still ack it.
 			continue
 		}
-		reg.markAcked(parts[1])
-		acked = append(acked, parts[1])
+		reg.markAcked(msgID)
+		acked = append(acked, msgID)
 	}
 	return acked
 }
@@ -979,55 +988,76 @@ func (s *Service) dropAcked(ctx context.Context, queue string, reg *ackRegistry,
 // A deadline of 0 is a nack (immediately redeliverable), so those IDs are
 // returned for flow-control release; a positive extension keeps the message
 // outstanding.
-func (s *Service) applyStreamModifyDeadlines(ctx context.Context, queue string, req *pubsubpb.StreamingPullRequest) []string {
+func (s *Service) applyStreamModifyDeadlines(ctx context.Context, queue string, eod bool, req *pubsubpb.StreamingPullRequest) []string {
 	ackIDs := req.GetModifyDeadlineAckIds()
 	seconds := req.GetModifyDeadlineSeconds()
 	n := len(seconds)
 	if len(ackIDs) < n {
 		n = len(ackIDs)
 	}
+	var byID map[string]pubsubstore.Message
+	if eod {
+		byID = s.messageIndex(ctx, queue)
+	}
+	now := clock.Now()
 	var nacked []string
 	for i := 0; i < n; i++ {
-		decoded, ok := decodeAckID(ackIDs[i])
-		if !ok {
-			continue
-		}
-		parts := strings.SplitN(decoded, "/", 2)
+		q, msgID, attempt, ok := pubsubstore.DecodeAckID(ackIDs[i])
 		// An ackId is valid only for the subscription that issued it.
-		if len(parts) != 2 || parts[0] != queue {
+		if !ok || q != queue {
 			continue
 		}
-		_ = s.messages.ModifyAckDeadline(ctx, queue, []string{queue + "/" + parts[1]}, int(seconds[i]), clock.Now())
+		// As with applyStreamAcks, a superseded/expired id on an exactly-once
+		// subscription must not touch the live delivery.
+		if eod {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, attempt, now) {
+				continue
+			}
+		}
+		_ = s.messages.ModifyAckDeadline(ctx, queue, []string{queue + "/" + msgID}, int(seconds[i]), now)
 		if seconds[i] <= 0 {
-			nacked = append(nacked, parts[1])
+			nacked = append(nacked, msgID)
 		}
 	}
 	return nacked
 }
 
 func (s *Service) Acknowledge(ctx context.Context, req *pubsubpb.AcknowledgeRequest) (*emptypb.Empty, error) {
-	_, sub, named := splitSubscriptionName(req.GetSubscription())
+	project, sub, named := splitSubscriptionName(req.GetSubscription())
+	// Exactly-once delivery validates the ack ID's encoded version; a plain
+	// (or unresolvable) subscription keeps the lenient accept-anything path.
+	eod := named && s.subscriptionEODByName(ctx, project, sub)
+	now := clock.Now()
+	var byID map[string]pubsubstore.Message
+	if eod {
+		byID = s.messageIndex(ctx, sub)
+	}
+	var invalid []string
 	for _, a := range req.GetAckIds() {
-		decoded, ok := decodeAckID(a)
+		queue, msgID, attempt, ok := pubsubstore.DecodeAckID(a)
 		if !ok {
-			continue
-		}
-		parts := strings.SplitN(decoded, "/", 2)
-		if len(parts) != 2 {
 			continue
 		}
 		// An ackId is valid only for the subscription that issued it. When the
 		// request names a subscription, enforce that; otherwise trust the ackId.
-		if named && parts[0] != sub {
+		if named && queue != sub {
 			continue
 		}
-		queue := parts[0]
-		if err := s.messages.Delete(ctx, queue, parts[1]); err != nil {
+		if eod && queue == sub {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, attempt, now) {
+				invalid = append(invalid, a)
+				continue
+			}
+		}
+		if err := s.messages.Delete(ctx, queue, msgID); err != nil {
 			return nil, mapError(err)
 		}
 		// Tombstone in the shared subscription registry so an active
 		// StreamingPull on the same subscription drops its claimed copy.
-		s.registry(queue).markAcked(parts[1])
+		s.registry(queue).markAcked(msgID)
+	}
+	if len(invalid) > 0 {
+		return nil, mapError(eodAckFailure(invalid))
 	}
 	return &emptypb.Empty{}, nil
 }
@@ -1044,29 +1074,89 @@ func (s *Service) ModifyAckDeadline(ctx context.Context, req *pubsubpb.ModifyAck
 		}
 		return nil, mapError(err)
 	}
-	var meta map[string]any
-	json.Unmarshal(e.Data, &meta)
+	eod := subscriptionEOD(e)
 	// Proto ModifyAckDeadline: valid values are 0 to 600 seconds.
 	if v := req.GetAckDeadlineSeconds(); v < 0 || v > 600 {
 		return nil, mapError(model.NewProviderError("InvalidArgument", fmt.Sprintf("ackDeadlineSeconds must be between 0 and 600 (got %d)", v), 400))
 	}
-	decoded := make([]string, 0, len(req.GetAckIds()))
-	for _, id := range req.GetAckIds() {
-		d, ok := decodeAckID(id)
-		if !ok {
-			continue
-		}
-		// An ackId is valid only for the subscription that issued it.
-		parts := strings.SplitN(d, "/", 2)
-		if len(parts) != 2 || parts[0] != sub {
-			continue
-		}
-		decoded = append(decoded, sub+"/"+parts[1])
+	now := clock.Now()
+	var byID map[string]pubsubstore.Message
+	if eod {
+		byID = s.messageIndex(ctx, sub)
 	}
-	if err := s.messages.ModifyAckDeadline(ctx, sub, decoded, int(req.GetAckDeadlineSeconds()), clock.Now()); err != nil {
+	decoded := make([]string, 0, len(req.GetAckIds()))
+	var invalid []string
+	for _, id := range req.GetAckIds() {
+		queue, msgID, attempt, ok := pubsubstore.DecodeAckID(id)
+		// An ackId is valid only for the subscription that issued it.
+		if !ok || queue != sub {
+			continue
+		}
+		if eod {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, attempt, now) {
+				invalid = append(invalid, id)
+				continue
+			}
+		}
+		decoded = append(decoded, sub+"/"+msgID)
+	}
+	if err := s.messages.ModifyAckDeadline(ctx, sub, decoded, int(req.GetAckDeadlineSeconds()), now); err != nil {
 		return nil, mapError(err)
 	}
+	if len(invalid) > 0 {
+		return nil, mapError(eodAckFailure(invalid))
+	}
 	return &emptypb.Empty{}, nil
+}
+
+// subscriptionEOD reports whether a subscription resource has exactly-once
+// delivery enabled. It reads the stored metadata directly.
+func subscriptionEOD(e store.ResourceEntry) bool {
+	var meta map[string]any
+	if err := json.Unmarshal(e.Data, &meta); err != nil {
+		return false
+	}
+	eod, _ := meta["enableExactlyOnceDelivery"].(bool)
+	return eod
+}
+
+// subscriptionEODByName fetches a subscription's exactly-once flag. A fetch
+// failure (unknown subscription) is treated as non-exactly-once so the lenient
+// legacy ack path is preserved.
+func (s *Service) subscriptionEODByName(ctx context.Context, project, sub string) bool {
+	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtSubscription, sub)
+	if err != nil {
+		return false
+	}
+	return subscriptionEOD(e)
+}
+
+// messageIndex lists a queue's messages by ID for ack-ID validation. A store
+// error yields a nil index, so validation degrades to the lenient path.
+func (s *Service) messageIndex(ctx context.Context, queue string) map[string]pubsubstore.Message {
+	msgs, err := s.messages.List(ctx, queue)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]pubsubstore.Message, len(msgs))
+	for _, m := range msgs {
+		out[m.MessageID] = m
+	}
+	return out
+}
+
+// eodAckFailure builds real GCP's exactly-once invalid-ack-ID error: an
+// INVALID_ARGUMENT whose google.rpc.ErrorInfo detail maps each bad ack ID to
+// PERMANENT_FAILURE_INVALID_ACK_ID.
+func eodAckFailure(invalidAckIDs []string) *model.ProviderError {
+	perr := model.NewProviderError("InvalidArgument", pubsubstore.EODAckFailureMessage, 400)
+	perr.Details = []model.ErrorDetail{{
+		Type:     "google.rpc.ErrorInfo",
+		Reason:   pubsubstore.EODAckFailureReason,
+		Domain:   pubsubstore.EODAckFailureDomain,
+		Metadata: pubsubstore.EODAckFailureMetadata(invalidAckIDs),
+	}}
+	return perr
 }
 
 // filterMessages drops (and deletes) messages that do not match a
@@ -1982,21 +2072,11 @@ func toStrings(v any) []string {
 	return out
 }
 
-// ─── ack-id encoding (mirrors the REST provider's wire format) ────────────────
-
-// encodeAckID renders the opaque wire ackId: base64url of "topicID/messageID".
-func encodeAckID(topicID, messageID string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(topicID + "/" + messageID))
-}
-
-// decodeAckID reverses encodeAckID, returning "topicID/messageID".
-func decodeAckID(s string) (string, bool) {
-	raw, err := base64.RawURLEncoding.DecodeString(s)
-	if err != nil {
-		return "", false
-	}
-	return string(raw), true
-}
+// ─── ack-id encoding ─────────────────────────────────────────────────────────
+//
+// The ack-id wire format (base64url of "subscription/messageID/deliveryAttempt")
+// lives in the store package so the REST provider and this gRPC service share
+// one codec: pubsubstore.EncodeAckID / DecodeAckID.
 
 // topicRetention resolves a topic's messageRetentionDuration in seconds,
 // defaulting to GCP's 7-day default.

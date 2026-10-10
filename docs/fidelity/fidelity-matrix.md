@@ -12,8 +12,8 @@ Cells: **1115**
 
 | state | count |
 | --- | --- |
-| ga | 964 |
-| limited | 105 |
+| ga | 968 |
+| limited | 101 |
 | preview | 14 |
 | unsupported | 32 |
 
@@ -21,8 +21,8 @@ Cells: **1115**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 524 | 102 | 14 | 12 |
-| grpc | 440 | 3 | 0 | 20 |
+| rest | 526 | 100 | 14 | 12 |
+| grpc | 442 | 1 | 0 | 20 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
 
@@ -1031,11 +1031,11 @@ _5 cell(s): ga=5 limited=0 preview=0 unsupported=0_
 
 ## pubsub
 
-_46 cell(s): ga=42 limited=4 preview=0 unsupported=0_
+_46 cell(s): ga=46 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
-| Acknowledge | grpc | limited | yes | plain ack is verified against real GCP by the PSM1 differential oracle, but exactly-once acknowledgement-ID versioning is unimplemented (EOD1): the emulator returns OK for a superseded/expired ack id where real GCP returns INVALID_ARGUMENT on an exactly-once subscription |
+| Acknowledge | grpc | ga | yes | — |
 | CreateSnapshot | grpc | ga | yes | — |
 | CreateSubscription | grpc | ga | yes | — |
 | CreateTopic | grpc | ga | yes | — |
@@ -1051,16 +1051,16 @@ _46 cell(s): ga=42 limited=4 preview=0 unsupported=0_
 | ListTopicSnapshots | grpc | ga | yes | — |
 | ListTopicSubscriptions | grpc | ga | yes | — |
 | ListTopics | grpc | ga | yes | — |
-| ModifyAckDeadline | grpc | limited | yes | plain modify-ack-deadline is verified against real GCP by the PSM1 differential oracle, but exactly-once acknowledgement-ID versioning is unimplemented (EOD1): the emulator returns OK for a superseded/expired ack id where real GCP returns INVALID_ARGUMENT on an exactly-once subscription |
+| ModifyAckDeadline | grpc | ga | yes | — |
 | ModifyPushConfig | grpc | ga | yes | — |
-| PubSub.SubscriptionAcknowledge | rest | limited | yes | plain ack is verified against real GCP by the PSM1 differential oracle, but exactly-once acknowledgement-ID versioning is unimplemented (EOD1): the emulator returns OK for a superseded/expired ack id where real GCP returns INVALID_ARGUMENT on an exactly-once subscription |
+| PubSub.SubscriptionAcknowledge | rest | ga | yes | — |
 | PubSub.SubscriptionCreate | rest | ga | yes | — |
 | PubSub.SubscriptionDelete | rest | ga | yes | — |
 | PubSub.SubscriptionDetach | rest | ga | yes | — |
 | PubSub.SubscriptionGet | rest | ga | yes | — |
 | PubSub.SubscriptionGetIamPolicy | rest | ga | yes | — |
 | PubSub.SubscriptionList | rest | ga | yes | — |
-| PubSub.SubscriptionModifyAckDeadline | rest | limited | yes | plain modify-ack-deadline is verified against real GCP by the PSM1 differential oracle, but exactly-once acknowledgement-ID versioning is unimplemented (EOD1): the emulator returns OK for a superseded/expired ack id where real GCP returns INVALID_ARGUMENT on an exactly-once subscription |
+| PubSub.SubscriptionModifyAckDeadline | rest | ga | yes | — |
 | PubSub.SubscriptionPull | rest | ga | yes | — |
 | PubSub.SubscriptionSetIamPolicy | rest | ga | yes | — |
 | PubSub.SubscriptionTestIamPermissions | rest | ga | yes | — |
