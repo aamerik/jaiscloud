@@ -198,7 +198,14 @@ func (p *Provider) ListTasks(ctx context.Context, nr *model.NormalizedRequest) (
 }
 
 func (p *Provider) CreateTask(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	t, err := taskFromBody(bodyOf(nr))
+	body := bodyOf(nr)
+	// The v2 `CreateTask` request body is a CreateTaskRequest that wraps the
+	// task in a "task" field (the official REST client sends {"task": {...}});
+	// accept the flat task body too, which the emulator's own handlers use.
+	if inner, ok := body["task"].(map[string]any); ok {
+		body = inner
+	}
+	t, err := taskFromBody(body)
 	if err != nil {
 		return nil, err
 	}

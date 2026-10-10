@@ -138,6 +138,27 @@ func TestProviderQueueIAM(t *testing.T) {
 	}
 }
 
+// TestProviderCreateTaskWrappedBody covers the v2 CreateTaskRequest body shape:
+// the official REST client wraps the task in a "task" field.
+func TestProviderCreateTaskWrappedBody(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+	if _, err := p.CreateQueue(ctx, req(map[string]any{"project": "p", "location": "l", "body": queueBody()})); err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+	body := map[string]any{"task": map[string]any{
+		"name":        "projects/p/locations/l/queues/q1/tasks/wrapped",
+		"httpRequest": map[string]any{"url": "http://example.test/hook", "httpMethod": "POST"},
+	}}
+	created, err := p.CreateTask(ctx, req(map[string]any{"project": "p", "location": "l", "queue": "q1", "body": body}))
+	if err != nil {
+		t.Fatalf("CreateTask (wrapped): %v", err)
+	}
+	if name, _ := created.Data["name"].(string); name != "projects/p/locations/l/queues/q1/tasks/wrapped" {
+		t.Fatalf("name = %v", created.Data["name"])
+	}
+}
+
 func taskNameOf(t *testing.T, full string) string {
 	t.Helper()
 	_, _, _, id, ok := core.ParseTaskName(full)

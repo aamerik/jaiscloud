@@ -734,6 +734,8 @@ test-integration-gcp: build-gcp ## Run GCP integration + SDK suites against an e
 	  ( cd tests/integration/gcp/sdk-metastore && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
 	  ( cd tests/integration/gcp/sdk-managed-kafka && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... ); \
 	  ( cd tests/integration/gcp/sdk-clouddns && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-scheduler && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-tasks && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
 	  ( cd tests/integration/gcp/sdk-memorystore && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
 	  ( cd tests/integration/gcp/sdk-compute && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
 	  echo "Running gRPC SDK suites..."; \
