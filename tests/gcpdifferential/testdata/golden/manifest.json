@@ -1,7 +1,7 @@
 {
   "version": 1,
   "project": "<project>",
-  "ops": 181,
+  "ops": 204,
   "services": [
     "bigquery",
     "compute",
@@ -275,7 +275,7 @@
     {
       "file": "040-kms-cryptokeys_list.json",
       "op": "cryptokeys_list",
-      "sha256": "ed4c4b464f754c87abe0f06c233c44337b54b36ccdc2125820b9f94f1d76f3f5",
+      "sha256": "2e1539f8b4d8344fc14473912e7779a7cb3e4720b8715ce732f553e625cd5974",
       "status": 200
     },
     {
@@ -875,25 +875,25 @@
     {
       "file": "140-run-run_service_get.json",
       "op": "run_service_get",
-      "sha256": "ebe2e85c71d5f7f10a363d2a235f0330ff92bc2a2537a428155866b38da69d41",
+      "sha256": "bee92ca1b5896faa00e689d211499823d75323f6a6f71797232a17781293320d",
       "status": 200
     },
     {
       "file": "141-run-run_service_patch.json",
       "op": "run_service_patch",
-      "sha256": "4067b1739457960554298aa87725c89cebe389b8e021c2f7456dd271813a8a8e",
+      "sha256": "36cf21365a66c2c602aa5fad348e30d80ce821e8acf306f6638509542c29ef12",
       "status": 200
     },
     {
       "file": "142-run-run_service_patch_wait.json",
       "op": "run_service_patch_wait",
-      "sha256": "971e24d870be59b3ef427e228c35feda296a467e3adb44f4e6db88ce0aab5b97",
+      "sha256": "f434615bcf6a576972d184a3a666af58132283bb5295837a2b30c63e9ec06443",
       "status": 200
     },
     {
       "file": "143-run-run_service_get_after_patch.json",
       "op": "run_service_get_after_patch",
-      "sha256": "89784bb80ad89211ab982d83dfd703abc5e7b98aa19a1bd7149c95f9824359b5",
+      "sha256": "8e3c06773b80d6bc42e83a8d958fd19057fe2ea201a17a0ac82925ef69ffef19",
       "status": 200
     },
     {
@@ -911,7 +911,7 @@
     {
       "file": "146-eventarc-eventarc_trigger_get.json",
       "op": "eventarc_trigger_get",
-      "sha256": "99fe94477595331065227f1b62c9f7e24de6f29ceb2d0294367bf778fb163946",
+      "sha256": "9799a574ca2da0c73ceed28552b30c8fa2f336b2ee82b153760485f7bc7bf5f8",
       "status": 200
     },
     {
@@ -947,7 +947,7 @@
     {
       "file": "152-serviceusage-su_service_get_unknown.json",
       "op": "su_service_get_unknown",
-      "sha256": "72d6604abfb72a262d1aa54b0ff28a31abdbacf70a85b572b6cf2fd8ba9bab7b",
+      "sha256": "8e87c03bd97a9827142e5742f0185a91ff0a2beff67d828c97447b7fcece68b9",
       "status": 403
     },
     {
@@ -1117,7 +1117,144 @@
       "op": "eod_ack_latest",
       "sha256": "b1b56b3347dce44e4beb02ff03a5b447264904cc4a937f315523ad57edb9dc1a",
       "status": 200
+    },
+    {
+      "file": "181-pubsub-redel_topic_create.json",
+      "op": "redel_topic_create",
+      "sha256": "65311c0c9457c79e7cc9e994800ccfc75d5b8f22be9e7f4d185b8cc962ae1d54",
+      "status": 200
+    },
+    {
+      "file": "182-pubsub-redel_sub_create.json",
+      "op": "redel_sub_create",
+      "sha256": "324f76b85ab07969e5ee79c1d8f8aac30dd1c9155b38cec13b0c85b2a8e9a484",
+      "status": 200
+    },
+    {
+      "file": "183-pubsub-redel_publish_0.json",
+      "op": "redel_publish_0",
+      "sha256": "ed72ea8d4a9fd8ad7c58531029d5c380f501a76fc317af4864ceac669db57ce9",
+      "status": 200
+    },
+    {
+      "file": "184-pubsub-redel_publish_1.json",
+      "op": "redel_publish_1",
+      "sha256": "bb6f3994421e6c3b100491562f9cd8b2acf5ceaa02c75cc7359fcdfe924d1e6a",
+      "status": 200
+    },
+    {
+      "file": "185-pubsub-redel_publish_2.json",
+      "op": "redel_publish_2",
+      "sha256": "ece556c694d71c40d4fb112072cd9e110247aec2d5ed27b80bd419f45030a146",
+      "status": 200
+    },
+    {
+      "file": "186-pubsub-redel_pull.json",
+      "op": "redel_pull",
+      "sha256": "1ca7db54e4c41295cf2f05a3fe7472c1e336fc757f495da0e72f3fc3faf58b52",
+      "status": 200
+    },
+    {
+      "file": "187-pubsub-redel_ack_a.json",
+      "op": "redel_ack_a",
+      "sha256": "1c01c6641a180736bc8eb092d1dee35785ff1330a606f16c21f6976c1a130073",
+      "status": 200
+    },
+    {
+      "file": "188-pubsub-redel_ack_c.json",
+      "op": "redel_ack_c",
+      "sha256": "f027df936fe67cef98de4b55819afdf8f10b8c5735a3c7127aad5bbd65d8ca9f",
+      "status": 200
+    },
+    {
+      "file": "189-pubsub-redel_nack_b.json",
+      "op": "redel_nack_b",
+      "sha256": "9d1929ce7880a2810ef403627e3c5a3ae5659e941dcbb7c555331464cd87819f",
+      "status": 200
+    },
+    {
+      "file": "190-pubsub-redel_repull.json",
+      "op": "redel_repull",
+      "sha256": "3c9ec4727f8a7e47fac1da125ea219fecf80d2d0378c43b585c221affa28e53a",
+      "status": 200
+    },
+    {
+      "file": "191-pubsub-redel_ack_b.json",
+      "op": "redel_ack_b",
+      "sha256": "08fa0aa1b47455afdd9b44b7207f3dfaa4893354505ac93e15fbe1136467aca6",
+      "status": 200
+    },
+    {
+      "file": "192-pubsub-redel_ack_c2.json",
+      "op": "redel_ack_c2",
+      "sha256": "2b5f3e5c7a08f37d4c71d212137d9e1ba4b5fa5c266b23bd4339b4cb206e7bf5",
+      "status": 200
+    },
+    {
+      "file": "193-pubsub-redel_repull_empty.json",
+      "op": "redel_repull_empty",
+      "sha256": "098ac63c1e30c942aa1b67ef53adb298cb78ec27c69bc23aef9df1488c6269d0",
+      "status": 200
+    },
+    {
+      "file": "194-pubsub-redel2_topic_create.json",
+      "op": "redel2_topic_create",
+      "sha256": "2006ca607a5737dabe0f637846925daf72ce5bb6bfc6387b7884ceb0650c61e5",
+      "status": 200
+    },
+    {
+      "file": "195-pubsub-redel2_sub_create.json",
+      "op": "redel2_sub_create",
+      "sha256": "daff2f6ba9b77a61c80fb182a0e4650cc113aacb4aac0c1b05e26bf205e1d5f9",
+      "status": 200
+    },
+    {
+      "file": "196-pubsub-redel2_publish_0.json",
+      "op": "redel2_publish_0",
+      "sha256": "839e90278e36bc280e84808c5dc457f9022c174362783120d1df306e1e4a9cdf",
+      "status": 200
+    },
+    {
+      "file": "197-pubsub-redel2_publish_1.json",
+      "op": "redel2_publish_1",
+      "sha256": "c67989e1712778ba58bd516135c32cfb12925cf44d327c6b8e196fd83e2c12cc",
+      "status": 200
+    },
+    {
+      "file": "198-pubsub-redel2_publish_2.json",
+      "op": "redel2_publish_2",
+      "sha256": "77e88da261b38264f7abe073c91eb4c7e4c9a5836ae855b4e18c8297cf8fce8b",
+      "status": 200
+    },
+    {
+      "file": "199-pubsub-redel2_pull.json",
+      "op": "redel2_pull",
+      "sha256": "6b0ceba2f7fa78bbf5b501e52681e57faad7f22dce6254dfe2d0b6a69f478698",
+      "status": 200
+    },
+    {
+      "file": "200-pubsub-redel2_ack_a.json",
+      "op": "redel2_ack_a",
+      "sha256": "caac652d9a1d87319de491aff643c05c6409318721ab7d1a90fd2579cb342c5a",
+      "status": 200
+    },
+    {
+      "file": "201-pubsub-redel2_ack_c.json",
+      "op": "redel2_ack_c",
+      "sha256": "294b7e051bdbf1c986851adf7aeb3b2eab06bec1273b4ee6a2c08897faf4e855",
+      "status": 200
+    },
+    {
+      "file": "202-pubsub-redel2_ack_b.json",
+      "op": "redel2_ack_b",
+      "sha256": "d4722c87308b4d0a34f52de6e21351f37acb5eb129f58445769189b3e12618eb",
+      "status": 200
+    },
+    {
+      "file": "203-pubsub-redel2_repull_empty.json",
+      "op": "redel2_repull_empty",
+      "sha256": "54c6539f72bde564f1faea5b9f0f5879c0ef4eb231a6e2a6e01303dd5ae2e40b",
+      "status": 200
     }
   ]
 }
-

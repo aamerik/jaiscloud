@@ -229,6 +229,15 @@ start, so a mid-stream fault is not reachable here.
 | `pubsub_ack_deadline` | unacked message redelivered after the ack deadline; ack stops it | `redelivered=yes` |
 | `pubsub_ack_extension` | `ModifyAckDeadline(600s)` keeps it invisible past the original 10s | `no_redelivery_while_extended=yes` |
 | `pubsub_ordering_keys` | a subscription with ordering enabled delivers a key's messages in order | `ordered=yes` |
+
+> **Ordering contract.** The tour asserts only in-order delivery. The full real-GCP
+> ordered-delivery contract is modelled in the emulator and recorded by the
+> differential oracle (`tests/gcpdifferential`, `redel_*`): a key's available
+> messages are returned together, a key with an outstanding batch is withheld, a
+> later ack is held until earlier messages for the key are acked, and a nack
+> redelivers the message and all subsequent messages for the key (see
+> `README-GCP.md` §Cloud Pub/Sub deviations). The tour scenario is not yet
+> extended to exercise the redelivery fan-out; that follow-up is tracked as PSM4.
 | `pubsub_exactly_once_ack` | an acked message on an exactly-once subscription is not redelivered | `dup=0` |
 | `firestore_listen_resume_token` | resuming Listen from a token loses nothing and duplicates nothing | `loss=0,dup=0` |
 | `firestore_snapshot_consistency` | concurrent writes delivered once each with monotonic `read_time` | `docs=5,dup=0,monotonic=yes` |
