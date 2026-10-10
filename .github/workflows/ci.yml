@@ -178,6 +178,9 @@ jobs:
       - name: Run GCP dev-tool tests
         run: go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/...
 
+      - name: Behavioral-coverage gate (every `ga` service has a suite or reasoned exemption)
+        run: make gcp-status-behavioral-gate
+
       - name: Run GCP convention lint
         run: go run ./tools/lint/gcplint ./internal/gcp/... ./cmd/jaiscloud-gcp
 

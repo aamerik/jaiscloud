@@ -1,0 +1,48 @@
+# Behavioral-suite DoD exemptions (GTC9).
+#
+# The behavioral-coverage gate (`make gcp-status-behavioral-gate`,
+# `bin/gcpstatus -coverage-gate`) requires every `ga` service to be exercised by
+# an official-client suite under tests/integration/gcp, or to appear here with a
+# reason. The inventory itself is derived (registry + fidelity matrix + test
+# tree); this file is only the reasoned-exemption overlay.
+#
+# Fields:
+#   service: required — a service named by the derived inventory (registry or
+#            matrix name; aliases like redis->memorystore resolve).
+#   reason:  required — why no dedicated tests/integration/gcp suite is needed.
+#
+# A typo'd service fails the gate (an exemption must never silently swallow a
+# real gap). Add a suite or a reasoned entry here; do not leave a `ga` service
+# uncovered.
+
+exemptions:
+  - service: firestoreadmin
+    reason: >-
+      gRPC-only wire service (google.firestore.admin.v1.FirestoreAdmin) whose
+      control plane — databases, composite indexes, fields, backup schedules,
+      backups, user credentials — is the same transport-neutral core served over
+      REST under the `firestore` descriptor. The `firestore` behavioral suite
+      (tests/integration/gcp/sdk-firestore + sdk-rest) drives that core, and the
+      Firestore Admin client is fully exercised by the gRPC message-level
+      conformance suite (27/27 checks). A dedicated sdk-firestoreadmin module
+      would duplicate the same core with no added behavioral depth.
+
+  - service: iamcredentials
+    reason: >-
+      The iamcredentials surface (generateAccessToken, generateIdToken, signBlob,
+      signJwt) is stateless token minting with no resource lifecycle to drive; it
+      is exercised by the IAM suite in tests/integration/gcp/sdk-rest and the
+      gRPC message-level conformance suite (4/4 checks). A dedicated behavioral
+      module would re-assert the same calls with no create/read/list/delete
+      lifecycle to cover.
+
+  - service: run
+    reason: >-
+      Cloud Run's behavioral lifecycle is proven by the executor-backed e2e
+      gates under tests/persistent_mode/gcp/cloudrun (`make
+      test-e2e-cloudrun-k8s` on k3d and `make test-e2e-cloudrun-docker` on the
+      local daemon), which need a real K8s/Docker backend and are intentionally
+      outside tests/integration/gcp (that harness boots the emulator with no
+      executor). Cloud Run is wire-gated by the REST wire-conformance and gRPC
+      conformance suites, and its data plane by the k3d gate asserted in
+      docs/GA.md.

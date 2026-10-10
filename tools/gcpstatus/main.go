@@ -226,7 +226,9 @@ func main() {
 	check := flag.Bool("check", false, "with -query/-service, exit 2 if already done, 3 if in flight")
 	audit := flag.Bool("audit", false, "print the audit classification of not-done items")
 	coverage := flag.Bool("coverage", false, "report per-doc coverage and fail if any doc has status markers but no rows")
-	coverageInventory := flag.Bool("coverage-inventory", false, "print the derived per-service behavioral-coverage inventory (report-only)")
+	coverageInventory := flag.Bool("coverage-inventory", false, "print the derived per-service behavioral-coverage inventory")
+	coverageGate := flag.Bool("coverage-gate", false, "fail if a `ga` service has no official-client behavioral suite and no reasoned exemption")
+	coverageExemptions := flag.String("coverage-exemptions", defaultCoverageExemptionsPath, "reasoned-exemption list for the behavioral-coverage gate ('' to disable)")
 	evidence := flag.Bool("evidence", false, "report per-operation conformance evidence from the fidelity matrix (verified vs unverified)")
 	next := flag.Bool("next", false, "print the next actionable items in priority order")
 	nextN := flag.Int("n", 5, "number of items for -next")
@@ -267,14 +269,22 @@ func main() {
 	if *matrixDiff != "" {
 		os.Exit(runMatrixDiff(*matrixDiff, *matrixPath))
 	}
+	if *coverageGate {
+		os.Exit(runCoverageGate(*matrixPath, gcpTestRoot, *coverageExemptions))
+	}
 	if *coverageInventory {
 		rows, err := gatherCoverage(*matrixPath, gcpTestRoot)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "gcpstatus: coverage inventory: %v\n", err)
 			os.Exit(1)
 		}
+		exemptions, err := loadCoverageExemptions(*coverageExemptions, rows)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "gcpstatus: coverage inventory: %v\n", err)
+			os.Exit(1)
+		}
 		var b strings.Builder
-		renderCoverageSection(&b, rows)
+		renderCoverageSection(&b, rows, exemptions)
 		fmt.Print(b.String())
 		return
 	}
@@ -321,9 +331,11 @@ func main() {
 	if *query != "" || *service != "" {
 		os.Exit(runQuery(items, *query, *service, *check))
 	}
-	// Derived, report-only: the per-service behavioral-coverage inventory. A
-	// missing matrix/tree just omits the section; it never fails the build.
+	// Derived: the per-service behavioral-coverage inventory. A missing
+	// matrix/tree just omits the section; it never fails the build (the gate is
+	// -coverage-gate / `make gcp-status-behavioral-gate`).
 	coverageRows, _ := gatherCoverage(*matrixPath, gcpTestRoot)
+	coverageExempt, _ := loadCoverageExemptions(*coverageExemptions, coverageRows)
 
 	if *jsonOut != "" {
 		if err := writeJSON(*jsonOut, items); err != nil {
@@ -332,7 +344,7 @@ func main() {
 		}
 	}
 	if *out != "" {
-		if err := writeMarkdown(*out, items, coverageRows); err != nil {
+		if err := writeMarkdown(*out, items, coverageRows, coverageExempt); err != nil {
 			fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
 			os.Exit(1)
 		}
@@ -1887,6 +1899,51 @@ func runCoverage(root string, includeArchive bool, items []*Item) int {
 	return 0
 }
 
+// runCoverageGate enforces the behavioral-suite Definition of Done: every `ga`
+// service must be exercised by an official-client suite in tests/integration/gcp
+// or carry a reasoned exemption. Exit 1 on any violation (the CI gate).
+func runCoverageGate(matrixPath, testRoot, exemptionsPath string) int {
+	rows, err := gatherCoverage(matrixPath, testRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gcpstatus: coverage gate: %v\n", err)
+		return 1
+	}
+	// An explicit (non-empty) exemption path must exist: a wrong path would
+	// otherwise disable every exemption and mask the configuration mistake.
+	if strings.TrimSpace(exemptionsPath) != "" {
+		if _, err := os.Stat(exemptionsPath); err != nil {
+			fmt.Fprintf(os.Stderr, "gcpstatus: coverage gate: %v\n", err)
+			return 1
+		}
+	}
+	exemptions, err := loadCoverageExemptions(exemptionsPath, rows)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gcpstatus: coverage gate: %v\n", err)
+		return 1
+	}
+	covered, total := gaCoverageTotals(rows)
+	violations := coverageGateViolations(rows, exemptions)
+	fmt.Printf("gcp-status behavioral gate: %d/%d `ga` services have an official-client suite", covered, total)
+	if len(exemptions) > 0 {
+		fmt.Printf("; %d reasoned exemption(s)", len(exemptions))
+	}
+	fmt.Println()
+	if len(violations) > 0 {
+		fmt.Printf("\n=> %d `ga` service(s) have no behavioral suite and no reasoned exemption:\n", len(violations))
+		for _, svc := range violations {
+			fmt.Printf("  - %s\n", svc)
+		}
+		if strings.TrimSpace(exemptionsPath) != "" {
+			fmt.Printf("\nAdd a tests/integration/gcp official-client suite, or a reasoned exemption in %s.\n", exemptionsPath)
+		} else {
+			fmt.Println("\nAdd a tests/integration/gcp official-client suite for each service.")
+		}
+		return 1
+	}
+	fmt.Println("=> every `ga` service has an official-client behavioral suite or a reasoned exemption.")
+	return 0
+}
+
 // runLintPlans fails if any plan-shaped doc produced no ledger rows — i.e. it
 // skipped (or malformed) the wave-plan template index/detail tables.
 func runLintPlans(root string, includeArchive bool, items []*Item) int {
@@ -2215,7 +2272,7 @@ func writeJSON(path string, items []*Item) error {
 	return os.WriteFile(path, append(b, '\n'), 0o644)
 }
 
-func writeMarkdown(path string, items []*Item, coverage []coverageRow) error {
+func writeMarkdown(path string, items []*Item, coverage []coverageRow, coverageExempt map[string]string) error {
 	counts := classCounts(items)
 	var backlog, prs, matrix []*Item
 	for _, it := range items {
@@ -2294,7 +2351,7 @@ func writeMarkdown(path string, items []*Item, coverage []coverageRow) error {
 		}
 		b.WriteString("\n")
 	}
-	renderCoverageSection(&b, coverage)
+	renderCoverageSection(&b, coverage, coverageExempt)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -2334,9 +2391,9 @@ func printSummary(items []*Item, out, jsonOut, matrixPath string, coverage []cov
 	}
 	if len(coverage) > 0 {
 		gaCovered, gaTotal := gaCoverageTotals(coverage)
-		fmt.Printf("  behavioral coverage (report-only): %d/%d ga services have a real-client suite\n", gaCovered, gaTotal)
+		fmt.Printf("  behavioral coverage: %d/%d ga services have a real-client suite (gate: make gcp-status-behavioral-gate)\n", gaCovered, gaTotal)
 		if uncovered := uncoveredGAServices(coverage); len(uncovered) > 0 {
-			fmt.Printf("    uncovered ga services: %s\n", strings.Join(uncovered, ", "))
+			fmt.Printf("    ga services without a suite: %s (exempt or gate violations)\n", strings.Join(uncovered, ", "))
 		}
 	}
 	if out != "" {

@@ -157,7 +157,7 @@ The real jobs in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) and w
 
 | job | what it proves |
 | --- | --- |
-| `test-gcp-unit` | race-tested unit tests for `internal/gcp/...` plus the shared Spark/K8s/platform/executor packages (no services required) |
+| `test-gcp-unit` | race-tested unit tests for `internal/gcp/...` plus the shared Spark/K8s/platform/executor packages, the `tools/gcpstatus` dev-tool tests, and the **behavioural-coverage gate** (`make gcp-status-behavioral-gate` — every `ga` service has an official-client suite or a reasoned exemption) (no services required) |
 | `test-gcp-integration` | builds and boots the binary (REST `:8080`, gRPC `:8081`), then runs the raw-HTTP integration suite and **18** official-SDK test modules |
 | `test-gcp-conformance` | records a fresh wire transcript, validates every response (and the error envelope) against the Discovery schemas — failing on any high-severity divergence — runs the gRPC message-level suite, the REST↔gRPC cross-transport parity suite, and the gcloud CLI suite, and fails if the fidelity matrix is stale |
 | `test-gcp-persistence` | with a Postgres service container, runs the `gcp_persistence` suite proving state survives process restarts |
@@ -165,7 +165,13 @@ The real jobs in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) and w
 | `docker-build` | the shared `Dockerfile` builds for `linux/amd64` (no push) |
 
 The conformance job is the wire-contract gate; integration and persistence prove the client
-surface and durability.
+surface and durability. The behavioural-coverage gate (in `test-gcp-unit`) is the
+**behavioural-depth** gate: it derives `service → suite → transport` from the registry +
+fidelity matrix + `tests/integration/gcp` tree and fails if any `ga` service has no
+official-client suite and no reasoned exemption (`docs/gcpstatus-coverage-exemptions.yaml`).
+The committed per-service map lives in
+[`docs/GCP-TESTABILITY.md` §9](GCP-TESTABILITY.md#9-behavioural-suite-contract--the-ga-definition-of-done-gated).
+`make test-all-gcp` aggregates it with unit + integration + conformance (`ga-check`) + persistence.
 
 ---
 

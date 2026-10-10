@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -237,5 +238,118 @@ func TestKmsAndStorage(t *testing.T) {}
 	}
 	if f, ok := got["sdk-rest"]; !ok || f.Funcs != 1 || !f.Services["storage"] || !f.Services["kms"] {
 		t.Fatalf("sdk-rest = %+v, want 1 func on storage+kms", f)
+	}
+}
+
+// ─── behavioral-coverage gate (GTC9) ─────────────────────────────────────────
+
+func TestCoverageGateViolations(t *testing.T) {
+	facts := map[string]matrixServiceFacts{
+		"storage":   {transports: map[string]bool{"rest": true, "grpc": true}, ga: 57, total: 57},
+		"scheduler": {transports: map[string]bool{"rest": true, "grpc": true}, ga: 16, total: 16},
+		"container": {transports: map[string]bool{"rest": true, "grpc": true}, ga: 58, total: 66},
+		"run":       {transports: map[string]bool{"rest": true, "grpc": true}, ga: 28, total: 28},
+		"bigquery":  {transports: map[string]bool{"rest": true}, ga: 0, total: 25},
+		"iceberg":   {transports: map[string]bool{"rest": true}, ga: 0, total: 14, preview: true},
+	}
+	files := []coverageTestFile{
+		{Suite: "sdk", Services: map[string]bool{"storage": true}, Funcs: 3},
+	}
+	rows := buildCoverage([]string{"storage", "scheduler", "container", "run", "bigquery", "iceberg"}, facts, files)
+
+	// A ga service with no suite and no exemption is a violation (seeded negative);
+	// a covered ga service and non-ga services are not.
+	got := coverageGateViolations(rows, nil)
+	if want := []string{"container", "run", "scheduler"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("coverageGateViolations = %v, want %v", got, want)
+	}
+
+	// A reasoned exemption clears the violation for that service only.
+	got = coverageGateViolations(rows, map[string]string{"run": "covered by e2e gates"})
+	if want := []string{"container", "scheduler"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("coverageGateViolations with exemption = %v, want %v", got, want)
+	}
+
+	// Exempting every uncovered ga service clears the gate.
+	got = coverageGateViolations(rows, map[string]string{"run": "r", "container": "r", "scheduler": "r"})
+	if len(got) != 0 {
+		t.Fatalf("coverageGateViolations with all exemptions = %v, want none", got)
+	}
+}
+
+func TestLoadCoverageExemptions(t *testing.T) {
+	// `run` and `dns` (alias -> clouddns) are uncovered `ga` gaps; `storage` is a
+	// covered `ga` service and `bigquery` is non-ga, so neither may be exempted.
+	rows := []coverageRow{
+		{Service: "run", Canonical: "run", GA: true},
+		{Service: "dns", Canonical: "clouddns", GA: true},
+		{Service: "storage", Canonical: "storage", GA: true, Covered: true},
+		{Service: "bigquery", Canonical: "bigquery"},
+	}
+
+	// Empty path and a missing file both disable exemptions (no error).
+	if got, err := loadCoverageExemptions("", rows); err != nil || len(got) != 0 {
+		t.Fatalf("empty path = %v, %v; want no exemptions", got, err)
+	}
+	if got, err := loadCoverageExemptions(filepath.Join(t.TempDir(), "nope.yaml"), rows); err != nil || len(got) != 0 {
+		t.Fatalf("missing file = %v, %v; want no exemptions", got, err)
+	}
+
+	write := func(body string) string {
+		p := filepath.Join(t.TempDir(), "exemptions.yaml")
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	// Valid entries resolve by canonical name (aliases included).
+	got, err := loadCoverageExemptions(write("exemptions:\n  - service: run\n    reason: e2e gates\n  - service: dns\n    reason: metadata only\n"), rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["run"] != "e2e gates" || got["clouddns"] != "metadata only" {
+		t.Fatalf("loadCoverageExemptions = %v, want run+clouddns", got)
+	}
+
+	for _, tc := range []struct {
+		name, body string
+	}{
+		{"unknown service", "exemptions:\n  - service: rnu\n    reason: typo\n"},
+		{"missing reason", "exemptions:\n  - service: run\n"},
+		{"empty service", "exemptions:\n  - reason: only a reason\n"},
+		{"stale: covered ga service", "exemptions:\n  - service: storage\n    reason: stale\n"},
+		{"not ga", "exemptions:\n  - service: bigquery\n    reason: not a gap\n"},
+		{"duplicate", "exemptions:\n  - service: run\n    reason: a\n  - service: run\n    reason: b\n"},
+		{"malformed yaml", "exemptions: [oops\n"},
+	} {
+		if _, err := loadCoverageExemptions(write(tc.body), rows); err == nil {
+			t.Errorf("%s: want error, got nil", tc.name)
+		}
+	}
+}
+
+func TestRenderCoverageSectionClassification(t *testing.T) {
+	rows := buildCoverage(
+		[]string{"storage", "run", "scheduler"},
+		map[string]matrixServiceFacts{
+			"storage":   {transports: map[string]bool{"rest": true}, ga: 57, total: 57},
+			"run":       {transports: map[string]bool{"grpc": true}, ga: 28, total: 28},
+			"scheduler": {transports: map[string]bool{"rest": true}, ga: 16, total: 16},
+		},
+		[]coverageTestFile{{Suite: "sdk", Services: map[string]bool{"storage": true}, Funcs: 1}},
+	)
+	var b strings.Builder
+	renderCoverageSection(&b, rows, map[string]string{"run": "e2e gates"})
+	out := b.String()
+	for _, want := range []string{"| storage | storage | rest | ga | 57/57 | sdk | 1 | yes |",
+		"| run | run | grpc | ga | 28/28 | — | 0 | exempt |",
+		"| scheduler | scheduler | rest | ga | 16/16 | — | 0 | **no** |"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("renderCoverageSection missing row %q\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, "Gate violations") {
+		t.Errorf("renderCoverageSection should flag the non-exempt gap\n%s", out)
 	}
 }

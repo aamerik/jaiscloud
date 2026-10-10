@@ -12,8 +12,8 @@
 //
 // The contract it measures is the behavioral-suite Definition of Done: every
 // `ga` service has at least one official-client behavioral suite (or a reasoned
-// exemption in the gate). It is report-only here; GTC9 (W4.1) promotes it to a
-// hard gate.
+// exemption). GTC9 (W4.1) promotes it to a hard gate (`-coverage-gate`, run by
+// `make gcp-status-behavioral-gate` and CI).
 package main
 
 import (
@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 
+	"gopkg.in/yaml.v3"
 	gcpadapter "jaiscloud/internal/gcp/adapter"
 )
 
@@ -173,11 +174,94 @@ type coverageRow struct {
 }
 
 // uncoveredGAServices returns the services that are `ga` but have no official-client
-// behavioral suite — the report-only DoD violations.
+// behavioral suite — the DoD violations ignored by the gate only when a
+// reasoned exemption names them.
 func uncoveredGAServices(rows []coverageRow) []string {
 	var out []string
 	for _, r := range rows {
 		if r.GA && !r.Covered {
+			out = append(out, r.Service)
+		}
+	}
+	return out
+}
+
+// defaultCoverageExemptionsPath is the committed reasoned-exemption list: the
+// `ga` services that deliberately ship without a tests/integration/gcp
+// official-client suite. Same shape (a service -> reason overlay) as the ledger's
+// own docs/gcpstatus-resolved.yaml; the conformance-owned
+// tests/gcpconformance/testdata/coverage-exemptions.json is a different,
+// operation-level list.
+const defaultCoverageExemptionsPath = "docs/gcpstatus-coverage-exemptions.yaml"
+
+// coverageExemption is one reasoned exemption from the behavioral-suite DoD.
+type coverageExemption struct {
+	Service string `yaml:"service"`
+	Reason  string `yaml:"reason"`
+}
+
+// coverageExemptionsFile is the committed exemption list.
+type coverageExemptionsFile struct {
+	Exemptions []coverageExemption `yaml:"exemptions"`
+}
+
+// loadCoverageExemptions reads the reasoned-exemption list, keyed by canonical
+// service name. An empty path (or a missing file) yields no exemptions. Every
+// entry must carry both a service and a reason, the service must resolve to a
+// known inventory row, and it must currently be an **uncovered `ga`** service —
+// so a typo, a duplicate, or a stale exemption (its suite has landed) fails
+// loud instead of silently suppressing or inflating the record.
+func loadCoverageExemptions(path string, rows []coverageRow) (map[string]string, error) {
+	out := map[string]string{}
+	if strings.TrimSpace(path) == "" {
+		return out, nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return nil, err
+	}
+	var f coverageExemptionsFile
+	if err := yaml.Unmarshal(b, &f); err != nil {
+		return nil, fmt.Errorf("coverage exemptions %s: %w", path, err)
+	}
+	known := map[string]bool{}
+	gaps := map[string]bool{}
+	for _, r := range rows {
+		canon := canonicalService(r.Service)
+		known[canon] = true
+		if r.GA && !r.Covered {
+			gaps[canon] = true
+		}
+	}
+	for i, e := range f.Exemptions {
+		if strings.TrimSpace(e.Service) == "" || strings.TrimSpace(e.Reason) == "" {
+			return nil, fmt.Errorf("coverage exemptions %s: entry %d needs a non-empty service and reason", path, i+1)
+		}
+		svc := canonicalService(e.Service)
+		if !known[svc] {
+			return nil, fmt.Errorf("coverage exemptions %s: entry %d names unknown service %q", path, i+1, e.Service)
+		}
+		if !gaps[svc] {
+			return nil, fmt.Errorf("coverage exemptions %s: entry %d exempts %q, which is not an uncovered `ga` service — remove the stale exemption", path, i+1, e.Service)
+		}
+		if _, dup := out[svc]; dup {
+			return nil, fmt.Errorf("coverage exemptions %s: entry %d duplicates service %q", path, i+1, e.Service)
+		}
+		out[svc] = e.Reason
+	}
+	return out, nil
+}
+
+// coverageGateViolations returns the `ga` services that have no official-client
+// behavioral suite and no reasoned exemption — the DoD gate failures. It is
+// pure so the gate is unit-testable with synthetic rows, and deterministic.
+func coverageGateViolations(rows []coverageRow, exemptions map[string]string) []string {
+	var out []string
+	for _, r := range rows {
+		if r.GA && !r.Covered && exemptions[canonicalService(r.Service)] == "" {
 			out = append(out, r.Service)
 		}
 	}
@@ -401,26 +485,32 @@ func gatherCoverage(matrixPath, testRoot string) ([]coverageRow, error) {
 
 // renderCoverageSection writes the derived behavioral-coverage section (used by
 // the STATUS.md ledger output and the -coverage-inventory report).
-func renderCoverageSection(b *strings.Builder, rows []coverageRow) {
+func renderCoverageSection(b *strings.Builder, rows []coverageRow, exemptions map[string]string) {
 	if len(rows) == 0 {
 		return
 	}
 	gaCovered, gaTotal := gaCoverageTotals(rows)
-	uncovered := uncoveredGAServices(rows)
+	violations := coverageGateViolations(rows, exemptions)
 
-	fmt.Fprintf(b, "## Behavioral coverage — registry service → suite (report-only) (%d)\n\n", len(rows))
+	fmt.Fprintf(b, "## Behavioral coverage — registry service → suite (%d)\n\n", len(rows))
 	fmt.Fprintf(b, "> Derived from the service registry (`internal/gcp/adapter`) + the fidelity matrix\n")
 	fmt.Fprintf(b, "> (`%s`) + the `tests/integration/gcp/**` test tree. DoD: every `ga` service\n", defaultMatrixPath)
-	fmt.Fprintf(b, "> needs ≥1 **official-client** behavioral suite (or a reasoned exemption). **Report-only**;\n")
-	fmt.Fprintf(b, "> GTC9 (W4.1) promotes it to a gate. Raw-REST probes that drive no official client (e.g.\n")
-	fmt.Fprintf(b, "> `serviceusage` in `lro_async_test.go`) intentionally do not satisfy the DoD.\n")
+	fmt.Fprintf(b, "> needs ≥1 **official-client** behavioral suite or a reasoned exemption. **Gated** by\n")
+	fmt.Fprintf(b, "> `make gcp-status-behavioral-gate` (CI); a service with neither fails.\n")
+	fmt.Fprintf(b, "> Raw-REST probes that drive no official client (e.g. `serviceusage` in\n")
+	fmt.Fprintf(b, "> `lro_async_test.go`) do not satisfy the DoD.\n")
 	fmt.Fprintf(b, ">\n> `ga` = the raw matrix rule: ≥1 `ga` cell and no `preview` cell (a deliberately mechanical,\n")
 	fmt.Fprintf(b, "> override-free reading of the per-operation states in `docs/GA.md`, not the curated\n")
 	fmt.Fprintf(b, "> GCP-TESTABILITY §2 tier). `limited`-only services (`bigquery`, `compute`, `clouddns`,\n")
 	fmt.Fprintf(b, "> `cloudsql`, `memorystore`) and `preview` services (`iceberg`) are exempt.\n")
-	fmt.Fprintf(b, "> `%d/%d` `ga` services have a suite.\n", gaCovered, gaTotal)
-	if len(uncovered) > 0 {
-		fmt.Fprintf(b, ">\n> **Uncovered `ga` services (%d): %s**\n", len(uncovered), strings.Join(uncovered, ", "))
+	fmt.Fprintf(b, "> `%d/%d` `ga` services have a suite", gaCovered, gaTotal)
+	if len(exemptions) > 0 {
+		fmt.Fprintf(b, "; %d carry a reasoned exemption", len(exemptions))
+	}
+	fmt.Fprintf(b, ".\n")
+	if len(violations) > 0 {
+		fmt.Fprintf(b, ">\n> **Gate violations — `ga` services with no suite and no exemption (%d): %s**\n",
+			len(violations), strings.Join(violations, ", "))
 	}
 	b.WriteString("\n")
 	fmt.Fprintf(b, "| service | canonical | transports | ga? | ga/total | suite(s) | funcs | covered |\n")
@@ -440,7 +530,14 @@ func renderCoverageSection(b *strings.Builder, rows []coverageRow) {
 		}
 		cov := "yes"
 		if !r.Covered {
-			cov = "**no**"
+			switch {
+			case r.GA && exemptions[canonicalService(r.Service)] != "":
+				cov = "exempt"
+			case r.GA:
+				cov = "**no**"
+			default:
+				cov = "n/a"
+			}
 		}
 		fmt.Fprintf(b, "| %s | %s | %s | %s | %s | %s | %d | %s |\n",
 			esc(r.Service), esc(r.Canonical), esc(strings.Join(r.Transports, ", ")), ga, ratio, esc(suites), r.Funcs, cov)

@@ -330,10 +330,11 @@ in production packages.
 
 ---
 
-## 9. Behavioural-suite contract — the `ga` Definition of Done (report-only)
+## 9. Behavioural-suite contract — the `ga` Definition of Done (gated)
 
 **The contract.** Every **`ga` service** must be exercised by **at least one
-official-client behavioural suite**, or carry a reasoned exemption in the gate.
+official-client behavioural suite**, or carry a **reasoned exemption** in
+[`docs/gcpstatus-coverage-exemptions.yaml`](gcpstatus-coverage-exemptions.yaml).
 This is the behavioural-depth counterpart to the wire-shape layers in §1–§5: the
 conformance / differential / parity harnesses prove the *shape* (the emulator
 answers like real GCP), while this proves an official client can drive a
@@ -362,6 +363,14 @@ answers like real GCP), while this proves an official client can drive a
   A dedicated `sdk-<service>` module is the canonical form; a generic suite
   (`sdk`, `sdk-rest`, `sdk-gcs-grpc`) that imports a service's official client
   and drives it counts too.
+- **A reasoned exemption** = an entry in
+  [`docs/gcpstatus-coverage-exemptions.yaml`](gcpstatus-coverage-exemptions.yaml)
+  naming the service and *why* no `tests/integration/gcp` module is warranted —
+  a stateless surface already covered by the IAM + conformance suites
+  (`iamcredentials`), a gRPC-only wire service whose core a sibling suite drives
+  (`firestoreadmin`), or an executor-backed service whose lifecycle the
+  k3d/Docker e2e gates prove (`run`). The gate accepts a service with either a
+  suite **or** an exemption; a typo'd/unknown exempt service fails loud.
 
 **How it is measured — derived, never hand-written.** `tools/gcpstatus` joins
 three independent sources — the service registry (`internal/gcp/adapter`), the
@@ -371,22 +380,61 @@ the registry names and the matrix service names**, so a matrix-only service such
 as the shared `operations`/`google.longrunning` service is not dropped):
 `service → canonical → transports → suite(s) → test-func count → covered?`.
 `make gcp-status` writes the inventory to `plan_docs/STATUS.md`
-(**Behavioral coverage**) and prints the uncovered count;
-`bin/gcpstatus -coverage-inventory` prints the table directly. A `ga` service
-with no suite is reported `uncovered`. Because the list is derived from the
-registry + matrix, a newly-registered service appears automatically — which is
-the point: a service cannot land `ga` with conformance + parity only without the
-ledger flagging it.
+(**Behavioral coverage**) and prints the covered count;
+`bin/gcpstatus -coverage-inventory` prints the table directly. In the table a
+covered `ga` service shows `yes`, a reasoned exemption shows `exempt`, a real
+gap (neither) shows `**no**`, and a non-`ga` service shows `n/a`. Because the
+list is derived from the registry + matrix, a newly-registered service appears
+automatically — which is the point: a service cannot land `ga` with conformance
++ parity only without the gate failing.
 
-**At the time of writing** the `ga` services with no official-client behavioural
-suite are: `container`, `firestoreadmin`, `iamcredentials`, `run`, `scheduler`,
-`serviceusage`, `tasks`. The test-coverage wave plan (`plan_docs/` local scratch)
-closes these in GTC2–GTC8 and adds the aggregate gate + per-service test map in
-GTC9 (W4.1).
+**Per-service test map (service → suite → transport).** Derived from the same
+inventory (`make gcp-status-behavioral-gate` prints the summary;
+`bin/gcpstatus -coverage-inventory` prints the full table). Services use their
+canonical matrix name (`clouddns`/`memorystore`/`cloudsql`), which differs from
+a few registry/wire names (`dns`/`redis`/`sqladmin`). `—` means no dedicated
+behavioural module — the service is either non-`ga` (exempt by the matrix rule)
+or carries a reasoned exemption.
 
-**Enforcement.** This contract is **report-only** today: the inventory never fails
-a build or a CI job. **GTC9 (W4.1)** promotes it to a hard gate — every `ga`
-service must then have a behavioural suite or a reasoned exemption recorded
-against it, and `docs/GA.md` carries the per-service `service → suite →
-transport` map.
+| service | transport(s) | behavioural suite(s) | coverage |
+| --- | --- | --- | --- |
+| `storage` | grpc, rest | `sdk`, `sdk-gcs-grpc` | suite |
+| `pubsub` | grpc, rest | `sdk-pubsub`, `sdk-rest`, `sdk-dataproc` | suite |
+| `kms` | grpc, rest | `sdk-rest` | suite |
+| `secretmanager` | grpc, rest | `sdk-rest` | suite |
+| `firestore` | grpc, rest | `sdk-firestore`, `sdk-rest` | suite |
+| `firestoreadmin` | grpc | — | exempt (core driven by `sdk-firestore` + gRPC conformance) |
+| `datastore` | grpc, rest | `sdk-datastore` | suite |
+| `monitoring` | grpc, rest | `sdk-monitoring` | suite |
+| `logging` | grpc, rest | `sdk-logging` | suite |
+| `iam` | grpc, rest | `sdk-rest` | suite |
+| `iamcredentials` | grpc, rest | — | exempt (stateless; IAM `sdk-rest` + conformance) |
+| `eventarc` | grpc, rest | `sdk-eventarc` | suite |
+| `managedkafka` | grpc, rest | `sdk-managed-kafka` | suite |
+| `metastore` | grpc, rest | `sdk-metastore` | suite |
+| `dataproc` | grpc, rest | `sdk-dataproc` | suite |
+| `operations` | grpc | `.` (root-suite client) | suite |
+| `serviceusage` | grpc, rest | `sdk-rest` | suite |
+| `resourcemanager` | grpc, rest | `sdk-rest` | suite |
+| `scheduler` | grpc, rest | `sdk-scheduler` | suite |
+| `tasks` | grpc, rest | `sdk-tasks` | suite |
+| `workflows` | grpc, rest | `sdk-workflows` | suite |
+| `workflowexecutions` | grpc, rest | `sdk-workflows` | suite |
+| `functions` | grpc, rest | `sdk-rest` | suite |
+| `container` | grpc, rest | `sdk-container` | suite |
+| `run` | grpc, rest | — | exempt (executor e2e: `test-e2e-cloudrun-k8s` / `-docker`) |
+| `compute` | rest | `sdk-compute` | limited — not required |
+| `cloudsql` | rest | `sdk-cloudsql` | limited — not required |
+| `clouddns` | rest | `sdk-clouddns` | limited — not required |
+| `memorystore` | rest | `sdk-memorystore` | limited — not required |
+| `bigquery` | rest | `sdk-bigquery` | limited — not required |
+| `iceberg` | rest | `sdk-iceberg` | preview — not required |
+
+**Enforcement.** The contract is a **hard gate**:
+`make gcp-status-behavioral-gate` (`bin/gcpstatus -coverage-gate`) exits non-zero
+if any `ga` service has neither a suite nor a reasoned exemption. It runs in CI
+(the `test-gcp-unit` job) and as part of the `test-all-gcp` aggregate, and only
+reads the fidelity matrix + the `tests/integration/gcp` tree (no server, no
+Docker), so it is safe on a hosted runner. The exemption list is committed so a
+waiver is a reviewed, evidence-carrying change rather than an invisible one.
 
