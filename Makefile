@@ -188,6 +188,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         demo-sdk-tour-errors \
         demo-sdk-tour-streaming \
         test-gcp-differential record-gcp-differential record-gcp-differential-grpc \
+        test-gcp-differential-bigquery record-gcp-differential-bigquery \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
         gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff
@@ -873,7 +874,7 @@ test-gcp-differential: ## Offline differential replay vs an ephemeral emulator (
 	  n=0; until bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081' >/dev/null 2>&1; do \
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp gRPC not ready"; cat /tmp/jaiscloud-gcp-differential.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (gRPC :8081)"; \
-	  go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest|TestTourGoldensAreClean|TestTourGoldenManifest|TestReplayGRPC|TestGRPCGoldensAreClean|TestGRPCGoldensAreMarked|TestGRPCGoldenManifest|TestGRPCScenariosValid|TestGRPCNormalizerFoldsVolatile|TestReplayTourGRPC|TestTourGRPCGoldensAreClean|TestReplayErrors|TestErrorGoldensAreClean|TestErrorGoldenManifest|TestErrorScenariosValid' ./tests/gcpdifferential/
+	  go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest|TestTourGoldensAreClean|TestTourGoldenManifest|TestReplayGRPC|TestGRPCGoldensAreClean|TestGRPCGoldensAreMarked|TestGRPCGoldenManifest|TestGRPCScenariosValid|TestGRPCNormalizerFoldsVolatile|TestReplayTourGRPC|TestTourGRPCGoldensAreClean|TestReplayErrors|TestErrorGoldensAreClean|TestErrorGoldenManifest|TestErrorScenariosValid|TestReplayBQSQL|TestBQSQLGoldensAreClean|TestBQSQLGoldenManifest|TestBQSQLScenariosValid' ./tests/gcpdifferential/
 
 test-gcp-differential-tour: ## Offline SDK-tour replay vs an ephemeral emulator (no credentials; tag: gcp_differential)
 	@echo "Building jaiscloud-gcp..."
@@ -905,6 +906,33 @@ test-gcp-differential-errors: ## Offline SDK error/retry replay vs an ephemeral 
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-differential-errors.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080)"; \
 	  GCP_DIFFERENTIAL_STRICT=1 go test -tags gcp_differential -count=1 -v -run 'TestReplayErrors|TestErrorGoldensAreClean|TestErrorGoldenManifest|TestErrorScenariosValid' ./tests/gcpdifferential/
+
+# BigQuery SQL differential corpus (PLAN 5): records a curated corpus of
+# Standard SQL jobs.query requests from REAL GCP into testdata/golden-bigquery
+# and replays them offline against the emulator, diffing rows, schema and error
+# envelopes. Needs ADC and a BigQuery-enabled project (the same parity project).
+# The fixture dataset is created and deleted by the target itself.
+record-gcp-differential-bigquery: ## Capture BigQuery SQL corpus goldens from REAL GCP (needs ADC)
+	@echo "Recording BigQuery SQL corpus goldens from real GCP (project: $${GCP_DIFFERENTIAL_PROJECT:-parity-diff-jaiscloud})..."
+	go test -tags gcp_differential -count=1 -v -run TestRecordBQSQL ./tests/gcpdifferential/ -record
+
+# The replay classifies each query against its declared expectation (match /
+# gap / bug): a known subset gap or engine bug is reported with real-vs-emulator
+# evidence and does not fail, while an unexpected regression to a previously
+# matching query does. No credentials; no external network.
+test-gcp-differential-bigquery: ## Offline BigQuery SQL corpus replay vs an ephemeral emulator (no credentials; tag: gcp_differential)
+	@echo "Building jaiscloud-gcp..."
+	@go build -o /tmp/jc-differential-bigquery ./cmd/jaiscloud-gcp/
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@set -e; \
+	  /tmp/jc-differential-bigquery start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-differential-bigquery.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp (REST :8080)..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-differential-bigquery.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  go test -tags gcp_differential -count=1 -v -run 'TestReplayBQSQL|TestBQSQLGoldensAreClean|TestBQSQLGoldenManifest|TestBQSQLScenariosValid' ./tests/gcpdifferential/
 
 # Opt-in Terraform / OpenTofu compatibility suites — drive the real
 # hashicorp/google provider against the emulator (tests/integration/gcp/terraform/).
