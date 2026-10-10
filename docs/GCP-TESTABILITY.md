@@ -327,3 +327,66 @@ These are fixed by policy, not by the fidelity matrix:
 
 A useful guard is a lint/test that rejects references to `/_jaiscloud/` and clock control
 in production packages.
+
+---
+
+## 9. Behavioural-suite contract — the `ga` Definition of Done (report-only)
+
+**The contract.** Every **`ga` service** must be exercised by **at least one
+official-client behavioural suite**, or carry a reasoned exemption in the gate.
+This is the behavioural-depth counterpart to the wire-shape layers in §1–§5: the
+conformance / differential / parity harnesses prove the *shape* (the emulator
+answers like real GCP), while this proves an official client can drive a
+*lifecycle* (create → read → list → update/error paths → delete) through it.
+
+- **`ga` service** = a service whose fidelity-matrix cells include at least one
+  `ga` cell and **no `preview` cell**. This is a deliberately **mechanical, raw
+  matrix rule** — a direct reading of the per-operation/per-transport states in
+  `docs/GA.md`, with **no overrides**. It is *not* §2's curated tier above: §2
+  applies hand-picked overrides (e.g. `functions`→Yellow, `kms`→Green) and its
+  snapshot is stale, so the inventory does not claim to reproduce it. A service
+  may carry a few explicit `unsupported` stubs (`container`, `dataproc`,
+  `metastore`) and still be `ga`. A `limited`-only service (zero `ga` cells —
+  `bigquery`, `compute`, `clouddns`, `cloudsql`, `memorystore`) and any `preview`
+  service (`iceberg`) is **not** `ga` and is **exempt** from this contract.
+- **An official-client behavioural suite** = a `tests/integration/gcp` suite that
+  drives an **official Google client** — a REST service client
+  (`google.golang.org/api/...`) or a native gRPC client
+  (`cloud.google.com/go/...`) — through a behavioural lifecycle. It is **not** a
+  unit test, and it is **not** satisfied by the shape-only layers — conformance
+  (`tests/gcpconformance`), real-GCP differential (`tests/gcpdifferential`),
+  REST↔gRPC parity (`tests/gcpparity`), or the persistence-after-restart probe
+  (AUD9) each prove something different. **Raw-REST coverage that drives no
+  official client does not count**: e.g. `serviceusage` is exercised only through
+  hand-rolled HTTP in `lro_async_test.go`, so it intentionally stays `uncovered`.
+  A dedicated `sdk-<service>` module is the canonical form; a generic suite
+  (`sdk`, `sdk-rest`, `sdk-gcs-grpc`) that imports a service's official client
+  and drives it counts too.
+
+**How it is measured — derived, never hand-written.** `tools/gcpstatus` joins
+three independent sources — the service registry (`internal/gcp/adapter`), the
+fidelity matrix (`docs/fidelity/fidelity-matrix.json`), and the
+`tests/integration/gcp/**` test tree — into one row per service (**the union of
+the registry names and the matrix service names**, so a matrix-only service such
+as the shared `operations`/`google.longrunning` service is not dropped):
+`service → canonical → transports → suite(s) → test-func count → covered?`.
+`make gcp-status` writes the inventory to `plan_docs/STATUS.md`
+(**Behavioral coverage**) and prints the uncovered count;
+`bin/gcpstatus -coverage-inventory` prints the table directly. A `ga` service
+with no suite is reported `uncovered`. Because the list is derived from the
+registry + matrix, a newly-registered service appears automatically — which is
+the point: a service cannot land `ga` with conformance + parity only without the
+ledger flagging it.
+
+**At the time of writing** the `ga` services with no official-client behavioural
+suite are: `container`, `firestoreadmin`, `iamcredentials`, `run`, `scheduler`,
+`serviceusage`, `tasks`. The test-coverage wave plan (`plan_docs/` local scratch)
+closes these in GTC2–GTC8 and adds the aggregate gate + per-service test map in
+GTC9 (W4.1).
+
+**Enforcement.** This contract is **report-only** today: the inventory never fails
+a build or a CI job. **GTC9 (W4.1)** promotes it to a hard gate — every `ga`
+service must then have a behavioural suite or a reasoned exemption recorded
+against it, and `docs/GA.md` carries the per-service `service → suite →
+transport` map.
+
