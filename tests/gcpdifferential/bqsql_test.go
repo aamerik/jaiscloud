@@ -98,7 +98,12 @@ func TestReplayBQSQL(t *testing.T) {
 	}
 
 	endpoint := strings.TrimRight(envOr("GCP_DIFFERENTIAL_ENDPOINT", "http://localhost:8080"), "/")
-	emulatorProject := envOr("GCP_DIFFERENTIAL_EMULATOR_PROJECT", EmulatorProjectDefault)
+	// The corpus replays in its own emulator project: it creates 74 jobs.query
+	// jobs, and the curated set's project-scoped BigQuery jobs.list /
+	// datasets.list goldens would otherwise see them (the emulator's job store
+	// is per project). The normalizer folds the project id to <project> either
+	// way, so the committed goldens are unaffected.
+	emulatorProject := envOr("GCP_DIFFERENTIAL_BQSQL_PROJECT", "jaiscloud-bqsql-diff")
 	suffix := runSuffix()
 	names := Names(suffix)
 	target := EmulatorTarget(endpoint, emulatorProject, suffix, names)
