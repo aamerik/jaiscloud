@@ -513,6 +513,15 @@ async function main() {
     if (outStream) outStream.end();
     return;
   }
+
+  if (MODE === "streaming") {
+    const { streamingScenarios } = require("./streaming_tour");
+    await streamingScenarios({
+      run, REST, GRPC, GRPC_HOST, GRPC_PORT, PROJECT, rid, grpc, grpcOpts,
+    });
+    if (outStream) outStream.end();
+    return;
+  }
   await storageScenarios();
   await pubsubScenarios();
   await firestoreScenarios();

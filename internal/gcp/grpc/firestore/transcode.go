@@ -21,6 +21,11 @@
 //     carries the minimum of the live cursors — resuming from there can replay a
 //     duplicate delta but never skip one. Real Firestore pairs each resume token
 //     with its own target_ids, which a single "all targets" token cannot express.
+//   - Exactly-once delivery per target. A live change whose sequence is at or
+//     below the target's delivered cursor is dropped, so a write that races the
+//     snapshot/replay is not delivered twice. The stream-wide NO_CHANGE token
+//     above remains the one place a duplicate can surface: resuming from the
+//     min-of-cursors token may replay a delta another target already observed.
 //   - Read position. A resume token is a position in the write feed, not a
 //     query-range read position: an incremental resume replays matching deltas
 //     only and does not re-stream the pre-existing result set, so a client must

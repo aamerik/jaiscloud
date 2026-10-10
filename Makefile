@@ -186,6 +186,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-gcloud-conformance test-gcp-python-conformance \
         demo-sdk-tour \
         demo-sdk-tour-errors \
+        demo-sdk-tour-streaming \
         test-gcp-differential record-gcp-differential record-gcp-differential-grpc \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
@@ -1002,6 +1003,9 @@ demo-sdk-tour: ## Official-client SDK tour (Go/Python/Java/Node) vs ephemeral ja
 
 demo-sdk-tour-errors: ## Official-client SDK error/retry/idempotency tour (Go/Python/Java/Node) -> PASS/FAIL matrix (demo/sdk-tour)
 	@demo/sdk-tour/run-errors.sh
+
+demo-sdk-tour-streaming: ## Official-client SDK streaming-semantics tour (Go/Python/Java/Node) -> PASS/FAIL matrix (demo/sdk-tour)
+	@demo/sdk-tour/run-streaming.sh
 
 gen-gcp-fidelity-matrix: ## Regenerate docs/fidelity/* (fidelity matrix) from the registry + conformance evidence
 	go run -tags gcp_conformance ./tools/fidelitygen -out docs/fidelity

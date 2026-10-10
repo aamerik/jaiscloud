@@ -157,6 +157,13 @@ public final class SdkTour {
       }
       return;
     }
+    if ("streaming".equals(mode)) {
+      StreamingTour.runStreaming();
+      if (out != null) {
+        out.close();
+      }
+      return;
+    }
 
     storageScenarios();
     pubsubScenarios();
