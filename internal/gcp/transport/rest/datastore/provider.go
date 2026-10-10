@@ -168,7 +168,7 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 	}
 
 	batch := map[string]any{
-		"entityResultType": "FULL",
+		"entityResultType": restEntityResultType(resp.ResultType),
 		"moreResults":      "NO_MORE_RESULTS",
 	}
 	if !resp.ReadTime.IsZero() {

@@ -43,6 +43,19 @@ func (s *Service) project(ctx context.Context, reqProject string) string {
 // mapError translates a core ProviderError into a gRPC status error.
 func mapError(err error) error { return grpcutil.GRPCStatus(err) }
 
+// entityResultType maps the core result classification to the wire
+// QueryResultBatch.EntityResultType.
+func entityResultType(rt core.ResultType) datastorepb.EntityResult_ResultType {
+	switch rt {
+	case core.ResultProjection:
+		return datastorepb.EntityResult_PROJECTION
+	case core.ResultKeysOnly:
+		return datastorepb.EntityResult_KEY_ONLY
+	default:
+		return datastorepb.EntityResult_FULL
+	}
+}
+
 // ─── Datastore service ────────────────────────────────────────────────────────
 
 func (s *Service) Commit(ctx context.Context, req *datastorepb.CommitRequest) (*datastorepb.CommitResponse, error) {
@@ -179,7 +192,7 @@ func (s *Service) RunQuery(ctx context.Context, req *datastorepb.RunQueryRequest
 	}
 
 	batch := &datastorepb.QueryResultBatch{
-		EntityResultType: datastorepb.EntityResult_FULL,
+		EntityResultType: entityResultType(resp.ResultType),
 		MoreResults:      datastorepb.QueryResultBatch_NO_MORE_RESULTS,
 		SkippedResults:   int32(resp.Skipped),
 	}

@@ -470,6 +470,7 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 	now := clock.Now()
 	out := &QueryResult{
 		MoreResults:     MoreResultsNoMoreResults,
+		ResultType:      q.ResultType(),
 		ReadTime:        now,
 		SnapshotVersion: now.UnixMicro(),
 	}
@@ -506,6 +507,11 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 		// Internal approximation: the emulator records the version of every
 		// entity the query returned and re-validates exactly those entities.
 		s.recordRead(txn, e.Key, true, e.Version)
+		// A projection restricts the returned properties (the key is always
+		// kept); a keys-only projection strips every property.
+		if q.Projection != nil {
+			e = projectEntity(e, q.Projection.Properties)
+		}
 		out.Entities = append(out.Entities, EntityResult{
 			Entity:     e,
 			Version:    e.Version,

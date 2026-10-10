@@ -418,7 +418,7 @@ func (p *Provider) Undelete(ctx context.Context, nr *model.NormalizedRequest) (*
 	}
 	email := emailFromName(name)
 	if m, err := p.loadServiceAccountMeta(ctx, nr.AccountID, email); err == nil {
-		return provider.OK(saToMap(m)), nil
+		return provider.OK(undeleteMap(m)), nil
 	}
 	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccountDeleted, email)
 	if err != nil {
@@ -439,7 +439,14 @@ func (p *Provider) Undelete(ctx context.Context, nr *model.NormalizedRequest) (*
 		return nil, err
 	}
 	_ = p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccountDeleted, email)
-	return provider.OK(saToMap(m)), nil
+	return provider.OK(undeleteMap(m)), nil
+}
+
+// undeleteMap renders the projects.serviceAccounts.undelete response. The
+// Discovery schema (UndeleteServiceAccountResponse) and the generated clients
+// expect the restored account nested under restoredAccount, not returned bare.
+func undeleteMap(m serviceAccountMeta) map[string]any {
+	return map[string]any{"restoredAccount": saToMap(m)}
 }
 
 // mustJSON marshals a service account metadata value for the resource store.
