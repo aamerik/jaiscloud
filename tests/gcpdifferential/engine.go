@@ -110,21 +110,25 @@ func (t *Target) Run(scenarios []Scenario) ([]Exchange, error) {
 			return exs, err
 		}
 
-		ex := Exchange{
-			Index:   i,
-			Service: sc.Service,
-			Op:      sc.Op,
-			Method:  sc.Method,
-			Path:    norm.Path(path),
-			Status:  status,
+		// A Setup scenario drives state a later golden depends on but is not
+		// itself recorded or diffed (its response is best-effort).
+		if !sc.Setup {
+			ex := Exchange{
+				Index:   i,
+				Service: sc.Service,
+				Op:      sc.Op,
+				Method:  sc.Method,
+				Path:    norm.Path(path),
+				Status:  status,
+			}
+			if len(bytes.TrimSpace(respBody)) > 0 {
+				ex.Response = norm.Bytes(respBody)
+			}
+			if reqBody != "" && !sc.NoRequestCapture {
+				ex.Request = norm.RequestBytes([]byte(reqBody))
+			}
+			exs = append(exs, ex)
 		}
-		if len(bytes.TrimSpace(respBody)) > 0 {
-			ex.Response = norm.Bytes(respBody)
-		}
-		if reqBody != "" && !sc.NoRequestCapture {
-			ex.Request = norm.RequestBytes([]byte(reqBody))
-		}
-		exs = append(exs, ex)
 
 		for name, header := range sc.SaveHeader {
 			if v := respHeader.Get(header); v != "" {

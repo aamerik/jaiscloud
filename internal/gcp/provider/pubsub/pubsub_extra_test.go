@@ -11,6 +11,7 @@ import (
 	"time"
 
 	kmsstore "jaiscloud/internal/gcp/store/kms"
+	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	"jaiscloud/internal/model"
 )
 
@@ -175,6 +176,22 @@ func TestPubSubDLQ(t *testing.T) {
 	}
 	if string(plain) != "hi" {
 		t.Errorf("unexpected DLQ message data: %q", string(plain))
+	}
+	// The republished copy carries real GCP's CloudPubSubDeadLetterSource*
+	// attributes: the source subscription short id + project, the delivery count
+	// (maxDeliveryAttempts), and the original publish time.
+	attrs := msgs[0].Attributes
+	if attrs[pubsubstore.AttrDeadLetterSourceSubscription] != "sub" {
+		t.Errorf("source subscription attr = %q, want sub", attrs[pubsubstore.AttrDeadLetterSourceSubscription])
+	}
+	if attrs[pubsubstore.AttrDeadLetterSourceSubscriptionProject] != "proj" {
+		t.Errorf("source project attr = %q, want proj", attrs[pubsubstore.AttrDeadLetterSourceSubscriptionProject])
+	}
+	if attrs[pubsubstore.AttrDeadLetterSourceDeliveryCount] != "5" {
+		t.Errorf("delivery count attr = %q, want 5", attrs[pubsubstore.AttrDeadLetterSourceDeliveryCount])
+	}
+	if attrs[pubsubstore.AttrDeadLetterSourceTopicPublishTime] == "" {
+		t.Errorf("source publish time attr missing: %v", attrs)
 	}
 }
 

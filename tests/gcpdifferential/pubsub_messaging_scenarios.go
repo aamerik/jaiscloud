@@ -20,10 +20,8 @@ import (
 // indices (and the control-plane list goldens, which must not see these extra
 // resources) are unchanged.
 //
-// Out of scope (recorded as debt, not faked): real-GCP dead-letter republish is
-// timing/delivery-count dependent and the emulator omits the
-// CloudPubSubDeadLetterSource* attributes, so it is deferred to its own fix
-// (see the plan doc). Exactly-once ack-ID versioning is EOD1 (W1.2).
+// Dead-letter republish is recorded by its own setup-driven block (see
+// pubsubDeadLetterScenarios). Exactly-once ack-ID versioning is EOD1 (W1.2).
 func pubsubMessagingScenarios(project string, n ResourceNames) []Scenario {
 	base := "/v1/projects/" + project
 	msgTopic := base + "/topics/" + n.MsgTopic
@@ -199,4 +197,51 @@ func pubsubMessagingScenarios(project string, n ResourceNames) []Scenario {
 		{Op: "redel2_repull_empty", Service: "pubsub", Method: http.MethodPost, Path: redel2Sub + ":pull",
 			Body: `{"maxMessages":10,"returnImmediately":true}`},
 	}
+}
+
+// pubsubDeadLetterScenarios (PSM2) records the dead-letter republish contract:
+// a subscription with a deadLetterPolicy forwards an undeliverable message to
+// its dead-letter topic, wrapped in a new message carrying real GCP's
+// CloudPubSubDeadLetterSource* attributes. The resources, the publish and the
+// nack loop that forces the forward are Setup (their per-attempt deliveryAttempt
+// is best-effort and not stable across backends); the final pull of the
+// dead-letter subscription is the recorded contract. Each resource is dedicated
+// (DLQMainTopic/DLQMainSub/DLQTopic/DLQSub) and torn down by Cleanup.
+func pubsubDeadLetterScenarios(project string, n ResourceNames) []Scenario {
+	base := "/v1/projects/" + project
+	dlqTopic := base + "/topics/" + n.DLQTopic
+	dlqSub := base + "/subscriptions/" + n.DLQSub
+	mainTopic := base + "/topics/" + n.DLQMainTopic
+	mainSub := base + "/subscriptions/" + n.DLQMainSub
+
+	sc := []Scenario{
+		{Op: "dlq_topic_create", Service: "pubsub", Method: http.MethodPut, Path: dlqTopic, Body: `{}`, Setup: true},
+		{Op: "dlq_topic_sub_create", Service: "pubsub", Method: http.MethodPut, Path: dlqSub, Setup: true,
+			Body: fmt.Sprintf(`{"topic":%q,"ackDeadlineSeconds":10}`, "projects/"+project+"/topics/"+n.DLQTopic)},
+		{Op: "dlq_main_topic_create", Service: "pubsub", Method: http.MethodPut, Path: mainTopic, Body: `{}`, Setup: true},
+		{Op: "dlq_main_sub_create", Service: "pubsub", Method: http.MethodPut, Path: mainSub, Setup: true,
+			Body: fmt.Sprintf(`{"topic":%q,"ackDeadlineSeconds":10,"deadLetterPolicy":{"deadLetterTopic":%q,"maxDeliveryAttempts":5}}`,
+				"projects/"+project+"/topics/"+n.DLQMainTopic, "projects/"+project+"/topics/"+n.DLQTopic)},
+		// Publish one message, then nack it past maxDeliveryAttempts (5) to force
+		// the forward. A publisher attribute is included to prove the forwarded
+		// copy preserves the original attributes alongside the source ones.
+		{Op: "dlq_publish", Service: "pubsub", Method: http.MethodPost, Path: mainTopic + ":publish", Setup: true,
+			Body: `{"messages":[{"data":"ZGxxLXBheWxvYWQ=","attributes":{"k":"v"}}]}`},
+	}
+	for i := 0; i < 7; i++ {
+		sc = append(sc,
+			Scenario{Op: fmt.Sprintf("dlq_nack_pull_%d", i), Service: "pubsub", Method: http.MethodPost, Path: mainSub + ":pull", Setup: true,
+				Body: `{"maxMessages":1,"returnImmediately":true}`,
+				Wait: &WaitSpec{Field: "receivedMessages", MinLen: 1, Interval: 500 * time.Millisecond, Timeout: 6 * time.Second},
+				Save: map[string]string{"ackId": "receivedMessages.0.ackId"}},
+			Scenario{Op: fmt.Sprintf("dlq_nack_%d", i), Service: "pubsub", Method: http.MethodPost, Path: mainSub + ":modifyAckDeadline", Setup: true,
+				Body: `{"ackIds":["${ackId}"],"ackDeadlineSeconds":0}`},
+		)
+	}
+	sc = append(sc, Scenario{
+		Op: "dlq_redelivered", Service: "pubsub", Method: http.MethodPost, Path: dlqSub + ":pull",
+		Body: `{"maxMessages":1,"returnImmediately":true}`,
+		Wait: &WaitSpec{Field: "receivedMessages", MinLen: 1, Interval: time.Second, Timeout: 180 * time.Second},
+	})
+	return sc
 }

@@ -108,6 +108,14 @@ type Scenario struct {
 	// It lets a scenario observe the result of an asynchronous (LRO) mutation,
 	// which real GCP completes after the create/delete call returns.
 	Wait *WaitSpec
+	// Setup, when true, runs the request (honouring Wait and Save) but records
+	// no golden and is not diffed. It exists for state a golden depends on but
+	// whose own response is best-effort/nondeterministic — e.g. the nack loop
+	// that forces a real-GCP dead-letter forward, whose per-attempt
+	// deliveryAttempt is not stable across the two backends. A setup scenario
+	// runs in both record and replay so the captured scenario that follows sees
+	// the same state on both sides.
+	Setup bool
 }
 
 // WaitSpec configures the polling behaviour for Scenario.Wait.
@@ -981,6 +989,11 @@ func Scenarios(project, suffix string) []Scenario {
 	// Appended last so the golden indices above (and the control-plane list
 	// goldens, which must not observe these extra resources) stay stable.
 	sc = append(sc, pubsubMessagingScenarios(project, n)...)
+
+	// ─── Pub/Sub dead-letter republish (PSM2) ─────────────────────────────────
+	// Setup-driven: only the final dead-letter pull is recorded; the nack loop
+	// that forces the forward is best-effort and not diffed.
+	sc = append(sc, pubsubDeadLetterScenarios(project, n)...)
 
 	return sc
 }

@@ -81,12 +81,20 @@ func matchGoldenKeys(keys []string, goldens []Exchange) (byKey map[string]Exchan
 // real-GCP recording; an orphan golden is a stale file that must be deleted (or
 // a scenario that was dropped) and is always an error.
 func matchScenariosToGoldens(scenarios []Scenario, goldens []Exchange) (matched []scenarioGolden, pending, orphans, duplicates []string) {
-	keys := make([]string, len(scenarios))
-	for i, sc := range scenarios {
-		keys[i] = scenarioKey(sc.Service, sc.Op)
+	// Setup scenarios produce no golden by design, so they are excluded from the
+	// pending set (they would otherwise look like an unrecorded scenario).
+	keys := make([]string, 0, len(scenarios))
+	for _, sc := range scenarios {
+		if sc.Setup {
+			continue
+		}
+		keys = append(keys, scenarioKey(sc.Service, sc.Op))
 	}
 	byKey, pending, orphans, duplicates := matchGoldenKeys(keys, goldens)
 	for _, sc := range scenarios {
+		if sc.Setup {
+			continue
+		}
 		if ex, ok := byKey[scenarioKey(sc.Service, sc.Op)]; ok {
 			matched = append(matched, scenarioGolden{Scenario: sc, Golden: ex})
 		}

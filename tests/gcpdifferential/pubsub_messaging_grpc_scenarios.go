@@ -38,6 +38,10 @@ func pubsubMessagingGRPCScenarios(project string, n ResourceNames) []GRPCScenari
 	seekSub := "projects/" + project + "/subscriptions/" + n.SeekSub
 	seekSnap := "projects/" + project + "/snapshots/" + n.SeekSnap
 	streamSub := "projects/" + project + "/subscriptions/" + n.StreamSub
+	dlqMainTopic := "projects/" + project + "/topics/" + n.DLQMainTopic
+	dlqMainSub := "projects/" + project + "/subscriptions/" + n.DLQMainSub
+	dlqTopic := "projects/" + project + "/topics/" + n.DLQTopic
+	dlqSub := "projects/" + project + "/subscriptions/" + n.DLQSub
 
 	return []GRPCScenario{
 		// ── Pull: publish one message, pull it (data + folded ackId/messageId) ─
@@ -213,6 +217,32 @@ func pubsubMessagingGRPCScenarios(project string, n ResourceNames) []GRPCScenari
 				return &pubsubpb.StreamingPullRequest{Subscription: streamSub}, frames, nil
 			},
 		},
+
+		// ── DeadLetter (PSM2): publish → nack past maxDeliveryAttempts → pull
+		//    the dead-letter subscription. The forwarded copy carries real GCP's
+		//    CloudPubSubDeadLetterSource* attributes; the nack loop is
+		//    best-effort and not itself captured. ─────────────────────────────
+		{
+			Service: "pubsub", Op: "msg_grpc_dead_letter",
+			Method: "google.pubsub.v1.Subscriber/Pull", Path: dlqSub,
+			Call: func(ctx context.Context, t *GRPCTarget) (proto.Message, proto.Message, error) {
+				if err := ensureGRPCPubSubDLQ(ctx, t, dlqMainTopic, dlqMainSub, dlqTopic, dlqSub); err != nil {
+					return nil, nil, err
+				}
+				if err := pubsubPublish(ctx, t, dlqMainTopic, "grpc-dlq", ""); err != nil {
+					return nil, nil, err
+				}
+				if err := pubsubNackLoop(ctx, t, dlqMainSub); err != nil {
+					return nil, nil, err
+				}
+				req := &pubsubpb.PullRequest{Subscription: dlqSub, MaxMessages: 1}
+				resp, err := pubsubPullUntil(ctx, t, dlqSub)
+				if err != nil {
+					return req, nil, err
+				}
+				return req, resp, nil
+			},
+		},
 	}
 }
 
@@ -275,6 +305,69 @@ func ensureGRPCSnapshot(ctx context.Context, t *GRPCTarget, snap, sub string) er
 		}
 		return e
 	})
+}
+
+// ensureGRPCPubSubDLQ creates the PSM2 dead-letter topology: a dead-letter
+// topic and its subscription, and a source topic and subscription configured
+// with a deadLetterPolicy (maxDeliveryAttempts=5, the proto minimum).
+// ALREADY_EXISTS is expected on replay of a prior run.
+func ensureGRPCPubSubDLQ(ctx context.Context, t *GRPCTarget, topic, sub, dlqTopic, dlqSub string) error {
+	err := withPubSubPublisher(ctx, t, func(c pubsubpb.PublisherClient) error {
+		for _, tp := range []string{topic, dlqTopic} {
+			if _, e := c.CreateTopic(ctx, &pubsubpb.Topic{Name: tp}); status.Code(e) != codes.OK && status.Code(e) != codes.AlreadyExists {
+				return e
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return withPubSubSubscriber(ctx, t, func(c pubsubpb.SubscriberClient) error {
+		if _, e := c.CreateSubscription(ctx, &pubsubpb.Subscription{Name: dlqSub, Topic: dlqTopic, AckDeadlineSeconds: 10}); status.Code(e) != codes.OK && status.Code(e) != codes.AlreadyExists {
+			return e
+		}
+		_, e := c.CreateSubscription(ctx, &pubsubpb.Subscription{
+			Name: sub, Topic: topic, AckDeadlineSeconds: 10,
+			DeadLetterPolicy: &pubsubpb.DeadLetterPolicy{DeadLetterTopic: dlqTopic, MaxDeliveryAttempts: 5},
+		})
+		if status.Code(e) != codes.OK && status.Code(e) != codes.AlreadyExists {
+			return e
+		}
+		return nil
+	})
+}
+
+// pubsubNackLoop pulls and immediately nacks the source subscription until the
+// message has been forwarded to the dead-letter topic (a pull comes back
+// empty). Bounded so a slow forward cannot hang a capture; the empty iterations
+// are what the bound covers. It is best-effort state setup, not a diffed
+// contract.
+func pubsubNackLoop(ctx context.Context, t *GRPCTarget, sub string) error {
+	for i := 0; i < 8; i++ {
+		var pulled []string
+		err := withPubSubSubscriber(ctx, t, func(c pubsubpb.SubscriberClient) error {
+			resp, cerr := c.Pull(ctx, &pubsubpb.PullRequest{Subscription: sub, MaxMessages: 1, ReturnImmediately: true})
+			if cerr != nil {
+				return cerr
+			}
+			for _, rm := range resp.GetReceivedMessages() {
+				pulled = append(pulled, rm.GetAckId())
+			}
+			if len(pulled) == 0 {
+				return nil
+			}
+			_, cerr = c.ModifyAckDeadline(ctx, &pubsubpb.ModifyAckDeadlineRequest{Subscription: sub, AckIds: pulled, AckDeadlineSeconds: 0})
+			return cerr
+		})
+		if err != nil {
+			return err
+		}
+		if len(pulled) == 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	return nil
 }
 
 // pubsubPublish publishes one message to a topic.
@@ -396,9 +489,13 @@ func (t *GRPCTarget) CleanupPubSubGRPC(ctx context.Context) []string {
 		{"subscription", base + "/subscriptions/" + n.ModSub},
 		{"subscription", base + "/subscriptions/" + n.SeekSub},
 		{"subscription", base + "/subscriptions/" + n.StreamSub},
+		{"subscription", base + "/subscriptions/" + n.DLQMainSub},
+		{"subscription", base + "/subscriptions/" + n.DLQSub},
 		{"topic", base + "/topics/" + n.MsgTopic},
 		{"topic", base + "/topics/" + n.OrderTopic},
 		{"topic", base + "/topics/" + n.StreamTopic},
+		{"topic", base + "/topics/" + n.DLQMainTopic},
+		{"topic", base + "/topics/" + n.DLQTopic},
 	}
 	var log []string
 	for _, tg := range targets {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/resource"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
+	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 )
 
 // Delivery tuning. Real Cloud Functions retries a failed invocation for up to
@@ -220,7 +220,7 @@ func (e *deliveryEngine) process(ctx context.Context, job deliveryJob) {
 	}
 	if job.retry {
 		rec.Status = functionsstore.DeliveryDeadLetter
-		if dlqTopic != "" && e.forwardToDeadLetter(ctx, rec, job.subscription, dlqTopic) {
+		if dlqTopic != "" && e.forwardToDeadLetter(ctx, rec, job.subscription, dlqTopic, job.occurredAt) {
 			rec.DeadLetterTopic = dlqTopic
 		}
 	} else {
@@ -257,16 +257,19 @@ func (e *deliveryEngine) deadLetter(ctx context.Context, job deliveryJob) (strin
 // the real Pub/Sub CloudPubSubDeadLetterSource* attributes, reporting whether it
 // was forwarded. A dead-letter topic equal to the event's own source topic is
 // skipped to prevent a self-retry loop.
-func (e *deliveryEngine) forwardToDeadLetter(ctx context.Context, rec functionsstore.Delivery, subscription, topic string) bool {
+func (e *deliveryEngine) forwardToDeadLetter(ctx context.Context, rec functionsstore.Delivery, subscription, topic string, occurredAt time.Time) bool {
 	if eventing.ResourceID(rec.Resource) == topic {
 		slog.Warn("functions: dead-letter topic equals source topic; not forwarding", "topic", topic)
 		return false
 	}
-	attrs := map[string]string{
-		"CloudPubSubDeadLetterSourceSubscription":        subscription,
-		"CloudPubSubDeadLetterSourceSubscriptionProject": rec.Project,
-		"CloudPubSubDeadLetterSourceDeliveryCount":       strconv.Itoa(rec.Attempts),
+	// The same four CloudPubSubDeadLetterSource* attributes real Pub/Sub attaches
+	// (shared with the Pub/Sub republish paths). The original event time is the
+	// producer's occurredAt, falling back to the delivery record's creation time.
+	publishedAt := occurredAt
+	if publishedAt.IsZero() {
+		publishedAt = rec.CreateTime
 	}
+	attrs := pubsubstore.DeadLetterMessageAttributes(rec.Project, subscription, rec.Attempts, publishedAt, rec.Attributes)
 	if err := e.svc.subscriptions.PublishDeadLetter(ctx, rec.Project, topic, []byte(rec.Data), attrs); err != nil {
 		slog.Warn("functions: forward dead-letter", "topic", topic, "err", err)
 		return false

@@ -1091,6 +1091,82 @@ func TestPubSubDeliveryAttemptRequiresDLQGRPC(t *testing.T) {
 	}
 }
 
+// TestPubSubDLQAttributesGRPC verifies the gRPC republish path attaches real
+// GCP's CloudPubSubDeadLetterSource* attributes (source subscription short id,
+// project, delivery count, original publish time) and preserves the publisher's
+// own attributes.
+func TestPubSubDLQAttributesGRPC(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/dlqsrc"
+	const dlq = "projects/test/topics/dlqtopic"
+	for _, tp := range []string{topic, dlq} {
+		if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: tp}); err != nil {
+			t.Fatalf("CreateTopic %s: %v", tp, err)
+		}
+	}
+	const srcSub = "projects/test/subscriptions/dlqsrc-sub"
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: srcSub, Topic: topic, AckDeadlineSeconds: 10,
+		DeadLetterPolicy: &pubsubpb.DeadLetterPolicy{DeadLetterTopic: dlq, MaxDeliveryAttempts: 5},
+	}); err != nil {
+		t.Fatalf("source sub: %v", err)
+	}
+	const dlqSub = "projects/test/subscriptions/dlqtopic-sub"
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{Name: dlqSub, Topic: dlq, AckDeadlineSeconds: 10}); err != nil {
+		t.Fatalf("dlq sub: %v", err)
+	}
+
+	if _, err := pub.Publish(ctx, &pubsubpb.PublishRequest{
+		Topic: topic, Messages: []*pubsubpb.PubsubMessage{{Data: []byte("hi"), Attributes: map[string]string{"k": "v"}}},
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	// Five delivering pulls (each nacked), then the next claim forwards it.
+	for i := 0; i < 6; i++ {
+		resp, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: srcSub, MaxMessages: 1, ReturnImmediately: true})
+		if err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		for _, rm := range resp.GetReceivedMessages() {
+			if _, err := subc.ModifyAckDeadline(ctx, &pubsubpb.ModifyAckDeadlineRequest{
+				Subscription: srcSub, AckIds: []string{rm.GetAckId()}, AckDeadlineSeconds: 0,
+			}); err != nil {
+				t.Fatalf("ModifyAckDeadline: %v", err)
+			}
+		}
+	}
+
+	resp, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: dlqSub, MaxMessages: 1, ReturnImmediately: true})
+	if err != nil {
+		t.Fatalf("Pull DLQ: %v", err)
+	}
+	if len(resp.GetReceivedMessages()) != 1 {
+		t.Fatalf("DLQ pull: got %d messages, want 1", len(resp.GetReceivedMessages()))
+	}
+	msg := resp.GetReceivedMessages()[0].GetMessage()
+	attrs := msg.GetAttributes()
+	if attrs[pubsubstore.AttrDeadLetterSourceSubscription] != "dlqsrc-sub" {
+		t.Errorf("source subscription = %q, want dlqsrc-sub", attrs[pubsubstore.AttrDeadLetterSourceSubscription])
+	}
+	if attrs[pubsubstore.AttrDeadLetterSourceSubscriptionProject] != "test" {
+		t.Errorf("source project = %q, want test", attrs[pubsubstore.AttrDeadLetterSourceSubscriptionProject])
+	}
+	if attrs[pubsubstore.AttrDeadLetterSourceDeliveryCount] != "5" {
+		t.Errorf("delivery count = %q, want 5", attrs[pubsubstore.AttrDeadLetterSourceDeliveryCount])
+	}
+	wantTime := msg.GetPublishTime().AsTime().UTC().Format("2006-01-02T15:04:05.000-07:00")
+	if got := attrs[pubsubstore.AttrDeadLetterSourceTopicPublishTime]; got != wantTime {
+		t.Errorf("source publish time = %q, want %q", got, wantTime)
+	}
+	if attrs["k"] != "v" {
+		t.Errorf("publisher attribute k = %q, want v", attrs["k"])
+	}
+}
+
 // TestPubSubAckDeadlineValidationGRPC verifies the [10,600] create bounds, the
 // 0→10 default, the [0,600] ModifyAckDeadline bounds, and the same bounds on
 // UpdateSubscription.
