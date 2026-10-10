@@ -160,7 +160,7 @@
     {
       "file": "025-bigquery-tour_bq_load_poll.json",
       "op": "tour_bq_load_poll",
-      "sha256": "bc52ad7ea605c08ebd4e17c418039b34f7dd38b5ec883190255a1fec92baaa6a",
+      "sha256": "b4ab45006c71d69eb13b073941d0c29402f2c92a092df9a4d9629d773a06a796",
       "status": 200
     },
     {

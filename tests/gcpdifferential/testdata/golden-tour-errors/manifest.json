@@ -47,7 +47,7 @@
     {
       "file": "006-pubsub-error_iam_set_stale.json",
       "op": "error_iam_set_stale",
-      "sha256": "072066ad2a6c14ce39d6863d2f946ce399ca60c7f89add101c4e227a55ecae98",
+      "sha256": "369fb7ae57a9178ed71d078bbcd5c09ad30db14b5bcb3c1eb94dfff111a50759",
       "status": 409
     },
     {

@@ -1,13 +1,14 @@
 {
   "version": 1,
   "project": "<project>",
-  "ops": 20,
+  "ops": 27,
   "services": [
     "dataproc",
     "datastore",
     "firestore",
     "logging",
-    "monitoring"
+    "monitoring",
+    "pubsub"
   ],
   "files": [
     {
@@ -128,6 +129,48 @@
       "file": "019-datastore-ds_run_query_end_cursor_last.json",
       "op": "ds_run_query_end_cursor_last",
       "sha256": "017c9085caf75d3d0e0cffb102c55d1f56e6670d5b3fa7ab2338ecaf8e6c9017",
+      "status": 0
+    },
+    {
+      "file": "020-pubsub-msg_grpc_pull.json",
+      "op": "msg_grpc_pull",
+      "sha256": "43ccd0233d2c8e9c851353063109846dd84b810399f55af2e2749153255c10ca",
+      "status": 0
+    },
+    {
+      "file": "021-pubsub-msg_grpc_acknowledge.json",
+      "op": "msg_grpc_acknowledge",
+      "sha256": "15bdeb84bc6cb87a235a0cce9ec3cea78045cec373a4689212d67e599dd2f534",
+      "status": 0
+    },
+    {
+      "file": "022-pubsub-msg_grpc_modify_ack_deadline.json",
+      "op": "msg_grpc_modify_ack_deadline",
+      "sha256": "a32278186508dfacbfd5b28428695f04aeb381d33ba7309d5e3a7a806da6d921",
+      "status": 0
+    },
+    {
+      "file": "023-pubsub-msg_grpc_create_snapshot.json",
+      "op": "msg_grpc_create_snapshot",
+      "sha256": "106baa2531d9c988499a0992335ce5f402f3ae51efdc3c99f0b9ef6a916614b5",
+      "status": 0
+    },
+    {
+      "file": "024-pubsub-msg_grpc_seek.json",
+      "op": "msg_grpc_seek",
+      "sha256": "ffb1246588b4f01cecbaedb079114d128cd89dabab1cd71eb022438871c04306",
+      "status": 0
+    },
+    {
+      "file": "025-pubsub-msg_grpc_seek_pull.json",
+      "op": "msg_grpc_seek_pull",
+      "sha256": "3897f71306a0672d254610abaf69b8e1fa0897f422e1f03b1bc1995f3305fe83",
+      "status": 0
+    },
+    {
+      "file": "026-pubsub-msg_grpc_streaming_pull.json",
+      "op": "msg_grpc_streaming_pull",
+      "sha256": "ecde6b393a6942bc6f2ff958ef1c7777aafd0e5aec7e2e96038d703a56afcd8d",
       "status": 0
     }
   ]

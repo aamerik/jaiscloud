@@ -34,6 +34,7 @@ package gcpdifferential
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -118,6 +119,10 @@ type WaitSpec struct {
 	// of the Field value contains this substring (e.g. a resource name inside a
 	// list). It is used for eventually-consistent list reads.
 	Contains string
+	// MinLen, when > 0, makes the poll succeed once the value at Field is an
+	// array or object with at least MinLen elements. It is used to wait for a
+	// batch of delivered messages (receivedMessages) to accumulate.
+	MinLen int
 	// Interval is the delay between polls (default 1s).
 	Interval time.Duration
 	// Timeout bounds the wait (default 120s); on expiry the last response is
@@ -270,6 +275,26 @@ type ResourceNames struct {
 	ErrorBQDataset string
 	ErrorBQTable   string
 	ErrorTopic     string
+
+	// Pub/Sub messaging-semantics oracle (PSM1): dedicated topics/subscriptions
+	// so the ack/modack, dead-letter and ordering flows never collide with the
+	// control-plane CRUD resources above. The gRPC half reuses the REST names
+	// where the transport is the same contract; the snapshot and streaming
+	// resources are gRPC-only.
+	MsgTopic     string
+	MsgSub       string
+	OrderTopic   string
+	OrderSub     string
+	AckSub       string
+	ModSub       string
+	DLQTopic     string
+	DLQSub       string
+	DLQMainTopic string
+	DLQMainSub   string
+	SeekSub      string
+	SeekSnap     string
+	StreamTopic  string
+	StreamSub    string
 }
 
 // Names derives the run's resource identifiers from suffix.
@@ -337,6 +362,22 @@ func Names(suffix string) ResourceNames {
 		ErrorBQDataset: "errors_ds_" + suffix,
 		ErrorBQTable:   "errors_tbl_" + suffix,
 		ErrorTopic:     "errors-topic-" + suffix,
+
+		// Pub/Sub messaging-semantics oracle (PSM1).
+		MsgTopic:     "conf-pubsub-msg-" + suffix,
+		MsgSub:       "conf-pubsub-msg-sub-" + suffix,
+		OrderTopic:   "conf-pubsub-order-" + suffix,
+		OrderSub:     "conf-pubsub-order-sub-" + suffix,
+		AckSub:       "conf-pubsub-ack-sub-" + suffix,
+		ModSub:       "conf-pubsub-mod-sub-" + suffix,
+		DLQTopic:     "conf-pubsub-dlq-" + suffix,
+		DLQSub:       "conf-pubsub-dlq-sub-" + suffix,
+		DLQMainTopic: "conf-pubsub-dlqmain-" + suffix,
+		DLQMainSub:   "conf-pubsub-dlq-main-" + suffix,
+		SeekSub:      "conf-pubsub-seek-sub-" + suffix,
+		SeekSnap:     "conf-pubsub-seek-snap-" + suffix,
+		StreamTopic:  "conf-pubsub-stream-" + suffix,
+		StreamSub:    "conf-pubsub-stream-sub-" + suffix,
 	}
 }
 
@@ -922,6 +963,11 @@ func Scenarios(project, suffix string) []Scenario {
 			Path: "/v1/projects/" + project + "/services/unknown.googleapis.com"},
 	)
 
+	// ─── Pub/Sub messaging semantics (PSM1) ───────────────────────────────────
+	// Appended last so the golden indices above (and the control-plane list
+	// goldens, which must not observe these extra resources) stay stable.
+	sc = append(sc, pubsubMessagingScenarios(project, n)...)
+
 	return sc
 }
 
@@ -938,6 +984,14 @@ func expandVars(s string, vars map[string]string) string {
 func captureVar(v any, path string) (string, bool) {
 	cur := v
 	for _, seg := range strings.Split(path, ".") {
+		if arr, ok := cur.([]any); ok {
+			i, err := strconv.Atoi(seg)
+			if err != nil || i < 0 || i >= len(arr) {
+				return "", false
+			}
+			cur = arr[i]
+			continue
+		}
 		m, ok := cur.(map[string]any)
 		if !ok {
 			return "", false

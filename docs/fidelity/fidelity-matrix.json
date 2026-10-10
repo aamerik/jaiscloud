@@ -3,20 +3,20 @@
   "summary": {
     "total": 1115,
     "by_state": {
-      "ga": 968,
-      "limited": 101,
+      "ga": 964,
+      "limited": 105,
       "preview": 14,
       "unsupported": 32
     },
     "by_transport": {
       "grpc": {
-        "ga": 442,
-        "limited": 1,
+        "ga": 440,
+        "limited": 3,
         "unsupported": 20
       },
       "rest": {
-        "ga": 526,
-        "limited": 100,
+        "ga": 524,
+        "limited": 102,
         "preview": 14,
         "unsupported": 12
       }
@@ -96,7 +96,8 @@
         "ga": 5
       },
       "pubsub": {
-        "ga": 46
+        "ga": 42,
+        "limited": 4
       },
       "resourcemanager": {
         "ga": 20
@@ -11650,7 +11651,8 @@
       "service": "pubsub",
       "operation": "Acknowledge",
       "transport": "grpc",
-      "state": "ga",
+      "state": "limited",
+      "reason": "plain ack is verified against real GCP by the PSM1 differential oracle, but exactly-once acknowledgement-ID versioning is unimplemented (EOD1): the emulator returns OK for a superseded/expired ack id where real GCP returns INVALID_ARGUMENT on an exactly-once subscription",
       "verified": true,
       "evidence": [
         "grpc-checks=Acknowledge",
@@ -11865,7 +11867,8 @@
       "service": "pubsub",
       "operation": "ModifyAckDeadline",
       "transport": "grpc",
-      "state": "ga",
+      "state": "limited",
+      "reason": "plain modify-ack-deadline is verified against real GCP by the PSM1 differential oracle, but exactly-once acknowledgement-ID versioning is unimplemented (EOD1): the emulator returns OK for a superseded/expired ack id where real GCP returns INVALID_ARGUMENT on an exactly-once subscription",
       "verified": true,
       "evidence": [
         "grpc-checks=ModifyAckDeadline",
@@ -11891,7 +11894,8 @@
       "service": "pubsub",
       "operation": "PubSub.SubscriptionAcknowledge",
       "transport": "rest",
-      "state": "ga",
+      "state": "limited",
+      "reason": "plain ack is verified against real GCP by the PSM1 differential oracle, but exactly-once acknowledgement-ID versioning is unimplemented (EOD1): the emulator returns OK for a superseded/expired ack id where real GCP returns INVALID_ARGUMENT on an exactly-once subscription",
       "discovery": "pubsub.projects.subscriptions.acknowledge",
       "verified": true,
       "evidence": [
@@ -11985,7 +11989,8 @@
       "service": "pubsub",
       "operation": "PubSub.SubscriptionModifyAckDeadline",
       "transport": "rest",
-      "state": "ga",
+      "state": "limited",
+      "reason": "plain modify-ack-deadline is verified against real GCP by the PSM1 differential oracle, but exactly-once acknowledgement-ID versioning is unimplemented (EOD1): the emulator returns OK for a superseded/expired ack id where real GCP returns INVALID_ARGUMENT on an exactly-once subscription",
       "discovery": "pubsub.projects.subscriptions.modifyAckDeadline",
       "verified": true,
       "evidence": [

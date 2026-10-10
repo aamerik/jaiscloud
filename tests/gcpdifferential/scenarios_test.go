@@ -86,6 +86,10 @@ func TestNormalizerCoversResources(t *testing.T) {
 		{names.MetricType, "<metricType>"},
 		{names.DSKind, "<dsKind>"},
 		{names.DSEntity, "<dsEntity>"},
+		{names.MsgTopic, "<topic>"},
+		{names.MsgSub, "<subscription>"},
+		{names.OrderTopic, "<topic>"},
+		{names.OrderSub, "<subscription>"},
 		{names.ServiceAccount + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
 		{names.ServiceAccount, "<serviceAccountId>"},
 		{"missing-" + suffix + "@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
@@ -96,6 +100,26 @@ func TestNormalizerCoversResources(t *testing.T) {
 		if got := norm.substitute(tc.in); got != tc.want {
 			t.Errorf("substitute(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestNormalizerFoldsAckIDs guards that a server-generated Pub/Sub ack id never
+// lands in a committed golden, in a request (Acknowledge/ModifyAckDeadline) or a
+// response (Pull). The tokens are delivery-scoped and differ every run.
+func TestNormalizerFoldsAckIDs(t *testing.T) {
+	names := Names("abc123")
+	norm := NewNormalizer("differential-proj", "", "abc123", names)
+
+	req := string(norm.RequestBytes([]byte(`{"subscription":"projects/differential-proj/subscriptions/s","ackIds":["UAYWLF1GSFE3GQhoUQ-opaque"]}`)))
+	if !strings.Contains(req, `"ackIds":["<ackId>"]`) {
+		t.Errorf("request ackIds were not folded: %s", req)
+	}
+	if strings.Contains(req, "opaque") {
+		t.Errorf("request still carries the raw ack id: %s", req)
+	}
+	resp := string(norm.Bytes([]byte(`{"receivedMessages":[{"ackId":"UAYWLF1GSFE3GQhoUQ-opaque"}]}`)))
+	if !strings.Contains(resp, `"ackId":"<ackId>"`) {
+		t.Errorf("response ackId was not folded: %s", resp)
 	}
 }
 
