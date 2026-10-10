@@ -744,7 +744,8 @@ test-integration-gcp: build-gcp ## Run GCP integration + SDK suites against an e
 	  ( cd tests/integration/gcp/sdk-monitoring && MONITORING_EMULATOR_HOST=localhost:8081 go test -count=1 -timeout 120s ./... ); \
 	  ( cd tests/integration/gcp/sdk-datastore && DATASTORE_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... ); \
 	  ( cd tests/integration/gcp/sdk-logging && LOGGING_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... ); \
-	  ( cd tests/integration/gcp/sdk-gcs-grpc && STORAGE_EMULATOR_HOST_GRPC=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... )
+	  ( cd tests/integration/gcp/sdk-gcs-grpc && STORAGE_EMULATOR_HOST_GRPC=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-pubsub && PUBSUB_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... )
 
 test-lro-async-gcp: build-gcp ## Run the opt-in async-LRO live e2e gate (JAISCLOUD_LRO_MODE=async, delay 2s)
 	@echo "Starting jaiscloud-gcp (ephemeral, async LROs)..."
