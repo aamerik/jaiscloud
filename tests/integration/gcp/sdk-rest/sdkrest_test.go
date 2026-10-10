@@ -253,10 +253,12 @@ func TestSDKPubSubDLQ(t *testing.T) {
 	}).Do()
 	require.NoError(t, err)
 
-	_, err = svc.Projects.Topics.Publish(src, &pubsub.PublishRequest{
-		Messages: []*pubsub.PubsubMessage{{Data: "aGk="}},
+	pr, err := svc.Projects.Topics.Publish(src, &pubsub.PublishRequest{
+		Messages: []*pubsub.PubsubMessage{{Data: "aGk=", OrderingKey: "ord-key"}},
 	}).Do()
 	require.NoError(t, err)
+	require.Len(t, pr.MessageIds, 1)
+	srcID := pr.MessageIds[0]
 
 	pull := func() (int, []string) {
 		r, err := svc.Projects.Subscriptions.Pull(sub, &pubsub.PullRequest{MaxMessages: 10}).Do()
@@ -297,4 +299,10 @@ func TestSDKPubSubDLQ(t *testing.T) {
 	require.Equal(t, "proj", attrs["CloudPubSubDeadLetterSourceSubscriptionProject"])
 	require.Equal(t, "5", attrs["CloudPubSubDeadLetterSourceDeliveryCount"])
 	require.NotEmpty(t, attrs["CloudPubSubDeadLetterSourceTopicPublishTime"])
+	// PSM5: real GCP wraps the original in a new message, so the forwarded
+	// message carries a fresh messageId and preserves the source ordering key.
+	fwd := dr.ReceivedMessages[0].Message
+	require.NotEmpty(t, fwd.MessageId)
+	require.NotEqual(t, srcID, fwd.MessageId)
+	require.Equal(t, "ord-key", fwd.OrderingKey)
 }

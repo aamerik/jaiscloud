@@ -120,13 +120,22 @@ func TestPubSubDLQ(t *testing.T) {
 		t.Fatalf("create dlq subscription: %v", err)
 	}
 
-	// Publish one message.
+	// Publish one message with an ordering key, so the forwarded copy can be
+	// checked to preserve it.
 	if _, err := p.TopicPublish(ctx, newNR(map[string]any{
 		"name": "topics/src",
-		"body": map[string]any{"messages": []any{map[string]any{"data": "aGk="}}},
+		"body": map[string]any{"messages": []any{map[string]any{"data": "aGk=", "orderingKey": "ord-key"}}},
 	})); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
+	// Capture the source message's identity before it is forwarded: real GCP
+	// mints a new messageId and a forward-time publishTime on the copy (PSM5).
+	src, err := p.messages.List(ctx, "sub")
+	if err != nil || len(src) != 1 {
+		t.Fatalf("expected 1 source message, got %d / %v", len(src), err)
+	}
+	srcID := src[0].MessageID
+	srcPublishTime := src[0].PublishTime
 
 	pull := func() int {
 		resp, err := p.SubscriptionPull(ctx, newNR(map[string]any{"name": "subscriptions/sub"}))
@@ -190,8 +199,22 @@ func TestPubSubDLQ(t *testing.T) {
 	if attrs[pubsubstore.AttrDeadLetterSourceDeliveryCount] != "5" {
 		t.Errorf("delivery count attr = %q, want 5", attrs[pubsubstore.AttrDeadLetterSourceDeliveryCount])
 	}
-	if attrs[pubsubstore.AttrDeadLetterSourceTopicPublishTime] == "" {
-		t.Errorf("source publish time attr missing: %v", attrs)
+	// The attribute carries the *source* publish time (ms, +00:00 layout), not
+	// the wrapper's own publishTime.
+	wantSrcTime := srcPublishTime.UTC().Format("2006-01-02T15:04:05.000-07:00")
+	if got := attrs[pubsubstore.AttrDeadLetterSourceTopicPublishTime]; got != wantSrcTime {
+		t.Errorf("source publish time attr = %q, want %q", got, wantSrcTime)
+	}
+	// PSM5: real GCP wraps the original in a new message — a fresh messageId, a
+	// forward-time publishTime, and the source ordering key preserved.
+	if msgs[0].MessageID == srcID {
+		t.Errorf("forwarded message id = %q, want a fresh id (source %q)", msgs[0].MessageID, srcID)
+	}
+	if msgs[0].PublishTime.Equal(srcPublishTime) {
+		t.Errorf("forwarded publishTime = %v, want the forward time (source %v)", msgs[0].PublishTime, srcPublishTime)
+	}
+	if msgs[0].OrderingKey != "ord-key" {
+		t.Errorf("forwarded ordering key = %q, want ord-key", msgs[0].OrderingKey)
 	}
 }
 
