@@ -18,6 +18,7 @@ Everything here is behind the `gcp_differential` build tag and uses the
 | `testdata/golden-grpc/` | curated gRPC (`GRPCScenarios`) | real GCP gRPC | emulator gRPC `:8081` |
 | `testdata/golden-tour/` | SDK-tour REST (`TourScenarios`) | real GCP REST | emulator REST `:8080` |
 | `testdata/golden-tour-grpc/` | SDK-tour gRPC (`TourGRPCScenarios`) | real GCP gRPC | emulator gRPC `:8081` |
+| `testdata/golden-bigquery/` | BigQuery SQL corpus (`BQSQLScenarios`) | real GCP REST | emulator REST `:8080` |
 
 Each golden is one `Exchange` (`{index, service, op, method, path, transport,
 status, request, response}`); `manifest.json` records a content hash per file.
@@ -34,10 +35,16 @@ and (for accepted divergences) the triage rule's reason.
 ```bash
 make test-gcp-differential        # ephemeral emulator; replays every set (+tour)
 make test-gcp-differential-tour   # ephemeral emulator; tour sets only
+make test-gcp-differential-bigquery # ephemeral emulator; BigQuery SQL corpus
 make record-gcp-differential      # curated REST   from real GCP (needs ADC)
 make record-gcp-differential-grpc # curated gRPC   from real GCP (needs ADC)
 make record-gcp-differential-tour # SDK-tour (REST + gRPC) from real GCP (needs ADC)
+make record-gcp-differential-bigquery # BigQuery SQL corpus from real GCP (needs ADC)
 ```
+
+The BigQuery SQL corpus classifies each query against a declared expectation
+(`match`/`gap`/`bug`) instead of failing on every open divergence; see
+[README-bigquery.md](README-bigquery.md).
 
 Record mode needs Application Default Credentials (`gcloud auth
 application-default login`) and a project with the relevant APIs enabled

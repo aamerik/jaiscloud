@@ -555,16 +555,31 @@ var bigQueryQueryStatFields = []string{
 }
 
 func init() {
-	for _, op := range []string{"query", "tour_bq_query"} {
-		for _, loc := range bigQueryQueryStatFields {
-			triageRules = append(triageRules, TriageRule{
-				Service:  "bigquery",
-				Op:       op,
-				Kind:     "missing_field",
-				Location: loc,
-				Reason:   "output-only job-statistics/timing field the emulator does not synthesize; executed rows/schema/statementType match real GCP",
-			})
-		}
+	// These job-statistics/timing fields are output-only members of a
+	// jobs.query/getQueryResults response, so the rule is scoped by Location
+	// (not by op) and covers every query op: the curated `query`, the tour
+	// `tour_bq_query` and each `bqsql_*` corpus query. Rows, schema,
+	// statementType and totalRows are deliberately not listed, so a regression
+	// in the executed result itself still surfaces as an open divergence.
+	for _, loc := range bigQueryQueryStatFields {
+		triageRules = append(triageRules, TriageRule{
+			Service:  "bigquery",
+			Kind:     "missing_field",
+			Location: loc,
+			Reason:   "output-only job-statistics/timing field the emulator does not synthesize; executed rows/schema/statementType match real GCP",
+		})
+	}
+	// Real GCP decorates a BigQuery SQL error's legacy errors[] detail with a
+	// per-token parse location/locationType; the emulator omits those advisory
+	// fields while the HTTP status and the machine-readable code/reason/status
+	// match. Scoped by Location so every query op is covered.
+	for _, loc := range []string{"errors[0].location", "errors[0].locationType"} {
+		triageRules = append(triageRules, TriageRule{
+			Service:  "bigquery",
+			Kind:     "missing_field",
+			Location: loc,
+			Reason:   "advisory per-token parse-location metadata on a BigQuery error detail; status, code and envelope shape match and no client branches on it",
+		})
 	}
 }
 
