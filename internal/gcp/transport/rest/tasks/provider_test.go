@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	core "jaiscloud/internal/gcp/service/tasks"
@@ -86,7 +87,9 @@ func TestProviderTaskLifecycleAndBatch(t *testing.T) {
 		t.Fatalf("ListTasks = %v, %v", resp, err)
 	}
 
-	// Batch create.
+	// Batch create: cloudtasks/v2 declares an LRO; the emulator creates
+	// synchronously and returns a done operation whose response carries the
+	// created tasks.
 	batch, err := p.BatchCreateTasks(ctx, req(map[string]any{
 		"project": "p", "location": "l", "queue": "q1",
 		"body": map[string]any{"requests": []any{
@@ -96,15 +99,20 @@ func TestProviderTaskLifecycleAndBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BatchCreateTasks: %v", err)
 	}
-	if len(batch.Data["tasks"].([]any)) != 1 {
-		t.Fatalf("batch = %v", batch.Data)
+	assertDoneOperation(t, batch.Data, "type.googleapis.com/google.cloud.tasks.v2.BatchCreateTasksMetadata", batchCreateResponseType)
+	respEnv, _ := batch.Data["response"].(map[string]any)
+	tasksOut, _ := respEnv["tasks"].([]any)
+	if len(tasksOut) != 1 {
+		t.Fatalf("batch create response tasks = %v", respEnv)
 	}
 
 	// Batch delete the just-created task by full name.
-	batchName, _ := batch.Data["tasks"].([]any)[0].(map[string]any)["name"].(string)
-	if _, err := p.BatchDeleteTasks(ctx, req(map[string]any{"project": "p", "location": "l", "queue": "q1", "body": map[string]any{"names": []any{batchName}}})); err != nil {
+	batchName, _ := tasksOut[0].(map[string]any)["name"].(string)
+	del, err := p.BatchDeleteTasks(ctx, req(map[string]any{"project": "p", "location": "l", "queue": "q1", "body": map[string]any{"names": []any{batchName}}}))
+	if err != nil {
 		t.Fatalf("BatchDeleteTasks: %v", err)
 	}
+	assertDoneOperation(t, del.Data, "type.googleapis.com/google.cloud.tasks.v2.BatchDeleteTasksMetadata", emptyTypeURL)
 
 	if _, err := p.GetTask(ctx, req(map[string]any{"project": "p", "location": "l", "queue": "q1", "task": taskNameOf(t, name)})); err != nil {
 		t.Fatalf("GetTask: %v", err)
@@ -156,6 +164,27 @@ func TestProviderCreateTaskWrappedBody(t *testing.T) {
 	}
 	if name, _ := created.Data["name"].(string); name != "projects/p/locations/l/queues/q1/tasks/wrapped" {
 		t.Fatalf("name = %v", created.Data["name"])
+	}
+}
+
+// assertDoneOperation asserts the wire shape of a synchronous
+// google.longrunning.Operation: done=true, a location-scoped name, the expected
+// metadata @type with a SUCCEEDED state, and the expected response @type.
+func assertDoneOperation(t *testing.T, op map[string]any, wantMetaType, wantRespType string) {
+	t.Helper()
+	if op["done"] != true {
+		t.Fatalf("operation done = %v, want true: %v", op["done"], op)
+	}
+	if name, _ := op["name"].(string); !strings.HasPrefix(name, "projects/p/locations/l/operations/") {
+		t.Fatalf("operation name = %q, want projects/p/locations/l/operations/…", name)
+	}
+	meta, _ := op["metadata"].(map[string]any)
+	if meta["@type"] != wantMetaType || meta["state"] != "SUCCEEDED" {
+		t.Fatalf("operation metadata = %v, want @type %q state SUCCEEDED", meta, wantMetaType)
+	}
+	respEnv, _ := op["response"].(map[string]any)
+	if respEnv["@type"] != wantRespType {
+		t.Fatalf("operation response @type = %v, want %q", respEnv["@type"], wantRespType)
 	}
 }
 

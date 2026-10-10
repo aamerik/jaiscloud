@@ -14,11 +14,12 @@
 // Documented emulator deviations this suite pins (real GCP differs):
 //   - appEngineHttpRequest tasks are stored and echoed but never delivered (no
 //     App Engine router); an attempt is recorded as Unimplemented (code 12).
-//   - batchCreate/batchDelete are served synchronously. Real GCP returns a
-//     google.longrunning.Operation; the emulator returns the created tasks (or
-//     an empty body), which the official client decodes as an empty Operation.
-//     The suite therefore verifies the effect through List rather than the
-//     response body.
+//   - batchCreate/batchDelete are served synchronously: the emulator performs
+//     the work inline and returns a done=true google.longrunning.Operation
+//     (real GCP returns an in-flight operation that is polled). The response
+//     carries a BatchCreateTasksResponse (the created tasks) or
+//     google.protobuf.Empty, so the official client decodes a populated
+//     Operation and the suite asserts its response body.
 //   - X-CloudTasks-QueueName / X-CloudTasks-TaskName carry the short queue/task
 //     id, not the full resource name, and the Authorization token attached for
 //     oauth/oidc targets is a synthetic emulator-local token.
@@ -32,6 +33,7 @@ package sdk_tasks_test
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -265,8 +267,9 @@ func TestSDKTasksQueueLifecycle(t *testing.T) {
 }
 
 // TestSDKTasksTaskCRUDAndBatch covers task create/get/list/delete plus the
-// batch endpoints (verified through List — see the package doc on the
-// synchronous emulator response shape).
+// batch endpoints. batchCreate/batchDelete return a done google.longrunning
+// .Operation whose typed response carries the created tasks / Empty (the
+// emulator runs them synchronously — see the package doc).
 func TestSDKTasksTaskCRUDAndBatch(t *testing.T) {
 	resetState(t)
 	svc := newService(t)
@@ -309,27 +312,41 @@ func TestSDKTasksTaskCRUDAndBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, taskName, got.Name)
 
-	// batchCreate: the emulator creates synchronously (real GCP returns an
-	// Operation); verify the effect through List.
+	// batchCreate: the emulator creates synchronously and returns a done
+	// google.longrunning.Operation whose BatchCreateTasksResponse carries the
+	// created tasks (real GCP returns an in-flight operation that is polled).
 	tid2, tid3 := unique("task"), unique("task")
 	name2, name3 := queueName+"/tasks/"+tid2, queueName+"/tasks/"+tid3
-	_, err = svc.Projects.Locations.Queues.Tasks.BatchCreate(queueName, &cloudtasks.BatchCreateTasksRequest{
+	batchOp, err := svc.Projects.Locations.Queues.Tasks.BatchCreate(queueName, &cloudtasks.BatchCreateTasksRequest{
 		Requests: []*cloudtasks.CreateTaskRequest{
 			{Task: &cloudtasks.Task{Name: name2, HttpRequest: httpTask(srv.URL), ScheduleTime: futureRFC()}},
 			{Task: &cloudtasks.Task{Name: name3, HttpRequest: httpTask(srv.URL), ScheduleTime: futureRFC()}},
 		},
 	}).Do()
 	require.NoError(t, err)
+	require.True(t, batchOp.Done, "batchCreate must return a done operation: %+v", batchOp)
+	var batchResp struct {
+		Tasks []*cloudtasks.Task `json:"tasks"`
+	}
+	require.NoError(t, json.Unmarshal(batchOp.Response, &batchResp))
+	require.Len(t, batchResp.Tasks, 2)
+	require.ElementsMatch(t, []string{name2, name3},
+		[]string{batchResp.Tasks[0].Name, batchResp.Tasks[1].Name})
 
 	list, err := svc.Projects.Locations.Queues.Tasks.List(queueName).Do()
 	require.NoError(t, err)
 	require.Len(t, list.Tasks, 3)
 
-	// batchDelete removes both batch tasks.
-	_, err = svc.Projects.Locations.Queues.Tasks.BatchDelete(queueName, &cloudtasks.BatchDeleteTasksRequest{
+	// batchDelete removes both batch tasks and returns a done operation whose
+	// response is google.protobuf.Empty.
+	delOp, err := svc.Projects.Locations.Queues.Tasks.BatchDelete(queueName, &cloudtasks.BatchDeleteTasksRequest{
 		Names: []string{name2, name3},
 	}).Do()
 	require.NoError(t, err)
+	require.True(t, delOp.Done, "batchDelete must return a done operation: %+v", delOp)
+	var deleteResp map[string]any
+	require.NoError(t, json.Unmarshal(delOp.Response, &deleteResp))
+	require.Equal(t, "type.googleapis.com/google.protobuf.Empty", deleteResp["@type"])
 	list, err = svc.Projects.Locations.Queues.Tasks.List(queueName).Do()
 	require.NoError(t, err)
 	require.Len(t, list.Tasks, 1)

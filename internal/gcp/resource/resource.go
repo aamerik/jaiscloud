@@ -444,6 +444,12 @@ var formatters = map[string]func(project, name string) string{
 		loc, q, t := wfExec(n)
 		return fmt.Sprintf("projects/%s/locations/%s/queues/%s/tasks/%s", p, loc, q, t)
 	},
+	// A Cloud Tasks long-running operation is location-scoped: callers pass
+	// "location/operation" (the batchCreate/batchDelete LROs).
+	"tasks-operation": func(p, n string) string {
+		loc, op := wfLoc(n)
+		return fmt.Sprintf("projects/%s/locations/%s/operations/%s", p, loc, op)
+	},
 	// Cloud Resource Manager — a project's canonical v3 resource name is
 	// "projects/{project}". The v1 REST API has no resource name (it identifies
 	// a project by projectId), so callers pass the project id as the closure

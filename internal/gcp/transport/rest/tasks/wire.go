@@ -1,7 +1,9 @@
 package tasks
 
 import (
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -9,10 +11,55 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/resource"
+	core "jaiscloud/internal/gcp/service/tasks"
 	tasksstore "jaiscloud/internal/gcp/store/tasks"
 	"jaiscloud/internal/model"
 )
+
+// Operation type URLs for the Cloud Tasks batch long-running operations. Real
+// cloudtasks/v2 declares tasks:batchCreate and tasks:batchDelete as
+// google.longrunning.Operations whose response is a BatchCreateTasksResponse or
+// google.protobuf.Empty, with BatchCreateTasksMetadata / BatchDeleteTasksMetadata
+// metadata. The emulator runs them inline and returns a done operation carrying
+// the typed response, so a client that reads the operation (rather than polling)
+// sees the documented shape.
+const (
+	batchCreateResponseType = "type.googleapis.com/google.cloud.tasks.v2.BatchCreateTasksResponse"
+	batchCreateMetadataType = "type.googleapis.com/google.cloud.tasks.v2.BatchCreateTasksMetadata"
+	batchDeleteMetadataType = "type.googleapis.com/google.cloud.tasks.v2.BatchDeleteTasksMetadata"
+	emptyTypeURL            = "type.googleapis.com/google.protobuf.Empty"
+)
+
+// batchOperationJSON renders a completed (done=true) google.longrunning
+// .Operation for a synchronous batch mutation. name is the location-scoped
+// operation name; metadataType is the operation's metadata type URL; response
+// is the already-typed result envelope.
+func batchOperationJSON(project, location, metadataType string, response map[string]any) map[string]any {
+	now := clock.Now().UTC().Format(time.RFC3339Nano)
+	return map[string]any{
+		"name": core.OperationName(project, location, randomHex(12)),
+		"done": true,
+		"metadata": map[string]any{
+			"@type":     metadataType,
+			"state":     "SUCCEEDED",
+			"startTime": now,
+			"endTime":   now,
+		},
+		"response": response,
+	}
+}
+
+// randomHex returns n random hexadecimal characters for an ephemeral operation
+// id (zero-filled on RNG failure, which never blocks a mutation).
+func randomHex(n int) string {
+	b := make([]byte, (n+1)/2)
+	if _, err := rand.Read(b); err != nil {
+		return strings.Repeat("0", n)
+	}
+	return hex.EncodeToString(b)[:n]
+}
 
 // ─── request helpers ──────────────────────────────────────────────────────────
 
