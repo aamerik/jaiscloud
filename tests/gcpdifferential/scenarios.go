@@ -262,6 +262,14 @@ type ResourceNames struct {
 	TourFSCounter string
 	TourFSPage    string
 	TourDataproc  string
+
+	// Error/retry tour differential (demo/sdk-tour errors mode): dedicated
+	// resources so the error set never collides with the happy-path tour set
+	// when both replay against one emulator run.
+	ErrorBucket    string
+	ErrorBQDataset string
+	ErrorBQTable   string
+	ErrorTopic     string
 }
 
 // Names derives the run's resource identifiers from suffix.
@@ -323,6 +331,12 @@ func Names(suffix string) ResourceNames {
 		TourFSCounter: "tour_fs_tx_" + suffix,
 		TourFSPage:    "tour_fs_page_" + suffix,
 		TourDataproc:  "tour-cluster-" + suffix,
+
+		// Error/retry tour differential.
+		ErrorBucket:    "errors-bucket-" + suffix,
+		ErrorBQDataset: "errors_ds_" + suffix,
+		ErrorBQTable:   "errors_tbl_" + suffix,
+		ErrorTopic:     "errors-topic-" + suffix,
 	}
 }
 

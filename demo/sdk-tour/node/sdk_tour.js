@@ -19,6 +19,7 @@ const GRPC = process.env.EMULATOR_GRPC || "localhost:8081";
 const PROJECT = process.env.PROJECT_ID || "jaiscloud-project";
 const RUN_ID = process.env.SDK_TOUR_RUN_ID || "local";
 const OUT = process.env.SDK_TOUR_RESULTS || "";
+const MODE = process.env.SDK_TOUR_MODE || "tour";
 const BATCH_COUNT = 32;
 
 const [GRPC_HOST, GRPC_PORT] = (() => {
@@ -502,6 +503,16 @@ async function dataprocScenarios() {
 }
 
 async function main() {
+  if (MODE === "errors") {
+    const { errorsScenarios } = require("./errors_tour");
+    await errorsScenarios({
+      run, REST, GRPC, PROJECT,
+      storage, pubsub, bigquery,
+      rid, resumablePayload, sha256Hex,
+    });
+    if (outStream) outStream.end();
+    return;
+  }
   await storageScenarios();
   await pubsubScenarios();
   await firestoreScenarios();

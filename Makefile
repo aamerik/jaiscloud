@@ -185,6 +185,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-rest-grpc-parity \
         test-gcp-gcloud-conformance test-gcp-python-conformance \
         demo-sdk-tour \
+        demo-sdk-tour-errors \
         test-gcp-differential record-gcp-differential record-gcp-differential-grpc \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
@@ -852,6 +853,10 @@ record-gcp-differential-tour: ## Capture SDK-tour goldens from REAL GCP (needs A
 	@echo "Recording SDK-tour goldens from real GCP (project: $${GCP_DIFFERENTIAL_PROJECT:-parity-diff-jaiscloud})..."
 	go test -tags gcp_differential -count=1 -v -run TestRecordTour ./tests/gcpdifferential/ -record
 
+record-gcp-differential-errors: ## Capture SDK error/retry tour goldens from REAL GCP (needs ADC)
+	@echo "Recording SDK error/retry tour goldens from real GCP (project: $${GCP_DIFFERENTIAL_PROJECT:-parity-diff-jaiscloud})..."
+	go test -tags gcp_differential -count=1 -v -run TestRecordErrors ./tests/gcpdifferential/ -record
+
 test-gcp-differential: ## Offline differential replay vs an ephemeral emulator (REST + gRPC; no credentials; tag: gcp_differential)
 	@echo "Building jaiscloud-gcp..."
 	@go build -o /tmp/jc-differential ./cmd/jaiscloud-gcp/
@@ -867,7 +872,7 @@ test-gcp-differential: ## Offline differential replay vs an ephemeral emulator (
 	  n=0; until bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081' >/dev/null 2>&1; do \
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp gRPC not ready"; cat /tmp/jaiscloud-gcp-differential.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (gRPC :8081)"; \
-	  go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest|TestTourGoldensAreClean|TestTourGoldenManifest|TestReplayGRPC|TestGRPCGoldensAreClean|TestGRPCGoldensAreMarked|TestGRPCGoldenManifest|TestGRPCScenariosValid|TestGRPCNormalizerFoldsVolatile|TestReplayTourGRPC|TestTourGRPCGoldensAreClean' ./tests/gcpdifferential/
+	  go test -tags gcp_differential -count=1 -v -run 'TestReplay|TestGoldensAreClean|TestGoldenManifest|TestTourGoldensAreClean|TestTourGoldenManifest|TestReplayGRPC|TestGRPCGoldensAreClean|TestGRPCGoldensAreMarked|TestGRPCGoldenManifest|TestGRPCScenariosValid|TestGRPCNormalizerFoldsVolatile|TestReplayTourGRPC|TestTourGRPCGoldensAreClean|TestReplayErrors|TestErrorGoldensAreClean|TestErrorGoldenManifest|TestErrorScenariosValid' ./tests/gcpdifferential/
 
 test-gcp-differential-tour: ## Offline SDK-tour replay vs an ephemeral emulator (no credentials; tag: gcp_differential)
 	@echo "Building jaiscloud-gcp..."
@@ -885,6 +890,20 @@ test-gcp-differential-tour: ## Offline SDK-tour replay vs an ephemeral emulator 
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp gRPC not ready"; cat /tmp/jaiscloud-gcp-differential-tour.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (gRPC :8081)"; \
 	  GCP_DIFFERENTIAL_STRICT=1 go test -tags gcp_differential -count=1 -v -run 'TestReplayTour|TestTourGoldensAreClean|TestTourGoldenManifest|TestTourScenariosValid|TestReplayTourGRPC|TestTourGRPCGoldensAreClean|TestTourGRPCScenariosValid' ./tests/gcpdifferential/
+
+test-gcp-differential-errors: ## Offline SDK error/retry replay vs an ephemeral emulator (no credentials; tag: gcp_differential)
+	@echo "Building jaiscloud-gcp..."
+	@go build -o /tmp/jc-differential-errors ./cmd/jaiscloud-gcp/
+	@echo "Starting jaiscloud-gcp (ephemeral)..."
+	@set -e; \
+	  /tmp/jc-differential-errors start --port 8080 --grpc-port 8081 --ephemeral > /tmp/jaiscloud-gcp-differential-errors.log 2>&1 & \
+	  pid=$$!; \
+	  cleanup() { echo "Stopping jaiscloud-gcp (REST :8080)..."; kill "$$pid" 2>/dev/null || true; p=$$(lsof -ti tcp:8080 2>/dev/null || true); if [ -n "$$p" ]; then kill $$p 2>/dev/null || true; fi; }; \
+	  trap cleanup EXIT INT TERM; \
+	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
+	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-differential-errors.log; exit 1; fi; sleep 1; \
+	  done; echo "  ready (REST :8080)"; \
+	  GCP_DIFFERENTIAL_STRICT=1 go test -tags gcp_differential -count=1 -v -run 'TestReplayErrors|TestErrorGoldensAreClean|TestErrorGoldenManifest|TestErrorScenariosValid' ./tests/gcpdifferential/
 
 # Opt-in Terraform / OpenTofu compatibility suites — drive the real
 # hashicorp/google provider against the emulator (tests/integration/gcp/terraform/).
@@ -980,6 +999,9 @@ test-gcp-python-conformance: ## Python google-cloud-* client-conformance suite v
 
 demo-sdk-tour: ## Official-client SDK tour (Go/Python/Java/Node) vs ephemeral jaiscloud-gcp -> PASS/FAIL matrix (demo/sdk-tour)
 	@demo/sdk-tour/run.sh
+
+demo-sdk-tour-errors: ## Official-client SDK error/retry/idempotency tour (Go/Python/Java/Node) -> PASS/FAIL matrix (demo/sdk-tour)
+	@demo/sdk-tour/run-errors.sh
 
 gen-gcp-fidelity-matrix: ## Regenerate docs/fidelity/* (fidelity matrix) from the registry + conformance evidence
 	go run -tags gcp_conformance ./tools/fidelitygen -out docs/fidelity

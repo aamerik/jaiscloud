@@ -32,6 +32,7 @@ type Config struct {
 	Project string
 	RunID   string // per-run unique suffix so repeated runs never collide
 	Lang    string
+	Mode    string // "tour" (default) or "errors"
 	Out     string // JSONL results path ("" = stdout only)
 }
 
@@ -49,6 +50,7 @@ func configFromEnv() Config {
 		Project: get("PROJECT_ID", "jaiscloud-project"),
 		RunID:   get("SDK_TOUR_RUN_ID", "local"),
 		Lang:    "go",
+		Mode:    get("SDK_TOUR_MODE", "tour"),
 		Out:     strings.TrimSpace(os.Getenv("SDK_TOUR_RESULTS")),
 	}
 }
@@ -209,6 +211,10 @@ func main() {
 	defer rec.close()
 	r := &runner{cfg: cfg, rec: rec}
 
+	if cfg.Mode == "errors" {
+		runErrors(r)
+		return
+	}
 	runAll(r)
 }
 

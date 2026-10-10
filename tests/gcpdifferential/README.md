@@ -122,6 +122,45 @@ normalizer (`normalize.go`) and adds:
   chunk and the finalizing chunk (512 KiB total); larger transfers differ only
   in chunk count.
 
+## Error / retry tour differential (demo/sdk-tour errors mode)
+
+`testdata/golden-tour-errors/` records the canonical **error** responses the same
+operations produce on real GCP — the surface the happy-path tour cannot see —
+and replays them against the emulator:
+
+| Op | What it covers |
+| --- | --- |
+| `error_bucket_create` / `error_bucket_already_exists` | bucket create then duplicate → 409 ALREADY_EXISTS |
+| `error_object_not_found` | missing object → 404 NOT_FOUND |
+| `error_topic_create` / `error_iam_get` / `error_iam_set_ok` / `error_iam_set_stale` | Pub/Sub IAM etag-optimistic-concurrency read-modify-write; the stale replay → 409 ABORTED |
+| `error_invalid_query` | malformed Standard SQL → 400 INVALID_ARGUMENT |
+| `error_bq_dataset_create` / `error_bq_table_create` | BigQuery fixtures for the insertId case |
+| `error_insertall_seed` / `error_insertall_duplicate` / `error_insertall_count` | `insertId` idempotency: the replay must not create a second row |
+
+Targets: `make record-gcp-differential-errors` (ADC) and
+`make test-gcp-differential-errors` (offline emulator). Like every other set
+the replay is gated with `GCP_DIFFERENTIAL_STRICT=1`; every observed divergence
+is either **open** (a real bug) or **accepted** with a rule and reason in
+`triage.go`. The report lands under `testdata/report-tour-errors/`.
+
+Findings from the first recording (structurally matching, prose-only accepted
+divergences omitted):
+
+* **Match:** error envelope shape, HTTP status and machine-readable
+  `code`/`reason`/`status` for storage 409/404, Pub/Sub IAM 409 ABORTED, and
+  BigQuery 400 INVALID_ARGUMENT.
+* **Accepted (advisory):** BigQuery's per-error `location`/`locationType`
+  fields are absent from the emulator's 400 body
+  (`response.error.errors[0].location`/`.locationType`). No official client
+  branches on them; `triage.go` accepts them with a reason.
+* **Accepted (eventual consistency):** real GCP's `tabledata.list` `totalRows`
+  lagged ("0") immediately after the insert while the emulator returned "1";
+  the row list itself matched.
+* **Additive/accepted:** the emulator reports the replayed `insertId` as an
+  `insertErrors[].reason: "duplicate"`; real GCP silently accepted it (the
+  stored row count is 1 on both). The demo harness asserts the row count, not
+  the duplicate error, for exactly this reason.
+
 ## Divergence classification
 
 Every divergence is either **open** (a real bug to investigate) or **accepted**
