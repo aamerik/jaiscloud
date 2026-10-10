@@ -198,6 +198,66 @@ classification, never silently skipped.
   accepted with reasons in the differential `triage.go` — see the differential
   README.
 
+## Streaming-semantics tour (`SDK_TOUR_MODE=streaming`)
+
+The happy-path tour proves a message arrives; the streaming mode asserts the
+*semantics* of the streaming surfaces — ack-deadline redelivery and extension,
+ordering keys, exactly-once ack, Firestore Listen resume tokens, Logging tail
+reconnects and Storage `BidiReadObject` — in all four official clients.
+
+```bash
+make demo-sdk-tour-streaming       # or: demo/sdk-tour/run-streaming.sh
+```
+
+`run-streaming.sh` starts a local ephemeral emulator and runs the four legs,
+then `aggregate_streaming.py` prints the matrix and exits non-zero on any FAIL,
+any status that differs from its pre-declared per-language expectation (an
+expected-OK surface a leg did not run, or an expected-SKIP surface that
+unexpectedly ran), or any cross-language divergence among the legs that ran.
+
+Where the high-level client hides the semantics under test, the generated
+low-level client is used (Firestore Listen resume tokens, precise
+`StreamingPull` / `ModifyAckDeadline` control); elsewhere the high-level client
+is used, because its behavior is part of what is under test. No throttle
+injection is used: the emulator's gRPC stream interceptor injects only at stream
+start, so a mid-stream fault is not reachable here.
+
+### Scenarios (`streaming.*`)
+
+| Scenario | Guarantee asserted | Observable |
+| --- | --- | --- |
+| `pubsub_ack_deadline` | unacked message redelivered after the ack deadline; ack stops it | `redelivered=yes` |
+| `pubsub_ack_extension` | `ModifyAckDeadline(600s)` keeps it invisible past the original 10s | `no_redelivery_while_extended=yes` |
+| `pubsub_ordering_keys` | a subscription with ordering enabled delivers a key's messages in order | `ordered=yes` |
+| `pubsub_exactly_once_ack` | an acked message on an exactly-once subscription is not redelivered | `dup=0` |
+| `firestore_listen_resume_token` | resuming Listen from a token loses nothing and duplicates nothing | `loss=0,dup=0` |
+| `firestore_snapshot_consistency` | concurrent writes delivered once each with monotonic `read_time` | `docs=5,dup=0,monotonic=yes` |
+| `logging_tail_reconnect` | a reconnected tail delivers new entries and does not replay the gap | `reconnect_ok=yes,gap_replayed=no` |
+| `storage_bidi_read` | `BidiReadObject` serves a full read and a subrange | `full=ok,range=ok` |
+
+### Guarantee matrix
+
+| Surface | Status | Notes |
+| --- | --- | --- |
+| Pub/Sub ack deadline + `ModifyAckDeadline` | asserted | memory and Postgres stores both implement the visibility deadline. |
+| Pub/Sub ordering keys | asserted | in-flight ordering-key groups gate later messages. |
+| Pub/Sub exactly-once | approximated | the emulator advertises `enable_exactly_once_delivery` (60s default deadline) and never redelivers an acked message, but treats a repeated/superseded ackId as an idempotent no-op and always returns success for `AckWithResult`; real GCP rejects a superseded ackId. See `internal/gcp/grpc/pubsub/acktrack.go`. |
+| Firestore Listen resume token | asserted | exactly-once per target after the fix below; the empty-target_ids NO_CHANGE token still carries the minimum cursor across targets. |
+| Firestore snapshot consistency | asserted | ordered, exactly-once, monotonic `read_time`. |
+| Logging tail reconnect | approximated | real `TailLogEntries` has no resume cursor, so reconnect dropping the gap is faithful, but the emulator is at-most-once relative to the stream's write-id snapshot and maps `buffer_window` to a poll interval; it never emits `suppression_info` (real GCP reports `RATE_LIMIT`/`NOT_CONSUMED`). See `internal/gcp/transport/grpc/logging/tail.go`. |
+| Storage `BidiReadObject` | asserted (Go, Java) / unsupported (Python, Node) | Go uses `experimental.WithGRPCBidiReads()`, Java `Storage#blobReadSession`; the Python and Node high-level storage clients expose no bidi-read projection, so those legs declare `SKIP`. |
+
+### Findings
+
+The resume-token scenario exposed a genuine Firestore gap: `Listen` registered
+its change subscription before capturing the snapshot/replay position, and
+`handleChange` re-emitted any live event at or below a target's delivered
+cursor — so a write landing between opening a resumed stream and sending
+`AddTarget` was both replayed and delivered from the buffered subscription, a
+duplicate. Real Firestore is exactly-once per target. Fixed in
+`internal/gcp/grpc/firestore/listen.go` by dropping live events with
+`Seq <= target.seq`; the scenario's racing write makes the guarantee observable.
+
 ## Layout
 
 ```
@@ -206,10 +266,13 @@ demo/sdk-tour/
   aggregate.py    # cross-language matrix + agreement check
   run-errors.sh   # error/retry phases -> 4 languages -> error matrix
   aggregate_errors.py # cross-language error matrix + agreement check
+  run-streaming.sh    # streaming-semantics phases -> 4 languages -> matrix
+  aggregate_streaming.py # streaming matrix + per-language expectations
   go/             # official cloud.google.com/go/* clients (separate module)
   python/         # official google-cloud-* clients (requirements.txt)
   java/           # official com.google.cloud clients (Maven, libraries-bom)
   node/           # official @google-cloud/* clients (package-lock.json)
   results/        # per-run JSONL (gitignored)
   results-errors/ # per-run error JSONL (gitignored)
+  results-streaming/ # per-run streaming JSONL (gitignored)
 ```

@@ -654,6 +654,11 @@ def main() -> int:
 
             errors_tour.errors_scenarios(rec)
             return 0
+        if MODE == "streaming":
+            import streaming_tour
+
+            streaming_tour.streaming_scenarios(rec)
+            return 0
         storage_scenarios(rec)
         pubsub_scenarios(rec)
         firestore_scenarios(rec)

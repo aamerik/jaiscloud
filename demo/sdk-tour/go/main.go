@@ -215,6 +215,10 @@ func main() {
 		runErrors(r)
 		return
 	}
+	if cfg.Mode == "streaming" {
+		runStreaming(r)
+		return
+	}
 	runAll(r)
 }
 
