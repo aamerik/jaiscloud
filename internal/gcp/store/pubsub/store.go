@@ -22,6 +22,13 @@ type Message struct {
 	Attributes      map[string]string
 	PublishTime     time.Time
 	DeliveryAttempt int
+	// DeliveryVersion is the exactly-once acknowledgement-ID version of the
+	// message's current delivery, encoded in the wire ack ID. It is deliberately
+	// distinct from DeliveryAttempt (which drives dead-letter accounting and must
+	// not be advanced by a Seek): a claim advances both, but only a Seek advances
+	// DeliveryVersion, so a Seek invalidates outstanding ack IDs without skewing
+	// the delivery-attempt count. See store/pubsub/ackid.go.
+	DeliveryVersion int
 	OrderingKey     string    // GCP orderingKey (FIFO group, like SQS MessageGroupId)
 	VisibleAt       time.Time // when the message becomes visible again (ack deadline)
 	// Acked marks a keyed message that has been acknowledged. Ordered messages
@@ -63,8 +70,9 @@ type Messages interface {
 	// List returns all messages for a queue, sorted by publish time (no claim).
 	List(ctx context.Context, queue string) ([]Message, error)
 	// Pull atomically claims up to maxMessages eligible messages, marking each
-	// invisible until now+ackDeadlineSec and incrementing its delivery attempt.
-	// retentionSec filters out messages older than the topic's retention.
+	// invisible until now+ackDeadlineSec and advancing its delivery attempt and
+	// ack-ID version. retentionSec filters out messages older than the topic's
+	// retention.
 	Pull(ctx context.Context, queue string, maxMessages, ackDeadlineSec, retentionSec int, now time.Time) ([]Message, error)
 	// Acknowledge applies an ack to one message (by message ID). An unordered
 	// message is deleted. A keyed message is retained and acked under the GCP
@@ -75,7 +83,15 @@ type Messages interface {
 	// held acks so those later messages are redelivered too.
 	Acknowledge(ctx context.Context, queue, messageID string) error
 	Delete(ctx context.Context, queue, messageID string) error
+	// UpdateDeliveryAttempt sets a message's dead-letter delivery attempt. It
+	// deliberately does not touch DeliveryVersion (the ack-ID version), which is
+	// advanced only by a claim (Pull) or a Seek (BumpDeliveryVersions).
 	UpdateDeliveryAttempt(ctx context.Context, queue, messageID string, attempt int) error
+	// BumpDeliveryVersions advances each named message's exactly-once ack-ID
+	// version by one so a previously issued ack ID no longer names the current
+	// delivery. A Seek uses it to invalidate outstanding ack IDs without touching
+	// DeliveryAttempt (dead-letter accounting). Unknown IDs are ignored.
+	BumpDeliveryVersions(ctx context.Context, queue string, messageIDs []string) error
 	// ModifyAckDeadline resets the visibility deadline for the given ack IDs
 	// (each "queue/messageID"); seconds==0 makes them immediately visible.
 	ModifyAckDeadline(ctx context.Context, queue string, ackIDs []string, seconds int, now time.Time) error

@@ -242,6 +242,62 @@ func TestSubscriptionExactlyOnceAckIDVersioning(t *testing.T) {
 	}
 }
 
+// TestSubscriptionSeekInvalidatesAckID pins the REST half of EOD2: the ack-ID
+// version a Seek advances is honored by the REST ack path. Seek itself is
+// gRPC-only today, so the test applies the same store mutations a Seek performs
+// (make the message visible, then advance its delivery version) and checks the
+// REST ack path rejects the pre-Seek id.
+func TestSubscriptionSeekInvalidatesAckID(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	if _, err := p.TopicCreate(ctx, newNR(map[string]any{"name": "topics/eods"})); err != nil {
+		t.Fatalf("topic create: %v", err)
+	}
+	if _, err := p.SubscriptionCreate(ctx, newNR(map[string]any{
+		"name": "subscriptions/eods",
+		"body": map[string]any{"topic": "projects/proj/topics/eods", "enableExactlyOnceDelivery": true},
+	})); err != nil {
+		t.Fatalf("subscription create: %v", err)
+	}
+	if _, err := p.TopicPublish(ctx, newNR(map[string]any{
+		"name": "topics/eods", "body": map[string]any{"messages": []any{map[string]any{"data": "aGk="}}},
+	})); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	ack1 := restPullOne(t, ctx, p, "subscriptions/eods")
+	_, msgID, _, ok := pubsubstore.DecodeAckID(ack1)
+	if !ok {
+		t.Fatalf("ack id %q did not decode", ack1)
+	}
+	// Seek's store effect: make the message visible, then advance its version.
+	if err := p.messages.ModifyAckDeadline(ctx, "eods", []string{"eods/" + msgID}, 0, clock.Now()); err != nil {
+		t.Fatalf("seek visibility reset: %v", err)
+	}
+	if err := p.messages.BumpDeliveryVersions(ctx, "eods", []string{msgID}); err != nil {
+		t.Fatalf("seek version bump: %v", err)
+	}
+
+	if _, err := p.SubscriptionAcknowledge(ctx, newNR(map[string]any{
+		"name": "subscriptions/eods", "body": map[string]any{"ackIds": []any{ack1}},
+	})); err == nil {
+		t.Fatal("ack(pre-Seek) = nil, want InvalidArgument")
+	} else {
+		assertEODFailure(t, err, ack1)
+	}
+
+	// The restored message is redelivered with a fresh ack id that works.
+	ack2 := restPullOne(t, ctx, p, "subscriptions/eods")
+	if ack2 == ack1 {
+		t.Fatal("post-Seek re-pull returned the same ack id; version was not advanced")
+	}
+	if _, err := p.SubscriptionAcknowledge(ctx, newNR(map[string]any{
+		"name": "subscriptions/eods", "body": map[string]any{"ackIds": []any{ack2}},
+	})); err != nil {
+		t.Fatalf("ack(post-Seek): %v", err)
+	}
+}
+
 // TestSubscriptionExactlyOnceAckIDExpired pins the expired-ID branch with a
 // frozen clock advanced past the ack deadline.
 func TestSubscriptionExactlyOnceAckIDExpired(t *testing.T) {

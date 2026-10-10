@@ -840,7 +840,7 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 			msg["orderingKey"] = m.OrderingKey
 		}
 		received = append(received, map[string]any{
-			"ackId":           pubsubstore.EncodeAckID(s, m.MessageID, m.DeliveryAttempt),
+			"ackId":           pubsubstore.EncodeAckID(s, m.MessageID, m.DeliveryVersion),
 			"message":         msg,
 			"deliveryAttempt": deliveryAttempt(m.DeliveryAttempt, hasDeadLetterPolicy),
 		})
@@ -891,13 +891,13 @@ func (p *Provider) SubscriptionAcknowledge(ctx context.Context, nr *model.Normal
 		if !ok {
 			continue
 		}
-		queue, msgID, attempt, ok := pubsubstore.DecodeAckID(id)
+		queue, msgID, version, ok := pubsubstore.DecodeAckID(id)
 		// An ackId is valid only for the subscription in the request path.
 		if !ok || queue != s {
 			continue
 		}
 		if eod {
-			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, attempt, now) {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, version, now) {
 				invalid = append(invalid, id)
 				continue
 			}
@@ -942,13 +942,13 @@ func (p *Provider) SubscriptionModifyAckDeadline(ctx context.Context, nr *model.
 	decoded := make([]string, 0, len(ackIDs))
 	var invalid []string
 	for _, id := range ackIDs {
-		queue, msgID, attempt, ok := pubsubstore.DecodeAckID(id)
+		queue, msgID, version, ok := pubsubstore.DecodeAckID(id)
 		// An ackId is valid only for the subscription in the request path.
 		if !ok || queue != s {
 			continue
 		}
 		if eod {
-			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, attempt, now) {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, version, now) {
 				invalid = append(invalid, id)
 				continue
 			}

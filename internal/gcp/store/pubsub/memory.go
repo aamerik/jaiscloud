@@ -16,8 +16,9 @@ type MemoryMessages struct {
 	messages map[string]map[string]Message // queue (subscription ID) → messageID → message
 	// sortedIDs caches, per queue, message IDs in ascending PublishTime order.
 	// Put/Delete invalidate a queue's entry (they change membership/order);
-	// claim-state mutations (Pull/UpdateDeliveryAttempt/ModifyAckDeadline only
-	// touch VisibleAt/DeliveryAttempt, never PublishTime) do not, so repeated
+	// claim-state mutations (Pull/UpdateDeliveryAttempt/ModifyAckDeadline/
+	// BumpDeliveryVersions only touch VisibleAt/DeliveryAttempt/DeliveryVersion,
+	// never PublishTime) do not, so repeated
 	// polling against an unchanged queue — the common Pub/Sub access pattern —
 	// avoids re-sorting the queue on every call.
 	sortedIDs map[string][]string
@@ -138,6 +139,7 @@ func (s *MemoryMessages) Pull(_ context.Context, queue string, maxMessages, ackD
 		// this key's available messages belong to the same batch.
 		m.VisibleAt = now.Add(duration(ackDeadlineSec))
 		m.DeliveryAttempt++
+		m.DeliveryVersion++
 		s.messages[queue][m.MessageID] = m
 		out = append(out, m)
 	}
@@ -274,6 +276,27 @@ func (s *MemoryMessages) UpdateDeliveryAttempt(_ context.Context, queue, message
 	}
 	m.DeliveryAttempt = attempt
 	msgs[messageID] = m
+	return nil
+}
+
+// BumpDeliveryVersions advances each named message's ack-ID version so a
+// previously issued ack ID no longer names the current delivery. A Seek uses it
+// to invalidate outstanding ack IDs; DeliveryAttempt is left untouched.
+func (s *MemoryMessages) BumpDeliveryVersions(_ context.Context, queue string, messageIDs []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	msgs, ok := s.messages[queue]
+	if !ok {
+		return nil
+	}
+	for _, id := range messageIDs {
+		m, ok := msgs[id]
+		if !ok {
+			continue
+		}
+		m.DeliveryVersion++
+		msgs[id] = m
+	}
 	return nil
 }
 

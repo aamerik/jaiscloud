@@ -44,11 +44,12 @@ const ackTombstoneTTL = time.Minute
 //     claimed copy can therefore still be sent until the store's own
 //     modify-deadline/ack-deadline state catches up. The task scope is ack
 //     state across StreamingPull streams, which this covers.
-//   - The ackId encodes the delivery attempt (base64url of
-//     "subscription/messageID/deliveryAttempt"). The unary Acknowledge and
-//     ModifyAckDeadline RPCs use it to reject a superseded or expired ackId on
-//     an exactly-once subscription (real GCP's contract: only the latest ackId
-//     is accepted, and an expired one is INVALID_ARGUMENT). This registry's own
+//   - The ackId encodes the message's delivery version (base64url of
+//     "subscription/messageID/deliveryVersion", advanced per claim and per
+//     Seek). The unary Acknowledge and ModifyAckDeadline RPCs use it to reject a
+//     superseded, expired, or Seek-invalidated ackId on an exactly-once
+//     subscription (real GCP's contract: only the latest ackId is accepted, and
+//     an expired one is INVALID_ARGUMENT). This registry's own
 //     path — acks/modacks sent on a StreamingPull stream — validates the version
 //     the same way and drops a superseded/expired id without mutating the live
 //     delivery; it does not populate
