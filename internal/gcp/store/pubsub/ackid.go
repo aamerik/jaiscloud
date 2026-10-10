@@ -25,7 +25,9 @@ func EncodeAckID(subscription, messageID string, deliveryAttempt int) string {
 }
 
 // DecodeAckID reverses EncodeAckID. ok is false for a malformed ID (bad base64,
-// missing segments, or a non-numeric version).
+// missing segments, or a non-numeric version). Message IDs are numeric
+// (store.NextID), so the middle segment is unambiguous and the store's
+// last-slash stripping of "subscription/messageID" stays correct.
 func DecodeAckID(s string) (subscription, messageID string, deliveryAttempt int, ok bool) {
 	raw, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {

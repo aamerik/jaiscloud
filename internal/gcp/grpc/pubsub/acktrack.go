@@ -49,11 +49,12 @@ const ackTombstoneTTL = time.Minute
 //     ModifyAckDeadline RPCs use it to reject a superseded or expired ackId on
 //     an exactly-once subscription (real GCP's contract: only the latest ackId
 //     is accepted, and an expired one is INVALID_ARGUMENT). This registry's own
-//     path — acks sent on a StreamingPull stream — still treats a repeat as an
-//     idempotent no-op rather than reporting it in
-//     StreamingPullResponse.acknowledge_confirmation.invalid_ack_ids; the
+//     path — acks/modacks sent on a StreamingPull stream — validates the version
+//     the same way and drops a superseded/expired id without mutating the live
+//     delivery; it does not populate
+//     StreamingPullResponse.acknowledge_confirmation.invalid_ack_ids (the
 //     official clients resolve AckWithResult from the unary RPC's ErrorInfo
-//     sidecar, so that confirmation surface is not exercised. Acking is still
+//     sidecar, so that confirmation surface is not exercised). Acking is still
 //     guaranteed not to redeliver the message.
 type ackRegistry struct {
 	sub      string

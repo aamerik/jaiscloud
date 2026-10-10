@@ -7,7 +7,10 @@ import (
 
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/crypto"
+	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
+	"jaiscloud/internal/store"
 
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
@@ -184,5 +187,121 @@ func TestPlainSubscriptionStaleAckIDOK(t *testing.T) {
 	_ = pullOne(t, ctx, subc, sub)
 	if _, err := subc.Acknowledge(ctx, &pubsubpb.AcknowledgeRequest{Subscription: sub, AckIds: []string{ack1}}); err != nil {
 		t.Fatalf("plain Acknowledge(stale) = %v, want OK", err)
+	}
+}
+
+// TestApplyStreamAcksExactlyOnceVersions pins the streaming path: on an
+// exactly-once subscription a superseded ack id must not mutate the live
+// delivery, while the latest id acks it; a non-EOD stream keeps the lenient
+// accept-anything behaviour.
+func TestApplyStreamAcksExactlyOnceVersions(t *testing.T) {
+	ctx := context.Background()
+	messages := pubsubstore.NewMemoryMessages()
+	svc := NewService(store.NewMemoryResourceStore(), messages, crypto.NewEnvelopeEncryptor(kmsstore.NewMemoryStore()), "test")
+	now := clock.Now()
+	put := func(attempt int) {
+		t.Helper()
+		if err := messages.Put(ctx, pubsubstore.Message{
+			Subscription: "s", MessageID: "m1", Data: "x",
+			DeliveryAttempt: attempt, VisibleAt: now.Add(time.Minute),
+		}); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+	streamAck := func(eod bool, ackID string) []string {
+		return svc.applyStreamAcks(ctx, "s", eod, &pubsubpb.StreamingPullRequest{AckIds: []string{ackID}})
+	}
+
+	// Superseded id on an exactly-once subscription: dropped, message intact.
+	put(2)
+	if got := streamAck(true, pubsubstore.EncodeAckID("s", "m1", 1)); len(got) != 0 {
+		t.Fatalf("stale stream ack returned %v, want none", got)
+	}
+	if msgs, _ := messages.List(ctx, "s"); len(msgs) != 1 {
+		t.Fatalf("stale stream ack mutated the live delivery: %d messages left", len(msgs))
+	}
+
+	// Latest id acks it.
+	if got := streamAck(true, pubsubstore.EncodeAckID("s", "m1", 2)); len(got) != 1 {
+		t.Fatalf("latest stream ack returned %v, want [m1]", got)
+	}
+	if msgs, _ := messages.List(ctx, "s"); len(msgs) != 0 {
+		t.Fatalf("latest stream ack did not delete the message: %d left", len(msgs))
+	}
+
+	// Non-exactly-once: a stale id is still accepted (deletes the message).
+	put(2)
+	if got := streamAck(false, pubsubstore.EncodeAckID("s", "m1", 1)); len(got) != 1 {
+		t.Fatalf("plain stream ack returned %v, want [m1]", got)
+	}
+	if msgs, _ := messages.List(ctx, "s"); len(msgs) != 0 {
+		t.Fatalf("plain stream ack did not delete the message: %d left", len(msgs))
+	}
+}
+
+// TestExactlyOnceUnknownAckIDOK pins the lenient branch: a decodable but unknown
+// ack id on an exactly-once subscription is OK (real GCP returns a plain
+// INVALID_ARGUMENT for malformed ids, which is a separate, out-of-scope gap).
+func TestExactlyOnceUnknownAckIDOK(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	const topic = "projects/test/topics/eod-unknown-topic"
+	const sub = "projects/test/subscriptions/eod-unknown-sub"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: sub, Topic: topic, AckDeadlineSeconds: 60, EnableExactlyOnceDelivery: true,
+	}); err != nil {
+		t.Fatalf("CreateSubscription: %v", err)
+	}
+	unknown := pubsubstore.EncodeAckID(sub, "999999", 1)
+	if _, err := subc.Acknowledge(ctx, &pubsubpb.AcknowledgeRequest{Subscription: sub, AckIds: []string{unknown}}); err != nil {
+		t.Fatalf("Acknowledge(unknown) = %v, want OK", err)
+	}
+}
+
+// TestExactlyOnceMixedBatchAcksValid pins the mixed-batch behavior: the valid
+// id is acked and the superseded id is reported in the ErrorInfo detail.
+func TestExactlyOnceMixedBatchAcksValid(t *testing.T) {
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	const topic = "projects/test/topics/eod-mixed-topic"
+	const sub = "projects/test/subscriptions/eod-mixed-sub"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: sub, Topic: topic, AckDeadlineSeconds: 60, EnableExactlyOnceDelivery: true,
+	}); err != nil {
+		t.Fatalf("CreateSubscription: %v", err)
+	}
+	if _, err := pub.Publish(ctx, &pubsubpb.PublishRequest{
+		Topic: topic, Messages: []*pubsubpb.PubsubMessage{{Data: []byte("mixed")}},
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	ack1 := pullOne(t, ctx, subc, sub)
+	if _, err := subc.ModifyAckDeadline(ctx, &pubsubpb.ModifyAckDeadlineRequest{
+		Subscription: sub, AckIds: []string{ack1}, AckDeadlineSeconds: 0,
+	}); err != nil {
+		t.Fatalf("nack: %v", err)
+	}
+	ack2 := pullOne(t, ctx, subc, sub)
+
+	if _, err := subc.Acknowledge(ctx, &pubsubpb.AcknowledgeRequest{Subscription: sub, AckIds: []string{ack1, ack2}}); err == nil {
+		t.Fatal("mixed Acknowledge = nil, want InvalidArgument for the superseded id")
+	} else if st, _ := status.FromError(err); st.Code() != codes.InvalidArgument {
+		t.Fatalf("mixed Acknowledge code = %v, want InvalidArgument", st.Code())
+	}
+	// The valid (latest) id was still acked, so the subscription is empty.
+	pull, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: sub, MaxMessages: 1, ReturnImmediately: true})
+	if err != nil {
+		t.Fatalf("pull after mixed ack: %v", err)
+	}
+	if len(pull.GetReceivedMessages()) != 0 {
+		t.Fatalf("valid id in a mixed batch was not acked: %d delivered", len(pull.GetReceivedMessages()))
 	}
 }

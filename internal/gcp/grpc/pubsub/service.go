@@ -808,10 +808,10 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 	flow := newStreamFlowControl(first.GetMaxOutstandingMessages(), first.GetMaxOutstandingBytes())
 
 	// Handle the initial request's control fields.
-	for _, id := range s.applyStreamAcks(ctx, sub, first) {
+	for _, id := range s.applyStreamAcks(ctx, sub, exactlyOnce, first) {
 		flow.release(id)
 	}
-	for _, id := range s.applyStreamModifyDeadlines(ctx, sub, first) {
+	for _, id := range s.applyStreamModifyDeadlines(ctx, sub, exactlyOnce, first) {
 		flow.release(id)
 	}
 
@@ -825,10 +825,10 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 				recvErr <- err
 				return
 			}
-			for _, id := range s.applyStreamAcks(ctx, sub, r) {
+			for _, id := range s.applyStreamAcks(ctx, sub, exactlyOnce, r) {
 				flow.release(id)
 			}
-			for _, id := range s.applyStreamModifyDeadlines(ctx, sub, r) {
+			for _, id := range s.applyStreamModifyDeadlines(ctx, sub, exactlyOnce, r) {
 				flow.release(id)
 			}
 		}
@@ -930,14 +930,29 @@ func (s *Service) StreamingPull(stream pubsubpb.Subscriber_StreamingPullServer) 
 // outstanding flow-control set. Each successful ack also tombstones the message
 // in the subscription-scoped registry so another stream cannot redeliver an
 // already-claimed copy.
-func (s *Service) applyStreamAcks(ctx context.Context, queue string, req *pubsubpb.StreamingPullRequest) []string {
+func (s *Service) applyStreamAcks(ctx context.Context, queue string, eod bool, req *pubsubpb.StreamingPullRequest) []string {
 	reg := s.registry(queue)
+	var byID map[string]pubsubstore.Message
+	if eod {
+		byID = s.messageIndex(ctx, queue)
+	}
+	now := clock.Now()
 	var acked []string
 	for _, a := range req.GetAckIds() {
-		q, msgID, _, ok := pubsubstore.DecodeAckID(a)
+		q, msgID, attempt, ok := pubsubstore.DecodeAckID(a)
 		// An ackId is valid only for the subscription that issued it.
 		if !ok || q != queue {
 			continue
+		}
+		// On an exactly-once subscription a superseded/expired id must not ack
+		// the live delivery. The streaming path does not populate
+		// acknowledge_confirmation.invalid_ack_ids (the official clients resolve
+		// the result from the unary RPC's ErrorInfo), so it drops the id instead
+		// of mutating state.
+		if eod {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, attempt, now) {
+				continue
+			}
 		}
 		if err := s.messages.Delete(ctx, queue, msgID); err != nil {
 			// Leave it untombstoned so a later retry can still ack it.
@@ -973,21 +988,33 @@ func (s *Service) dropAcked(ctx context.Context, queue string, reg *ackRegistry,
 // A deadline of 0 is a nack (immediately redeliverable), so those IDs are
 // returned for flow-control release; a positive extension keeps the message
 // outstanding.
-func (s *Service) applyStreamModifyDeadlines(ctx context.Context, queue string, req *pubsubpb.StreamingPullRequest) []string {
+func (s *Service) applyStreamModifyDeadlines(ctx context.Context, queue string, eod bool, req *pubsubpb.StreamingPullRequest) []string {
 	ackIDs := req.GetModifyDeadlineAckIds()
 	seconds := req.GetModifyDeadlineSeconds()
 	n := len(seconds)
 	if len(ackIDs) < n {
 		n = len(ackIDs)
 	}
+	var byID map[string]pubsubstore.Message
+	if eod {
+		byID = s.messageIndex(ctx, queue)
+	}
+	now := clock.Now()
 	var nacked []string
 	for i := 0; i < n; i++ {
-		q, msgID, _, ok := pubsubstore.DecodeAckID(ackIDs[i])
+		q, msgID, attempt, ok := pubsubstore.DecodeAckID(ackIDs[i])
 		// An ackId is valid only for the subscription that issued it.
 		if !ok || q != queue {
 			continue
 		}
-		_ = s.messages.ModifyAckDeadline(ctx, queue, []string{queue + "/" + msgID}, int(seconds[i]), clock.Now())
+		// As with applyStreamAcks, a superseded/expired id on an exactly-once
+		// subscription must not touch the live delivery.
+		if eod {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, attempt, now) {
+				continue
+			}
+		}
+		_ = s.messages.ModifyAckDeadline(ctx, queue, []string{queue + "/" + msgID}, int(seconds[i]), now)
 		if seconds[i] <= 0 {
 			nacked = append(nacked, msgID)
 		}
@@ -999,7 +1026,7 @@ func (s *Service) Acknowledge(ctx context.Context, req *pubsubpb.AcknowledgeRequ
 	project, sub, named := splitSubscriptionName(req.GetSubscription())
 	// Exactly-once delivery validates the ack ID's encoded version; a plain
 	// (or unresolvable) subscription keeps the lenient accept-anything path.
-	eod := named && s.subscriptionEOD(ctx, project, sub)
+	eod := named && s.subscriptionEODByName(ctx, project, sub)
 	now := clock.Now()
 	var byID map[string]pubsubstore.Message
 	if eod {
@@ -1096,7 +1123,7 @@ func subscriptionEOD(e store.ResourceEntry) bool {
 // subscriptionEODByName fetches a subscription's exactly-once flag. A fetch
 // failure (unknown subscription) is treated as non-exactly-once so the lenient
 // legacy ack path is preserved.
-func (s *Service) subscriptionEOD(ctx context.Context, project, sub string) bool {
+func (s *Service) subscriptionEODByName(ctx context.Context, project, sub string) bool {
 	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtSubscription, sub)
 	if err != nil {
 		return false
