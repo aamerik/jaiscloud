@@ -33,6 +33,49 @@ func TestMemoryMessagesPullVisibility(t *testing.T) {
 	}
 }
 
+// TestMemoryMessagesBumpDeliveryVersions verifies the Seek contract: bumping a
+// message's delivery version invalidates a previously issued ack ID (the version
+// is encoded per delivery), without advancing the dead-letter DeliveryAttempt
+// counter, and the message stays available for redelivery.
+func TestMemoryMessagesBumpDeliveryVersions(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemoryMessages()
+	now := time.Now()
+	s.Put(ctx, Message{Topic: "t", MessageID: "1", PublishTime: now})
+
+	msgs, err := s.Pull(ctx, "t", 10, 10, 0, now)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("pull = %+v / %v", msgs, err)
+	}
+	first := msgs[0]
+	if first.DeliveryVersion != 1 || first.DeliveryAttempt != 1 {
+		t.Fatalf("first delivery = version %d / attempt %d, want 1/1", first.DeliveryVersion, first.DeliveryAttempt)
+	}
+	// A Seek makes the message visible and advances only the ack-ID version.
+	if err := s.ModifyAckDeadline(ctx, "t", []string{"t/1"}, 0, now); err != nil {
+		t.Fatalf("seek visibility reset: %v", err)
+	}
+	if err := s.BumpDeliveryVersions(ctx, "t", []string{"1"}); err != nil {
+		t.Fatalf("BumpDeliveryVersions: %v", err)
+	}
+	stored, _ := s.List(ctx, "t")
+	if len(stored) != 1 || stored[0].DeliveryVersion != 2 || stored[0].DeliveryAttempt != 1 {
+		t.Fatalf("after seek = version %d / attempt %d, want 2/1", stored[0].DeliveryVersion, stored[0].DeliveryAttempt)
+	}
+	// The pre-Seek ack ID no longer names the current delivery.
+	if AckIDCurrent(stored[0], first.DeliveryVersion, now) {
+		t.Fatal("pre-Seek version still current, want invalidated")
+	}
+	// The redelivered message gets a fresh version and is current.
+	msgs, _ = s.Pull(ctx, "t", 10, 10, 0, now)
+	if len(msgs) != 1 || msgs[0].DeliveryVersion != 3 {
+		t.Fatalf("redelivery = %+v, want version 3", msgs)
+	}
+	if !AckIDCurrent(msgs[0], msgs[0].DeliveryVersion, now) {
+		t.Fatal("post-Seek redelivery version not current")
+	}
+}
+
 // TestMemoryMessagesOrderingKey verifies the real-GCP ordered pull contract: a
 // key's available messages are delivered together, in publish order, and the
 // key is withheld while that batch is outstanding (only one batch at a time).

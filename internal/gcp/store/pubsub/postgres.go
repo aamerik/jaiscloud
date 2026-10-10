@@ -42,17 +42,17 @@ func (s *PostgresMessages) Put(ctx context.Context, m Message) error {
 	}
 	attrs, _ := json.Marshal(m.Attributes)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_pubsub_messages (topic, subscription, message_id, data, attributes, publish_time, delivery_attempt, ordering_key, visible_at, acked, ack_pending, kms_key_name, wrapped_dek)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		INSERT INTO jc_pubsub_messages (topic, subscription, message_id, data, attributes, publish_time, delivery_attempt, delivery_version, ordering_key, visible_at, acked, ack_pending, kms_key_name, wrapped_dek)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		ON CONFLICT (subscription, message_id) DO UPDATE
-			SET topic=$1, data=$4, attributes=$5, publish_time=$6, delivery_attempt=$7, ordering_key=$8, visible_at=$9, acked=$10, ack_pending=$11, kms_key_name=$12, wrapped_dek=$13
-	`, m.Topic, m.queueKey(), m.MessageID, m.Data, json.RawMessage(attrs), m.PublishTime, m.DeliveryAttempt, m.OrderingKey, nullableTime(m.VisibleAt), m.Acked, m.AckPending, m.KmsKeyName, m.WrappedDEK)
+			SET topic=$1, data=$4, attributes=$5, publish_time=$6, delivery_attempt=$7, delivery_version=$8, ordering_key=$9, visible_at=$10, acked=$11, ack_pending=$12, kms_key_name=$13, wrapped_dek=$14
+	`, m.Topic, m.queueKey(), m.MessageID, m.Data, json.RawMessage(attrs), m.PublishTime, m.DeliveryAttempt, m.DeliveryVersion, m.OrderingKey, nullableTime(m.VisibleAt), m.Acked, m.AckPending, m.KmsKeyName, m.WrappedDEK)
 	return err
 }
 
 func (s *PostgresMessages) List(ctx context.Context, queue string) ([]Message, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT topic, message_id, data, attributes, publish_time, delivery_attempt, ordering_key, visible_at, acked, ack_pending, kms_key_name, wrapped_dek
+		SELECT topic, message_id, data, attributes, publish_time, delivery_attempt, delivery_version, ordering_key, visible_at, acked, ack_pending, kms_key_name, wrapped_dek
 		FROM jc_pubsub_messages WHERE subscription=$1 ORDER BY publish_time, message_id
 	`, queue)
 	if err != nil {
@@ -64,7 +64,7 @@ func (s *PostgresMessages) List(ctx context.Context, queue string) ([]Message, e
 		var m Message
 		var attrs []byte
 		var visibleAt *time.Time
-		if err := rows.Scan(&m.Topic, &m.MessageID, &m.Data, &attrs, &m.PublishTime, &m.DeliveryAttempt, &m.OrderingKey, &visibleAt, &m.Acked, &m.AckPending, &m.KmsKeyName, &m.WrappedDEK); err != nil {
+		if err := rows.Scan(&m.Topic, &m.MessageID, &m.Data, &attrs, &m.PublishTime, &m.DeliveryAttempt, &m.DeliveryVersion, &m.OrderingKey, &visibleAt, &m.Acked, &m.AckPending, &m.KmsKeyName, &m.WrappedDEK); err != nil {
 			return nil, err
 		}
 		json.Unmarshal(attrs, &m.Attributes)
@@ -113,7 +113,7 @@ func (s *PostgresMessages) Pull(ctx context.Context, queue string, maxMessages, 
 	}
 
 	rows, err := tx.Query(ctx, `
-		SELECT topic, message_id, data, attributes, publish_time, delivery_attempt, ordering_key, kms_key_name, wrapped_dek
+		SELECT topic, message_id, data, attributes, publish_time, delivery_attempt, delivery_version, ordering_key, kms_key_name, wrapped_dek
 		FROM jc_pubsub_messages
 		WHERE subscription = $1
 		  AND acked = false
@@ -129,7 +129,7 @@ func (s *PostgresMessages) Pull(ctx context.Context, queue string, maxMessages, 
 	for rows.Next() {
 		var m Message
 		var attrs []byte
-		if err := rows.Scan(&m.Topic, &m.MessageID, &m.Data, &attrs, &m.PublishTime, &m.DeliveryAttempt, &m.OrderingKey, &m.KmsKeyName, &m.WrappedDEK); err != nil {
+		if err := rows.Scan(&m.Topic, &m.MessageID, &m.Data, &attrs, &m.PublishTime, &m.DeliveryAttempt, &m.DeliveryVersion, &m.OrderingKey, &m.KmsKeyName, &m.WrappedDEK); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -153,14 +153,15 @@ func (s *PostgresMessages) Pull(ctx context.Context, queue string, maxMessages, 
 		}
 		m.VisibleAt = now.Add(time.Duration(ackDeadlineSec) * time.Second)
 		m.DeliveryAttempt++
+		m.DeliveryVersion++
 		out = append(out, m)
 	}
 
 	for _, m := range out {
 		if _, err := tx.Exec(ctx, `
-			UPDATE jc_pubsub_messages SET visible_at=$2, delivery_attempt=$3
-			WHERE subscription=$1 AND message_id=$4
-		`, queue, m.VisibleAt, m.DeliveryAttempt, m.MessageID); err != nil {
+			UPDATE jc_pubsub_messages SET visible_at=$2, delivery_attempt=$3, delivery_version=$4
+			WHERE subscription=$1 AND message_id=$5
+		`, queue, m.VisibleAt, m.DeliveryAttempt, m.DeliveryVersion, m.MessageID); err != nil {
 			return nil, err
 		}
 	}
@@ -267,6 +268,21 @@ func (s *PostgresMessages) UpdateDeliveryAttempt(ctx context.Context, queue, mes
 	_, err := s.pool.Exec(ctx, `
 		UPDATE jc_pubsub_messages SET delivery_attempt=$3 WHERE subscription=$1 AND message_id=$2
 	`, queue, messageID, attempt)
+	return err
+}
+
+// BumpDeliveryVersions advances each named message's ack-ID version so a
+// previously issued ack ID no longer names the current delivery. A Seek uses it
+// to invalidate outstanding ack IDs; DeliveryAttempt (dead-letter accounting) is
+// left untouched.
+func (s *PostgresMessages) BumpDeliveryVersions(ctx context.Context, queue string, messageIDs []string) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE jc_pubsub_messages SET delivery_version = delivery_version + 1
+		WHERE subscription=$1 AND message_id = ANY($2)
+	`, queue, messageIDs)
 	return err
 }
 

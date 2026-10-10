@@ -79,3 +79,56 @@ func TestPostgresOrderedAckContract(t *testing.T) {
 	}
 	s.Reset(ctx)
 }
+
+// TestPostgresBumpDeliveryVersions verifies the Postgres backend honors the Seek
+// delivery-version contract: making a message visible again and bumping its
+// version invalidates the pre-Seek ack ID without advancing the dead-letter
+// delivery attempt, and the next pull mints a fresh version.
+func TestPostgresBumpDeliveryVersions(t *testing.T) {
+	dsn := os.Getenv("JAISCLOUD_DSN")
+	if dsn == "" {
+		t.Skip("JAISCLOUD_DSN not set — skipping Postgres delivery-version test")
+	}
+	ctx := context.Background()
+	pg, err := store.NewPostgresResourceStore(ctx, dsn, "gcp")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pg.Close()
+	if err := store.RunMigrations(ctx, pg.Pool(), "gcp", gcpstore.MigrationFS, "gcp"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	s := NewPostgresMessages(pg.Pool())
+	s.Reset(ctx)
+	queue := "seek-" + clock.Now().Format("150405.000000000")
+	now := clock.Now()
+	if err := s.Put(ctx, Message{Topic: "t", Subscription: queue, MessageID: "1", PublishTime: now}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	msgs, err := s.Pull(ctx, queue, 10, 10, 0, now)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("pull = %d msgs / %v", len(msgs), err)
+	}
+	if msgs[0].DeliveryVersion != 1 || msgs[0].DeliveryAttempt != 1 {
+		t.Fatalf("first delivery = version %d / attempt %d, want 1/1", msgs[0].DeliveryVersion, msgs[0].DeliveryAttempt)
+	}
+	// Seek's store effect: make the message visible, then advance its version.
+	if err := s.ModifyAckDeadline(ctx, queue, []string{queue + "/1"}, 0, now); err != nil {
+		t.Fatalf("seek visibility reset: %v", err)
+	}
+	if err := s.BumpDeliveryVersions(ctx, queue, []string{"1"}); err != nil {
+		t.Fatalf("BumpDeliveryVersions: %v", err)
+	}
+	stored, _ := s.List(ctx, queue)
+	if len(stored) != 1 || stored[0].DeliveryVersion != 2 || stored[0].DeliveryAttempt != 1 {
+		t.Fatalf("after seek = %+v, want version 2 / attempt 1", stored)
+	}
+	if AckIDCurrent(stored[0], msgs[0].DeliveryVersion, now) {
+		t.Fatal("pre-Seek version still current, want invalidated")
+	}
+	msgs, err = s.Pull(ctx, queue, 10, 10, 0, now)
+	if err != nil || len(msgs) != 1 || msgs[0].DeliveryVersion != 3 {
+		t.Fatalf("redelivery = %+v / %v, want version 3", msgs, err)
+	}
+	s.Reset(ctx)
+}

@@ -15,6 +15,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // eodErrorInfo extracts the google.rpc.ErrorInfo detail from an exactly-once
@@ -156,6 +157,70 @@ func TestExactlyOnceAckIDExpired(t *testing.T) {
 	}
 }
 
+// TestExactlyOnceSeekInvalidatesAckID pins EOD2: a Seek that makes a message
+// visible again invalidates an ack ID issued before the Seek (real GCP's
+// contract), and the restored message is redelivered with a fresh, usable ack ID.
+func TestExactlyOnceSeekInvalidatesAckID(t *testing.T) {
+	base := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: base})
+	defer clock.SetGlobalClock(nil)
+
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/eod-seek-topic"
+	const sub = "projects/test/subscriptions/eod-seek-sub"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: sub, Topic: topic, AckDeadlineSeconds: 60, EnableExactlyOnceDelivery: true,
+	}); err != nil {
+		t.Fatalf("CreateSubscription: %v", err)
+	}
+	if _, err := pub.Publish(ctx, &pubsubpb.PublishRequest{
+		Topic: topic, Messages: []*pubsubpb.PubsubMessage{{Data: []byte("seek")}},
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	ack1 := pullOne(t, ctx, subc, sub)
+
+	// Seek to just before the publish time: the message is retained and made
+	// visible again, which invalidates ack1.
+	if _, err := subc.Seek(ctx, &pubsubpb.SeekRequest{
+		Subscription: sub,
+		Target:       &pubsubpb.SeekRequest_Time{Time: timestamppb.New(base.Add(-time.Second))},
+	}); err != nil {
+		t.Fatalf("Seek: %v", err)
+	}
+
+	if _, err := subc.Acknowledge(ctx, &pubsubpb.AcknowledgeRequest{Subscription: sub, AckIds: []string{ack1}}); err == nil {
+		t.Fatal("Acknowledge(pre-Seek ack id) = nil, want InvalidArgument")
+	} else if st, _ := status.FromError(err); st.Code() != codes.InvalidArgument {
+		t.Fatalf("Acknowledge(pre-Seek ack id) code = %v, want InvalidArgument", st.Code())
+	} else if st.Message() != pubsubstore.EODAckFailureMessage {
+		t.Fatalf("Acknowledge(pre-Seek ack id) message = %q", st.Message())
+	}
+	ei := eodErrorInfo(t, func() error {
+		_, err := subc.Acknowledge(ctx, &pubsubpb.AcknowledgeRequest{Subscription: sub, AckIds: []string{ack1}})
+		return err
+	}())
+	if ei.Metadata[ack1] != pubsubstore.InvalidAckIDValue {
+		t.Fatalf("ErrorInfo metadata = %v, want [%s]=%s", ei.Metadata, ack1, pubsubstore.InvalidAckIDValue)
+	}
+
+	// The restored message is redelivered with a fresh ack id that works.
+	ack2 := pullOne(t, ctx, subc, sub)
+	if ack2 == ack1 {
+		t.Fatal("post-Seek re-pull returned the same ack id; version was not advanced")
+	}
+	if _, err := subc.Acknowledge(ctx, &pubsubpb.AcknowledgeRequest{Subscription: sub, AckIds: []string{ack2}}); err != nil {
+		t.Fatalf("Acknowledge(post-Seek ack id): %v", err)
+	}
+}
+
 // TestPlainSubscriptionStaleAckIDOK pins the out-of-scope rule: without
 // exactly-once delivery a superseded ack id is still accepted.
 func TestPlainSubscriptionStaleAckIDOK(t *testing.T) {
@@ -203,7 +268,7 @@ func TestApplyStreamAcksExactlyOnceVersions(t *testing.T) {
 		t.Helper()
 		if err := messages.Put(ctx, pubsubstore.Message{
 			Subscription: "s", MessageID: "m1", Data: "x",
-			DeliveryAttempt: attempt, VisibleAt: now.Add(time.Minute),
+			DeliveryAttempt: attempt, DeliveryVersion: attempt, VisibleAt: now.Add(time.Minute),
 		}); err != nil {
 			t.Fatalf("Put: %v", err)
 		}

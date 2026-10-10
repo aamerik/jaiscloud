@@ -687,7 +687,7 @@ func (s *Service) buildReceivedMessages(ctx context.Context, project, queue, dlq
 			attempt = int32(m.DeliveryAttempt)
 		}
 		received = append(received, &pubsubpb.ReceivedMessage{
-			AckId:           pubsubstore.EncodeAckID(queue, m.MessageID, m.DeliveryAttempt),
+			AckId:           pubsubstore.EncodeAckID(queue, m.MessageID, m.DeliveryVersion),
 			Message:         pm,
 			DeliveryAttempt: attempt,
 		})
@@ -939,7 +939,7 @@ func (s *Service) applyStreamAcks(ctx context.Context, queue string, eod bool, r
 	now := clock.Now()
 	var acked []string
 	for _, a := range req.GetAckIds() {
-		q, msgID, attempt, ok := pubsubstore.DecodeAckID(a)
+		q, msgID, version, ok := pubsubstore.DecodeAckID(a)
 		// An ackId is valid only for the subscription that issued it.
 		if !ok || q != queue {
 			continue
@@ -950,7 +950,7 @@ func (s *Service) applyStreamAcks(ctx context.Context, queue string, eod bool, r
 		// the result from the unary RPC's ErrorInfo), so it drops the id instead
 		// of mutating state.
 		if eod {
-			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, attempt, now) {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, version, now) {
 				continue
 			}
 		}
@@ -1028,7 +1028,7 @@ func (s *Service) applyStreamModifyDeadlines(ctx context.Context, queue string, 
 	now := clock.Now()
 	var nacked []string
 	for i := 0; i < n; i++ {
-		q, msgID, attempt, ok := pubsubstore.DecodeAckID(ackIDs[i])
+		q, msgID, version, ok := pubsubstore.DecodeAckID(ackIDs[i])
 		// An ackId is valid only for the subscription that issued it.
 		if !ok || q != queue {
 			continue
@@ -1036,7 +1036,7 @@ func (s *Service) applyStreamModifyDeadlines(ctx context.Context, queue string, 
 		// As with applyStreamAcks, a superseded/expired id on an exactly-once
 		// subscription must not touch the live delivery.
 		if eod {
-			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, attempt, now) {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, version, now) {
 				continue
 			}
 		}
@@ -1060,7 +1060,7 @@ func (s *Service) Acknowledge(ctx context.Context, req *pubsubpb.AcknowledgeRequ
 	}
 	var invalid []string
 	for _, a := range req.GetAckIds() {
-		queue, msgID, attempt, ok := pubsubstore.DecodeAckID(a)
+		queue, msgID, version, ok := pubsubstore.DecodeAckID(a)
 		if !ok {
 			continue
 		}
@@ -1070,7 +1070,7 @@ func (s *Service) Acknowledge(ctx context.Context, req *pubsubpb.AcknowledgeRequ
 			continue
 		}
 		if eod && queue == sub {
-			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, attempt, now) {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, version, now) {
 				invalid = append(invalid, a)
 				continue
 			}
@@ -1113,13 +1113,13 @@ func (s *Service) ModifyAckDeadline(ctx context.Context, req *pubsubpb.ModifyAck
 	decoded := make([]string, 0, len(req.GetAckIds()))
 	var invalid []string
 	for _, id := range req.GetAckIds() {
-		queue, msgID, attempt, ok := pubsubstore.DecodeAckID(id)
+		queue, msgID, version, ok := pubsubstore.DecodeAckID(id)
 		// An ackId is valid only for the subscription that issued it.
 		if !ok || queue != sub {
 			continue
 		}
 		if eod {
-			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, attempt, now) {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, version, now) {
 				invalid = append(invalid, id)
 				continue
 			}
@@ -1694,29 +1694,42 @@ func (s *Service) Seek(ctx context.Context, req *pubsubpb.SeekRequest) (*pubsubp
 // seekToTime marks the subscription's retained messages published before t as
 // acknowledged (deleted) and makes those published at/after t visible again.
 // Already-acked messages are gone, so they are not restored (proto-documented).
+// Making a message visible again invalidates outstanding ack IDs, so every
+// retained message's delivery version is advanced (EOD2).
 func (s *Service) seekToTime(ctx context.Context, queue string, t time.Time) error {
 	msgs, err := s.messages.List(ctx, queue)
 	if err != nil {
 		return err
 	}
+	var retained []string
 	for _, m := range msgs {
 		if m.PublishTime.Before(t) {
 			_ = s.messages.Delete(ctx, queue, m.MessageID)
 			continue
 		}
 		_ = s.messages.ModifyAckDeadline(ctx, queue, []string{m.MessageID}, 0, clock.Now())
+		retained = append(retained, m.MessageID)
 	}
-	return nil
+	return s.messages.BumpDeliveryVersions(ctx, queue, retained)
 }
 
 // restoreSnapshot resets the subscription to the state captured by snap: the
 // snapshot backlog is restored as unacknowledged, plus every message still
 // retained in the subscription that was published at/after the snapshot was
 // created. Messages acked before the snapshot are not restored.
+//
+// A Seek invalidates outstanding ack IDs: each restored message gets a delivery
+// version strictly greater than both its snapshot version and its version in the
+// store at Seek time, so any ack ID issued before the Seek no longer names the
+// current delivery (EOD2).
 func (s *Service) restoreSnapshot(ctx context.Context, queue string, snap snapshotMeta) error {
 	current, err := s.messages.List(ctx, queue)
 	if err != nil {
 		return err
+	}
+	currentVersions := make(map[string]int, len(current))
+	for _, m := range current {
+		currentVersions[m.MessageID] = m.DeliveryVersion
 	}
 	for _, m := range current {
 		_ = s.messages.Delete(ctx, queue, m.MessageID)
@@ -1728,6 +1741,10 @@ func (s *Service) restoreSnapshot(ctx context.Context, queue string, snap snapsh
 		// ordered ack state on the message.
 		m.Acked = false
 		m.AckPending = false
+		if v, ok := currentVersions[m.MessageID]; ok && v > m.DeliveryVersion {
+			m.DeliveryVersion = v
+		}
+		m.DeliveryVersion++
 		return s.messages.Put(ctx, m)
 	}
 	for _, m := range snap.Backlog {
@@ -2104,7 +2121,7 @@ func toStrings(v any) []string {
 
 // ─── ack-id encoding ─────────────────────────────────────────────────────────
 //
-// The ack-id wire format (base64url of "subscription/messageID/deliveryAttempt")
+// The ack-id wire format (base64url of "subscription/messageID/deliveryVersion")
 // lives in the store package so the REST provider and this gRPC service share
 // one codec: pubsubstore.EncodeAckID / DecodeAckID.
 

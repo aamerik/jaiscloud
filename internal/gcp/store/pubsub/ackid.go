@@ -13,14 +13,18 @@ import (
 // enableExactlyOnceDelivery makes Acknowledge/ModifyAckDeadline reject a
 // *superseded* (a later delivery has a newer ID) or *expired* (the ack deadline
 // has lapsed) ack ID with INVALID_ARGUMENT, while a plain subscription keeps
-// accepting any decodable ID. The emulator encodes the delivery attempt into
-// the opaque wire ack ID so both transports can honour that contract. Message
-// IDs are numeric (store NextID), so the attempt is the final path segment and
-// the message ID the middle one: "subscription/messageID/deliveryAttempt".
-
+// accepting any decodable ID. A Seek that makes a message visible again also
+// invalidates outstanding ack IDs (a version advance, EOD2). The emulator
+// encodes a per-message *delivery version* into the opaque wire ack ID so both
+// transports can honour that contract. That version is separate from
+// Message.DeliveryAttempt, which drives dead-letter accounting and must not be
+// advanced by a Seek. Message IDs are numeric (store NextID), so the version is
+// the final path segment and the message ID the middle one:
+// "subscription/messageID/deliveryVersion".
+//
 // EncodeAckID renders the opaque wire ack ID for a delivery.
-func EncodeAckID(subscription, messageID string, deliveryAttempt int) string {
-	raw := subscription + "/" + messageID + "/" + strconv.Itoa(deliveryAttempt)
+func EncodeAckID(subscription, messageID string, deliveryVersion int) string {
+	raw := subscription + "/" + messageID + "/" + strconv.Itoa(deliveryVersion)
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
@@ -28,7 +32,7 @@ func EncodeAckID(subscription, messageID string, deliveryAttempt int) string {
 // missing segments, or a non-numeric version). Message IDs are numeric
 // (store.NextID), so the middle segment is unambiguous and the store's
 // last-slash stripping of "subscription/messageID" stays correct.
-func DecodeAckID(s string) (subscription, messageID string, deliveryAttempt int, ok bool) {
+func DecodeAckID(s string) (subscription, messageID string, deliveryVersion int, ok bool) {
 	raw, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
 		return "", "", 0, false
@@ -42,20 +46,20 @@ func DecodeAckID(s string) (subscription, messageID string, deliveryAttempt int,
 	if last <= first {
 		return "", "", 0, false
 	}
-	attempt, err := strconv.Atoi(text[last+1:])
+	version, err := strconv.Atoi(text[last+1:])
 	if err != nil {
 		return "", "", 0, false
 	}
-	return text[:first], text[first+1 : last], attempt, true
+	return text[:first], text[first+1 : last], version, true
 }
 
-// AckIDCurrent reports whether the ack ID minted for deliveryAttempt still names
+// AckIDCurrent reports whether the ack ID minted for deliveryVersion still names
 // the message's current delivery whose ack deadline has not lapsed. A message
 // that is visible — never claimed, or explicitly released by a nack
 // (VisibleAt zero) — is not treated as expired: only a lapsed deadline
 // (VisibleAt set and in the past) invalidates the ID.
-func AckIDCurrent(m Message, deliveryAttempt int, now time.Time) bool {
-	if m.DeliveryAttempt != deliveryAttempt {
+func AckIDCurrent(m Message, deliveryVersion int, now time.Time) bool {
+	if m.DeliveryVersion != deliveryVersion {
 		return false
 	}
 	if !m.VisibleAt.IsZero() && !now.Before(m.VisibleAt) {
