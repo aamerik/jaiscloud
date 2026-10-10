@@ -1,5 +1,6 @@
 package com.jaiscloud.demo;
 
+import com.google.api.gax.batching.FlowControlSettings;
 import com.google.api.gax.core.NoCredentialsProvider;
 import com.google.api.gax.rpc.AlreadyExistsException;
 import com.google.api.gax.rpc.ApiStreamObserver;
@@ -62,17 +63,19 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * jaiscloud-gcp SDK tour — Java "streaming" leg (SDK_TOUR_MODE=streaming).
  *
- * Ports the seven streaming-semantics scenarios of the Go reference
+ * Ports the nine streaming-semantics scenarios of the Go reference
  * ({@code demo/sdk-tour/go/streaming.go}) onto the official Java clients,
  * emitting the same observable strings through the shared {@link SdkTour}
  * recorder. A happy-path tour proves a stream can carry one message; this leg
  * asserts the stream's *semantics*: ack-deadline redelivery and extension,
- * ordering keys, exactly-once ack, Firestore Listen resume tokens, Logging tail
- * reconnects, and Storage BidiReadObject.
+ * ordering keys, exactly-once ack, subscriber flow control, Firestore Listen
+ * resume tokens, Logging tail reconnects, and Storage BidiReadObject.
  *
  * Where the high-level client hides the semantics being asserted, the generated
  * low-level client is used (the gax SubscriberStub's StreamingPull for precise
@@ -390,6 +393,96 @@ final class StreamingTour {
         }
       }
       return new String[]{"dup=0", "acked exactly-once message was not redelivered"};
+    });
+
+    SdkTour.run("streaming.pubsub_flow_control", "OK", () -> {
+      final int cap = 3;
+      final int backlog = 15;
+      String subId = SdkTour.rid("stream-flow-sub");
+      ensurePubsub(topicId, subId, STREAM_ACK_DEADLINE, false, false);
+
+      Publisher publisher = Publisher.newBuilder(ProjectTopicName.of(SdkTour.PROJECT, topicId))
+          .setChannelProvider(SdkTour.plaintext(SdkTour.GRPC))
+          .setCredentialsProvider(NoCredentialsProvider.create())
+          .build();
+      try {
+        for (int i = 0; i < backlog; i++) {
+          publisher.publish(PubsubMessage.newBuilder()
+              .setData(ByteString.copyFromUtf8(String.format("flow-%02d", i))).build())
+              .get(30, TimeUnit.SECONDS);
+        }
+      } finally {
+        publisher.shutdown();
+        publisher.awaitTermination(30, TimeUnit.SECONDS);
+      }
+
+      // The high-level subscriber under test: the configured cap must bound how
+      // many unacked messages it holds at once. Receivers hold their message (no
+      // ack) so delivery would outrun acks and expose a missing bound; the driver
+      // releases them only after the cap is proved.
+      AtomicInteger inflight = new AtomicInteger();
+      AtomicInteger maxInflight = new AtomicInteger();
+      AtomicInteger delivered = new AtomicInteger();
+      AtomicBoolean released = new AtomicBoolean(false);
+      MessageReceiver receiver = (message, consumer) -> {
+        int cur = inflight.incrementAndGet();
+        maxInflight.accumulateAndGet(cur, Math::max);
+        delivered.incrementAndGet();
+        while (!released.get()) {
+          try {
+            Thread.sleep(5);
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            break;
+          }
+        }
+        consumer.ack();
+        inflight.decrementAndGet();
+      };
+      Subscriber subscriber = Subscriber.newBuilder(
+              ProjectSubscriptionName.of(SdkTour.PROJECT, subId), receiver)
+          .setChannelProvider(SdkTour.plaintext(SdkTour.GRPC))
+          .setCredentialsProvider(NoCredentialsProvider.create())
+          .setFlowControlSettings(FlowControlSettings.newBuilder()
+              .setMaxOutstandingElementCount((long) cap)
+              .build())
+          .build();
+      subscriber.startAsync().awaitRunning();
+      try {
+        long deadline = System.currentTimeMillis() + 30_000;
+        while (delivered.get() < cap && System.currentTimeMillis() < deadline) {
+          Thread.sleep(10);
+        }
+        if (delivered.get() < cap) {
+          throw new IllegalStateException("flow control: only " + delivered.get() + "/" + cap
+              + " messages delivered while held");
+        }
+        // Hold at the cap: a client that ignores the bound keeps delivering.
+        Thread.sleep(1_500);
+        int held = delivered.get();
+        int maxSeen = maxInflight.get();
+        if (held != cap) {
+          throw new IllegalStateException("flow control: " + held
+              + " messages held concurrently, want max_outstanding=" + cap);
+        }
+        if (maxSeen != cap) {
+          throw new IllegalStateException("flow control: max in flight " + maxSeen + ", want " + cap);
+        }
+        released.set(true);
+        deadline = System.currentTimeMillis() + 30_000;
+        while (delivered.get() < backlog && System.currentTimeMillis() < deadline) {
+          Thread.sleep(10);
+        }
+        if (delivered.get() != backlog) {
+          throw new IllegalStateException("flow control: drained " + delivered.get() + "/" + backlog
+              + " messages");
+        }
+      } finally {
+        released.set(true);
+        subscriber.stopAsync().awaitTerminated(30, TimeUnit.SECONDS);
+      }
+      return new String[]{"flow_control=ok,max_in_flight<=" + cap,
+          "held at most " + cap + " of " + backlog + " messages outstanding"};
     });
   }
 

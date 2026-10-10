@@ -32,6 +32,9 @@ SCENARIOS: dict[str, dict[str, str]] = {
     "streaming.pubsub_ack_extension": {"go": "OK", "python": "OK", "java": "OK", "node": "OK"},
     "streaming.pubsub_ordering_keys": {"go": "OK", "python": "OK", "java": "OK", "node": "OK"},
     "streaming.pubsub_exactly_once_ack": {"go": "OK", "python": "OK", "java": "OK", "node": "OK"},
+    # All four high-level subscribers send max_outstanding_messages on the
+    # initial StreamingPull and enforce the same cap locally, so no leg SKIPs.
+    "streaming.pubsub_flow_control": {"go": "OK", "python": "OK", "java": "OK", "node": "OK"},
     "streaming.firestore_listen_resume_token": {"go": "OK", "python": "OK", "java": "OK", "node": "OK"},
     "streaming.firestore_snapshot_consistency": {"go": "OK", "python": "OK", "java": "OK", "node": "OK"},
     "streaming.logging_tail_reconnect": {"go": "OK", "python": "OK", "java": "OK", "node": "OK"},
