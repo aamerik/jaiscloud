@@ -645,18 +645,21 @@ func (s *Service) buildReceivedMessages(ctx context.Context, project, queue, dlq
 		// the dead-letter topic and drop the original.
 		if dlqTopic != "" && maxDeliveryAttempts > 0 && m.DeliveryAttempt > maxDeliveryAttempts {
 			_ = s.messages.Delete(ctx, queue, m.MessageID)
-			// Republish with real GCP's CloudPubSubDeadLetterSource* attributes.
-			// DeliveryAttempt was incremented by this (non-delivering) claim, so
-			// the delivery count actually made to the source subscription is one
-			// less — the configured maxDeliveryAttempts, which is what real GCP
-			// reports.
-			dlqAttrs := pubsubstore.DeadLetterMessageAttributes(project, queue, m.DeliveryAttempt-1, m.PublishTime, m.Attributes)
+			// Real GCP forwards the message wrapped in a new one: a fresh
+			// messageId and the forward time as publishTime, with the original
+			// publish time preserved in the CloudPubSubDeadLetterSource*
+			// attributes. DeliveryAttempt was incremented by this
+			// (non-delivering) claim, so the delivery count actually made to the
+			// source subscription is one less — the configured
+			// maxDeliveryAttempts, which is what real GCP reports.
+			fwdID, err := s.messages.NextID(ctx)
+			if err != nil {
+				return nil, mapError(err)
+			}
+			fwd := pubsubstore.ForwardedMessage(m, dlqTopic, "", fwdID, clock.Now(), project, queue, m.DeliveryAttempt-1)
 			for _, sid := range s.pullSubscriptionIDs(ctx, project, dlqTopic) {
-				_ = s.messages.Put(ctx, pubsubstore.Message{
-					Topic: dlqTopic, Subscription: sid, MessageID: m.MessageID, Data: m.Data, Attributes: dlqAttrs,
-					PublishTime: m.PublishTime, DeliveryAttempt: 0,
-					KmsKeyName: m.KmsKeyName, WrappedDEK: m.WrappedDEK,
-				})
+				fwd.Subscription = sid
+				_ = s.messages.Put(ctx, fwd)
 			}
 			continue
 		}

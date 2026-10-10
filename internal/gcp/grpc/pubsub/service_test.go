@@ -1120,18 +1120,26 @@ func TestPubSubDLQAttributesGRPC(t *testing.T) {
 	}
 
 	if _, err := pub.Publish(ctx, &pubsubpb.PublishRequest{
-		Topic: topic, Messages: []*pubsubpb.PubsubMessage{{Data: []byte("hi"), Attributes: map[string]string{"k": "v"}}},
+		Topic: topic, Messages: []*pubsubpb.PubsubMessage{{Data: []byte("hi"), Attributes: map[string]string{"k": "v"}, OrderingKey: "ord-key"}},
 	}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 
 	// Five delivering pulls (each nacked), then the next claim forwards it.
+	// Capture the source message's identity from its first delivery: real GCP
+	// mints a new messageId and a forward-time publishTime on the copy (PSM5).
+	var srcID string
+	var srcPublishTime time.Time
 	for i := 0; i < 6; i++ {
 		resp, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: srcSub, MaxMessages: 1, ReturnImmediately: true})
 		if err != nil {
 			t.Fatalf("Pull: %v", err)
 		}
 		for _, rm := range resp.GetReceivedMessages() {
+			if srcID == "" {
+				srcID = rm.GetMessage().GetMessageId()
+				srcPublishTime = rm.GetMessage().GetPublishTime().AsTime()
+			}
 			if _, err := subc.ModifyAckDeadline(ctx, &pubsubpb.ModifyAckDeadlineRequest{
 				Subscription: srcSub, AckIds: []string{rm.GetAckId()}, AckDeadlineSeconds: 0,
 			}); err != nil {
@@ -1158,12 +1166,23 @@ func TestPubSubDLQAttributesGRPC(t *testing.T) {
 	if attrs[pubsubstore.AttrDeadLetterSourceDeliveryCount] != "5" {
 		t.Errorf("delivery count = %q, want 5", attrs[pubsubstore.AttrDeadLetterSourceDeliveryCount])
 	}
-	wantTime := msg.GetPublishTime().AsTime().UTC().Format("2006-01-02T15:04:05.000-07:00")
+	wantTime := srcPublishTime.UTC().Format("2006-01-02T15:04:05.000-07:00")
 	if got := attrs[pubsubstore.AttrDeadLetterSourceTopicPublishTime]; got != wantTime {
 		t.Errorf("source publish time = %q, want %q", got, wantTime)
 	}
 	if attrs["k"] != "v" {
 		t.Errorf("publisher attribute k = %q, want v", attrs["k"])
+	}
+	// PSM5: real GCP wraps the original in a new message — a fresh messageId, a
+	// forward-time publishTime, and the source ordering key preserved.
+	if msg.GetMessageId() == srcID {
+		t.Errorf("forwarded message id = %q, want a fresh id (source %q)", msg.GetMessageId(), srcID)
+	}
+	if msg.GetPublishTime().AsTime().Equal(srcPublishTime) {
+		t.Errorf("forwarded publishTime = %v, want the forward time (source %v)", msg.GetPublishTime().AsTime(), srcPublishTime)
+	}
+	if msg.GetOrderingKey() != "ord-key" {
+		t.Errorf("forwarded ordering key = %q, want ord-key", msg.GetOrderingKey())
 	}
 }
 

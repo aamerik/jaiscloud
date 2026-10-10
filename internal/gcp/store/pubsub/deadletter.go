@@ -56,3 +56,33 @@ func DeadLetterMessageAttributes(project, subscription string, deliveryCount int
 	}
 	return out
 }
+
+// ForwardedMessage builds the copy of src that real GCP publishes to a
+// subscription's dead-letter topic. Real GCP wraps the undeliverable message in
+// a new message (PSM5, verified live 2026-10): the forwarded copy gets a fresh
+// server-assigned messageId and a publishTime of the forward instant, while the
+// *original* publish time is preserved in the
+// CloudPubSubDeadLetterSourceTopicPublishTime attribute. The publisher's data,
+// own attributes, ordering key and key material carry onto the copy, and the
+// delivery attempt resets to 0 (the source delivery count is reported in the
+// CloudPubSubDeadLetterSourceDeliveryCount attribute instead).
+//
+// messageID is the id the caller allocated via Messages.NextID; topic and
+// subscription name the dead-letter topic's delivery queue; forwardTime is the
+// forward instant (clock.Now()); project and sourceSubscription identify the
+// subscription the message could not be delivered to; deliveryCount is the
+// delivery count made to that source subscription.
+func ForwardedMessage(src Message, topic, subscription, messageID string, forwardTime time.Time, project, sourceSubscription string, deliveryCount int) Message {
+	return Message{
+		Topic:           topic,
+		Subscription:    subscription,
+		MessageID:       messageID,
+		Data:            src.Data,
+		Attributes:      DeadLetterMessageAttributes(project, sourceSubscription, deliveryCount, src.PublishTime, src.Attributes),
+		PublishTime:     forwardTime,
+		DeliveryAttempt: 0,
+		OrderingKey:     src.OrderingKey,
+		KmsKeyName:      src.KmsKeyName,
+		WrappedDEK:      src.WrappedDEK,
+	}
+}
