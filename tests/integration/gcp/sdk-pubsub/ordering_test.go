@@ -26,8 +26,10 @@ func TestPubSubOrderingKeyWithholdAndOrder(t *testing.T) {
 		publish(t, c, ctx, topic, body, func(m *pubsubpb.PubsubMessage) { m.OrderingKey = "k1" })
 	}
 
-	// Collect the k1 batch; assert publish order is preserved.
+	// Collect the k1 batch; assert publish order is preserved (dedupe so a
+	// redelivery cannot inflate the count).
 	var k1 []string
+	seenK1 := map[string]bool{}
 	deadline := time.Now().Add(8 * time.Second)
 	var outstanding []*pubsubpb.ReceivedMessage
 	for len(k1) < 3 && time.Now().Before(deadline) {
@@ -36,7 +38,11 @@ func TestPubSubOrderingKeyWithholdAndOrder(t *testing.T) {
 			if rm.GetMessage().GetOrderingKey() != "k1" {
 				continue
 			}
-			k1 = append(k1, string(rm.GetMessage().GetData()))
+			body := string(rm.GetMessage().GetData())
+			if !seenK1[body] {
+				seenK1[body] = true
+				k1 = append(k1, body)
+			}
 			outstanding = append(outstanding, rm)
 		}
 		if len(k1) < 3 {

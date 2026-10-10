@@ -1,6 +1,7 @@
 package sdkpubsub_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -57,6 +58,11 @@ func TestPubSubRetentionSnapshotSeek(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateSnapshot: %v", err)
 	}
+	t.Cleanup(func() {
+		dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = c.SubscriptionAdminClient.DeleteSnapshot(dctx, &pubsubpb.DeleteSnapshotRequest{Snapshot: snap})
+	})
 
 	ack(t, c, ctx, sub, backlog["r0"].GetAckId())
 	ack(t, c, ctx, sub, backlog["r1"].GetAckId())
@@ -95,9 +101,16 @@ func TestPubSubSeekToTime(t *testing.T) {
 
 	publish(t, c, ctx, topic, "before-seek")
 
+	// Prove the message is deliverable first, then hand it back so the seek has
+	// a real backlog to discard (otherwise the assertion below passes vacuously).
+	rm := waitForBody(t, c, ctx, sub, "before-seek", 10*time.Second)
+	release(t, c, ctx, sub, rm.GetAckId())
+
+	// Seek to a moment in the future: every message published before it — i.e.
+	// the one above — is discarded.
 	if _, err := c.SubscriptionAdminClient.Seek(ctx, &pubsubpb.SeekRequest{
 		Subscription: sub,
-		Target:       &pubsubpb.SeekRequest_Time{Time: timestamppb.Now()},
+		Target:       &pubsubpb.SeekRequest_Time{Time: timestamppb.New(time.Now().Add(2 * time.Second))},
 	}); err != nil {
 		t.Fatalf("Seek(time): %v", err)
 	}

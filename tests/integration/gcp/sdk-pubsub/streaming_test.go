@@ -2,6 +2,7 @@ package sdkpubsub_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,8 +19,8 @@ func TestPubSubStreamingPullReceive(t *testing.T) {
 	createTopic(t, c, ctx, topic)
 	createSub(t, c, ctx, sub, topic, nil)
 
-	want := map[string]bool{"s0": false, "s1": false, "s2": false, "s3": false, "s4": false}
-	for body := range want {
+	want := []string{"s0", "s1", "s2", "s3", "s4"}
+	for _, body := range want {
 		publish(t, c, ctx, topic, body, nil)
 	}
 
@@ -29,32 +30,33 @@ func TestPubSubStreamingPullReceive(t *testing.T) {
 	subscriber.ReceiveSettings.NumGoroutines = 1
 	subscriber.ReceiveSettings.MaxOutstandingMessages = 10
 
-	got := make(chan string, len(want))
+	// Collect under a mutex and cancel from the callback once everything has
+	// arrived, so a duplicate (at-least-once) delivery cannot block the handler.
+	var mu sync.Mutex
+	seen := map[string]bool{}
 	done := make(chan error, 1)
 	go func() {
 		done <- subscriber.Receive(rctx, func(ctx context.Context, m *pubsub.Message) {
-			got <- string(m.Data)
+			mu.Lock()
+			seen[string(m.Data)] = true
+			n := len(seen)
+			mu.Unlock()
 			m.Ack()
+			if n == len(want) {
+				cancel()
+			}
 		})
 	}()
 
-	seen := map[string]bool{}
-	timeout := time.After(25 * time.Second)
-	for len(seen) < len(want) {
-		select {
-		case body := <-got:
-			seen[body] = true
-		case <-timeout:
-			t.Fatalf("received %v over streaming pull, want all of %v", seen, want)
-		}
-	}
-	cancel()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatalf("Subscriber.Receive did not return after cancel")
+	case <-time.After(25 * time.Second):
+		t.Fatalf("Subscriber.Receive did not observe all messages within 25s")
 	}
-	for body := range want {
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, body := range want {
 		if !seen[body] {
 			t.Fatalf("streaming pull never delivered %q (got %v)", body, seen)
 		}

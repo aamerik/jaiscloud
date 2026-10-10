@@ -53,6 +53,11 @@ func randSuffix() string {
 // channel from PUBSUB_EMULATOR_HOST.
 func newClient(t *testing.T) (*pubsub.Client, context.Context) {
 	t.Helper()
+	if os.Getenv("PUBSUB_EMULATOR_HOST") == "" {
+		if err := os.Setenv("PUBSUB_EMULATOR_HOST", emulatorHost()); err != nil {
+			t.Fatalf("set PUBSUB_EMULATOR_HOST: %v", err)
+		}
+	}
 	ctx := context.Background()
 	c, err := pubsub.NewClient(ctx, projectID())
 	if err != nil {
@@ -83,6 +88,11 @@ func createTopic(t *testing.T, c *pubsub.Client, ctx context.Context, name strin
 	if _, err := c.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{Name: name}); err != nil {
 		t.Fatalf("CreateTopic(%s): %v", name, err)
 	}
+	t.Cleanup(func() {
+		dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = c.TopicAdminClient.DeleteTopic(dctx, &pubsubpb.DeleteTopicRequest{Topic: name})
+	})
 }
 
 // createSub creates a subscription over an existing topic.
@@ -95,6 +105,11 @@ func createSub(t *testing.T, c *pubsub.Client, ctx context.Context, name, topic 
 	if _, err := c.SubscriptionAdminClient.CreateSubscription(ctx, sub); err != nil {
 		t.Fatalf("CreateSubscription(%s): %v", name, err)
 	}
+	t.Cleanup(func() {
+		dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = c.SubscriptionAdminClient.DeleteSubscription(dctx, &pubsubpb.DeleteSubscriptionRequest{Subscription: name})
+	})
 }
 
 // publish sends one message and returns the server-assigned message id. An

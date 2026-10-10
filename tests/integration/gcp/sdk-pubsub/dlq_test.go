@@ -1,6 +1,7 @@
 package sdkpubsub_test
 
 import (
+	"path"
 	"testing"
 	"time"
 
@@ -36,9 +37,13 @@ func TestPubSubDeadLetterForwarding(t *testing.T) {
 	// Drive the source subscription past maxDeliveryAttempts: each pull is one
 	// delivery, immediately released so the next delivery is prompt.
 	var forwarded *pubsubpb.ReceivedMessage
+	originalMessageID := ""
 	deadline := time.Now().Add(30 * time.Second)
 	for forwarded == nil && time.Now().Before(deadline) {
 		for _, rm := range pullOnce(t, c, ctx, srcSub, 10) {
+			if originalMessageID == "" {
+				originalMessageID = rm.GetMessage().GetMessageId()
+			}
 			release(t, c, ctx, srcSub, rm.GetAckId())
 		}
 		if dlq := pullOnce(t, c, ctx, dlqSub, 10); len(dlq) > 0 {
@@ -54,11 +59,15 @@ func TestPubSubDeadLetterForwarding(t *testing.T) {
 	if body := string(forwarded.GetMessage().GetData()); body != "poison" {
 		t.Fatalf("forwarded body = %q, want %q", body, "poison")
 	}
+	// The forwarded copy is a NEW message: a fresh server-assigned id.
+	if fwdID := forwarded.GetMessage().GetMessageId(); fwdID == "" || fwdID == originalMessageID {
+		t.Fatalf("forwarded messageId = %q, want a fresh id distinct from the original %q", fwdID, originalMessageID)
+	}
 	attrs := forwarded.GetMessage().GetAttributes()
 	if attrs["origin"] != "dlqtest" {
 		t.Fatalf("forwarded attributes %v lost the publisher attribute origin=dlqtest", attrs)
 	}
-	wantSub := srcSub[len("projects/"+projectID()+"/subscriptions/"):]
+	wantSub := path.Base(srcSub)
 	checks := map[string]bool{
 		"CloudPubSubDeadLetterSourceSubscription":        attrs["CloudPubSubDeadLetterSourceSubscription"] == wantSub,
 		"CloudPubSubDeadLetterSourceSubscriptionProject": attrs["CloudPubSubDeadLetterSourceSubscriptionProject"] == projectID(),
