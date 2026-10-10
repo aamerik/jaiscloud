@@ -30,6 +30,8 @@ func pubsubMessagingScenarios(project string, n ResourceNames) []Scenario {
 	msgSub := base + "/subscriptions/" + n.MsgSub
 	orderTopic := base + "/topics/" + n.OrderTopic
 	orderSub := base + "/subscriptions/" + n.OrderSub
+	eodTopic := base + "/topics/" + n.EODTopic
+	eodSub := base + "/subscriptions/" + n.EODSub
 
 	// waitPull polls a subscription until at least one message is delivered,
 	// then records that response. The ackId is captured for a later
@@ -101,5 +103,33 @@ func pubsubMessagingScenarios(project string, n ResourceNames) []Scenario {
 			Save: map[string]string{"ackId": "receivedMessages.0.ackId"}},
 		{Op: "order_acknowledge", Service: "pubsub", Method: http.MethodPost, Path: orderSub + ":acknowledge",
 			Body: `{"ackIds":["${ackId}"]}`},
+
+		// ── Exactly-once acknowledgement-ID versioning (EOD1) ────────────────
+		// Real GCP versions the ackId per delivery: on an exactly-once
+		// subscription a superseded (nacked-then-redelivered) ackId is
+		// INVALID_ARGUMENT carrying a google.rpc.ErrorInfo detail, while the
+		// latest id is accepted. The emulator embeds the delivery attempt in the
+		// ackId and matches. Two variables are needed because the redelivery
+		// mints a new id; the metadata key is that id, folded by the normalizer.
+		{Op: "eod_topic_create", Service: "pubsub", Method: http.MethodPut, Path: eodTopic,
+			Body: `{}`},
+		{Op: "eod_sub_create", Service: "pubsub", Method: http.MethodPut, Path: eodSub,
+			Body: fmt.Sprintf(`{"topic":%q,"ackDeadlineSeconds":10,"enableExactlyOnceDelivery":true}`, "projects/"+project+"/topics/"+n.EODTopic)},
+		{Op: "eod_publish", Service: "pubsub", Method: http.MethodPost, Path: eodTopic + ":publish",
+			Body: `{"messages":[{"data":"Z29k"}]}`},
+		{Op: "eod_pull", Service: "pubsub", Method: http.MethodPost, Path: eodSub + ":pull",
+			Body: `{"maxMessages":1}`,
+			Wait: &WaitSpec{Field: "receivedMessages", MinLen: 1, Interval: time.Second, Timeout: 60 * time.Second},
+			Save: map[string]string{"eodAck1": "receivedMessages.0.ackId"}},
+		{Op: "eod_nack", Service: "pubsub", Method: http.MethodPost, Path: eodSub + ":modifyAckDeadline",
+			Body: `{"ackIds":["${eodAck1}"],"ackDeadlineSeconds":0}`},
+		{Op: "eod_repull", Service: "pubsub", Method: http.MethodPost, Path: eodSub + ":pull",
+			Body: `{"maxMessages":1}`,
+			Wait: &WaitSpec{Field: "receivedMessages", MinLen: 1, Interval: time.Second, Timeout: 60 * time.Second},
+			Save: map[string]string{"eodAck2": "receivedMessages.0.ackId"}},
+		{Op: "eod_ack_superseded", Service: "pubsub", Method: http.MethodPost, Path: eodSub + ":acknowledge",
+			Body: `{"ackIds":["${eodAck1}"]}`},
+		{Op: "eod_ack_latest", Service: "pubsub", Method: http.MethodPost, Path: eodSub + ":acknowledge",
+			Body: `{"ackIds":["${eodAck2}"]}`},
 	}
 }

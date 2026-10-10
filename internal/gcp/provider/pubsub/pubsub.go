@@ -840,7 +840,7 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 			msg["orderingKey"] = m.OrderingKey
 		}
 		received = append(received, map[string]any{
-			"ackId":           encodeAckID(s, m.MessageID),
+			"ackId":           pubsubstore.EncodeAckID(s, m.MessageID, m.DeliveryAttempt),
 			"message":         msg,
 			"deliveryAttempt": deliveryAttempt(m.DeliveryAttempt, hasDeadLetterPolicy),
 		})
@@ -867,20 +867,45 @@ func (p *Provider) longPoll(ctx context.Context, queue string, maxMsgs, ackDeadl
 }
 
 func (p *Provider) SubscriptionAcknowledge(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	s := strings.TrimPrefix(name, "subscriptions/")
+	// Exactly-once delivery validates the ack ID's encoded version; a plain (or
+	// unresolvable) subscription keeps the lenient accept-anything path.
+	eod := false
+	if e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtSubscription, s); err == nil {
+		eod = subscriptionEOD(e)
+	}
+	now := clock.Now()
+	var byID map[string]pubsubstore.Message
+	if eod {
+		byID = p.messageIndex(ctx, s)
+	}
 	body, _ := nr.Params["body"].(map[string]any)
 	ackIDs, _ := body["ackIds"].([]any)
+	var invalid []string
 	for _, a := range ackIDs {
-		if id, ok := a.(string); ok {
-			decoded, ok := decodeAckID(id)
-			if !ok {
+		id, ok := a.(string)
+		if !ok {
+			continue
+		}
+		queue, msgID, attempt, ok := pubsubstore.DecodeAckID(id)
+		// An ackId is valid only for the subscription in the request path.
+		if !ok || queue != s {
+			continue
+		}
+		if eod {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, attempt, now) {
+				invalid = append(invalid, id)
 				continue
 			}
-			// decoded ackId = topicID + "/" + messageID
-			parts := strings.SplitN(decoded, "/", 2)
-			if len(parts) == 2 {
-				_ = p.messages.Delete(ctx, parts[0], parts[1])
-			}
 		}
+		_ = p.messages.Delete(ctx, queue, msgID)
+	}
+	if len(invalid) > 0 {
+		return nil, eodAckFailure(invalid)
 	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
 }
@@ -891,20 +916,16 @@ func (p *Provider) SubscriptionModifyAckDeadline(ctx context.Context, nr *model.
 		return nil, err
 	}
 	s := strings.TrimPrefix(name, "subscriptions/")
-	if _, err = p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtSubscription, s); err != nil {
+	e, err := p.resources.Get(ctx, nr.AccountID, store.GlobalRegion, rtSubscription, s)
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, model.NewProviderError("NotFound", "subscription not found", 404)
 		}
 		return nil, err
 	}
+	eod := subscriptionEOD(e)
 	body, _ := nr.Params["body"].(map[string]any)
 	ackIDs := toStrings(body["ackIds"])
-	decoded := make([]string, 0, len(ackIDs))
-	for _, id := range ackIDs {
-		if d, ok := decodeAckID(id); ok {
-			decoded = append(decoded, d)
-		}
-	}
 	seconds := 0
 	if ad, ok := body["ackDeadlineSeconds"].(float64); ok {
 		seconds = int(ad)
@@ -913,24 +934,73 @@ func (p *Provider) SubscriptionModifyAckDeadline(ctx context.Context, nr *model.
 			return nil, model.NewProviderError("InvalidArgument", fmt.Sprintf("ackDeadlineSeconds must be between 0 and 600 (got %d)", seconds), 400)
 		}
 	}
-	if err := p.messages.ModifyAckDeadline(ctx, s, decoded, seconds, clock.Now()); err != nil {
+	now := clock.Now()
+	var byID map[string]pubsubstore.Message
+	if eod {
+		byID = p.messageIndex(ctx, s)
+	}
+	decoded := make([]string, 0, len(ackIDs))
+	var invalid []string
+	for _, id := range ackIDs {
+		queue, msgID, attempt, ok := pubsubstore.DecodeAckID(id)
+		// An ackId is valid only for the subscription in the request path.
+		if !ok || queue != s {
+			continue
+		}
+		if eod {
+			if m, found := byID[msgID]; found && !pubsubstore.AckIDCurrent(m, attempt, now) {
+				invalid = append(invalid, id)
+				continue
+			}
+		}
+		decoded = append(decoded, s+"/"+msgID)
+	}
+	if err := p.messages.ModifyAckDeadline(ctx, s, decoded, seconds, now); err != nil {
 		return nil, err
+	}
+	if len(invalid) > 0 {
+		return nil, eodAckFailure(invalid)
 	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
 }
 
-// encodeAckID renders the opaque wire ackId: base64url of "topicID/messageID".
-func encodeAckID(topicID, messageID string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(topicID + "/" + messageID))
+// subscriptionEOD reports whether a subscription resource has exactly-once
+// delivery enabled.
+func subscriptionEOD(e store.ResourceEntry) bool {
+	var meta map[string]any
+	if err := json.Unmarshal(e.Data, &meta); err != nil {
+		return false
+	}
+	eod, _ := meta["enableExactlyOnceDelivery"].(bool)
+	return eod
 }
 
-// decodeAckID reverses encodeAckID, returning "topicID/messageID".
-func decodeAckID(s string) (string, bool) {
-	raw, err := base64.RawURLEncoding.DecodeString(s)
+// messageIndex lists a queue's messages by ID for ack-ID validation. A store
+// error yields a nil index, so validation degrades to the lenient path.
+func (p *Provider) messageIndex(ctx context.Context, queue string) map[string]pubsubstore.Message {
+	msgs, err := p.messages.List(ctx, queue)
 	if err != nil {
-		return "", false
+		return nil
 	}
-	return string(raw), true
+	out := make(map[string]pubsubstore.Message, len(msgs))
+	for _, m := range msgs {
+		out[m.MessageID] = m
+	}
+	return out
+}
+
+// eodAckFailure builds real GCP's exactly-once invalid-ack-ID error: an
+// INVALID_ARGUMENT whose google.rpc.ErrorInfo detail maps each bad ack ID to
+// PERMANENT_FAILURE_INVALID_ACK_ID.
+func eodAckFailure(invalidAckIDs []string) *model.ProviderError {
+	perr := model.NewProviderError("InvalidArgument", pubsubstore.EODAckFailureMessage, 400)
+	perr.Details = []model.ErrorDetail{{
+		Type:     "google.rpc.ErrorInfo",
+		Reason:   pubsubstore.EODAckFailureReason,
+		Domain:   pubsubstore.EODAckFailureDomain,
+		Metadata: pubsubstore.EODAckFailureMetadata(invalidAckIDs),
+	}}
+	return perr
 }
 
 // pullSubscriptionIDs returns the IDs of a topic's pull subscriptions. Push

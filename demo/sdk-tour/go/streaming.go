@@ -35,6 +35,7 @@ import (
 	"google.golang.org/api/option"
 	mrpb "google.golang.org/genproto/googleapis/api/monitoredres"
 	ltype "google.golang.org/genproto/googleapis/logging/type"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -349,8 +350,57 @@ func streamPubSubScenarios(r *runner) {
 				return "", "", fmt.Errorf("exactly-once message redelivered after ack")
 			}
 		}
-		return "dup=0", "acked exactly-once message was not redelivered", nil
+
+		// Exactly-once acknowledgement-ID versioning: a superseded ackId must be
+		// rejected with INVALID_ARGUMENT carrying the ErrorInfo detail the
+		// official clients map to AcknowledgeStatusInvalidAckID, while the latest
+		// id is accepted. The superseded check runs against the same low-level
+		// client (its ErrorInfo sidecar is exactly what AckWithResult consumes),
+		// so it does not change the scenario's `dup=0` observable.
+		if err := publishOne(ctx, topic, "eod-supersede"); err != nil {
+			return "", "", err
+		}
+		recvA, cancelA := context.WithCancel(ctx)
+		superseded, err := streamPullOne(recvA, sc, name, "eod-supersede")
+		cancelA()
+		if err != nil {
+			return "", "", fmt.Errorf("supersede delivery: %w", err)
+		}
+		if err := sc.ModifyAckDeadline(ctx, &pubsubpb.ModifyAckDeadlineRequest{
+			Subscription: name, AckIds: []string{superseded}, AckDeadlineSeconds: 0,
+		}); err != nil {
+			return "", "", fmt.Errorf("nack: %w", err)
+		}
+		recvB, cancelB := context.WithCancel(ctx)
+		latest, err := streamPullOne(recvB, sc, name, "eod-supersede")
+		cancelB()
+		if err != nil {
+			return "", "", fmt.Errorf("redelivery: %w", err)
+		}
+		if latest == superseded {
+			return "", "", fmt.Errorf("redelivery reused the ackId; delivery version not encoded")
+		}
+		if err := sc.Acknowledge(ctx, &pubsubpb.AcknowledgeRequest{Subscription: name, AckIds: []string{superseded}}); err == nil {
+			return "", "", fmt.Errorf("superseded ackId accepted; want INVALID_ARGUMENT")
+		} else if st, _ := status.FromError(err); st.Code() != codes.InvalidArgument || !hasInvalidAckID(st, superseded) {
+			return "", "", fmt.Errorf("superseded ack: code=%v details=%v, want INVALID_ARGUMENT + PERMANENT_FAILURE_INVALID_ACK_ID", st.Code(), st.Details())
+		}
+		if err := sc.Acknowledge(ctx, &pubsubpb.AcknowledgeRequest{Subscription: name, AckIds: []string{latest}}); err != nil {
+			return "", "", fmt.Errorf("ack latest: %w", err)
+		}
+		return "dup=0", "acked exactly-once message was not redelivered; superseded ackId rejected", nil
 	})
+}
+
+// hasInvalidAckID reports whether st carries the google.rpc.ErrorInfo detail the
+// official clients read as AcknowledgeStatusInvalidAckID / INVALID_ACK_ID.
+func hasInvalidAckID(st *status.Status, ackID string) bool {
+	for _, d := range st.Details() {
+		if ei, ok := d.(*errdetails.ErrorInfo); ok && ei.Metadata[ackID] == "PERMANENT_FAILURE_INVALID_ACK_ID" {
+			return true
+		}
+	}
+	return false
 }
 
 func streamAckDeadlineSeconds() time.Duration {

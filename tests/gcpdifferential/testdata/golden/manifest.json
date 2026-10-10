@@ -1,7 +1,7 @@
 {
   "version": 1,
   "project": "<project>",
-  "ops": 173,
+  "ops": 181,
   "services": [
     "bigquery",
     "compute",
@@ -1068,6 +1068,54 @@
       "file": "172-pubsub-order_acknowledge.json",
       "op": "order_acknowledge",
       "sha256": "bc1bbcdccea025823ff389032bec2fd10b4952ceb6bd9f5032c88871747fb6cf",
+      "status": 200
+    },
+    {
+      "file": "173-pubsub-eod_topic_create.json",
+      "op": "eod_topic_create",
+      "sha256": "530bdc928d0679477ca4f118e0c016de9793d965b2c6f43ae3d9187f86257370",
+      "status": 200
+    },
+    {
+      "file": "174-pubsub-eod_sub_create.json",
+      "op": "eod_sub_create",
+      "sha256": "0c9a6ca17f7ea743692219fbd7e5e647c093e2808b39f2b8fe901ddf83411729",
+      "status": 200
+    },
+    {
+      "file": "175-pubsub-eod_publish.json",
+      "op": "eod_publish",
+      "sha256": "8c10a69124bab6c88d5b9182441bd8f48a160f7f0c0485946b8536e452996cdd",
+      "status": 200
+    },
+    {
+      "file": "176-pubsub-eod_pull.json",
+      "op": "eod_pull",
+      "sha256": "d63f400da32f0bd33ca86dd2665acbd8417c720ca1fd6d3f6b4566437751eaf7",
+      "status": 200
+    },
+    {
+      "file": "177-pubsub-eod_nack.json",
+      "op": "eod_nack",
+      "sha256": "b469391b61b90d28a98ef3b711c137b5eaef626c5ad4f52919e44d482139f1b3",
+      "status": 200
+    },
+    {
+      "file": "178-pubsub-eod_repull.json",
+      "op": "eod_repull",
+      "sha256": "4168f1bb3b4fff64c62680930b7da62b8679ef31d3f7c74ff26d6ea6472de878",
+      "status": 200
+    },
+    {
+      "file": "179-pubsub-eod_ack_superseded.json",
+      "op": "eod_ack_superseded",
+      "sha256": "d6f715a4c67daed1c91f951960c6fab739684823dcb602575009cb08f2a1d8ef",
+      "status": 400
+    },
+    {
+      "file": "180-pubsub-eod_ack_latest.json",
+      "op": "eod_ack_latest",
+      "sha256": "b1b56b3347dce44e4beb02ff03a5b447264904cc4a937f315523ad57edb9dc1a",
       "status": 200
     }
   ]

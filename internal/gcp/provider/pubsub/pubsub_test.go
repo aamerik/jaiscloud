@@ -134,8 +134,8 @@ func TestPubSubOpaqueAckID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ackId is not base64url: %v", err)
 	}
-	if string(decoded) != "s/"+msgID {
-		t.Errorf("decoded ackId = %q, want s/%s", decoded, msgID)
+	if string(decoded) != "s/"+msgID+"/1" {
+		t.Errorf("decoded ackId = %q, want s/%s/1", decoded, msgID)
 	}
 
 	// modifyAckDeadline round-trips through the opaque ackId.

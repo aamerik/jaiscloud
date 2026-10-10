@@ -297,27 +297,3 @@ operations:
     state: unsupported
     reason: "usable-subnetwork discovery requires a Compute subnet catalog; explicit Unimplemented stub"
 
-  # Pub/Sub messaging semantics (PSM1). The plain ack / modify-ack-deadline
-  # paths are now oracle-backed by the real-GCP differential harness
-  # (tests/gcpdifferential), but the exactly-once contract is not implemented:
-  # the emulator mints a delivery-invariant ack id and always returns OK, while
-  # real GCP versions the ack id per delivery and returns INVALID_ARGUMENT for a
-  # superseded/expired id on an exactly-once subscription. The cells are
-  # therefore limited until EOD1 (W1.2, fix/gcp-pubsub-eod-ackid) implements the
-  # versioning and re-grades them to ga.
-  - service: pubsub
-    operation: Acknowledge
-    state: limited
-    reason: "plain ack is verified against real GCP by the PSM1 differential oracle, but exactly-once acknowledgement-ID versioning is unimplemented (EOD1): the emulator returns OK for a superseded/expired ack id where real GCP returns INVALID_ARGUMENT on an exactly-once subscription"
-  - service: pubsub
-    operation: ModifyAckDeadline
-    state: limited
-    reason: "plain modify-ack-deadline is verified against real GCP by the PSM1 differential oracle, but exactly-once acknowledgement-ID versioning is unimplemented (EOD1): the emulator returns OK for a superseded/expired ack id where real GCP returns INVALID_ARGUMENT on an exactly-once subscription"
-  - service: pubsub
-    operation: PubSub.SubscriptionAcknowledge
-    state: limited
-    reason: "plain ack is verified against real GCP by the PSM1 differential oracle, but exactly-once acknowledgement-ID versioning is unimplemented (EOD1): the emulator returns OK for a superseded/expired ack id where real GCP returns INVALID_ARGUMENT on an exactly-once subscription"
-  - service: pubsub
-    operation: PubSub.SubscriptionModifyAckDeadline
-    state: limited
-    reason: "plain modify-ack-deadline is verified against real GCP by the PSM1 differential oracle, but exactly-once acknowledgement-ID versioning is unimplemented (EOD1): the emulator returns OK for a superseded/expired ack id where real GCP returns INVALID_ARGUMENT on an exactly-once subscription"

@@ -44,11 +44,17 @@ const ackTombstoneTTL = time.Minute
 //     claimed copy can therefore still be sent until the store's own
 //     modify-deadline/ack-deadline state catches up. The task scope is ack
 //     state across StreamingPull streams, which this covers.
-//   - The ackId is base64url("subscription/messageID") and is stable across
-//     redeliveries (no wire change), so the emulator cannot tell a superseded
-//     ackId from the latest one. Real exactly-once rejects acks with a
-//     superseded/expired ackId; the emulator treats a repeat as an idempotent
-//     no-op. Acking is still guaranteed not to redeliver the message.
+//   - The ackId encodes the delivery attempt (base64url of
+//     "subscription/messageID/deliveryAttempt"). The unary Acknowledge and
+//     ModifyAckDeadline RPCs use it to reject a superseded or expired ackId on
+//     an exactly-once subscription (real GCP's contract: only the latest ackId
+//     is accepted, and an expired one is INVALID_ARGUMENT). This registry's own
+//     path — acks sent on a StreamingPull stream — still treats a repeat as an
+//     idempotent no-op rather than reporting it in
+//     StreamingPullResponse.acknowledge_confirmation.invalid_ack_ids; the
+//     official clients resolve AckWithResult from the unary RPC's ErrorInfo
+//     sidecar, so that confirmation surface is not exercised. Acking is still
+//     guaranteed not to redeliver the message.
 type ackRegistry struct {
 	sub      string
 	messages pubsubstore.Messages
