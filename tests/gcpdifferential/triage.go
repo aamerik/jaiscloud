@@ -187,20 +187,6 @@ var triageRules = []TriageRule{
 		Location: "pushConfig",
 		Reason:   "an absent pushConfig and an explicit {} both mean 'no push endpoint'; the emulator correctly has no push subscription",
 	},
-	// ── Pub/Sub ordered (keyed) delivery ────────────────────────────────────
-	// Real GCP returns every available message for an ordering key in one pull;
-	// the emulator's ordering-key gate withholds all but the earliest until it
-	// is acknowledged, so the batch is shorter. This is the documented ordering
-	// deviation (README-GCP §Cloud Pub/Sub deviations, PSM1), not a claim that
-	// the messages are lost — the withheld messages remain deliverable.
-	{
-		Service:  "pubsub",
-		Op:       "order_pull",
-		Kind:     "array_length_mismatch",
-		Location: "response.receivedMessages",
-		Reason:   "documented ordering deviation: real GCP returns every available message for an ordering key in one response, while the emulator's ordering-key gate withholds all but the earliest until it is acked (README-GCP §Cloud Pub/Sub deviations)",
-	},
-
 	// ── GCS: absent rpo ≡ default ───────────────────────────────────────────
 	{
 		Service:  "storage",

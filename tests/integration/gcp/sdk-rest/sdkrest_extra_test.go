@@ -68,21 +68,25 @@ func TestSDKPubSubOrderingKeyAndAttributes(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
-	// Ordering-key FIFO: only one message per key is in flight at a time, so
-	// pull+ack one at a time and verify strict delivery order.
-	for i := 0; i < n; i++ {
-		pull, err := svc.Projects.Subscriptions.Pull(sub, &pubsub.PullRequest{MaxMessages: 10}).Do()
-		require.NoError(t, err)
-		require.Len(t, pull.ReceivedMessages, 1, "exactly one message per ordering-key group is delivered at a time")
-		rm := pull.ReceivedMessages[0]
+	// Ordering-key contract: a key's available messages are returned together in
+	// one batch, in publish order; the key is then withheld while that batch is
+	// outstanding (only one batch per key at a time).
+	pull, err := svc.Projects.Subscriptions.Pull(sub, &pubsub.PullRequest{MaxMessages: 10}).Do()
+	require.NoError(t, err)
+	require.Len(t, pull.ReceivedMessages, n, "all available messages for the ordering key are one batch")
+	ackIds := make([]string, 0, n)
+	for i, rm := range pull.ReceivedMessages {
 		require.Equal(t, "group-1", rm.Message.OrderingKey, "orderingKey must round-trip")
 		require.Equal(t, b64(string(rune('a'+i))), rm.Message.Data, "FIFO order must be preserved")
 		require.Equal(t, string(rune('0'+i)), rm.Message.Attributes["seq"])
-		_, err = svc.Projects.Subscriptions.Acknowledge(sub, &pubsub.AcknowledgeRequest{
-			AckIds: []string{rm.AckId},
-		}).Do()
-		require.NoError(t, err)
+		ackIds = append(ackIds, rm.AckId)
 	}
+	// The key is gated while the batch is in flight.
+	gated, err := svc.Projects.Subscriptions.Pull(sub, &pubsub.PullRequest{MaxMessages: 10}).Do()
+	require.NoError(t, err)
+	require.Len(t, gated.ReceivedMessages, 0, "an ordering key with an outstanding batch is withheld")
+	_, err = svc.Projects.Subscriptions.Acknowledge(sub, &pubsub.AcknowledgeRequest{AckIds: ackIds}).Do()
+	require.NoError(t, err)
 }
 
 // TestSDKPubSubModifyAckDeadlineRedelivery exercises ack-deadline reset: a

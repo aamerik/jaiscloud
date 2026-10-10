@@ -32,6 +32,10 @@ func pubsubMessagingScenarios(project string, n ResourceNames) []Scenario {
 	orderSub := base + "/subscriptions/" + n.OrderSub
 	eodTopic := base + "/topics/" + n.EODTopic
 	eodSub := base + "/subscriptions/" + n.EODSub
+	redelTopic := base + "/topics/" + n.RedelTopic
+	redelSub := base + "/subscriptions/" + n.RedelSub
+	redel2Topic := base + "/topics/" + n.Redel2Topic
+	redel2Sub := base + "/subscriptions/" + n.Redel2Sub
 
 	// waitPull polls a subscription until at least one message is delivered,
 	// then records that response. The ackId is captured for a later
@@ -100,6 +104,7 @@ func pubsubMessagingScenarios(project string, n ResourceNames) []Scenario {
 			Body: `{"messages":[{"data":"a2V5LTI=","orderingKey":"key"}]}`},
 		{Op: "order_pull", Service: "pubsub", Method: http.MethodPost, Path: orderSub + ":pull",
 			Body: `{"maxMessages":10}`,
+			Wait: &WaitSpec{Field: "receivedMessages", MinLen: 3, Interval: time.Second, Timeout: 60 * time.Second},
 			Save: map[string]string{"ackId": "receivedMessages.0.ackId"}},
 		{Op: "order_acknowledge", Service: "pubsub", Method: http.MethodPost, Path: orderSub + ":acknowledge",
 			Body: `{"ackIds":["${ackId}"]}`},
@@ -131,5 +136,67 @@ func pubsubMessagingScenarios(project string, n ResourceNames) []Scenario {
 			Body: `{"ackIds":["${eodAck1}"]}`},
 		{Op: "eod_ack_latest", Service: "pubsub", Method: http.MethodPost, Path: eodSub + ":acknowledge",
 			Body: `{"ackIds":["${eodAck2}"]}`},
+
+		// ── Ordered redelivery fan-out + in-order ack (PSM3) ─────────────────
+		// Real GCP's ordered contract: a later ack is accepted but held while an
+		// earlier message for the key is unacked; a nack/expiry redelivers the
+		// message and all subsequent messages for the key, even already-acked
+		// ones. Each case gets a dedicated ordered subscription so the message
+		// state is isolated and the capture is deterministic.
+		{Op: "redel_topic_create", Service: "pubsub", Method: http.MethodPut, Path: redelTopic,
+			Body: `{}`},
+		{Op: "redel_sub_create", Service: "pubsub", Method: http.MethodPut, Path: redelSub,
+			Body: fmt.Sprintf(`{"topic":%q,"ackDeadlineSeconds":60,"enableMessageOrdering":true}`, "projects/"+project+"/topics/"+n.RedelTopic)},
+		{Op: "redel_publish_0", Service: "pubsub", Method: http.MethodPost, Path: redelTopic + ":publish",
+			Body: `{"messages":[{"data":"cmVkZWwtMA==","orderingKey":"rk"}]}`},
+		{Op: "redel_publish_1", Service: "pubsub", Method: http.MethodPost, Path: redelTopic + ":publish",
+			Body: `{"messages":[{"data":"cmVkZWwtMQ==","orderingKey":"rk"}]}`},
+		{Op: "redel_publish_2", Service: "pubsub", Method: http.MethodPost, Path: redelTopic + ":publish",
+			Body: `{"messages":[{"data":"cmVkZWwtMg==","orderingKey":"rk"}]}`},
+		{Op: "redel_pull", Service: "pubsub", Method: http.MethodPost, Path: redelSub + ":pull",
+			Body: `{"maxMessages":10}`,
+			Wait: &WaitSpec{Field: "receivedMessages", MinLen: 3, Interval: time.Second, Timeout: 60 * time.Second},
+			Save: map[string]string{"ra0": "receivedMessages.0.ackId", "ra1": "receivedMessages.1.ackId", "ra2": "receivedMessages.2.ackId"}},
+		{Op: "redel_ack_a", Service: "pubsub", Method: http.MethodPost, Path: redelSub + ":acknowledge",
+			Body: `{"ackIds":["${ra0}"]}`},
+		{Op: "redel_ack_c", Service: "pubsub", Method: http.MethodPost, Path: redelSub + ":acknowledge",
+			Body: `{"ackIds":["${ra2}"]}`},
+		{Op: "redel_nack_b", Service: "pubsub", Method: http.MethodPost, Path: redelSub + ":modifyAckDeadline",
+			Body: `{"ackIds":["${ra1}"],"ackDeadlineSeconds":0}`},
+		{Op: "redel_repull", Service: "pubsub", Method: http.MethodPost, Path: redelSub + ":pull",
+			Body: `{"maxMessages":10}`,
+			Wait: &WaitSpec{Field: "receivedMessages", MinLen: 2, Interval: time.Second, Timeout: 60 * time.Second},
+			Save: map[string]string{"rb": "receivedMessages.0.ackId", "rc": "receivedMessages.1.ackId"}},
+		{Op: "redel_ack_b", Service: "pubsub", Method: http.MethodPost, Path: redelSub + ":acknowledge",
+			Body: `{"ackIds":["${rb}"]}`},
+		{Op: "redel_ack_c2", Service: "pubsub", Method: http.MethodPost, Path: redelSub + ":acknowledge",
+			Body: `{"ackIds":["${rc}"]}`},
+		{Op: "redel_repull_empty", Service: "pubsub", Method: http.MethodPost, Path: redelSub + ":pull",
+			Body: `{"maxMessages":10,"returnImmediately":true}`},
+
+		// A later ack is held, then applied once the intervening earlier message
+		// is acked: ack A, ack C (held behind B), ack B → the key drains.
+		{Op: "redel2_topic_create", Service: "pubsub", Method: http.MethodPut, Path: redel2Topic,
+			Body: `{}`},
+		{Op: "redel2_sub_create", Service: "pubsub", Method: http.MethodPut, Path: redel2Sub,
+			Body: fmt.Sprintf(`{"topic":%q,"ackDeadlineSeconds":60,"enableMessageOrdering":true}`, "projects/"+project+"/topics/"+n.Redel2Topic)},
+		{Op: "redel2_publish_0", Service: "pubsub", Method: http.MethodPost, Path: redel2Topic + ":publish",
+			Body: `{"messages":[{"data":"cjJh","orderingKey":"rk2"}]}`},
+		{Op: "redel2_publish_1", Service: "pubsub", Method: http.MethodPost, Path: redel2Topic + ":publish",
+			Body: `{"messages":[{"data":"cjJi","orderingKey":"rk2"}]}`},
+		{Op: "redel2_publish_2", Service: "pubsub", Method: http.MethodPost, Path: redel2Topic + ":publish",
+			Body: `{"messages":[{"data":"cjJj","orderingKey":"rk2"}]}`},
+		{Op: "redel2_pull", Service: "pubsub", Method: http.MethodPost, Path: redel2Sub + ":pull",
+			Body: `{"maxMessages":10}`,
+			Wait: &WaitSpec{Field: "receivedMessages", MinLen: 3, Interval: time.Second, Timeout: 60 * time.Second},
+			Save: map[string]string{"r2a": "receivedMessages.0.ackId", "r2b": "receivedMessages.1.ackId", "r2c": "receivedMessages.2.ackId"}},
+		{Op: "redel2_ack_a", Service: "pubsub", Method: http.MethodPost, Path: redel2Sub + ":acknowledge",
+			Body: `{"ackIds":["${r2a}"]}`},
+		{Op: "redel2_ack_c", Service: "pubsub", Method: http.MethodPost, Path: redel2Sub + ":acknowledge",
+			Body: `{"ackIds":["${r2c}"]}`},
+		{Op: "redel2_ack_b", Service: "pubsub", Method: http.MethodPost, Path: redel2Sub + ":acknowledge",
+			Body: `{"ackIds":["${r2b}"]}`},
+		{Op: "redel2_repull_empty", Service: "pubsub", Method: http.MethodPost, Path: redel2Sub + ":pull",
+			Body: `{"maxMessages":10,"returnImmediately":true}`},
 	}
 }

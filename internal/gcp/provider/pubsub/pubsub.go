@@ -902,7 +902,7 @@ func (p *Provider) SubscriptionAcknowledge(ctx context.Context, nr *model.Normal
 				continue
 			}
 		}
-		_ = p.messages.Delete(ctx, queue, msgID)
+		_ = p.messages.Acknowledge(ctx, queue, msgID)
 	}
 	if len(invalid) > 0 {
 		return nil, eodAckFailure(invalid)

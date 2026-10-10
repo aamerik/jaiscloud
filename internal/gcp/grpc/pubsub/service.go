@@ -954,7 +954,7 @@ func (s *Service) applyStreamAcks(ctx context.Context, queue string, eod bool, r
 				continue
 			}
 		}
-		if err := s.messages.Delete(ctx, queue, msgID); err != nil {
+		if err := s.messages.Acknowledge(ctx, queue, msgID); err != nil {
 			// Leave it untombstoned so a later retry can still ack it.
 			continue
 		}
@@ -972,15 +972,41 @@ func (s *Service) dropAcked(ctx context.Context, queue string, reg *ackRegistry,
 	if len(msgs) == 0 {
 		return msgs
 	}
+	// A retained acked ordered message is present in the store but must stay
+	// acked; only a message that is present and *unacked* (restored by Seek) is
+	// made visible again. Without this a redelivery reset would un-ack it. The
+	// store's acked set is only fetched when a tombstone is actually seen.
+	var acked map[string]bool
 	kept := msgs[:0]
 	for _, m := range msgs {
-		if reg.isAcked(m.MessageID) {
-			_ = s.messages.ModifyAckDeadline(ctx, queue, []string{queue + "/" + m.MessageID}, 0, clock.Now())
+		if !reg.isAcked(m.MessageID) {
+			kept = append(kept, m)
 			continue
 		}
-		kept = append(kept, m)
+		if acked == nil {
+			acked = s.ackedIDs(ctx, queue)
+		}
+		if !acked[m.MessageID] {
+			_ = s.messages.ModifyAckDeadline(ctx, queue, []string{queue + "/" + m.MessageID}, 0, clock.Now())
+		}
 	}
 	return kept
+}
+
+// ackedIDs returns the IDs of a queue's retained acked messages (keyed messages
+// ack retains; unordered acked messages are deleted and never appear).
+func (s *Service) ackedIDs(ctx context.Context, queue string) map[string]bool {
+	msgs, err := s.messages.List(ctx, queue)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]bool, len(msgs))
+	for _, m := range msgs {
+		if m.Acked {
+			out[m.MessageID] = true
+		}
+	}
+	return out
 }
 
 // applyStreamModifyDeadlines applies the parallel modifyDeadlineAckIds /
@@ -1049,7 +1075,7 @@ func (s *Service) Acknowledge(ctx context.Context, req *pubsubpb.AcknowledgeRequ
 				continue
 			}
 		}
-		if err := s.messages.Delete(ctx, queue, msgID); err != nil {
+		if err := s.messages.Acknowledge(ctx, queue, msgID); err != nil {
 			return nil, mapError(err)
 		}
 		// Tombstone in the shared subscription registry so an active
@@ -1698,6 +1724,10 @@ func (s *Service) restoreSnapshot(ctx context.Context, queue string, snap snapsh
 	restore := func(m pubsubstore.Message) error {
 		m.Subscription = queue
 		m.VisibleAt = time.Time{}
+		// A seek restores the backlog as unacknowledged, so clear any retained
+		// ordered ack state on the message.
+		m.Acked = false
+		m.AckPending = false
 		return s.messages.Put(ctx, m)
 	}
 	for _, m := range snap.Backlog {

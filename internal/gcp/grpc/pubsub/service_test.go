@@ -284,16 +284,28 @@ func TestPullOrderingKeyGating(t *testing.T) {
 		t.Fatalf("Publish second: %v", err)
 	}
 
-	// A single pull must return only the first message of the group.
+	// A single pull returns the whole key batch, in publish order.
 	pull, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: subscription, MaxMessages: 10, ReturnImmediately: true})
 	if err != nil {
 		t.Fatalf("Pull: %v", err)
 	}
-	if len(pull.GetReceivedMessages()) != 1 {
-		t.Fatalf("Pull received %d messages, want 1 (ordering-key gate)", len(pull.GetReceivedMessages()))
+	if len(pull.GetReceivedMessages()) != 2 {
+		t.Fatalf("Pull received %d messages, want 2 (one keyed batch)", len(pull.GetReceivedMessages()))
 	}
-	if string(pull.GetReceivedMessages()[0].GetMessage().GetData()) != "first" {
-		t.Fatalf("Pull data = %q, want first", string(pull.GetReceivedMessages()[0].GetMessage().GetData()))
+	if got := string(pull.GetReceivedMessages()[0].GetMessage().GetData()); got != "first" {
+		t.Fatalf("Pull data[0] = %q, want first", got)
+	}
+	if got := string(pull.GetReceivedMessages()[1].GetMessage().GetData()); got != "second" {
+		t.Fatalf("Pull data[1] = %q, want second", got)
+	}
+
+	// The key is gated while that batch is outstanding.
+	pull, err = subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: subscription, MaxMessages: 10, ReturnImmediately: true})
+	if err != nil {
+		t.Fatalf("Pull 2: %v", err)
+	}
+	if len(pull.GetReceivedMessages()) != 0 {
+		t.Fatalf("Pull 2 received %d messages, want 0 (key gated while in-flight)", len(pull.GetReceivedMessages()))
 	}
 }
 

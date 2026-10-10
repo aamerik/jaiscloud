@@ -297,6 +297,12 @@ type ResourceNames struct {
 	StreamSub    string
 	EODTopic     string
 	EODSub       string
+	// Ordered redelivery contract (PSM3): two dedicated ordered subscriptions,
+	// one for the held-ack + nack fan-out, one for the nack-of-acked case.
+	RedelTopic  string
+	RedelSub    string
+	Redel2Topic string
+	Redel2Sub   string
 }
 
 // Names derives the run's resource identifiers from suffix.
@@ -382,6 +388,10 @@ func Names(suffix string) ResourceNames {
 		StreamSub:    "conf-pubsub-stream-sub-" + suffix,
 		EODTopic:     "conf-pubsub-eod-" + suffix,
 		EODSub:       "conf-pubsub-eod-sub-" + suffix,
+		RedelTopic:   "conf-pubsub-redel-" + suffix,
+		RedelSub:     "conf-pubsub-redel-sub-" + suffix,
+		Redel2Topic:  "conf-pubsub-redel2-" + suffix,
+		Redel2Sub:    "conf-pubsub-redel2-sub-" + suffix,
 	}
 }
 

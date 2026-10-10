@@ -24,6 +24,17 @@ type Message struct {
 	DeliveryAttempt int
 	OrderingKey     string    // GCP orderingKey (FIFO group, like SQS MessageGroupId)
 	VisibleAt       time.Time // when the message becomes visible again (ack deadline)
+	// Acked marks a keyed message that has been acknowledged. Ordered messages
+	// are retained after ack (not deleted) so that a redelivery of an earlier
+	// message for the key can redeliver it too — real GCP redelivers all
+	// subsequent messages for an ordering key, even acknowledged ones.
+	// Unordered messages are deleted on ack and never set this.
+	Acked bool
+	// AckPending marks a keyed message whose ack arrived while an earlier
+	// message for the same key was still unacknowledged. Real GCP accepts the
+	// later ack but holds it: it applies only once every earlier message for the
+	// key is acked (and is discarded if an earlier message is redelivered).
+	AckPending bool
 	// KmsKeyName is the CMEK key name (empty when server-DEK encrypted). The
 	// Data field stores base64(AES-GCM ciphertext) when envelope encryption is
 	// active; WrappedDEK is the DEK wrapped by KmsKeyName.
@@ -55,6 +66,14 @@ type Messages interface {
 	// invisible until now+ackDeadlineSec and incrementing its delivery attempt.
 	// retentionSec filters out messages older than the topic's retention.
 	Pull(ctx context.Context, queue string, maxMessages, ackDeadlineSec, retentionSec int, now time.Time) ([]Message, error)
+	// Acknowledge applies an ack to one message (by message ID). An unordered
+	// message is deleted. A keyed message is retained and acked under the GCP
+	// ordered-delivery contract: the ack is held (AckPending) while an earlier
+	// message for the same ordering key is still unacknowledged, and is applied
+	// — cascading through any held later acks — only when every earlier message
+	// is acked. Redelivering an earlier message (ModifyAckDeadline 0) clears the
+	// held acks so those later messages are redelivered too.
+	Acknowledge(ctx context.Context, queue, messageID string) error
 	Delete(ctx context.Context, queue, messageID string) error
 	UpdateDeliveryAttempt(ctx context.Context, queue, messageID string, attempt int) error
 	// ModifyAckDeadline resets the visibility deadline for the given ack IDs

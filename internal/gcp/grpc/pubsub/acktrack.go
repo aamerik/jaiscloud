@@ -168,17 +168,22 @@ func (r *ackRegistry) reconcile(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	present := make(map[string]struct{}, len(live))
+	present := make(map[string]pubsubstore.Message, len(live))
 	for _, m := range live {
-		present[m.MessageID] = struct{}{}
+		present[m.MessageID] = m
 	}
 	now := clock.RealNow()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for id, at := range r.acked {
-		if _, ok := present[id]; ok {
-			// The message was restored (Seek to a snapshot/time) and is
-			// deliverable again: drop the stale tombstone.
+		if m, ok := present[id]; ok {
+			// A retained acked ordered message stays acked: keep its tombstone
+			// so no stream redelivers it. Any other present message was restored
+			// (Seek to a snapshot/time) and is deliverable again, so its stale
+			// tombstone is dropped.
+			if m.Acked {
+				continue
+			}
 			delete(r.acked, id)
 			continue
 		}
