@@ -226,6 +226,7 @@ func main() {
 	check := flag.Bool("check", false, "with -query/-service, exit 2 if already done, 3 if in flight")
 	audit := flag.Bool("audit", false, "print the audit classification of not-done items")
 	coverage := flag.Bool("coverage", false, "report per-doc coverage and fail if any doc has status markers but no rows")
+	coverageInventory := flag.Bool("coverage-inventory", false, "print the derived per-service behavioral-coverage inventory (report-only)")
 	evidence := flag.Bool("evidence", false, "report per-operation conformance evidence from the fidelity matrix (verified vs unverified)")
 	next := flag.Bool("next", false, "print the next actionable items in priority order")
 	nextN := flag.Int("n", 5, "number of items for -next")
@@ -265,6 +266,17 @@ func main() {
 	}
 	if *matrixDiff != "" {
 		os.Exit(runMatrixDiff(*matrixDiff, *matrixPath))
+	}
+	if *coverageInventory {
+		rows, err := gatherCoverage(*matrixPath, gcpTestRoot)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "gcpstatus: coverage inventory: %v\n", err)
+			os.Exit(1)
+		}
+		var b strings.Builder
+		renderCoverageSection(&b, rows)
+		fmt.Print(b.String())
+		return
 	}
 
 	items, docPaths, waves := collect(*docs, *includeArchive, *verbose)
@@ -309,6 +321,10 @@ func main() {
 	if *query != "" || *service != "" {
 		os.Exit(runQuery(items, *query, *service, *check))
 	}
+	// Derived, report-only: the per-service behavioral-coverage inventory. A
+	// missing matrix/tree just omits the section; it never fails the build.
+	coverageRows, _ := gatherCoverage(*matrixPath, gcpTestRoot)
+
 	if *jsonOut != "" {
 		if err := writeJSON(*jsonOut, items); err != nil {
 			fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
@@ -316,12 +332,12 @@ func main() {
 		}
 	}
 	if *out != "" {
-		if err := writeMarkdown(*out, items); err != nil {
+		if err := writeMarkdown(*out, items, coverageRows); err != nil {
 			fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
 			os.Exit(1)
 		}
 	}
-	printSummary(items, *out, *jsonOut, *matrixPath)
+	printSummary(items, *out, *jsonOut, *matrixPath, coverageRows)
 }
 
 // ─── document parsing ─────────────────────────────────────────────────────────
@@ -2199,7 +2215,7 @@ func writeJSON(path string, items []*Item) error {
 	return os.WriteFile(path, append(b, '\n'), 0o644)
 }
 
-func writeMarkdown(path string, items []*Item) error {
+func writeMarkdown(path string, items []*Item, coverage []coverageRow) error {
 	counts := classCounts(items)
 	var backlog, prs, matrix []*Item
 	for _, it := range items {
@@ -2278,6 +2294,7 @@ func writeMarkdown(path string, items []*Item) error {
 		}
 		b.WriteString("\n")
 	}
+	renderCoverageSection(&b, coverage)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -2298,7 +2315,7 @@ func writeTable(b *strings.Builder, rows []*Item) {
 	}
 }
 
-func printSummary(items []*Item, out, jsonOut, matrixPath string) {
+func printSummary(items []*Item, out, jsonOut, matrixPath string, coverage []coverageRow) {
 	backlog, prs, matrix := 0, 0, 0
 	for _, it := range items {
 		switch it.Kind {
@@ -2314,6 +2331,13 @@ func printSummary(items []*Item, out, jsonOut, matrixPath string) {
 	if ev, ok := loadEvidence(matrixPath); ok {
 		fmt.Printf("  conformance evidence: rest %d/%d verified, grpc %d/%d verified (run `-evidence` for the REST gaps)\n",
 			ev.restVerified, ev.restTotal, ev.grpcVerified, ev.grpcTotal)
+	}
+	if len(coverage) > 0 {
+		gaCovered, gaTotal := gaCoverageTotals(coverage)
+		fmt.Printf("  behavioral coverage (report-only): %d/%d ga services have a real-client suite\n", gaCovered, gaTotal)
+		if uncovered := uncoveredGAServices(coverage); len(uncovered) > 0 {
+			fmt.Printf("    uncovered ga services: %s\n", strings.Join(uncovered, ", "))
+		}
 	}
 	if out != "" {
 		fmt.Printf("  wrote %s\n", out)
