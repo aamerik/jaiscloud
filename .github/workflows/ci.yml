@@ -338,6 +338,18 @@ jobs:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
         run: go test -v -count=1 -timeout 120s ./...
 
+      - name: Run Cloud Scheduler SDK tests
+        working-directory: tests/integration/gcp/sdk-scheduler
+        env:
+          GCP_EMULATOR_ENDPOINT: http://localhost:8080/
+        run: go test -v -count=1 -timeout 120s ./...
+
+      - name: Run Cloud Tasks SDK tests
+        working-directory: tests/integration/gcp/sdk-tasks
+        env:
+          GCP_EMULATOR_ENDPOINT: http://localhost:8080/
+        run: go test -v -count=1 -timeout 120s ./...
+
       - name: Run Memorystore SDK tests
         working-directory: tests/integration/gcp/sdk-memorystore
         env:
