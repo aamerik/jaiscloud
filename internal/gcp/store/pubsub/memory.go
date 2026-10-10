@@ -16,8 +16,9 @@ type MemoryMessages struct {
 	messages map[string]map[string]Message // queue (subscription ID) → messageID → message
 	// sortedIDs caches, per queue, message IDs in ascending PublishTime order.
 	// Put/Delete invalidate a queue's entry (they change membership/order);
-	// claim-state mutations (Pull/UpdateDeliveryAttempt/ModifyAckDeadline only
-	// touch VisibleAt/DeliveryAttempt, never PublishTime) do not, so repeated
+	// claim-state mutations (Pull/UpdateDeliveryAttempt/ModifyAckDeadline/
+	// BumpDeliveryVersions only touch VisibleAt/DeliveryAttempt/DeliveryVersion,
+	// never PublishTime) do not, so repeated
 	// polling against an unchanged queue — the common Pub/Sub access pattern —
 	// avoids re-sorting the queue on every call.
 	sortedIDs map[string][]string

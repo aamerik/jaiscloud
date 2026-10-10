@@ -221,6 +221,61 @@ func TestExactlyOnceSeekInvalidatesAckID(t *testing.T) {
 	}
 }
 
+// TestExactlyOnceSnapshotSeekInvalidatesAckID pins the snapshot-based Seek path:
+// restoring a subscription to a snapshot invalidates an ack ID issued before the
+// Seek, exercising restoreSnapshot's version bump (EOD2).
+func TestExactlyOnceSnapshotSeekInvalidatesAckID(t *testing.T) {
+	base := time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: base})
+	defer clock.SetGlobalClock(nil)
+
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/eod-snap-topic"
+	const sub = "projects/test/subscriptions/eod-snap-sub"
+	const snap = "projects/test/snapshots/eod-snap"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{
+		Name: sub, Topic: topic, AckDeadlineSeconds: 60, EnableExactlyOnceDelivery: true,
+	}); err != nil {
+		t.Fatalf("CreateSubscription: %v", err)
+	}
+	if _, err := pub.Publish(ctx, &pubsubpb.PublishRequest{
+		Topic: topic, Messages: []*pubsubpb.PubsubMessage{{Data: []byte("snap")}},
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	ack1 := pullOne(t, ctx, subc, sub)
+	if _, err := subc.CreateSnapshot(ctx, &pubsubpb.CreateSnapshotRequest{Name: snap, Subscription: sub}); err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+	if _, err := subc.Seek(ctx, &pubsubpb.SeekRequest{
+		Subscription: sub,
+		Target:       &pubsubpb.SeekRequest_Snapshot{Snapshot: snap},
+	}); err != nil {
+		t.Fatalf("Seek(snapshot): %v", err)
+	}
+
+	if _, err := subc.Acknowledge(ctx, &pubsubpb.AcknowledgeRequest{Subscription: sub, AckIds: []string{ack1}}); err == nil {
+		t.Fatal("Acknowledge(pre-Seek ack id) = nil, want InvalidArgument")
+	} else if st, _ := status.FromError(err); st.Code() != codes.InvalidArgument {
+		t.Fatalf("Acknowledge(pre-Seek ack id) code = %v, want InvalidArgument", st.Code())
+	}
+
+	ack2 := pullOne(t, ctx, subc, sub)
+	if ack2 == ack1 {
+		t.Fatal("post-Seek re-pull returned the same ack id; version was not advanced")
+	}
+	if _, err := subc.Acknowledge(ctx, &pubsubpb.AcknowledgeRequest{Subscription: sub, AckIds: []string{ack2}}); err != nil {
+		t.Fatalf("Acknowledge(post-Seek ack id): %v", err)
+	}
+}
+
 // TestPlainSubscriptionStaleAckIDOK pins the out-of-scope rule: without
 // exactly-once delivery a superseded ack id is still accepted.
 func TestPlainSubscriptionStaleAckIDOK(t *testing.T) {

@@ -70,8 +70,9 @@ type Messages interface {
 	// List returns all messages for a queue, sorted by publish time (no claim).
 	List(ctx context.Context, queue string) ([]Message, error)
 	// Pull atomically claims up to maxMessages eligible messages, marking each
-	// invisible until now+ackDeadlineSec and incrementing its delivery attempt.
-	// retentionSec filters out messages older than the topic's retention.
+	// invisible until now+ackDeadlineSec and advancing its delivery attempt and
+	// ack-ID version. retentionSec filters out messages older than the topic's
+	// retention.
 	Pull(ctx context.Context, queue string, maxMessages, ackDeadlineSec, retentionSec int, now time.Time) ([]Message, error)
 	// Acknowledge applies an ack to one message (by message ID). An unordered
 	// message is deleted. A keyed message is retained and acked under the GCP
@@ -82,6 +83,9 @@ type Messages interface {
 	// held acks so those later messages are redelivered too.
 	Acknowledge(ctx context.Context, queue, messageID string) error
 	Delete(ctx context.Context, queue, messageID string) error
+	// UpdateDeliveryAttempt sets a message's dead-letter delivery attempt. It
+	// deliberately does not touch DeliveryVersion (the ack-ID version), which is
+	// advanced only by a claim (Pull) or a Seek (BumpDeliveryVersions).
 	UpdateDeliveryAttempt(ctx context.Context, queue, messageID string, attempt int) error
 	// BumpDeliveryVersions advances each named message's exactly-once ack-ID
 	// version by one so a previously issued ack ID no longer names the current

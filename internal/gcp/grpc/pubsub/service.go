@@ -1695,7 +1695,9 @@ func (s *Service) Seek(ctx context.Context, req *pubsubpb.SeekRequest) (*pubsubp
 // acknowledged (deleted) and makes those published at/after t visible again.
 // Already-acked messages are gone, so they are not restored (proto-documented).
 // Making a message visible again invalidates outstanding ack IDs, so every
-// retained message's delivery version is advanced (EOD2).
+// retained message's delivery version is advanced (EOD2). The versions are
+// advanced *before* the messages are made visible, so a concurrent Pull cannot
+// claim a message and be handed an ID that the bump immediately invalidates.
 func (s *Service) seekToTime(ctx context.Context, queue string, t time.Time) error {
 	msgs, err := s.messages.List(ctx, queue)
 	if err != nil {
@@ -1707,10 +1709,15 @@ func (s *Service) seekToTime(ctx context.Context, queue string, t time.Time) err
 			_ = s.messages.Delete(ctx, queue, m.MessageID)
 			continue
 		}
-		_ = s.messages.ModifyAckDeadline(ctx, queue, []string{m.MessageID}, 0, clock.Now())
 		retained = append(retained, m.MessageID)
 	}
-	return s.messages.BumpDeliveryVersions(ctx, queue, retained)
+	if err := s.messages.BumpDeliveryVersions(ctx, queue, retained); err != nil {
+		return err
+	}
+	for _, id := range retained {
+		_ = s.messages.ModifyAckDeadline(ctx, queue, []string{id}, 0, clock.Now())
+	}
+	return nil
 }
 
 // restoreSnapshot resets the subscription to the state captured by snap: the
@@ -1719,9 +1726,11 @@ func (s *Service) seekToTime(ctx context.Context, queue string, t time.Time) err
 // created. Messages acked before the snapshot are not restored.
 //
 // A Seek invalidates outstanding ack IDs: each restored message gets a delivery
-// version strictly greater than both its snapshot version and its version in the
-// store at Seek time, so any ack ID issued before the Seek no longer names the
-// current delivery (EOD2).
+// version greater than both its snapshot version and its version in the store at
+// Seek time, so an ack ID issued before the Seek no longer names the current
+// delivery (EOD2). This covers a message still present at Seek; a message
+// superseded after the snapshot and acked before the Seek is restored from the
+// snapshot version (see the EOD6 deferral in the EOD wave plan).
 func (s *Service) restoreSnapshot(ctx context.Context, queue string, snap snapshotMeta) error {
 	current, err := s.messages.List(ctx, queue)
 	if err != nil {
