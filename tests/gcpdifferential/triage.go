@@ -504,6 +504,35 @@ var triageRules = []TriageRule{
 		Kind:    "missing_field",
 		Reason:  "output-only Secret Manager version metadata the emulator does not echo (etag, replicationStatus); the version name and state match",
 	},
+
+	// SDK error/retry tour. Real GCP decorates a BigQuery jobs.query error
+	// detail with the offending parameter's map location; the emulator omits
+	// those advisory fields. HTTP status, error code and envelope shape match,
+	// and no official client branches on the location.
+	{
+		Service:  "bigquery",
+		Op:       "error_invalid_query",
+		Kind:     "missing_field",
+		Location: ".location",
+		Reason:   "advisory per-error map-location metadata on a BigQuery error detail; status, code and envelope shape match and no client branches on it",
+	},
+	{
+		Service:  "bigquery",
+		Op:       "error_invalid_query",
+		Kind:     "missing_field",
+		Location: ".locationType",
+		Reason:   "advisory per-error map-location metadata (see .location); status, code and envelope shape match",
+	},
+	// Real GCP's tabledata.list totalRows is eventually consistent immediately
+	// after an insert and lagged the returned row array in the recording; the
+	// emulator returns the already-consistent value. The rows themselves match.
+	{
+		Service:  "bigquery",
+		Op:       "error_insertall_count",
+		Kind:     "value_mismatch",
+		Location: ".totalRows",
+		Reason:   "real GCP tabledata.list totalRows is eventually consistent right after an insert and lagged the returned row array; the rows themselves match",
+	},
 }
 
 // bigQueryQueryStatFields are the output-only job-statistics/timing members of a

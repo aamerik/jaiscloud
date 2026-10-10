@@ -903,11 +903,7 @@ test-gcp-differential-errors: ## Offline SDK error/retry replay vs an ephemeral 
 	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-differential-errors.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080)"; \
-	  go test -tags gcp_differential -count=1 -v -run 'TestReplayErrors|TestErrorGoldensAreClean|TestErrorGoldenManifest|TestErrorScenariosValid' ./tests/gcpdifferential/
-# NOTE: this target intentionally runs report-only (no GCP_DIFFERENTIAL_STRICT):
-# the error-tour set exists to surface real-GCP/emulator error-body divergences,
-# and strict mode would fail on the human-readable prose differences that are
-# the point. See the report under testdata/report-tour-errors/.
+	  GCP_DIFFERENTIAL_STRICT=1 go test -tags gcp_differential -count=1 -v -run 'TestReplayErrors|TestErrorGoldensAreClean|TestErrorGoldenManifest|TestErrorScenariosValid' ./tests/gcpdifferential/
 
 # Opt-in Terraform / OpenTofu compatibility suites — drive the real
 # hashicorp/google provider against the emulator (tests/integration/gcp/terraform/).

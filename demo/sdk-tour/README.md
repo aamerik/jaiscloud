@@ -192,8 +192,11 @@ classification, never silently skipped.
   silently while the emulator also reports an `insertErrors[].duplicate`; the
   scenario therefore asserts the *stored row count*, not the duplicate error.
 * **Real-GCP golden diff.** `make test-gcp-differential-errors` replays the
-  recorded error bodies and reports the divergences; see the differential
-  README for the open (minor) items.
+  recorded error bodies and reports the divergences; the envelope/status/code
+  match, and the remaining differences (BigQuery error-detail location metadata
+  the emulator omits, and real GCP's eventually-consistent `totalRows`) are
+  accepted with reasons in the differential `triage.go` — see the differential
+  README.
 
 ## Layout
 
