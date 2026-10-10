@@ -1,6 +1,6 @@
 """jaiscloud-gcp SDK tour — Python streaming-semantics leg (SDK_TOUR_MODE=streaming).
 
-Port of ../go/streaming.go: the same eight streaming scenarios with the same
+Port of ../go/streaming.go: the same nine streaming scenarios with the same
 observable strings, driven by the official google-cloud-* clients. It reuses the
 tour's Recorder/run helper and client wiring so its rows land in the
 cross-language matrix beside the other legs.
@@ -17,6 +17,7 @@ recorded and classified, never papered over.
 from __future__ import annotations
 
 import queue
+import threading
 import time
 
 import grpc
@@ -192,6 +193,76 @@ def pubsub_scenarios(rec: Recorder) -> None:
         return "dup=0", "acked exactly-once message was not redelivered"
 
     run(rec, "streaming.pubsub_exactly_once_ack", "OK", exactly_once_ack)
+
+    def flow_control():
+        from google.cloud import pubsub_v1
+
+        n = 3
+        backlog = 15
+        topic_path, sub_path = _ensure_topic_sub(
+            publisher, subscriber, rid("stream-topic-flow"), rid("stream-flow-sub"))
+        for i in range(backlog):
+            publisher.publish(topic_path, f"flow-{i:02d}".encode()).result(timeout=30)
+
+        # The high-level subscriber under test: max_messages must bound how many
+        # unacked messages it holds at once. Callbacks hold their message (no
+        # ack) so delivery would outrun acks and expose a missing bound; the
+        # driver releases them only after the cap is proved.
+        state = {"inflight": 0, "max_inflight": 0, "delivered": 0}
+        lock = threading.Lock()
+        released = threading.Event()
+
+        def callback(message):
+            with lock:
+                state["inflight"] += 1
+                state["max_inflight"] = max(state["max_inflight"], state["inflight"])
+                state["delivered"] += 1
+            released.wait(30)
+            message.ack()
+            with lock:
+                state["inflight"] -= 1
+
+        future = subscriber.subscribe(
+            sub_path, callback,
+            flow_control=pubsub_v1.types.FlowControl(max_messages=n))
+        try:
+            deadline = time.monotonic() + 30
+            while True:
+                with lock:
+                    delivered = state["delivered"]
+                if delivered >= n or time.monotonic() > deadline:
+                    break
+                time.sleep(0.01)
+            if delivered < n:
+                raise AssertionError(
+                    f"flow control: only {delivered}/{n} messages delivered while held")
+            # Hold at the cap: a client that ignores the bound keeps delivering.
+            time.sleep(1.5)
+            with lock:
+                held, max_seen = state["delivered"], state["max_inflight"]
+            if held != n:
+                raise AssertionError(
+                    f"flow control: {held} messages held concurrently, want max_outstanding={n}")
+            if max_seen != n:
+                raise AssertionError(f"flow control: max in flight {max_seen}, want {n}")
+
+            released.set()
+            deadline = time.monotonic() + 30
+            while True:
+                with lock:
+                    delivered = state["delivered"]
+                if delivered >= backlog or time.monotonic() > deadline:
+                    break
+                time.sleep(0.01)
+            if delivered != backlog:
+                raise AssertionError(f"flow control: drained {delivered}/{backlog} messages")
+        finally:
+            released.set()
+            future.cancel()
+        return (f"flow_control=ok,max_in_flight<={n}",
+                f"held at most {n} of {backlog} messages outstanding")
+
+    run(rec, "streaming.pubsub_flow_control", "OK", flow_control)
 
 
 # ─── Firestore ───────────────────────────────────────────────────────────────

@@ -202,8 +202,9 @@ classification, never silently skipped.
 
 The happy-path tour proves a message arrives; the streaming mode asserts the
 *semantics* of the streaming surfaces — ack-deadline redelivery and extension,
-ordering keys, exactly-once ack, Firestore Listen resume tokens, Logging tail
-reconnects and Storage `BidiReadObject` — in all four official clients.
+ordering keys, exactly-once ack, subscriber flow control, Firestore Listen
+resume tokens, Logging tail reconnects and Storage `BidiReadObject` — in all
+four official clients.
 
 ```bash
 make demo-sdk-tour-streaming       # or: demo/sdk-tour/run-streaming.sh
@@ -239,6 +240,7 @@ start, so a mid-stream fault is not reachable here.
 > `README-GCP.md` §Cloud Pub/Sub deviations). The tour scenario is not yet
 > extended to exercise the redelivery fan-out; that follow-up is tracked as PSM4.
 | `pubsub_exactly_once_ack` | an acked message on an exactly-once subscription is not redelivered | `dup=0` |
+| `pubsub_flow_control` | the subscriber holds no more than its configured max outstanding messages while draining a backlog | `flow_control=ok,max_in_flight<=3` |
 | `firestore_listen_resume_token` | resuming Listen from a token loses nothing and duplicates nothing | `loss=0,dup=0` |
 | `firestore_snapshot_consistency` | concurrent writes delivered once each with monotonic `read_time` | `docs=5,dup=0,monotonic=yes` |
 | `logging_tail_reconnect` | a reconnected tail delivers new entries and does not replay the gap | `reconnect_ok=yes,gap_replayed=no` |
@@ -251,6 +253,7 @@ start, so a mid-stream fault is not reachable here.
 | Pub/Sub ack deadline + `ModifyAckDeadline` | asserted | memory and Postgres stores both implement the visibility deadline. |
 | Pub/Sub ordering keys | asserted with caveats | in-flight ordering-key groups gate later messages, but only the earliest unacked message per key is delivered per batch (real GCP returns every available message for the key in one response), and keyed redelivery fan-out / in-order ack are not modelled. Without an ordering key there is **no** ordering guarantee: the emulator's ascending-`PublishTime` delivery is extra determinism, not real behaviour. See the Cloud Pub/Sub deviations in `README-GCP.md` (PSM1). |
 | Pub/Sub exactly-once | asserted | the emulator versions the ackId per delivery; on an exactly-once subscription `Acknowledge`/`ModifyAckDeadline` reject a superseded or expired ackId with `INVALID_ARGUMENT` + `ErrorInfo` (`PERMANENT_FAILURE_INVALID_ACK_ID`), so `AckWithResult` returns `InvalidAckID`; a re-ack is `OK` and a plain subscription is unaffected. See `internal/gcp/store/pubsub/ackid.go`. |
+| Pub/Sub subscriber flow control | asserted | all four high-level subscribers send `max_outstanding_messages` on the initial `StreamingPull` and cap delivery locally; the scenario pins a cap of 3 against a 15-message backlog with held (unacked) callbacks and asserts the client never holds more than 3 outstanding and drains all 15. The emulator clamps its send loop to the same field (`internal/gcp/grpc/pubsub/streamflow.go`). Byte-based flow control is deliberately not asserted. |
 | Firestore Listen resume token | asserted | exactly-once per target after the fix below; the empty-target_ids NO_CHANGE token still carries the minimum cursor across targets. |
 | Firestore snapshot consistency | asserted | ordered, exactly-once, monotonic `read_time`. |
 | Logging tail reconnect | approximated | real `TailLogEntries` has no resume cursor, so reconnect dropping the gap is faithful, but the emulator is at-most-once relative to the stream's write-id snapshot and maps `buffer_window` to a poll interval; it never emits `suppression_info` (real GCP reports `RATE_LIMIT`/`NOT_CONSUMED`). See `internal/gcp/transport/grpc/logging/tail.go`. |

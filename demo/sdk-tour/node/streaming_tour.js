@@ -3,8 +3,9 @@
 // The happy-path tour proves the official clients can drive every surface; this
 // leg goes deeper on the *streaming* surfaces and asserts their semantics, not
 // just that a message arrived: ack-deadline redelivery and extension, ordering
-// keys, exactly-once ack, Firestore Listen resume tokens and snapshot
-// consistency, Logging tail reconnects, and Storage BidiReadObject.
+// keys, exactly-once ack, subscriber flow control, Firestore Listen resume
+// tokens and snapshot consistency, Logging tail reconnects, and Storage
+// BidiReadObject.
 //
 // It ports the Go reference (demo/sdk-tour/go/streaming.go) scenario-for-scenario
 // and reuses the parent tour's run()/record() helpers and official clients, so
@@ -383,7 +384,78 @@ async function streamingScenarios(ctx) {
     }
   });
 
-  // 5. A Listen resume token must replay the post-token write and de-duplicate
+  // 5. The high-level subscriber must honor its configured flow-control cap:
+  // with maxMessages below the backlog it must never hold more than maxMessages
+  // unacked messages, and it must drain the whole backlog.
+  await run("streaming.pubsub_flow_control", "OK", async () => {
+    const cap = 3;
+    const backlog = 15;
+    const subId = rid("stream-flow-sub");
+    await ensureSubscription(subId, { ackDeadlineSeconds: ACK_DEADLINE });
+    const topic = await ensureTopic();
+    for (let i = 0; i < backlog; i++) {
+      await topic.publishMessage({ data: Buffer.from(`flow-${String(i).padStart(2, "0")}`) });
+    }
+
+    // The subscriber under test holds each message (no ack) until released, so
+    // delivery would outrun acks and expose a missing bound. The driver releases
+    // only after the cap is proved.
+    let inflight = 0;
+    let maxInflight = 0;
+    let delivered = 0;
+    let releaseGate;
+    const gate = new Promise((resolve) => { releaseGate = resolve; });
+
+    const sub = pubsub.subscription(subId, { flowControl: { maxMessages: cap } });
+    try {
+      const drained = new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error(`flow control: drain timed out (delivered=${delivered})`)), 40000);
+        sub.on("message", (msg) => {
+          inflight += 1;
+          maxInflight = Math.max(maxInflight, inflight);
+          delivered += 1;
+          gate.then(() => {
+            msg.ack();
+            inflight -= 1;
+            if (delivered >= backlog) {
+              clearTimeout(timer);
+              resolve();
+            }
+          });
+        });
+        sub.on("error", reject);
+      });
+
+      const deadline = Date.now() + 30000;
+      while (delivered < cap && Date.now() < deadline) {
+        await sleep(10);
+      }
+      if (delivered < cap) {
+        throw new Error(`flow control: only ${delivered}/${cap} messages delivered while held`);
+      }
+      // Hold at the cap: a client that ignores the bound keeps delivering.
+      await sleep(1500);
+      if (delivered !== cap) {
+        throw new Error(`flow control: ${delivered} messages held concurrently, want max_outstanding=${cap}`);
+      }
+      if (maxInflight !== cap) {
+        throw new Error(`flow control: max in flight ${maxInflight}, want ${cap}`);
+      }
+
+      releaseGate();
+      await drained;
+    } finally {
+      releaseGate();
+      await sub.close().catch(() => {});
+    }
+    return {
+      observable: `flow_control=ok,max_in_flight<=${cap}`,
+      detail: `held at most ${cap} of ${backlog} messages outstanding`,
+    };
+  });
+
+  // 6. A Listen resume token must replay the post-token write and de-duplicate
   // the racing write opened before AddTarget.
   await run("streaming.firestore_listen_resume_token", "OK", async () => {
     const coll = rid("stream-listen-resume");
@@ -454,7 +526,7 @@ async function streamingScenarios(ctx) {
     }
   });
 
-  // 6. A live Listen snapshot must deliver each document exactly once with a
+  // 7. A live Listen snapshot must deliver each document exactly once with a
   // non-decreasing read_time.
   await run("streaming.firestore_snapshot_consistency", "OK", async () => {
     const coll = rid("stream-listen-consistency");
@@ -514,7 +586,7 @@ async function streamingScenarios(ctx) {
     }
   });
 
-  // 7. A reconnected tail must deliver post-reconnect entries and must not
+  // 8. A reconnected tail must deliver post-reconnect entries and must not
   // replay the disconnected-window entry (TailLogEntries has no resume cursor).
   await run("streaming.logging_tail_reconnect", "OK", async () => {
     const parent = `projects/${PROJECT}`;
@@ -590,7 +662,7 @@ async function streamingScenarios(ctx) {
     }
   });
 
-  // 8. Node's high-level Storage client has no BidiReadObject projection.
+  // 9. Node's high-level Storage client has no BidiReadObject projection.
   await run("streaming.storage_bidi_read", "SKIP", async () => {
     throw new Error("@google-cloud/storage has no high-level BidiReadObject projection; use the Go/Java legs");
   });

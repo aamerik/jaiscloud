@@ -5,8 +5,8 @@ package main
 // The happy-path tour proves the official clients can drive every surface; this
 // leg goes deeper on the *streaming* surfaces and asserts their semantics, not
 // just that a message arrived: ack-deadline redelivery and extension, ordering
-// keys, exactly-once ack, Firestore Listen resume tokens, Logging tail
-// reconnects, and Storage BidiReadObject.
+// keys, exactly-once ack, subscriber flow control, Firestore Listen resume
+// tokens, Logging tail reconnects, and Storage BidiReadObject.
 //
 // Where the high-level client hides the semantics being asserted, the generated
 // low-level client is used (Firestore Listen resume tokens, precise
@@ -20,6 +20,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	firestorehl "cloud.google.com/go/firestore"
@@ -50,6 +51,13 @@ const (
 	// redeliverWait is ack deadline + a margin. Redelivery is a property of the
 	// emulator's own clock, so a small margin is not a timing race.
 	redeliverWait = 13 * time.Second
+	// flowMaxOutstanding is the subscriber flow-control cap the scenario pins.
+	// It is deliberately small and below every client's default worker/thread
+	// count, so the cap (not the client's concurrency) bounds delivery.
+	flowMaxOutstanding = 3
+	// flowBacklog is the number of messages published to fill a backlog well
+	// past the cap.
+	flowBacklog = 15
 )
 
 // runStreaming is the entry point for SDK_TOUR_MODE=streaming.
@@ -389,6 +397,99 @@ func streamPubSubScenarios(r *runner) {
 			return "", "", fmt.Errorf("ack latest: %w", err)
 		}
 		return "dup=0", "acked exactly-once message was not redelivered; superseded ackId rejected", nil
+	})
+
+	r.run("streaming.pubsub_flow_control", "OK", func(ctx context.Context) (string, string, error) {
+		c, err := pubsub.NewClient(ctx, project)
+		if err != nil {
+			return "", "", err
+		}
+		defer c.Close()
+		topic, err := newStreamTopic(ctx, c, topicID)
+		if err != nil {
+			return "", "", err
+		}
+		subID := rid(cfg, "stream-flow-sub")
+		sub, err := newStreamSub(ctx, c, subID, topic, pubsub.SubscriptionConfig{
+			AckDeadline: streamAckDeadlineSeconds(),
+		})
+		if err != nil {
+			return "", "", err
+		}
+		for i := 0; i < flowBacklog; i++ {
+			if err := publishOne(ctx, topic, fmt.Sprintf("flow-%02d", i)); err != nil {
+				return "", "", err
+			}
+		}
+		topic.Stop()
+
+		// The high-level subscriber under test: the configured cap must bound
+		// how many unacked messages it holds at once. Callbacks hold their
+		// message (no ack) so delivery would outrun acks and expose a missing
+		// bound; the main goroutine releases them only after the cap is proved.
+		sub.ReceiveSettings.MaxOutstandingMessages = flowMaxOutstanding
+		var inflight, maxInflight, delivered atomic.Int32
+		var released atomic.Bool
+		recvCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		recvDone := make(chan error, 1)
+		go func() {
+			recvDone <- sub.Receive(recvCtx, func(_ context.Context, m *pubsub.Message) {
+				cur := inflight.Add(1)
+				for {
+					mx := maxInflight.Load()
+					if cur <= mx || maxInflight.CompareAndSwap(mx, cur) {
+						break
+					}
+				}
+				delivered.Add(1)
+				for !released.Load() {
+					time.Sleep(5 * time.Millisecond)
+				}
+				m.Ack()
+				inflight.Add(-1)
+			})
+		}()
+
+		waitFor := func(want int32) bool {
+			deadline := time.Now().Add(30 * time.Second)
+			for delivered.Load() < want && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			return delivered.Load() >= want
+		}
+
+		if !waitFor(flowMaxOutstanding) {
+			cancel()
+			return "", "", fmt.Errorf("flow control: only %d/%d messages delivered while held",
+				delivered.Load(), flowMaxOutstanding)
+		}
+		// Hold at the cap: a client that ignores the bound keeps delivering.
+		time.Sleep(1500 * time.Millisecond)
+		held, maxSeen := delivered.Load(), maxInflight.Load()
+		if held != flowMaxOutstanding {
+			cancel()
+			return "", "", fmt.Errorf("flow control: %d messages held concurrently, want max_outstanding=%d",
+				held, flowMaxOutstanding)
+		}
+		if maxSeen != flowMaxOutstanding {
+			cancel()
+			return "", "", fmt.Errorf("flow control: max in flight %d, want %d", maxSeen, flowMaxOutstanding)
+		}
+
+		released.Store(true)
+		if !waitFor(flowBacklog) {
+			cancel()
+			return "", "", fmt.Errorf("flow control: drained %d/%d messages",
+				delivered.Load(), flowBacklog)
+		}
+		cancel()
+		select {
+		case <-recvDone:
+		case <-time.After(5 * time.Second):
+		}
+		return fmt.Sprintf("flow_control=ok,max_in_flight<=%d", flowMaxOutstanding),
+			fmt.Sprintf("held at most %d of %d messages outstanding", flowMaxOutstanding, flowBacklog), nil
 	})
 }
 
