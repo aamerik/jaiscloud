@@ -119,15 +119,94 @@ No other SDK/emulator surface in the 18 scenarios needed a fix; any future
 failure is captured with its request/response and classified as emulator bug,
 wiring gap, or unimplemented surface rather than papered over.
 
+## Error / retry / idempotency tour (`SDK_TOUR_MODE=errors`)
+
+The happy-path tour above asserts the clients can drive every surface; it cannot
+see how they behave when a request *fails*. The errors mode runs the same four
+official clients through the failure surfaces — error-code mapping, retry
+classification, backoff/`Retry-After` honoring, idempotency and resumable-upload
+rewind — and prints a second cross-language matrix.
+
+```bash
+make demo-sdk-tour-errors          # or: demo/sdk-tour/run-errors.sh
+```
+
+`run-errors.sh` starts a local ephemeral emulator with `--metrics` and runs two
+phases:
+
+* **Phase A (env).** The emulator is started with the throttle configured
+  through the environment (`JAISCLOUD_GCP_THROTTLE=fault`,
+  `JAISCLOUD_GCP_THROTTLE_SERVICES=storage`,
+  `JAISCLOUD_GCP_THROTTLE_FAIL_FIRST=1`,
+  `JAISCLOUD_GCP_THROTTLE_STATUS=429`,
+  `JAISCLOUD_GCP_THROTTLE_RETRY_DELAY=1s`) and a raw probe asserts the first
+  matching request is refused with `429` + `Retry-After: 1` +
+  `google.rpc.RetryInfo{retryDelay:"1s"}`.
+* **Phase B (runtime).** The emulator restarts clean; each leg arms the injector
+  per scenario through `POST /_jaiscloud/throttle` and clears it afterwards, so
+  one process covers every throttle configuration without further restarts. The
+  runtime control plane reaches the same injector the env path does.
+
+Attempt counts are **observed, not assumed**: every leg scrapes the emulator's
+Prometheus counter (`jaiscloud_requests_total`, hence `--metrics`) before and
+after the operation and reports the delta. The matrix asserts those deltas and
+the final observable agree across the four SDKs.
+
+### Scenarios (`errors.*`)
+
+| Scenario | Injected / expected | Observable |
+| --- | --- | --- |
+| `storage_already_exists` | duplicate bucket create → 409 | `already_exists=yes` |
+| `storage_not_found` | missing object → 404 | `not_found=yes` |
+| `invalid_argument` | malformed Standard SQL → 400 | `invalid_argument=yes` |
+| `iam_failed_precondition` | stale bucket IAM etag → 409 | `failed_precondition=yes` |
+| `no_retry_on_4xx` | 404 is not retried | `no_retry_attempts=1` |
+| `retry_429_storage_get` | first storage request refused 429 | `retry_429_attempts=2` |
+| `retry_503_storage_get` | first storage request refused 503 | `retry_503_attempts=2` |
+| `retry_info_shape` | raw 429 envelope | `RetryInfo:1s:Retry-After=1` |
+| `pagination_stability` | 429 on the first list request | `pagination_total=5` |
+| `idempotent_insertall` | replayed `insertId` | `idempotent_rows=1` |
+| `resumable_rewind` | 429 on the first chunk PUT | `resumable_sha256=…` |
+| `pubsub_topic_already_exists` | duplicate topic create (gRPC) | `grpc_already_exists=yes` |
+
+Each scenario asserts client-observable facts (attempt count, final code,
+`Retry-After`/`RetryInfo`, checksum, row count); a scenario that cannot be wired
+in a language is reported `MISSING`/`FAIL` with its raw error and a
+classification, never silently skipped.
+
+### Findings
+
+* **Retry classification matches.** All four SDKs treat the injected `429` and
+  `503` as retryable and the `404`/`400` surfaces as terminal — `errors.*` shows
+  exactly two attempts for the transient cases and one for the 4xx case.
+  Backoff honors the advertised `Retry-After`/`RetryInfo`.
+* **Error mapping matches.** Storage 409/404, BigQuery 400 INVALID_ARGUMENT and
+  Pub/Sub IAM 409 ABORTED surface with the same status and machine-readable
+  code in every language; only human-readable prose differs.
+* **Resumable rewind works.** A `429` scoped to the chunk PUT
+  (`services=["storage/objectsinsertresumable"]`, so the session start is
+  untouched) is re-sent by every SDK and the object still verifies by sha256.
+* **Idempotency.** Replaying a BigQuery row with the same `insertId` leaves one
+  stored row in every language. The recorded real-GCP golden
+  (`tests/gcpdifferential/testdata/golden-tour-errors`) shows real GCP dedups
+  silently while the emulator also reports an `insertErrors[].duplicate`; the
+  scenario therefore asserts the *stored row count*, not the duplicate error.
+* **Real-GCP golden diff.** `make test-gcp-differential-errors` replays the
+  recorded error bodies and reports the divergences; see the differential
+  README for the open (minor) items.
+
 ## Layout
 
 ```
 demo/sdk-tour/
   run.sh          # toolchains -> ephemeral emulator -> 4 languages -> matrix
   aggregate.py    # cross-language matrix + agreement check
+  run-errors.sh   # error/retry phases -> 4 languages -> error matrix
+  aggregate_errors.py # cross-language error matrix + agreement check
   go/             # official cloud.google.com/go/* clients (separate module)
   python/         # official google-cloud-* clients (requirements.txt)
   java/           # official com.google.cloud clients (Maven, libraries-bom)
   node/           # official @google-cloud/* clients (package-lock.json)
   results/        # per-run JSONL (gitignored)
+  results-errors/ # per-run error JSONL (gitignored)
 ```

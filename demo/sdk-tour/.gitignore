@@ -1,5 +1,6 @@
 # Downloaded toolchains, SDK caches and generated artifacts (never committed).
 results/
+results-errors/
 python/.venv/
 node/node_modules/
 java/target/

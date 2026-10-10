@@ -28,6 +28,9 @@ GRPC = os.environ.get("EMULATOR_GRPC", "localhost:8081")
 PROJECT = os.environ.get("PROJECT_ID", "jaiscloud-project")
 RUN_ID = os.environ.get("SDK_TOUR_RUN_ID", "local")
 OUT = os.environ.get("SDK_TOUR_RESULTS", "")
+# "tour" (default) runs the happy-path scenarios; "errors" runs the failure /
+# retry / idempotency tour in errors_tour.py instead.
+MODE = os.environ.get("SDK_TOUR_MODE", "tour")
 
 # Emulator hooks the official Python clients honour. Set before any client is
 # constructed; an explicit caller value always wins.
@@ -646,6 +649,11 @@ def dataproc_scenarios(rec: Recorder) -> None:
 def main() -> int:
     rec = Recorder()
     try:
+        if MODE == "errors":
+            import errors_tour
+
+            errors_tour.errors_scenarios(rec)
+            return 0
         storage_scenarios(rec)
         pubsub_scenarios(rec)
         firestore_scenarios(rec)

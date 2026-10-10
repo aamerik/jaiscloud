@@ -160,6 +160,11 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		{names.TourFSCounter, "<fsCollection>"},
 		{names.TourFSPage, "<fsCollection>"},
 		{names.TourDataproc, "<dataprocCluster>"},
+		// Error/retry tour differential resources.
+		{names.ErrorBucket, "<bucket>"},
+		{names.ErrorBQDataset, "<dataset>"},
+		{names.ErrorBQTable, "<table>"},
+		{names.ErrorTopic, "<topic>"},
 		// The scheduler job's OIDC service account is a project-shaped email
 		// (never a real account). Fold it so no golden carries an email address.
 		{"demo-runner@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},

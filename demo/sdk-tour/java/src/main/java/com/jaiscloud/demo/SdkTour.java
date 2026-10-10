@@ -147,6 +147,17 @@ public final class SdkTour {
       out = new PrintWriter(new FileWriter(OUT));
     }
 
+    // SDK_TOUR_MODE=errors runs the failure/retry/idempotency leg only; the
+    // happy-path tour is the default.
+    String mode = env("SDK_TOUR_MODE", "tour");
+    if ("errors".equals(mode)) {
+      ErrorsTour.runErrors();
+      if (out != null) {
+        out.close();
+      }
+      return;
+    }
+
     storageScenarios();
     pubsubScenarios();
     firestoreScenarios();
