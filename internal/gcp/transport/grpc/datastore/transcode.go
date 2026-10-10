@@ -336,6 +336,15 @@ func queryFromProto(q *datastorepb.Query) (*core.Query, error) {
 	if len(q.GetEndCursor()) > 0 {
 		out.EndCursor = q.GetEndCursor()
 	}
+	if projs := q.GetProjection(); len(projs) > 0 {
+		props := make([]string, 0, len(projs))
+		for _, pr := range projs {
+			if name := pr.GetProperty().GetName(); name != "" {
+				props = append(props, name)
+			}
+		}
+		out.Projection = &core.Projection{Properties: props}
+	}
 	f, err := filterFromProto(q.GetFilter())
 	if err != nil {
 		return nil, err

@@ -586,19 +586,19 @@ func BlobKey(bucket, object, generation string) string {
 func objectPrecondition(nr *model.NormalizedRequest) *gcs.Precondition {
 	var pre gcs.Precondition
 	set := false
-	if v, ok := parseInt64Param(nr, "ifGenerationMatch"); ok {
+	if v, ok := preconditionInt(nr, "ifGenerationMatch"); ok {
 		pre.GenerationMatch = &v
 		set = true
 	}
-	if v, ok := parseInt64Param(nr, "ifGenerationNotMatch"); ok {
+	if v, ok := preconditionInt(nr, "ifGenerationNotMatch"); ok {
 		pre.GenerationNotMatch = &v
 		set = true
 	}
-	if v, ok := parseInt64Param(nr, "ifMetagenerationMatch"); ok {
+	if v, ok := preconditionInt(nr, "ifMetagenerationMatch"); ok {
 		pre.MetagenerationMatch = &v
 		set = true
 	}
-	if v, ok := parseInt64Param(nr, "ifMetagenerationNotMatch"); ok {
+	if v, ok := preconditionInt(nr, "ifMetagenerationNotMatch"); ok {
 		pre.MetagenerationNotMatch = &v
 		set = true
 	}
@@ -614,11 +614,11 @@ func objectPrecondition(nr *model.NormalizedRequest) *gcs.Precondition {
 func bucketPrecondition(nr *model.NormalizedRequest) *gcs.Precondition {
 	var pre gcs.Precondition
 	set := false
-	if v, ok := parseInt64Param(nr, "ifMetagenerationMatch"); ok {
+	if v, ok := preconditionInt(nr, "ifMetagenerationMatch"); ok {
 		pre.MetagenerationMatch = &v
 		set = true
 	}
-	if v, ok := parseInt64Param(nr, "ifMetagenerationNotMatch"); ok {
+	if v, ok := preconditionInt(nr, "ifMetagenerationNotMatch"); ok {
 		pre.MetagenerationNotMatch = &v
 		set = true
 	}
@@ -626,6 +626,44 @@ func bucketPrecondition(nr *model.NormalizedRequest) *gcs.Precondition {
 		return nil
 	}
 	return &pre
+}
+
+// preconditionInt reads a GCS precondition from the request, accepting either
+// form the real API does: the ifGenerationMatch/ifMetagenerationMatch query
+// params, or the equivalent x-goog-if-generation-match / x-goog-if-metageneration-match
+// request headers. The official clients (cloud.google.com/go/storage for reads,
+// and the XML API generally) use the header form, so honoring only the query
+// params silently dropped a client's conditional read.
+func preconditionInt(nr *model.NormalizedRequest, queryKey string) (int64, bool) {
+	if v, ok := parseInt64Param(nr, queryKey); ok {
+		return v, true
+	}
+	if nr.Raw != nil {
+		if s := nr.Raw.Header.Get(googIfHeader(queryKey)); s != "" {
+			if v, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
+				return v, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// googIfHeader maps a camelCase precondition query name to its x-goog header
+// form (ifGenerationMatch → x-goog-if-generation-match).
+func googIfHeader(queryKey string) string {
+	var b strings.Builder
+	b.WriteString("x-goog-")
+	for i, r := range queryKey {
+		if unicode.IsUpper(r) {
+			if i > 0 {
+				b.WriteByte('-')
+			}
+			b.WriteRune(unicode.ToLower(r))
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func parseInt64Param(nr *model.NormalizedRequest, key string) (int64, bool) {
@@ -2386,24 +2424,24 @@ func (p *Provider) copyObject(ctx context.Context, nr *model.NormalizedRequest) 
 }
 
 // sourcePrecondition parses the ifSourceGenerationMatch/NotMatch and
-// ifSourceMetagenerationMatch/NotMatch query params used by objects.move to
+// ifSourceMetagenerationMatch/NotMatch preconditions used by objects.move to
 // guard the source object. Nil when none is present.
 func sourcePrecondition(nr *model.NormalizedRequest) *gcs.Precondition {
 	var pre gcs.Precondition
 	set := false
-	if v, ok := parseInt64Param(nr, "ifSourceGenerationMatch"); ok {
+	if v, ok := preconditionInt(nr, "ifSourceGenerationMatch"); ok {
 		pre.GenerationMatch = &v
 		set = true
 	}
-	if v, ok := parseInt64Param(nr, "ifSourceGenerationNotMatch"); ok {
+	if v, ok := preconditionInt(nr, "ifSourceGenerationNotMatch"); ok {
 		pre.GenerationNotMatch = &v
 		set = true
 	}
-	if v, ok := parseInt64Param(nr, "ifSourceMetagenerationMatch"); ok {
+	if v, ok := preconditionInt(nr, "ifSourceMetagenerationMatch"); ok {
 		pre.MetagenerationMatch = &v
 		set = true
 	}
-	if v, ok := parseInt64Param(nr, "ifSourceMetagenerationNotMatch"); ok {
+	if v, ok := preconditionInt(nr, "ifSourceMetagenerationNotMatch"); ok {
 		pre.MetagenerationNotMatch = &v
 		set = true
 	}

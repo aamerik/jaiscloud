@@ -185,6 +185,65 @@ type Query struct {
 	// Namespace and Database scope the query's partition ("" = default).
 	Namespace string
 	Database  string
+	// Projection, when non-nil, restricts each result entity to the named
+	// properties (the entity's key is always included). A non-nil projection
+	// with no properties is a keys-only query: results carry only their key.
+	// A nil Projection returns full entities.
+	Projection *Projection
+}
+
+// Projection is a structured (or GQL) query's property projection. Properties
+// are top-level property names; "__key__" is accepted as a no-op (the key is
+// always present).
+type Projection struct {
+	Properties []string
+}
+
+// ResultType classifies what a query's result entities carry.
+type ResultType int
+
+const (
+	// ResultFull means the query has no projection: entities carry all properties.
+	ResultFull ResultType = iota
+	// ResultProjection means each entity carries only the projected properties.
+	ResultProjection
+	// ResultKeysOnly means each entity carries only its key.
+	ResultKeysOnly
+)
+
+// ResultType returns the result classification for the query. A projection
+// that names only "__key__" (how the clients express a keys-only query) is
+// keys-only.
+func (q *Query) ResultType() ResultType {
+	if q == nil || q.Projection == nil {
+		return ResultFull
+	}
+	for _, p := range q.Projection.Properties {
+		if p != "__key__" {
+			return ResultProjection
+		}
+	}
+	return ResultKeysOnly
+}
+
+// projectEntity returns a copy of e carrying only the projected properties
+// (plus its key and metadata). named may include "__key__", which is a no-op.
+func projectEntity(e dsstore.Entity, named []string) dsstore.Entity {
+	if len(named) == 0 {
+		e.Properties = map[string]dsstore.Value{}
+		return e
+	}
+	keep := make(map[string]dsstore.Value, len(named))
+	for _, name := range named {
+		if name == "__key__" {
+			continue
+		}
+		if v, ok := e.Properties[name]; ok {
+			keep[name] = v
+		}
+	}
+	e.Properties = keep
+	return e
 }
 
 // QueryResult is the transport-neutral result of RunQuery.
@@ -192,6 +251,8 @@ type QueryResult struct {
 	Entities    []EntityResult
 	Skipped     int
 	MoreResults MoreResults
+	// ResultType classifies what the entities carry (full / projected / keys-only).
+	ResultType ResultType
 	// ReadTime is the timestamp the batch was read from, and SnapshotVersion a
 	// monotonically increasing version of the snapshot it came from. EndCursor
 	// points to the position after the last result, and SkippedCursor to the

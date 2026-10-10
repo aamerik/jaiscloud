@@ -66,8 +66,12 @@ func TestServiceAccountUndelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("undelete: %v", err)
 	}
-	if und.Data["email"] != email {
-		t.Fatalf("undelete email = %v, want %v", und.Data["email"], email)
+	restored, ok := und.Data["restoredAccount"].(map[string]any)
+	if !ok {
+		t.Fatalf("undelete response must nest the account under restoredAccount, got %v", und.Data)
+	}
+	if restored["email"] != email {
+		t.Fatalf("undelete email = %v, want %v", restored["email"], email)
 	}
 	if _, err := p.Get(ctx, newNR(map[string]any{"name": name})); err != nil {
 		t.Fatalf("get after undelete: %v", err)

@@ -484,6 +484,23 @@ func queryFromWire(v any) (*core.Query, error) {
 		}
 		out.EndCursor = cur
 	}
+	if projs, ok := m["projection"].([]any); ok && len(projs) > 0 {
+		props := make([]string, 0, len(projs))
+		for _, e := range projs {
+			em, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			p, ok := em["property"].(map[string]any)
+			if !ok {
+				continue
+			}
+			if name := strFrom(p["name"]); name != "" {
+				props = append(props, name)
+			}
+		}
+		out.Projection = &core.Projection{Properties: props}
+	}
 	f, err := filterFromWire(m["filter"])
 	if err != nil {
 		return nil, err
@@ -705,5 +722,18 @@ func compositeOpFromWire(s string) core.CompositeOp {
 		return core.CompositeOr
 	default:
 		return core.CompositeUnspecified
+	}
+}
+
+// restEntityResultType maps the core result classification to the REST
+// QueryResultBatch.entityResultType enum string.
+func restEntityResultType(rt core.ResultType) string {
+	switch rt {
+	case core.ResultProjection:
+		return "PROJECTION"
+	case core.ResultKeysOnly:
+		return "KEY_ONLY"
+	default:
+		return "FULL"
 	}
 }
