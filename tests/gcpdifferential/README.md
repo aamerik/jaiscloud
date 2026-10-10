@@ -110,10 +110,20 @@ normalizer (`normalize.go`) and adds:
 
 ### Deferrals (documented, not silently skipped)
 
-* **Pub/Sub streaming pull, Firestore Listen, Logging TailLogEntries** — these
-  are long-lived streams whose frame timing is not deterministic across real GCP
-  and the emulator; a stable golden needs a bounded-capture contract that does
-  not yet exist. They remain exercised by the live SDK tour (`demo/sdk-tour`).
+* **Firestore Listen, Logging TailLogEntries** — these are long-lived streams
+  whose frame timing is not deterministic across real GCP and the emulator; a
+  stable golden needs a bounded-capture contract that does not yet exist. They
+  remain exercised by the live SDK tour (`demo/sdk-tour`).
+* **Pub/Sub StreamingPull framing** is captured as a **bounded, message-level**
+  contract rather than a raw frame sequence (`msg_grpc_streaming_pull`): the
+  stream is drained until the published message arrives, then cancelled, and
+  only the delivered messages are golden. The frame boundaries themselves are a
+  documented deferral — real GCP emits a properties-only frame before the data
+  frame, which the emulator combines.
+* **Pub/Sub dead-letter republish** is a documented deferral (see the
+  `gcp-pubsub-messaging-oracle` plan's PSM2): forwarding is delivery-count/timing
+  dependent and the emulator omits real GCP's `CloudPubSubDeadLetterSource*`
+  attributes on the forwarded message.
 * **Dataproc LRO create/poll** — creating a real Dataproc cluster is
   heavyweight (minutes; cost) and the emulator completes LROs synchronously.
   The curated set deliberately excludes a real Dataproc create for the same

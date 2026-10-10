@@ -165,6 +165,25 @@ func NewNormalizer(project, projectNumber, suffix string, names ResourceNames) *
 		{names.ErrorBQDataset, "<dataset>"},
 		{names.ErrorBQTable, "<table>"},
 		{names.ErrorTopic, "<topic>"},
+		// Pub/Sub messaging-semantics oracle (PSM1). Every dedicated topic folds
+		// to the shared <topic> and every subscription to <subscription>, so the
+		// scoped-list rules keep working; the snapshot folds to <snapshot>. The
+		// longest-first sort puts StreamSub before StreamTopic, so the topic
+		// prefix of the stream subscription name cannot win first.
+		{names.StreamSub, "<subscription>"},
+		{names.StreamTopic, "<topic>"},
+		{names.SeekSnap, "<snapshot>"},
+		{names.SeekSub, "<subscription>"},
+		{names.DLQMainSub, "<subscription>"},
+		{names.DLQMainTopic, "<topic>"},
+		{names.DLQSub, "<subscription>"},
+		{names.DLQTopic, "<topic>"},
+		{names.OrderSub, "<subscription>"},
+		{names.OrderTopic, "<topic>"},
+		{names.AckSub, "<subscription>"},
+		{names.ModSub, "<subscription>"},
+		{names.MsgSub, "<subscription>"},
+		{names.MsgTopic, "<topic>"},
 		// The scheduler job's OIDC service account is a project-shaped email
 		// (never a real account). Fold it so no golden carries an email address.
 		{"demo-runner@" + project + ".iam.gserviceaccount.com", "<serviceAccount>"},
@@ -428,6 +447,10 @@ var volatileObjectKeys = map[string]bool{
 // whole array (used for arrays of opaque, per-run identifiers).
 var volatileArrayKeys = map[string]any{
 	"messageIds": []any{"<messageId>"},
+	// Pub/Sub ack ids are server-generated, delivery-scoped opaque tokens that
+	// appear as an array in Acknowledge/ModifyAckDeadline requests (and never
+	// carry harness-authored meaning), so fold the whole array on both sides.
+	"ackIds": []any{"<ackId>"},
 	// Cloud DNS synthesizes a delegation set per managed zone whose names
 	// differ between real GCP and the emulator; the count is not part of
 	// this harness's contract, so the whole array folds to one placeholder.

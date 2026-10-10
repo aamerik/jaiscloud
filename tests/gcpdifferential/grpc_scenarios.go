@@ -545,6 +545,12 @@ func GRPCScenarios(project, suffix string) []GRPCScenario {
 		}),
 	)
 
+	// ─── Pub/Sub messaging semantics (PSM1) ───────────────────────────────────
+	// Appended last so the golden indices above stay stable. Backs the gRPC-only
+	// Acknowledge/ModifyAckDeadline/Pull/Seek/StreamingPull cells with a
+	// real-GCP transcript.
+	sc = append(sc, pubsubMessagingGRPCScenarios(project, n)...)
+
 	return sc
 }
 
@@ -685,5 +691,8 @@ func (t *GRPCTarget) CleanupGRPC(ctx context.Context) []string {
 	} else {
 		log = append(log, "cleanup firestore document: ok")
 	}
+
+	// PSM1 Pub/Sub messaging resources.
+	log = append(log, t.CleanupPubSubGRPC(ctx)...)
 	return log
 }

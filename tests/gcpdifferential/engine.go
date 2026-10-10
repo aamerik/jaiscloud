@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -167,11 +168,16 @@ func (t *Target) waitFor(send func() (int, []byte, error), spec *WaitSpec) (int,
 		var decoded any
 		if json.Unmarshal(body, &decoded) == nil {
 			if v, ok := jsonPathValue(decoded, spec.Field); ok {
-				if spec.Contains != "" {
+				switch {
+				case spec.MinLen > 0:
+					if jsonLen(v) >= spec.MinLen {
+						return status, body, nil
+					}
+				case spec.Contains != "":
 					if b, err := json.Marshal(v); err == nil && strings.Contains(string(b), spec.Contains) {
 						return status, body, nil
 					}
-				} else if truthyJSON(v) {
+				case truthyJSON(v):
 					return status, body, nil
 				}
 			}
@@ -183,10 +189,20 @@ func (t *Target) waitFor(send func() (int, []byte, error), spec *WaitSpec) (int,
 	}
 }
 
-// jsonPathValue resolves a dotted path into a decoded JSON value.
+// jsonPathValue resolves a dotted path into a decoded JSON value. A numeric
+// segment indexes an array ("receivedMessages.0.ackId"); any other segment is a
+// map key.
 func jsonPathValue(v any, path string) (any, bool) {
 	cur := v
 	for _, seg := range strings.Split(path, ".") {
+		if arr, ok := cur.([]any); ok {
+			i, err := strconv.Atoi(seg)
+			if err != nil || i < 0 || i >= len(arr) {
+				return nil, false
+			}
+			cur = arr[i]
+			continue
+		}
 		m, ok := cur.(map[string]any)
 		if !ok {
 			return nil, false
@@ -197,6 +213,19 @@ func jsonPathValue(v any, path string) (any, bool) {
 		}
 	}
 	return cur, true
+}
+
+// jsonLen reports the element count of a decoded JSON array or object, and 0
+// for anything else.
+func jsonLen(v any) int {
+	switch t := v.(type) {
+	case []any:
+		return len(t)
+	case map[string]any:
+		return len(t)
+	default:
+		return 0
+	}
 }
 
 // truthyJSON reports whether a decoded JSON value is a true/non-empty scalar or
