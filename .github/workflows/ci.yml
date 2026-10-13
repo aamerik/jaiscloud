@@ -181,6 +181,9 @@ jobs:
       - name: Behavioral-coverage gate (every `ga` service has a suite or reasoned exemption)
         run: make gcp-status-behavioral-gate
 
+      - name: Behavioral-depth gate (every `ga` service records p2–p5 present or dated-exempt)
+        run: make gcp-status-depth-gate
+
       - name: Run GCP convention lint
         run: go run ./tools/lint/gcplint ./internal/gcp/... ./cmd/jaiscloud-gcp
 

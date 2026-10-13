@@ -229,6 +229,8 @@ func main() {
 	coverageInventory := flag.Bool("coverage-inventory", false, "print the derived per-service behavioral-coverage inventory")
 	coverageGate := flag.Bool("coverage-gate", false, "fail if a `ga` service has no official-client behavioral suite and no reasoned exemption")
 	coverageExemptions := flag.String("coverage-exemptions", defaultCoverageExemptionsPath, "reasoned-exemption list for the behavioral-coverage gate ('' to disable)")
+	depthGate := flag.Bool("depth-gate", false, "fail if any `ga` service has no behavioural-depth record (each p2–p5 present or dated-exempt)")
+	depthDir := flag.String("depth-dir", defaultDepthDir, "per-service behavioural-depth records directory ('' to disable)")
 	evidence := flag.Bool("evidence", false, "report per-operation conformance evidence from the fidelity matrix (verified vs unverified)")
 	next := flag.Bool("next", false, "print the next actionable items in priority order")
 	nextN := flag.Int("n", 5, "number of items for -next")
@@ -272,6 +274,9 @@ func main() {
 	if *coverageGate {
 		os.Exit(runCoverageGate(*matrixPath, gcpTestRoot, *coverageExemptions))
 	}
+	if *depthGate {
+		os.Exit(runDepthGate(*matrixPath, gcpTestRoot, *depthDir))
+	}
 	if *coverageInventory {
 		rows, err := gatherCoverage(*matrixPath, gcpTestRoot)
 		if err != nil {
@@ -283,8 +288,13 @@ func main() {
 			fmt.Fprintf(os.Stderr, "gcpstatus: coverage inventory: %v\n", err)
 			os.Exit(1)
 		}
+		depth, err := loadDepthDir(*depthDir, rows)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "gcpstatus: coverage inventory: %v\n", err)
+			os.Exit(1)
+		}
 		var b strings.Builder
-		renderCoverageSection(&b, rows, exemptions)
+		renderCoverageSection(&b, rows, exemptions, depth)
 		fmt.Print(b.String())
 		return
 	}
@@ -336,6 +346,7 @@ func main() {
 	// -coverage-gate / `make gcp-status-behavioral-gate`).
 	coverageRows, _ := gatherCoverage(*matrixPath, gcpTestRoot)
 	coverageExempt, _ := loadCoverageExemptions(*coverageExemptions, coverageRows)
+	depthRecords, _ := loadDepthDir(*depthDir, coverageRows)
 
 	if *jsonOut != "" {
 		if err := writeJSON(*jsonOut, items); err != nil {
@@ -344,12 +355,12 @@ func main() {
 		}
 	}
 	if *out != "" {
-		if err := writeMarkdown(*out, items, coverageRows, coverageExempt); err != nil {
+		if err := writeMarkdown(*out, items, coverageRows, coverageExempt, depthRecords); err != nil {
 			fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
 			os.Exit(1)
 		}
 	}
-	printSummary(items, *out, *jsonOut, *matrixPath, coverageRows)
+	printSummary(items, *out, *jsonOut, *matrixPath, coverageRows, depthRecords)
 }
 
 // ─── document parsing ─────────────────────────────────────────────────────────
@@ -2272,7 +2283,7 @@ func writeJSON(path string, items []*Item) error {
 	return os.WriteFile(path, append(b, '\n'), 0o644)
 }
 
-func writeMarkdown(path string, items []*Item, coverage []coverageRow, coverageExempt map[string]string) error {
+func writeMarkdown(path string, items []*Item, coverage []coverageRow, coverageExempt map[string]string, depth map[string]depthRecord) error {
 	counts := classCounts(items)
 	var backlog, prs, matrix []*Item
 	for _, it := range items {
@@ -2351,7 +2362,7 @@ func writeMarkdown(path string, items []*Item, coverage []coverageRow, coverageE
 		}
 		b.WriteString("\n")
 	}
-	renderCoverageSection(&b, coverage, coverageExempt)
+	renderCoverageSection(&b, coverage, coverageExempt, depth)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -2372,7 +2383,7 @@ func writeTable(b *strings.Builder, rows []*Item) {
 	}
 }
 
-func printSummary(items []*Item, out, jsonOut, matrixPath string, coverage []coverageRow) {
+func printSummary(items []*Item, out, jsonOut, matrixPath string, coverage []coverageRow, depth map[string]depthRecord) {
 	backlog, prs, matrix := 0, 0, 0
 	for _, it := range items {
 		switch it.Kind {
@@ -2394,6 +2405,12 @@ func printSummary(items []*Item, out, jsonOut, matrixPath string, coverage []cov
 		fmt.Printf("  behavioral coverage: %d/%d ga services have a real-client suite (gate: make gcp-status-behavioral-gate)\n", gaCovered, gaTotal)
 		if uncovered := uncoveredGAServices(coverage); len(uncovered) > 0 {
 			fmt.Printf("    ga services without a suite: %s (exempt or gate violations)\n", strings.Join(uncovered, ", "))
+		}
+		recorded, present, exempt := depthTotalsFor(coverage, depth)
+		fmt.Printf("  behavioral depth: %d/%d ga services recorded (p2–p5: %d present + %d exempt) (gate: make gcp-status-depth-gate)\n",
+			recorded, gaTotal, present, exempt)
+		if v := depthGateViolations(coverage, depth); len(v) > 0 {
+			fmt.Printf("    unaccounted-for depth cells: %s\n", strings.Join(v, ", "))
 		}
 	}
 	if out != "" {

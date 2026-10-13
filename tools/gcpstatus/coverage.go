@@ -484,13 +484,16 @@ func gatherCoverage(matrixPath, testRoot string) ([]coverageRow, error) {
 }
 
 // renderCoverageSection writes the derived behavioral-coverage section (used by
-// the STATUS.md ledger output and the -coverage-inventory report).
-func renderCoverageSection(b *strings.Builder, rows []coverageRow, exemptions map[string]string) {
+// the STATUS.md ledger output and the -coverage-inventory report). The p1–p5
+// columns are the behavioural-depth matrix: `✓` = present, `exempt` = a
+// reasoned/dated exemption, `**no**` = an unaccounted-for cell, `n/a` = non-`ga`.
+func renderCoverageSection(b *strings.Builder, rows []coverageRow, exemptions map[string]string, depth map[string]depthRecord) {
 	if len(rows) == 0 {
 		return
 	}
 	gaCovered, gaTotal := gaCoverageTotals(rows)
 	violations := coverageGateViolations(rows, exemptions)
+	depthViolations := depthGateViolations(rows, depth)
 
 	fmt.Fprintf(b, "## Behavioral coverage — registry service → suite (%d)\n\n", len(rows))
 	fmt.Fprintf(b, "> Derived from the service registry (`internal/gcp/adapter`) + the fidelity matrix\n")
@@ -512,9 +515,18 @@ func renderCoverageSection(b *strings.Builder, rows []coverageRow, exemptions ma
 		fmt.Fprintf(b, ">\n> **Gate violations — `ga` services with no suite and no exemption (%d): %s**\n",
 			len(violations), strings.Join(violations, ", "))
 	}
+	fmt.Fprintf(b, ">\n> **Behavioural depth** (`p1`–`p5`, docs/GCP-TESTABILITY.md §10): `p1` = the\n")
+	fmt.Fprintf(b, "> lifecycle baseline; `p2` concurrency/OCC, `p3` errors/negatives, `p4` listing/paging,\n")
+	fmt.Fprintf(b, "> `p5` scale/boundary. Each `ga` service records every class as `✓` (asserted by an\n")
+	fmt.Fprintf(b, "> official-client suite) or `exempt` (reasoned + dated), gated by\n")
+	fmt.Fprintf(b, "> `make gcp-status-depth-gate`. A `**no**` cell is unaccounted for.\n")
+	if len(depthViolations) > 0 {
+		fmt.Fprintf(b, ">\n> **Depth gate violations — unaccounted-for `ga` cells (%d): %s**\n",
+			len(depthViolations), strings.Join(depthViolations, ", "))
+	}
 	b.WriteString("\n")
-	fmt.Fprintf(b, "| service | canonical | transports | ga? | ga/total | suite(s) | funcs | covered |\n")
-	fmt.Fprintf(b, "|---|---|---|---|---|---|---:|---|\n")
+	fmt.Fprintf(b, "| service | canonical | transports | ga? | ga/total | suite(s) | funcs | covered | p1 | p2 | p3 | p4 | p5 |\n")
+	fmt.Fprintf(b, "|---|---|---|---|---|---|---:|---|:-:|:-:|:-:|:-:|:-:|\n")
 	for _, r := range rows {
 		ga := "—"
 		if r.GA {
@@ -539,8 +551,50 @@ func renderCoverageSection(b *strings.Builder, rows []coverageRow, exemptions ma
 				cov = "n/a"
 			}
 		}
-		fmt.Fprintf(b, "| %s | %s | %s | %s | %s | %s | %d | %s |\n",
-			esc(r.Service), esc(r.Canonical), esc(strings.Join(r.Transports, ", ")), ga, ratio, esc(suites), r.Funcs, cov)
+		// p1 mirrors `covered`; p2–p5 come from the depth record. Non-ga
+		// services are `n/a` (the depth contract only governs `ga`).
+		p1 := "n/a"
+		if r.GA {
+			switch {
+			case r.Covered:
+				p1 = "✓"
+			case exemptions[canonicalService(r.Service)] != "":
+				p1 = "exempt"
+			default:
+				p1 = "**no**"
+			}
+		}
+		cells := make([]string, 0, len(depthClasses))
+		for _, class := range depthClasses {
+			cells = append(cells, depthCellMark(r, class, depth))
+		}
+		fmt.Fprintf(b, "| %s | %s | %s | %s | %s | %s | %d | %s | %s | %s |\n",
+			esc(r.Service), esc(r.Canonical), esc(strings.Join(r.Transports, ", ")), ga, ratio, esc(suites), r.Funcs, cov,
+			p1, strings.Join(cells, " | "))
 	}
 	b.WriteString("\n")
+}
+
+// depthCellMark renders one p2–p5 cell for the depth matrix: `✓` present,
+// `exempt` reasoned gap, `**no**` an unaccounted-for `ga` cell, `n/a` non-`ga`.
+func depthCellMark(r coverageRow, class string, depth map[string]depthRecord) string {
+	if !r.GA {
+		return "n/a"
+	}
+	rec, ok := depth[canonicalService(r.Service)]
+	if !ok {
+		return "**no**"
+	}
+	state, ok := rec.classState(class)
+	if !ok {
+		return "**no**"
+	}
+	switch state {
+	case "present":
+		return "✓"
+	case "exempt":
+		return "exempt"
+	default:
+		return "**no**"
+	}
 }

@@ -17,7 +17,7 @@ PYTHON ?= python3
 # The audit family (gcp-audit-wave-plan.md: evidence coverage, cross-transport
 # parity, convention invariants) runs after the service families and immediately
 # before demo-spikes, so the emulator is verified before the demo is de-risked.
-SERIES ?= ga-fidelity,functions-docker-executor,console-ui,ledger-integrity,dataproc-gke,java-compat,functions-parity,metastore-parity,bigquery-ga,bigquery-load-jobs,audit,test-coverage,demo-spikes
+SERIES ?= ga-fidelity,functions-docker-executor,console-ui,ledger-integrity,dataproc-gke,java-compat,functions-parity,metastore-parity,bigquery-ga,bigquery-load-jobs,audit,test-coverage,test-depth,demo-spikes
 
 # Include non-ga fidelity-matrix cells in the ledger (informational, kind=matrix).
 # Set MATRIX= to disable.
@@ -191,7 +191,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-differential-bigquery record-gcp-differential-bigquery \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
-        gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-behavioral-gate gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff
+        gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-behavioral-gate gcp-status-depth-gate gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -1077,6 +1077,11 @@ gcp-status-behavioral-gate: ## Fail if any `ga` service has no official-client b
 	@go build -o bin/gcpstatus ./tools/gcpstatus
 	@bin/gcpstatus -coverage-gate -matrix docs/fidelity/fidelity-matrix.json -coverage-exemptions docs/gcpstatus-coverage-exemptions.yaml
 
+gcp-status-depth-gate: ## Fail if any `ga` service has no behavioural-depth record (TD1: each p2–p5 present or dated-exempt)
+	@mkdir -p bin
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -depth-gate -matrix docs/fidelity/fidelity-matrix.json -depth-dir docs/test-depth
+
 gcp-status-evidence: ## Report per-operation conformance evidence (verified vs unverified) from the fidelity matrix (report-only)
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
@@ -1435,7 +1440,7 @@ test-e2e: test-e2e-docker-all test-e2e-k8s-all test-e2e-persistence test-e2e-ice
 
 test-all: test test-integration test-e2e ## Unit tests + integration tests + all e2e suites
 
-test-all-gcp: ga-check test-gcp test-integration-gcp test-e2e-gcp-persistence gcp-status-behavioral-gate ## GCP aggregate: unit + integration + conformance (ga-check) + persistence + behavioral-coverage gate
+test-all-gcp: ga-check test-gcp test-integration-gcp test-e2e-gcp-persistence gcp-status-behavioral-gate gcp-status-depth-gate ## GCP aggregate: unit + integration + conformance (ga-check) + persistence + behavioral-coverage + depth gates
 
 # ─── Internal helpers (not shown in help) ────────────────────────────────────
 

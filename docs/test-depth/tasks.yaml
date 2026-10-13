@@ -1,0 +1,24 @@
+# Behavioural depth record - tasks (TD1).
+#
+# p2-p5 are defined in docs/GCP-TESTABILITY.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned + dated). `make gcp-status-depth-gate` fails when a `ga` service
+# has no record here or leaves a class unaccounted for.
+service: tasks
+classes:
+  p2:
+    state: present
+    suites: [sdk-tasks]
+    note: "queue rate-limit contention under dispatch"
+  p3:
+    state: present
+    suites: [sdk-tasks]
+    note: "googleapi error envelopes plus run/retry semantics"
+  p4:
+    state: exempt
+    reason: "no pageToken paging over queues/tasks"
+    date: "2026-10-13"
+  p5:
+    state: exempt
+    reason: "no scale/boundary suite"
+    date: "2026-10-13"
