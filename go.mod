@@ -168,6 +168,7 @@ require (
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/twpayne/go-geom v1.6.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
+	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.67.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0 // indirect

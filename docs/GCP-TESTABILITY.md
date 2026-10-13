@@ -291,8 +291,17 @@ evidence for any of them.
       clock-derived TTLs (Datastore transaction expiry) and DynamoDB-style TTL edge cases can
       behave differently. (Firestore's per-document `UpdateTime` and Datastore's per-entity
       `update_time` OCC tokens are kept strictly monotonic even under a frozen clock, so
-      concurrent writes still conflict correctly.) Do not rely on frozen-clock results as
-      production evidence.
+      concurrent writes still conflict correctly.) The dedicated time-control suite
+      (`tests/integration/gcp/time_control_test.go`) pins the contract deterministically — the
+      three modes (`fixed`/`offset`/`real`), the admin endpoint validation, `reset` restoring real
+      time, no cross-test leak, and the clock-driven expiry/dispatch paths: Scheduler due-time
+      dispatch, Pub/Sub retention expiry, KMS scheduled-destroy and the async-LRO deadline (the
+      frozen-timestamp, Scheduler and KMS cases are cross-checked REST + gRPC; the async-LRO case
+      is REST-only). Advancing a frozen clock does **not** wake the wall-time
+      tickers (Scheduler, Tasks, Monitoring, EventBridge), so a deterministic test fires those
+      engines through their synchronous `/_jaiscloud/<engine>-tick` endpoint rather than sleeping;
+      the lazy-on-read paths (KMS destroy promotion, LRO settlement, Pub/Sub retention) settle on
+      a bare clock advance. Do not rely on frozen-clock results as production evidence.
 - [ ] **Per-language SDK wire paths.** Different official SDKs exercise different wire
       paths. Add each client SDK/language in use to the conformance matrix rather
       than assuming one client's pass transfers.
@@ -399,8 +408,8 @@ or carries a reasoned exemption.
 | service | transport(s) | behavioural suite(s) | coverage |
 | --- | --- | --- | --- |
 | `storage` | grpc, rest | `sdk`, `sdk-gcs-grpc` | suite |
-| `pubsub` | grpc, rest | `sdk-pubsub`, `sdk-rest`, `sdk-dataproc` | suite |
-| `kms` | grpc, rest | `sdk-rest` | suite |
+| `pubsub` | grpc, rest | `.` (root-suite client), `sdk-pubsub`, `sdk-rest`, `sdk-dataproc` | suite |
+| `kms` | grpc, rest | `.` (root-suite client), `sdk-rest` | suite |
 | `secretmanager` | grpc, rest | `sdk-rest` | suite |
 | `firestore` | grpc, rest | `sdk-firestore`, `sdk-rest` | suite |
 | `firestoreadmin` | grpc | — | exempt (core driven by `sdk-firestore` + gRPC conformance) |
@@ -416,7 +425,7 @@ or carries a reasoned exemption.
 | `operations` | grpc | `.` (root-suite client) | suite |
 | `serviceusage` | grpc, rest | `sdk-rest` | suite |
 | `resourcemanager` | grpc, rest | `sdk-rest` | suite |
-| `scheduler` | grpc, rest | `sdk-scheduler` | suite |
+| `scheduler` | grpc, rest | `.` (root-suite client), `sdk-scheduler` | suite |
 | `tasks` | grpc, rest | `sdk-tasks` | suite |
 | `workflows` | grpc, rest | `sdk-workflows` | suite |
 | `workflowexecutions` | grpc, rest | `sdk-workflows` | suite |
