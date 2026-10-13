@@ -1,0 +1,26 @@
+# Behavioural depth record - eventarc (TD1).
+#
+# p2-p5 are defined in docs/GCP-TESTABILITY.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned + dated). `make gcp-status-depth-gate` fails when a `ga` service
+# has no record here or leaves a class unaccounted for.
+service: eventarc
+classes:
+  p2:
+    state: present
+    suites: [sdk-eventarc]
+    note: "stale-etag (OCC) trigger update/delete rejected"
+  p3:
+    state: present
+    suites: [sdk-eventarc]
+    note: "missing-destination (Workflow) trigger rejected"
+  p4:
+    state: exempt
+    reason: "no trigger listing orderBy/pageToken suite"
+    owner: TD7
+    date: "2026-10-13"
+  p5:
+    state: exempt
+    reason: "no delivery-fan-out-at-volume suite"
+    owner: TD7
+    date: "2026-10-13"

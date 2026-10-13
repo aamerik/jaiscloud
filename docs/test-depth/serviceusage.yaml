@@ -1,0 +1,24 @@
+# Behavioural depth record - serviceusage (TD1).
+#
+# p2-p5 are defined in docs/GCP-TESTABILITY.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned + dated). `make gcp-status-depth-gate` fails when a `ga` service
+# has no record here or leaves a class unaccounted for.
+service: serviceusage
+classes:
+  p2:
+    state: exempt
+    reason: "no concurrent enable/disable contention suite"
+    date: "2026-10-13"
+  p3:
+    state: present
+    suites: [sdk-rest]
+    note: "batch-enable validation rejects bad input"
+  p4:
+    state: present
+    suites: [sdk-rest]
+    note: "list filtered by state"
+  p5:
+    state: exempt
+    reason: "no scale/boundary suite"
+    date: "2026-10-13"

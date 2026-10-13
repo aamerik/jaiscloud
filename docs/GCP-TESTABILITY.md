@@ -438,3 +438,68 @@ reads the fidelity matrix + the `tests/integration/gcp` tree (no server, no
 Docker), so it is safe on a hosted runner. The exemption list is committed so a
 waiver is a reviewed, evidence-carrying change rather than an invisible one.
 
+> **Depth beyond the lifecycle baseline.** This contract proves a suite *exists*;
+> §10 records how *deep* it goes (`p2`–`p5`) and gates that record too
+> (`make gcp-status-depth-gate`).
+
+---
+
+## 10. Behavioural depth classes — the `p2`–`p5` record (gated)
+
+§9 proves a `ga` service has **a** lifecycle suite; it says nothing about how
+**deep** that suite goes — a service can be one test func deep and still pass.
+This section adds the depth axis, borrowed from the AWS reference
+implementation's test-suite taxonomy (its `p1`–`p5` behaviour classes). A
+suite's *depth* is recorded as five behaviour classes:
+
+| class | what the suite must exercise |
+| --- | --- |
+| `p1` | **baseline lifecycle** — create → get → list → update → delete through an official client. This is exactly §9's Definition of Done; `p1` stays **derived** from the coverage inventory (`coverageRow.Covered`), never recorded by hand. |
+| `p2` | **concurrency & contention** — parallel writers under `-race`, OCC/etag/precondition conflicts (`409`/`412`), lost-update prevention through transactions, lease/ack contention (ack-deadline redelivery, ordering, exactly-once). |
+| `p3` | **errors, negatives & retry/idempotency** — the real error envelope + codes (`googleapi.Error` / `codes.*`), `404`/`409`/`400`, `ALREADY_EXISTS` vs conflict semantics, invalid-input rejection, idempotent retry. |
+| `p4` | **listing & paging** — `pageToken`/`pageSize` (or `nextPageToken`/`maxResults`) composed with `filter`/`orderBy`/`delimiter`/`prefix`, empty pages, cross-page stability. |
+| `p5` | **scale & boundary** — large payload/object streaming (no full buffering), many resources, version/rotation lineage, long-running/streaming lifecycle, retention/TTL edges. |
+
+**The definition of done.** Every `ga` service (the §9 rule: ≥1 `ga` cell, no
+`preview` cell) must **account for each of `p2`–`p5`** — either as a class its
+official-client suite(s) exercise, or as a **reasoned, dated exemption** (a
+metadata-only service with no listing has no `p4`; a stateless token service has
+none of them). A class that is neither present nor exempt is **unaccounted for**
+and fails the gate.
+
+**The record — one file per service, derived + validated.** The record lives at
+[`docs/test-depth/<canonical>.yaml`](test-depth/), conventionally one
+`<canonical>.yaml` file per service (not a single central file, so per-service
+sessions extend their own record without colliding). Each `p2`–`p5` cell is
+either:
+
+- `state: present` — with `suites` (the official-client suite(s) asserting it,
+  each of which must be one of the service's §9 coverage suites) and a one-line
+  `note`; or
+- `state: exempt` — with a `reason`, a `date` (`YYYY-MM-DD`), and optionally an
+  `owner` (the backlog ID that will close it, e.g. `TD6`; advisory, not
+  validated).
+
+The loader rejects a typo'd service, an unknown class key, a duplicate service
+across files, a `present` cell with no note/suite or a suite the service does
+not own, and an `exempt` cell with no reason or an unparseable date — so a typo
+can never silently inflate or swallow the record.
+
+**How it is measured and enforced.** `tools/gcpstatus` joins the §9 inventory
+with `docs/test-depth/` into a per-service `p1`–`p5` matrix: `make gcp-status`
+writes it into the **Behavioral coverage** table in `plan_docs/STATUS.md`
+(`✓` present, `exempt` reasoned gap, `**no**` unaccounted for, `n/a` non-`ga`),
+and `bin/gcpstatus -coverage-inventory` prints it directly. The contract is a
+**hard gate**: `make gcp-status-depth-gate` (`bin/gcpstatus -depth-gate`) exits
+non-zero if any `ga` service has no record or leaves a `p2`–`p5` cell
+unaccounted for. It runs in CI (the `test-gcp-unit` job, beside the §9 gate) and
+in the `test-all-gcp` aggregate, and — like §9 — only reads the fidelity matrix,
+the test tree, and the committed records (no server, no Docker).
+
+Pre-existing thin services are **grandfathered**: their day-one record carries
+dated exemptions (often `owner: TD<n>` from the test-depth wave), so a *newly
+added* `ga` service with no `docs/test-depth` record fails the gate on landing.
+The per-service test-depth sessions then replace those exemptions with `present`
+cells as the depth lands.
+
+

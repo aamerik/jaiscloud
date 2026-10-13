@@ -1,0 +1,24 @@
+# Behavioural depth record - storage (TD1).
+#
+# p2-p5 are defined in docs/GCP-TESTABILITY.md §10. Each class is either
+# `present` (asserted by the official-client suite(s) listed) or `exempt`
+# (reasoned + dated). `make gcp-status-depth-gate` fails when a `ga` service
+# has no record here or leaves a class unaccounted for.
+service: storage
+classes:
+  p2:
+    state: present
+    suites: [sdk]
+    note: "object preconditions (etag / if-generation -> 412) and versioned generation lineage"
+  p3:
+    state: present
+    suites: [sdk]
+    note: "delete-of-missing 404 plus bucket/object error envelopes"
+  p4:
+    state: present
+    suites: [sdk]
+    note: "list composed with prefix + delimiter + pageToken"
+  p5:
+    state: present
+    suites: [sdk]
+    note: "resumable large-object stream and retention-blocks-delete"

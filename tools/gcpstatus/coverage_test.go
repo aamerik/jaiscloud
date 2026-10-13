@@ -340,16 +340,31 @@ func TestRenderCoverageSectionClassification(t *testing.T) {
 		[]coverageTestFile{{Suite: "sdk", Services: map[string]bool{"storage": true}, Funcs: 1}},
 	)
 	var b strings.Builder
-	renderCoverageSection(&b, rows, map[string]string{"run": "e2e gates"})
+	depth := map[string]depthRecord{
+		"storage": {Service: "storage", Classes: map[string]depthClass{
+			"p2": {State: "present"}, "p3": {State: "present"},
+			"p4": {State: "present"}, "p5": {State: "present"},
+		}},
+		"run": {Service: "run", Classes: map[string]depthClass{
+			"p2": {State: "exempt"}, "p3": {State: "exempt"},
+			"p4": {State: "exempt"}, "p5": {State: "exempt"},
+		}},
+	}
+	renderCoverageSection(&b, rows, map[string]string{"run": "e2e gates"}, depth)
 	out := b.String()
-	for _, want := range []string{"| storage | storage | rest | ga | 57/57 | sdk | 1 | yes |",
-		"| run | run | grpc | ga | 28/28 | — | 0 | exempt |",
-		"| scheduler | scheduler | rest | ga | 16/16 | — | 0 | **no** |"} {
+	for _, want := range []string{
+		"| storage | storage | rest | ga | 57/57 | sdk | 1 | yes | ✓ | ✓ | ✓ | ✓ | ✓ |",
+		"| run | run | grpc | ga | 28/28 | — | 0 | exempt | exempt | exempt | exempt | exempt | exempt |",
+		"| scheduler | scheduler | rest | ga | 16/16 | — | 0 | **no** | **no** | **no** | **no** | **no** | **no** |",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("renderCoverageSection missing row %q\n%s", want, out)
 		}
 	}
 	if !strings.Contains(out, "Gate violations") {
 		t.Errorf("renderCoverageSection should flag the non-exempt gap\n%s", out)
+	}
+	if !strings.Contains(out, "Depth gate violations") {
+		t.Errorf("renderCoverageSection should flag the unrecorded depth cell\n%s", out)
 	}
 }
