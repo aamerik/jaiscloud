@@ -176,6 +176,12 @@ The committed per-service map lives in
 drops below its committed floor in `docs/gcp-coverage-floor.yaml`.
 `make test-all-gcp` aggregates it with unit + integration + conformance (`ga-check`) + persistence.
 
+Outside PR CI, `make test-gcp-load` is the **load / concurrency gate**: it boots an ephemeral
+emulator with `--metrics` and drives GCS object PUT/GET, Pub/Sub publish + fan-out and Firestore
+commits at `-c 100`, failing on any 5xx or on goroutine/memory growth past a threshold. It runs
+locally and on the weekly/manual [`gcp-load.yml`](../.github/workflows/gcp-load.yml) workflow
+(§12 of [`docs/GCP-TESTABILITY.md`](GCP-TESTABILITY.md#12-load--concurrency-gate--the-hot-path-soak-local--nightly)).
+
 ---
 
 ## 5. Client compatibility

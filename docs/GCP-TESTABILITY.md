@@ -560,4 +560,57 @@ are unit-tested in `tools/gcpstatus/coverageratchet_test.go`; a manual seeded
 negative (deleting a suite's test file drops its package below the floor) also
 fails the gate.
 
+---
+
+## 12. Load / concurrency gate — the hot-path soak (local + nightly)
+
+§9–§11 prove a suite *exists*, records its *depth*, and *executes* code in each
+package. None of them can catch a defect that only appears under contention: a
+race that `-race` misses because the interleaving needs many writers, a 5xx
+under load, or state that grows without bound as requests accumulate. This
+section adds that axis — a bounded soak of three hot paths.
+
+**The gate.** `make test-gcp-load` (`test/gcp-load` package under
+`tests/integration/gcp/loadtest`) builds `jaiscloud-gcp`, boots it ephemeral on
+private ports **with `--metrics`**, seeds a bucket, a topic + three pull
+subscriptions and the Firestore database, then drives `-c 100` for a bounded
+window against:
+
+| hot path | what it hammers | per-request correctness |
+| --- | --- | --- |
+| GCS object PUT/GET | media upload + `?alt=media` download | every download matches the bytes just uploaded |
+| Pub/Sub publish + fan-out | `topics:publish` and `subscriptions:pull`/`:acknowledge` on 3 subscriptions | publish returns one `messageId`; a bounded fan-out pass asserts **every** subscription received **every** published marker |
+| Firestore concurrent commits | `documents:commit` | the commit envelope carries a `commitTime` and one `writeResult` |
+
+It fails on any **5xx**, any transport error, any unexpected status, and any
+goroutine or memory growth past a threshold across the window. Goroutine/memory
+growth is read from the emulator's own Prometheus `/metrics`
+(`go_goroutines`, `go_memstats_alloc_bytes`, `process_resident_memory_bytes`);
+the client closes its idle keep-alive connections and the process settles before
+the trailing snapshot, so per-connection goroutines do not read as a leak. The
+thresholds are deliberately generous leak detectors, not budgets, and are
+env-overridable (`JAISCLOUD_LOAD_MAX_GOROUTINES`, `…_MAX_HEAP_PCT`,
+`…_MAX_RSS_PCT`; window/concurrency via `JAISCLOUD_LOAD_WINDOW` /
+`JAISCLOUD_LOAD_CONCURRENCY`).
+
+**Race-instrumented mode.** `make test-gcp-load LOAD_RACE=1` builds the emulator
+with the Go race detector (`go build -race`) and, after the run, fails the gate
+if the emulator log contains a `WARNING: DATA RACE` report — so a data race the
+ordinary `-race` unit/integration suites miss (one that needs many concurrent
+writers) is caught and surfaced. The scheduled workflow runs with `LOAD_RACE=1`;
+the local default is the fast non-instrumented binary.
+
+**Why it is not in PR CI.** Mirroring the documented decision for the k3d/Docker
+e2e gates, a 100-way soak does not belong on a hosted per-PR runner. It runs
+locally (`make test-gcp-load`) and on a **weekly + manual** workflow
+([`.github/workflows/gcp-load.yml`](../.github/workflows/gcp-load.yml)) — like
+the Terraform/OpenTofu compat workflow, it is `workflow_dispatch` with a
+schedule. The harness mechanics — the metric parser, the worker pool, and the
+growth checks — are unit-tested server-free in `loadtest/harness_test.go`, with
+seeded negatives (a `500`, a corrupted download, a dropped fan-out copy, a
+`commit` missing its envelope) proving each assertion bites. The live gate skips
+unless `JAISCLOUD_LOAD=1`, so `go test ./tests/integration/gcp/...` stays a
+no-op for it.
+
+
 
