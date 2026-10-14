@@ -231,6 +231,11 @@ func main() {
 	coverageExemptions := flag.String("coverage-exemptions", defaultCoverageExemptionsPath, "reasoned-exemption list for the behavioral-coverage gate ('' to disable)")
 	depthGate := flag.Bool("depth-gate", false, "fail if any `ga` service has no behavioural-depth record (each p2–p5 present or dated-exempt)")
 	depthDir := flag.String("depth-dir", defaultDepthDir, "per-service behavioural-depth records directory ('' to disable)")
+	coverageRatchet := flag.Bool("coverage-ratchet", false, "gate a Go coverprofile against the per-package floor (needs -coverage-profile)")
+	coverageProfile := flag.String("coverage-profile", "", "Go coverprofile (from `go test -coverprofile`) for -coverage-ratchet / -coverage-floor-update")
+	coverageFloor := flag.String("coverage-floor", defaultCoverageFloorPath, "per-package statement-coverage floor file")
+	coverageFloorUpdate := flag.Bool("coverage-floor-update", false, "rewrite the coverage floor from -coverage-profile (ratchet up; needs -allow-lower to drop)")
+	coverageAllowLower := flag.Bool("allow-lower", false, "with -coverage-floor-update: permit lowering a recorded floor")
 	evidence := flag.Bool("evidence", false, "report per-operation conformance evidence from the fidelity matrix (verified vs unverified)")
 	next := flag.Bool("next", false, "print the next actionable items in priority order")
 	nextN := flag.Int("n", 5, "number of items for -next")
@@ -276,6 +281,20 @@ func main() {
 	}
 	if *depthGate {
 		os.Exit(runDepthGate(*matrixPath, gcpTestRoot, *depthDir))
+	}
+	if *coverageRatchet || *coverageFloorUpdate {
+		if strings.TrimSpace(*coverageProfile) == "" {
+			fmt.Fprintln(os.Stderr, "gcpstatus: -coverage-ratchet/-coverage-floor-update require -coverage-profile")
+			os.Exit(2)
+		}
+		if *coverageFloorUpdate {
+			if err := runCoverageRatchetUpdate(*coverageProfile, *coverageFloor, *coverageAllowLower); err != nil {
+				fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+		os.Exit(runCoverageRatchet(*coverageProfile, *coverageFloor))
 	}
 	if *coverageInventory {
 		rows, err := gatherCoverage(*matrixPath, gcpTestRoot)

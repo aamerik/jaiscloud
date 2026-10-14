@@ -511,4 +511,53 @@ added* `ga` service with no `docs/test-depth` record fails the gate on landing.
 The per-service test-depth sessions then replace those exemptions with `present`
 cells as the depth lands.
 
+---
+
+## 11. Statement-coverage ratchet — the per-package floor (gated)
+
+§9 proves a suite **exists** and §10 records which behaviour classes it
+exercises; neither measures how much of a package's code those tests actually
+**execute**. Statement coverage does not measure *assertion strength* — that is
+the mutation-testing axis (`TD13`) — but it does make a largely-unexercised
+surface visible, which is the axis this section adds: a committed **per-package
+statement-coverage floor** that can only move up.
+
+**How it is measured.** `make test-gcp-coverage` runs
+`go test -count=1 -covermode=set -coverprofile=bin/gcp-coverage.out
+./internal/gcp/...` and feeds the profile to `bin/gcpstatus -coverage-ratchet`.
+The profile is aggregated per package (statements with a non-zero execution
+count over total statements), and a per-package table is printed — wrapped in a
+collapsed GitHub Actions `::group::` in CI.
+
+**The floor.** [`docs/gcp-coverage-floor.yaml`](gcp-coverage-floor.yaml) records,
+per repo-relative package dir, the statement-coverage percentage at the time it
+was last ratcheted. It is a **ratchet, not a target**: it starts at today's
+measured value and only moves up. `make test-gcp-coverage-update` rewrites it
+from a fresh profile and **raises** a recorded floor but refuses to **lower** one
+unless `ALLOW_LOWER=1` is set (a held regression is reported, not silently
+recorded) — so a coverage drop for a package that still produces data cannot be
+laundered by re-running the update. Generated protobuf packages (a final path
+element ending in `pb`, e.g. `grpc/storage/storagepb`) are excluded mechanically:
+they carry no hand-written behaviour to cover. Packages with **no test files**
+produce no coverage data and are therefore outside the ratchet (a regression
+needs tests to regress); the §9 gate still requires a behavioural suite for every
+`ga` service.
+
+**Enforcement.** The contract is a **hard gate**: `make test-gcp-coverage`
+(`bin/gcpstatus -coverage-ratchet`) exits non-zero when
+
+- a measured package drops **more than 0.5pp below** its recorded floor (a small
+  tolerance for a few timing-dependent tests whose statement coverage varies
+  run-to-run — e.g. a gRPC receive loop racing `ctx.Done`);
+- a measured package has **no floor entry** (a new package must be recorded); or
+- a floor entry names a package that **no longer produces coverage data**
+  (removed/renamed — re-run the update).
+
+It runs in CI (the `test-gcp-unit` job, beside the §9/§10 gates) and in the
+`test-all-gcp` aggregate, and — like §9/§10 — needs no server and no Docker. Its
+violation branches (below / unrecorded / stale) and its ratchet / tolerance edges
+are unit-tested in `tools/gcpstatus/coverageratchet_test.go`; a manual seeded
+negative (deleting a suite's test file drops its package below the floor) also
+fails the gate.
+
 
