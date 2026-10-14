@@ -612,5 +612,80 @@ seeded negatives (a `500`, a corrupted download, a dropped fan-out copy, a
 unless `JAISCLOUD_LOAD=1`, so `go test ./tests/integration/gcp/...` stays a
 no-op for it.
 
+---
+
+## 13. Mutation testing — assertion strength (the local spike)
+
+§9–§12 prove a suite **exists**, records its **depth**, **executes** code, and
+survives a soak. None of them measures whether the assertions *bite*: a test
+that calls a function and only checks `err == nil` executes the code (raising
+statement coverage) yet kills no fault. Mutation testing is that axis — mutate
+the source, replay the package's own tests against each mutant, and count the
+mutants the tests **detect** (kill). A surviving mutant is either a real
+assertion gap or a provably equivalent mutation; telling the two apart is the
+triage.
+
+**The tool and the invocation.** `make test-gcp-mutation PKG=…` installs the
+pinned [`go-mutesting`](https://github.com/avito-tech/go-mutesting) (the
+maintained fork of `zimmski/go-mutesting`) into `bin/` and runs it over one
+package (default `./internal/gcp/service/datastore`). For each mutant it
+rewrites one target file **in place**, runs `go test <package>`, restores the
+file, and finally writes a JSON report — `bin/gcp-mutation-report.json` — whose
+`stats` carry the mutation score and whose `escaped` array carries the diff of
+every surviving mutant. The target is **local only** (a full package run is
+minutes, not a per-PR budget): TD13 is a spike that seeds a ratchet, not a gate.
+
+**The spike's result** (`internal/gcp/service/datastore`, the transport-neutral
+Datastore core; 1246 mutants):
+
+| run | killed | escaped | MSI |
+| --- | --- | --- | --- |
+| initial (as-shot, no test change) | 582 | 664 | **46.7%** |
+| after the TD13 test pass | 856 | 390 | **68.7%** |
+
+The pass added the missing assertion strength where the suite only *called*
+code: value equality/ordering across every `Value` variant (`valueEqual` /
+`valueCompare` / `entityEqual`, including the later-variant nil guards),
+the aggregation reducer (`count`/`sum`/`avg` edges: empty set, `up_to` clamp,
+double promotion, int64 overflow, non-numeric skips), the store-sentinel →
+`ProviderError` mapping (previously 0% covered), the GQL lexer
+(tokens, number/string literals, escapes, char classes), key/path validation
+and projection, and the transaction TTL/OCC boundaries (`txnTTL` at exactly the
+limit, `maxAggregations` at 5 vs 6, read-set sorting, abort-on-read-conflict).
+
+**Surviving-mutant classes** (final run) and their triage:
+
+| class | what the mutant changes | shares | triage |
+| --- | --- | --- | --- |
+| `branch/if` | a guard/`return` body emptied (condition forced false) | 121 | real gaps concentrate in the **GQL parser error arms** and the **metadata synthesizers**; the rest are lock/defer bookkeeping (below) |
+| `expression/remove` | one operand of a `&&`/`\|\|` forced `false` | 82 | a few real (untested later-variant guards); many provably equivalent — e.g. `if aNum \|\| bNum` in `valueEqual` is equivalent because neither numeric variant can reach the `switch` |
+| `numbers/incrementer`/`decrementer` | a literal or counter `±1` | 107 | the load-bearing constants/limits are now pinned (`txnTTL`, `maxAggregations`); the remainder are loop counters whose ±1 is absorbed |
+| `statement/remove` | a statement deleted | 21 | mostly `s.txnMu.Lock()` / `defer Unlock()` — a real concurrency bug only a `-race`/multi-writer run would observe, which the non-race mutation exec cannot |
+| `branch/case` | a `switch`-case body emptied | 20 | real where the arm is untested (`Commit` mode dispatch, `metadata` representation cases) |
+| `expression/comparison` | `<`↔`<=`, `>`↔`>=`, `==`↔`!=` | 19 | real only at an untested boundary |
+| `loop/break` | `continue`↔`break` | 11 | real only when a multi-match input is tested |
+| `arithmetic/*`, `loop/range_break`, `branch/else` | `+`↔`-`, `+=`↔`-=`, a range break, an else body | 9 | mixed; none load-bearing |
+
+The **equivalent** survivors (the `valueEqual`/`valueCompare` short-circuit
+operands that no input can distinguish, the single-threaded lock statements) are
+*not* assertion gaps and are deliberately left; the rest are recorded as the
+TD13-a / TD13-b follow-ups (a negative-suite pass on the GQL parser and
+metadata, and a committed `docs/gcp-mutation-floor.yaml` ratchet once the score
+is stable).
+
+Writing the value-comparison tests surfaced a **real semantic gap** worth more
+than the score: `valueEqual`/`valueCompare` treat INTEGER and DOUBLE as one
+numeric type (`n = 3` matches a stored `3.0`; `7 < 3.2`), whereas Firestore in
+Datastore mode documents them as *separate* types for ordering and equality.
+That is a behaviour question, not a test-depth one, so the spike does not change
+it — it is recorded as TD13-c (and the new tests say so) rather than silently
+blessed.
+
+The codec/router surface the plan also named — `internal/gcp/adapter/jsoncodec.go`,
+where a wrong resource-type or action derivation silently misroutes a request —
+was scored but not fixed in the spike (**64.3%** MSI, 502/781 killed; the
+survivors are `expression/remove`/`branch/case` in the resource-type and action
+derivation); see TD13-b.
+
 
 

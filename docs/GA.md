@@ -182,6 +182,12 @@ commits at `-c 100`, failing on any 5xx or on goroutine/memory growth past a thr
 locally and on the weekly/manual [`gcp-load.yml`](../.github/workflows/gcp-load.yml) workflow
 (§12 of [`docs/GCP-TESTABILITY.md`](GCP-TESTABILITY.md#12-load--concurrency-gate--the-hot-path-soak-local--nightly)).
 
+Also outside PR CI, `make test-gcp-mutation PKG=…` is the **assertion-strength** measurement: it
+runs the pinned `go-mutesting` over one package, replays the package's own tests against each
+mutant, and writes a mutation score + surviving-mutant report to `bin/gcp-mutation-report.json`.
+It is a local spike/ratchet seed (a full package run is minutes), not a per-PR gate
+(§13 of [`docs/GCP-TESTABILITY.md`](GCP-TESTABILITY.md#13-mutation-testing--assertion-strength-the-local-spike)).
+
 ---
 
 ## 5. Client compatibility

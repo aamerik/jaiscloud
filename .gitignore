@@ -25,6 +25,12 @@ dist/
 *.test
 coverage.out
 
+# go-mutesting report artifacts (make test-gcp-mutation writes report.json to the
+# CWD and, on success, moves it under bin/; ignore the transient root copies so a
+# failed/interrupted run does not surface as an untracked file).
+/report.json
+/go-mutesting-report.html
+
 # UI — npm/pnpm dependencies
 node_modules/
 
