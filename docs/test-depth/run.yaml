@@ -7,22 +7,18 @@
 service: run
 classes:
   p2:
-    state: exempt
-    reason: "no control-plane contention suite in tests/integration/gcp"
-    owner: TD14
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-run]
+    note: "etag/optimistic-concurrency conflicts (409 ABORTED) across service patch, delete and IAM setIamPolicy, plus parallel writers under -race"
   p3:
-    state: exempt
-    reason: "no control-plane error-envelope suite in tests/integration/gcp"
-    owner: TD14
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-run]
+    note: "googleapi error envelopes: 404 NotFound, 409 AlreadyExists/Aborted, 400 InvalidArgument/FailedPrecondition"
   p4:
-    state: exempt
-    reason: "no revisions/service listing+paging suite in tests/integration/gcp"
-    owner: TD14
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-run]
+    note: "pageSize/pageToken cursor paging over revisions, with cross-page stability"
   p5:
-    state: exempt
-    reason: "no LRO/traffic-split boundary suite in tests/integration/gcp"
-    owner: TD14
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-run]
+    note: "long-running operation lifecycle (sync + async), revision lineage/rotation, and the traffic-split boundary"

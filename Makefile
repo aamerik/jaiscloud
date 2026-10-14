@@ -751,6 +751,7 @@ test-integration-gcp: build-gcp ## Run GCP integration + SDK suites against an e
 	  ( cd tests/integration/gcp/sdk-memorystore && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
 	  ( cd tests/integration/gcp/sdk-compute && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -race -count=1 -timeout 180s ./... ); \
 	  ( cd tests/integration/gcp/sdk-container && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-run && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -race -count=1 -timeout 180s ./... ); \
 	  echo "Running gRPC SDK suites..."; \
 	  ( cd tests/integration/gcp/sdk-firestore && FIRESTORE_EMULATOR_HOST=localhost:8081 go test -count=1 -timeout 120s ./... ); \
 	  ( cd tests/integration/gcp/sdk-monitoring && MONITORING_EMULATOR_HOST=localhost:8081 go test -count=1 -timeout 120s ./... ); \
@@ -770,7 +771,8 @@ test-lro-async-gcp: build-gcp ## Run the opt-in async-LRO live e2e gate (JAISCLO
 	  n=0; until curl -sf http://localhost:8080/_jaiscloud/health >/dev/null 2>&1; do \
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-lro.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080, gRPC :8081, async LRO delay 2s)"; \
-	  JAISCLOUD_LRO_ASYNC=1 go test -race -count=1 -timeout 120s ./tests/integration/gcp/ -run TestLROAsync
+	  JAISCLOUD_LRO_ASYNC=1 go test -race -count=1 -timeout 120s ./tests/integration/gcp/ -run TestLROAsync; \
+	  ( cd tests/integration/gcp/sdk-run && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ JAISCLOUD_LRO_ASYNC=1 go test -race -count=1 -timeout 240s ./... )
 
 test-throttle-gcp: build-gcp ## Run the opt-in throttle/quota injection live e2e gate (fault mode, storage-scoped)
 	@echo "Starting jaiscloud-gcp (ephemeral, throttle fault injection)..."
