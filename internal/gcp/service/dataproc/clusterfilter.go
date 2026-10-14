@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"jaiscloud/internal/gcp/aip160"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
 )
 
@@ -83,11 +84,11 @@ func compileClusterFilter(s string) (clusterFilter, error) {
 	if strings.TrimSpace(s) == "" {
 		return clusterFilter{}, nil
 	}
-	toks, err := tokenizeFilter(s)
+	toks, err := aip160.Tokenize(s)
 	if err != nil {
 		return clusterFilter{}, invalidArgument("dataproc ListClusters filter: " + err.Error())
 	}
-	preds, err := (&filterParser{toks: toks}).parseClauses(parseClusterClause)
+	preds, err := aip160.NewParser(toks).ParseClauses(parseClusterClause)
 	if err != nil {
 		return clusterFilter{}, invalidArgument("dataproc ListClusters filter: " + err.Error())
 	}
@@ -159,49 +160,49 @@ func (p clusterLabelEqualsPredicate) match(c dpstore.Cluster) bool {
 
 // parseClusterClause parses one clusters.list filter clause into the matching
 // clusterPredicate, returned as an `any` for the shared clause sequencer.
-func parseClusterClause(p *filterParser) (any, error) {
-	keyTok := p.next()
-	if keyTok.kind != filterIdent {
-		return nil, fmt.Errorf("expected field, got %s", filterTokenText(keyTok))
+func parseClusterClause(p *aip160.Parser) (any, error) {
+	keyTok := p.Next()
+	if keyTok.Kind != aip160.KindIdent {
+		return nil, fmt.Errorf("expected field, got %s", aip160.TokenText(keyTok))
 	}
-	key := keyTok.text
+	key := keyTok.Text
 
-	opTok := p.next()
-	if opTok.kind != filterOp {
-		return nil, fmt.Errorf("expected operator after %q, got %s", key, filterTokenText(opTok))
+	opTok := p.Next()
+	if opTok.Kind != aip160.KindOp {
+		return nil, fmt.Errorf("expected operator after %q, got %s", key, aip160.TokenText(opTok))
 	}
-	op := opTok.text
+	op := opTok.Text
 	if op != "=" {
 		return nil, fmt.Errorf("unsupported operator %q on %s (only \"=\" is supported)", op, key)
 	}
 
 	switch {
 	case key == "status.state":
-		valTok := p.next()
-		if valTok.kind != filterIdent {
-			return nil, fmt.Errorf("status.state value must be a state name, got %s", filterTokenText(valTok))
+		valTok := p.Next()
+		if valTok.Kind != aip160.KindIdent {
+			return nil, fmt.Errorf("status.state value must be a state name, got %s", aip160.TokenText(valTok))
 		}
-		switch valTok.text {
+		switch valTok.Text {
 		case "ACTIVE":
 			return clusterStatePredicate{state: "ACTIVE"}, nil
 		case "INACTIVE":
 			return clusterStatePredicate{state: "INACTIVE"}, nil
 		default:
-			if !clusterFilterStates[valTok.text] {
+			if !clusterFilterStates[valTok.Text] {
 				return nil, fmt.Errorf("unsupported status.state %q (want ACTIVE, INACTIVE or one of %s)",
-					valTok.text, clusterStateList())
+					valTok.Text, clusterStateList())
 			}
-			return clusterStatePredicate{state: valTok.text}, nil
+			return clusterStatePredicate{state: valTok.Text}, nil
 		}
 
 	case key == "clusterName":
-		valTok := p.next()
-		if valTok.kind == filterStar {
+		valTok := p.Next()
+		if valTok.Kind == aip160.KindStar {
 			return clusterNamePredicate{}, nil
 		}
-		val, ok := filterTokenValue(valTok)
+		val, ok := aip160.TokenValue(valTok)
 		if !ok || val == "" {
-			return nil, fmt.Errorf("clusterName value must be a name or \"*\", got %s", filterTokenText(valTok))
+			return nil, fmt.Errorf("clusterName value must be a name or \"*\", got %s", aip160.TokenText(valTok))
 		}
 		return clusterNamePredicate{name: val}, nil
 
@@ -210,13 +211,13 @@ func parseClusterClause(p *filterParser) (any, error) {
 		if lk == "" {
 			return nil, fmt.Errorf("empty label key in %q", key)
 		}
-		valTok := p.next()
-		if valTok.kind == filterStar {
+		valTok := p.Next()
+		if valTok.Kind == aip160.KindStar {
 			return clusterLabelExistsPredicate{key: lk}, nil
 		}
-		val, ok := filterTokenValue(valTok)
+		val, ok := aip160.TokenValue(valTok)
 		if !ok {
-			return nil, fmt.Errorf("label value must be a value or \"*\", got %s", filterTokenText(valTok))
+			return nil, fmt.Errorf("label value must be a value or \"*\", got %s", aip160.TokenText(valTok))
 		}
 		return clusterLabelEqualsPredicate{key: lk, value: val}, nil
 

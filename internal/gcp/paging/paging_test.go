@@ -51,6 +51,37 @@ func TestPageGeneric(t *testing.T) {
 	}
 }
 
+// TestPageOrderedPagination covers the order-aware variant: the caller owns the
+// ordering, the token is the caller's cursor value, and the position the token
+// denotes is honored even when the item it was minted from is gone.
+func TestPageOrderedPagination(t *testing.T) {
+	// Descending order, cursor is the bare key.
+	items := []string{"e", "d", "c", "b", "a"}
+	cursor := func(s string) string { return s }
+	after := func(s, tok string) bool { return s < tok }
+
+	page, next := PageOrdered(items, map[string]any{"pageSize": "2"}, cursor, after)
+	if len(page) != 2 || page[0] != "e" || page[1] != "d" || next == "" {
+		t.Fatalf("page 1 = %v, next=%q", page, next)
+	}
+	page, next = PageOrdered(items, map[string]any{"pageSize": "2", "pageToken": next}, cursor, after)
+	if len(page) != 2 || page[0] != "c" || page[1] != "b" || next == "" {
+		t.Fatalf("page 2 = %v, next=%q", page, next)
+	}
+	page, next = PageOrdered(items, map[string]any{"pageSize": "2", "pageToken": next}, cursor, after)
+	if len(page) != 1 || page[0] != "a" || next != "" {
+		t.Fatalf("page 3 = %v, next=%q", page, next)
+	}
+
+	// Resuming from a token whose origin item is absent still returns exactly
+	// the following items (no repeats, no skips).
+	cursorToken := encodeCursor("c")
+	page, _ = PageOrdered([]string{"e", "d", "b", "a"}, map[string]any{"pageSize": "2", "pageToken": cursorToken}, cursor, after)
+	if len(page) != 2 || page[0] != "b" || page[1] != "a" {
+		t.Fatalf("resume after a deleted origin = %v", page)
+	}
+}
+
 func TestPageSizeFallback(t *testing.T) {
 	if got := PageSize(map[string]any{"pageSize": "0"}); got != 1000 {
 		t.Errorf("expected default 1000 for non-positive size, got %d", got)

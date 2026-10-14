@@ -124,7 +124,9 @@ func (p *Provider) GetTrigger(ctx context.Context, nr *model.NormalizedRequest) 
 
 func (p *Provider) ListTriggers(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListTriggers(ctx, project, strParam(nr, "location"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	page, next, err := p.core.ListTriggers(ctx, project, strParam(nr, "location"),
+		strParam(nr, "filter"), strParam(nr, "orderBy"),
+		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

@@ -3,6 +3,7 @@ package eventarc
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -833,6 +834,105 @@ func TestPagination(t *testing.T) {
 	if len(cfirst.Data["channels"].([]any)) != 2 || cfirst.Data["nextPageToken"] == nil {
 		t.Fatalf("channel page 1 = %v", cfirst.Data)
 	}
+}
+
+// TestListTriggersFilterAndOrder verifies the documented triggers.list
+// `filter` and `orderBy` parameters reach the core rather than being dropped:
+// the old provider read neither, so a client that sorted or filtered silently
+// got the unfiltered, name-ascending list.
+func TestListTriggersFilterAndOrder(t *testing.T) {
+	ctx := context.Background()
+	p, _, workflows := newProvider()
+	createWorkflow(t, workflows, "us-central1", "w1")
+	wfName := "projects/proj/locations/us-central1/workflows/w1"
+
+	createWith := func(id string, body map[string]any) {
+		t.Helper()
+		if _, err := p.CreateTrigger(ctx, newNR(map[string]any{"location": "us-central1", "triggerId": id, "body": body})); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	createWith("t1", triggerBody(wfName))
+	createWith("t2", map[string]any{
+		"destination":  map[string]any{"cloudRun": map[string]any{"service": "svc", "region": "us-central1"}},
+		"eventFilters": []any{map[string]any{"attribute": "type", "value": "google.cloud.pubsub.topic.v1.messagePublished"}},
+		"labels":       map[string]any{"env": "prod"},
+	})
+	createWith("t3", triggerBody(wfName))
+
+	ids := func(params map[string]any) []string {
+		t.Helper()
+		params["location"] = "us-central1"
+		resp, err := p.ListTriggers(ctx, newNR(params))
+		if err != nil {
+			t.Fatalf("ListTriggers %v: %v", params, err)
+		}
+		triggers, _ := resp.Data["triggers"].([]any)
+		out := make([]string, 0, len(triggers))
+		for _, raw := range triggers {
+			m, _ := raw.(map[string]any)
+			name, _ := m["name"].(string)
+			out = append(out, name)
+		}
+		return out
+	}
+	wantNames := func(ids []string) []string {
+		out := make([]string, 0, len(ids))
+		for _, id := range ids {
+			out = append(out, "projects/proj/locations/us-central1/triggers/"+id)
+		}
+		return out
+	}
+
+	if got := ids(map[string]any{}); len(got) != 3 {
+		t.Fatalf("unfiltered list = %v", got)
+	}
+	if got, want := ids(map[string]any{"filter": "destination:workflow"}), wantNames([]string{"t1", "t3"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("filter=destination:workflow = %v, want %v", got, want)
+	}
+	if got, want := ids(map[string]any{"filter": "destination:cloudRun"}), wantNames([]string{"t2"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("filter=destination:cloudRun = %v, want %v", got, want)
+	}
+	if got, want := ids(map[string]any{"filter": "labels.env=prod"}), wantNames([]string{"t2"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("filter=labels.env=prod = %v, want %v", got, want)
+	}
+	if got, want := ids(map[string]any{"orderBy": "name desc"}), wantNames([]string{"t3", "t2", "t1"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("orderBy=name desc = %v, want %v", got, want)
+	}
+	// The filter and the order compose with each other and with the page cursor.
+	page1, err := p.ListTriggers(ctx, newNR(map[string]any{
+		"location": "us-central1", "filter": "destination:workflow", "orderBy": "name desc", "pageSize": "1",
+	}))
+	if err != nil {
+		t.Fatalf("filtered page 1: %v", err)
+	}
+	triggers1, _ := page1.Data["triggers"].([]any)
+	token, _ := page1.Data["nextPageToken"].(string)
+	if len(triggers1) != 1 || token == "" {
+		t.Fatalf("filtered page 1 = %v, token=%q", page1.Data, token)
+	}
+	page2, err := p.ListTriggers(ctx, newNR(map[string]any{
+		"location": "us-central1", "filter": "destination:workflow", "orderBy": "name desc", "pageSize": "1", "pageToken": token,
+	}))
+	if err != nil {
+		t.Fatalf("filtered page 2: %v", err)
+	}
+	triggers2, _ := page2.Data["triggers"].([]any)
+	if len(triggers2) != 1 || page2.Data["nextPageToken"] != nil {
+		t.Fatalf("filtered page 2 = %v", page2.Data)
+	}
+	first, _ := triggers1[0].(map[string]any)
+	second, _ := triggers2[0].(map[string]any)
+	if first["name"] != wantNames([]string{"t3"})[0] || second["name"] != wantNames([]string{"t1"})[0] {
+		t.Fatalf("paged order = %v then %v", first["name"], second["name"])
+	}
+
+	// An unsupported filter/orderBy is InvalidArgument, never a silently
+	// ignored parameter.
+	_, err = p.ListTriggers(ctx, newNR(map[string]any{"location": "us-central1", "filter": "bogus=1"}))
+	expectProviderError(t, err, "InvalidArgument", 400)
+	_, err = p.ListTriggers(ctx, newNR(map[string]any{"location": "us-central1", "orderBy": "bogus"}))
+	expectProviderError(t, err, "InvalidArgument", 400)
 }
 
 func TestUidIsUUID4(t *testing.T) {
