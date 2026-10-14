@@ -19,9 +19,11 @@ package sdk_compute_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -310,4 +312,410 @@ func TestSDKCompute(t *testing.T) {
 	require.Error(t, err, "a deleted instance must not be readable")
 	require.ErrorAs(t, err, &apiErr)
 	require.Equal(t, 404, apiErr.Code)
+}
+
+// requireAPICode asserts err is a googleapi.Error with the given HTTP status.
+func requireAPICode(t *testing.T, err error, code int) {
+	t.Helper()
+	require.Error(t, err)
+	var apiErr *googleapi.Error
+	require.ErrorAs(t, err, &apiErr)
+	require.Equal(t, code, apiErr.Code, "unexpected API error: %v", err)
+}
+
+// requireErrorEnvelope also asserts the GCP error envelope body carries the
+// matching google.rpc status name (e.g. INVALID_ARGUMENT, NOT_FOUND).
+func requireErrorEnvelope(t *testing.T, err error, status string, code int) {
+	t.Helper()
+	requireAPICode(t, err, code)
+	var apiErr *googleapi.Error
+	require.ErrorAs(t, err, &apiErr)
+	require.NotEmpty(t, apiErr.Body, "error body must carry the GCP envelope")
+	var env struct {
+		Error struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+			Status  string `json:"status"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(apiErr.Body), &env))
+	require.Equal(t, code, env.Error.Code)
+	require.Equal(t, status, env.Error.Status)
+	require.NotEmpty(t, env.Error.Message)
+}
+
+func instanceTemplate(name string) *compute.Instance {
+	return &compute.Instance{Name: name, MachineType: "e2-micro"}
+}
+
+// TestSDKComputeConcurrency is the p2 class: concurrent writers. The test client
+// runs under -race; the emulator is a separate process, so the assertions here
+// are the conflict semantics, not server-side race detection. A same-name insert
+// race must produce exactly one success and N-1 conflicts, and the same is true
+// of a delete race; distinct-name churn must lose no writer.
+func TestSDKComputeConcurrency(t *testing.T) {
+	ctx := context.Background()
+	svc, err := compute.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	project, zone := projectID(), "us-east1-c"
+
+	const racers = 8
+
+	// Same-name concurrent insert -> exactly one winner, the rest 409.
+	name := unique("race-vm")
+	var wg sync.WaitGroup
+	errs := make([]error, racers)
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = svc.Instances.Insert(project, zone, instanceTemplate(name)).Do()
+		}(i)
+	}
+	wg.Wait()
+	_, conflicts := tallyResults(t, errs, 409)
+	require.Equal(t, racers-1, conflicts, "a same-name insert race must conflict the losers")
+
+	// Exactly one instance was created.
+	after, err := svc.Instances.List(project, zone).Filter("name = " + name).Do()
+	require.NoError(t, err)
+	require.Len(t, after.Items, 1)
+
+	// Same-name concurrent delete -> exactly one winner, the rest 404.
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = svc.Instances.Delete(project, zone, name).Do()
+		}(i)
+	}
+	wg.Wait()
+	_, notFound := tallyResults(t, errs, 404)
+	require.Equal(t, racers-1, notFound, "a same-name delete race must 404 the losers")
+
+	// Same-name concurrent disk and firewall inserts conflict the same way.
+	disk := unique("race-disk")
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = svc.Disks.Insert(project, zone, &compute.Disk{Name: disk, SizeGb: 10}).Do()
+		}(i)
+	}
+	wg.Wait()
+	successes, conflicts := tallyResults(t, errs, 409)
+	require.Equal(t, 1, successes, "exactly one disk insert must win")
+	require.Equal(t, racers-1, conflicts)
+
+	fw := unique("race-fw")
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = svc.Firewalls.Insert(project, &compute.Firewall{
+				Name: fw, Network: "default", SourceRanges: []string{"0.0.0.0/0"},
+				Allowed: []*compute.FirewallAllowed{{IPProtocol: "tcp", Ports: []string{"22"}}},
+			}).Do()
+		}(i)
+	}
+	wg.Wait()
+	successes, conflicts = tallyResults(t, errs, 409)
+	require.Equal(t, 1, successes, "exactly one firewall insert must win")
+	require.Equal(t, racers-1, conflicts)
+
+	// Distinct-name churn: every writer must win, with no data race.
+	distinct := make([]string, racers)
+	for i := 0; i < racers; i++ {
+		distinct[i] = fmt.Sprintf("%s-%d", unique("churn"), i)
+	}
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = svc.Instances.Insert(project, zone, instanceTemplate(distinct[i])).Do()
+		}(i)
+	}
+	wg.Wait()
+	successes, _ = tallyResults(t, errs, 0)
+	require.Equal(t, racers, successes, "distinct-name inserts must all succeed")
+
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = svc.Instances.Delete(project, zone, distinct[i]).Do()
+		}(i)
+	}
+	wg.Wait()
+	successes, _ = tallyResults(t, errs, 0)
+	require.Equal(t, racers, successes, "distinct-name deletes must all succeed")
+}
+
+// tallyResults counts successes (err == nil) and errors carrying wantCode.
+func tallyResults(t *testing.T, errs []error, wantCode int) (successes, coded int) {
+	t.Helper()
+	for _, e := range errs {
+		if e == nil {
+			successes++
+			continue
+		}
+		requireAPICode(t, e, wantCode)
+		coded++
+	}
+	return successes, coded
+}
+
+// TestSDKComputeErrorSemantics is the p3 class: real error envelopes, 400/404/409.
+func TestSDKComputeErrorSemantics(t *testing.T) {
+	ctx := context.Background()
+	svc, err := compute.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	project, zone := projectID(), "us-east4-a"
+
+	// An unknown machine type is rejected with 400 (not silently accepted).
+	_, err = svc.Instances.Insert(project, zone, &compute.Instance{
+		Name: unique("vm"), MachineType: "bogus-type",
+	}).Do()
+	requireErrorEnvelope(t, err, "INVALID_ARGUMENT", 400)
+
+	// A malformed resource name is rejected with 400.
+	_, err = svc.Instances.Insert(project, zone, &compute.Instance{
+		Name: "Bad_Name", MachineType: "e2-micro",
+	}).Do()
+	requireErrorEnvelope(t, err, "INVALID_ARGUMENT", 400)
+
+	// A machine type outside the advertised catalog but real (family/size or
+	// custom) is accepted.
+	_, err = svc.Instances.Insert(project, zone, &compute.Instance{
+		Name: unique("vm"), MachineType: "e2-standard-4",
+	}).Do()
+	require.NoError(t, err)
+
+	// Duplicate insert -> 409.
+	dup := unique("vm")
+	_, err = svc.Instances.Insert(project, zone, instanceTemplate(dup)).Do()
+	require.NoError(t, err)
+	_, err = svc.Instances.Insert(project, zone, instanceTemplate(dup)).Do()
+	requireErrorEnvelope(t, err, "ALREADY_EXISTS", 409)
+
+	// start/stop on a missing instance -> 404.
+	_, err = svc.Instances.Start(project, zone, unique("absent")).Do()
+	requireErrorEnvelope(t, err, "NOT_FOUND", 404)
+	_, err = svc.Instances.Stop(project, zone, unique("absent")).Do()
+	requireAPICode(t, err, 404)
+
+	// get-after-delete -> 404 for every resource kind.
+	for _, tc := range []struct {
+		label string
+		do    func(name string) error
+	}{
+		{"instance", func(n string) error {
+			if _, err := svc.Instances.Insert(project, zone, instanceTemplate(n)).Do(); err != nil {
+				return err
+			}
+			if _, err := svc.Instances.Delete(project, zone, n).Do(); err != nil {
+				return err
+			}
+			_, err := svc.Instances.Get(project, zone, n).Do()
+			return err
+		}},
+		{"disk", func(n string) error {
+			if _, err := svc.Disks.Insert(project, zone, &compute.Disk{Name: n, SizeGb: 10}).Do(); err != nil {
+				return err
+			}
+			if _, err := svc.Disks.Delete(project, zone, n).Do(); err != nil {
+				return err
+			}
+			_, err := svc.Disks.Get(project, zone, n).Do()
+			return err
+		}},
+		{"network", func(n string) error {
+			if _, err := svc.Networks.Insert(project, &compute.Network{Name: n, AutoCreateSubnetworks: false}).Do(); err != nil {
+				return err
+			}
+			if _, err := svc.Networks.Delete(project, n).Do(); err != nil {
+				return err
+			}
+			_, err := svc.Networks.Get(project, n).Do()
+			return err
+		}},
+		{"firewall", func(n string) error {
+			if _, err := svc.Firewalls.Insert(project, &compute.Firewall{Name: n, Network: "default"}).Do(); err != nil {
+				return err
+			}
+			if _, err := svc.Firewalls.Delete(project, n).Do(); err != nil {
+				return err
+			}
+			_, err := svc.Firewalls.Get(project, n).Do()
+			return err
+		}},
+		{"subnetwork", func(n string) error {
+			if _, err := svc.Subnetworks.Insert(project, "us-east4", &compute.Subnetwork{Name: n, Network: "default", IpCidrRange: "10.4.0.0/20"}).Do(); err != nil {
+				return err
+			}
+			if _, err := svc.Subnetworks.Delete(project, "us-east4", n).Do(); err != nil {
+				return err
+			}
+			_, err := svc.Subnetworks.Get(project, "us-east4", n).Do()
+			return err
+		}},
+	} {
+		requireAPICode(t, tc.do(unique("e-"+tc.label)), 404)
+	}
+}
+
+// TestSDKComputePagingAndFilter is the p4 class: maxResults/pageToken walks
+// composed with the documented filter subset.
+func TestSDKComputePagingAndFilter(t *testing.T) {
+	ctx := context.Background()
+	svc, err := compute.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	project, zone := projectID(), "us-west1-b"
+
+	prefix := unique("page-vm")
+	want := map[string]bool{}
+	for i := 0; i < 5; i++ {
+		n := fmt.Sprintf("%s-%d", prefix, i)
+		_, err := svc.Instances.Insert(project, zone, instanceTemplate(n)).Do()
+		require.NoError(t, err)
+		want[n] = true
+	}
+
+	// Walk the zone listing two at a time; no duplicates, every instance seen,
+	// pages continue until the token is empty.
+	seen := map[string]bool{}
+	token, pages := "", 0
+	for {
+		call := svc.Instances.List(project, zone).MaxResults(2)
+		if token != "" {
+			call = call.PageToken(token)
+		}
+		page, err := call.Do()
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(page.Items), 2)
+		for _, it := range page.Items {
+			require.False(t, seen[it.Name], "instance %q returned twice", it.Name)
+			seen[it.Name] = true
+		}
+		pages++
+		token = page.NextPageToken
+		if token == "" {
+			break
+		}
+		require.Less(t, pages, 100, "paging did not terminate")
+	}
+	for n := range want {
+		require.True(t, seen[n], "instance %q missing from the paged listing", n)
+	}
+	require.Greater(t, pages, 1, "5 instances at maxResults=2 must span more than one page")
+
+	// Filter equality is composed with paging.
+	first := fmt.Sprintf("%s-0", prefix)
+	list, err := svc.Instances.List(project, zone).Filter("name = " + first).Do()
+	require.NoError(t, err)
+	require.Len(t, list.Items, 1)
+	require.Equal(t, first, list.Items[0].Name)
+
+	// Filter negates too: none of the returned items is the excluded one.
+	list, err = svc.Instances.List(project, zone).Filter("name != " + first).Do()
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(list.Items), 4)
+	for _, it := range list.Items {
+		require.NotEqual(t, first, it.Name)
+	}
+
+	// A filter outside the documented subset fails loud.
+	_, err = svc.Instances.List(project, zone).Filter("name > x").Do()
+	requireAPICode(t, err, 400)
+
+	// The aggregated listing pages the flattened set and re-groups by zone.
+	aggSeen := map[string]bool{}
+	token = ""
+	for {
+		call := svc.Instances.AggregatedList(project).MaxResults(3)
+		if token != "" {
+			call = call.PageToken(token)
+		}
+		page, err := call.Do()
+		require.NoError(t, err)
+		count := 0
+		for _, group := range page.Items {
+			for _, it := range group.Instances {
+				count++
+				require.False(t, aggSeen[it.Name], "instance %q returned twice across pages", it.Name)
+				aggSeen[it.Name] = true
+			}
+		}
+		require.LessOrEqual(t, count, 3)
+		pages++
+		token = page.NextPageToken
+		if token == "" {
+			break
+		}
+		require.Less(t, pages, 200, "aggregated paging did not terminate")
+	}
+	for n := range want {
+		require.True(t, aggSeen[n], "instance %q missing from the aggregated listing", n)
+	}
+}
+
+// TestSDKComputeOperationsLifecycle is the p5 class: the operation-polling
+// surface (zonal + global) and a many-resource listing.
+func TestSDKComputeOperationsLifecycle(t *testing.T) {
+	ctx := context.Background()
+	svc, err := compute.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	project := projectID()
+
+	// A zonal mutation's operation is retrievable by name and listed at scope.
+	zone := "us-west1-a"
+	insOp, err := svc.Instances.Insert(project, zone, instanceTemplate(unique("op-vm"))).Do()
+	require.NoError(t, err)
+	require.Equal(t, "compute#operation", insOp.Kind)
+	require.Equal(t, "DONE", insOp.Status)
+	require.Equal(t, int64(100), insOp.Progress)
+	require.NotEmpty(t, insOp.InsertTime)
+	require.NotEmpty(t, insOp.EndTime)
+
+	got, err := svc.ZoneOperations.Get(project, zone, insOp.Name).Do()
+	require.NoError(t, err)
+	require.Equal(t, insOp.Name, got.Name)
+	require.Equal(t, "DONE", got.Status)
+	require.Contains(t, got.SelfLink, "zones/"+zone+"/operations/")
+
+	listed, err := svc.ZoneOperations.List(project, zone).Filter("name = " + insOp.Name).Do()
+	require.NoError(t, err)
+	require.Len(t, listed.Items, 1)
+
+	// A global mutation's operation lives at global scope.
+	netOp, err := svc.Networks.Insert(project, &compute.Network{
+		Name: unique("op-net"), AutoCreateSubnetworks: false, ForceSendFields: []string{"AutoCreateSubnetworks"},
+	}).Do()
+	require.NoError(t, err)
+	globalGot, err := svc.GlobalOperations.Get(project, netOp.Name).Do()
+	require.NoError(t, err)
+	require.Equal(t, "DONE", globalGot.Status)
+	require.Contains(t, globalGot.SelfLink, "global/operations/")
+
+	globalList, err := svc.GlobalOperations.List(project).Filter("name = " + netOp.Name).Do()
+	require.NoError(t, err)
+	require.Len(t, globalList.Items, 1)
+
+	// Many-resource listing: several instances across two zones all show up in
+	// the aggregated listing, grouped by zone.
+	zoneB := "europe-west1-b"
+	names := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		n := fmt.Sprintf("%s-%d", unique("many"), i)
+		_, err := svc.Instances.Insert(project, zoneB, instanceTemplate(n)).Do()
+		require.NoError(t, err)
+		names[n] = true
+	}
+	agg, err := svc.Instances.AggregatedList(project).MaxResults(500).Do()
+	require.NoError(t, err)
+	require.Contains(t, agg.Items, "zones/"+zoneB)
+	for _, it := range agg.Items["zones/"+zoneB].Instances {
+		delete(names, it.Name)
+	}
+	require.Empty(t, names, "every created instance must appear in the aggregated listing")
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -568,6 +569,219 @@ func TestSynthesizedDiscovery(t *testing.T) {
 func TestUnimplemented(t *testing.T) {
 	if _, err := newProvider().Unimplemented(context.Background(), newNR(nil)); !isCode(err, "Unimplemented") {
 		t.Fatalf("expected Unimplemented, got %v", err)
+	}
+}
+
+// TestResourceNameValidation pins Compute Engine's documented name grammar
+// (Discovery, Instance.name): 1-63 chars matching [a-z]([-a-z0-9]*[a-z0-9])?.
+func TestResourceNameValidation(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	bad := []string{"Upper", "under_score", "-leading", "trailing-", "with space", strings.Repeat("a", 64)}
+
+	for _, name := range bad {
+		if _, err := p.InstancesInsert(ctx, newNR(zonal("us-central1-a", map[string]any{"body": instanceBody(name)}))); !isCode(err, "InvalidArgument") {
+			t.Errorf("instance name %q: expected InvalidArgument, got %v", name, err)
+		}
+		if _, err := p.DisksInsert(ctx, newNR(zonal("us-central1-a", map[string]any{"body": map[string]any{"name": name}}))); !isCode(err, "InvalidArgument") {
+			t.Errorf("disk name %q: expected InvalidArgument, got %v", name, err)
+		}
+		if _, err := p.NetworksInsert(ctx, newNR(map[string]any{"body": map[string]any{"name": name}})); !isCode(err, "InvalidArgument") {
+			t.Errorf("network name %q: expected InvalidArgument, got %v", name, err)
+		}
+		if _, err := p.FirewallsInsert(ctx, newNR(map[string]any{"body": map[string]any{"name": name}})); !isCode(err, "InvalidArgument") {
+			t.Errorf("firewall name %q: expected InvalidArgument, got %v", name, err)
+		}
+		if _, err := p.SubnetworksInsert(ctx, newNR(regional("us-central1", map[string]any{"body": map[string]any{"name": name}}))); !isCode(err, "InvalidArgument") {
+			t.Errorf("subnetwork name %q: expected InvalidArgument, got %v", name, err)
+		}
+	}
+
+	// A single-character name and an all-digit tail are valid.
+	for _, name := range []string{"a", "vm-1", "web-01"} {
+		if _, err := p.InstancesInsert(ctx, newNR(zonal("us-central1-a", map[string]any{"body": instanceBody(name)}))); err != nil {
+			t.Errorf("instance name %q: expected success, got %v", name, err)
+		}
+	}
+}
+
+// TestMachineTypeValidationOnInsert pins that an unknown machine type is
+// rejected with 400 (real GCP) instead of silently accepted.
+func TestMachineTypeValidationOnInsert(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+
+	// Unknown machine type.
+	if _, err := p.InstancesInsert(ctx, newNR(zonal("us-central1-a", map[string]any{"body": map[string]any{
+		"name": "vm-bogus", "machineType": "bogus-type",
+	}}))); !isCode(err, "InvalidArgument") {
+		t.Fatalf("expected InvalidArgument for unknown machine type, got %v", err)
+	}
+
+	// A full/partial machine-type URL resolves to its last segment.
+	if _, err := p.InstancesInsert(ctx, newNR(zonal("us-central1-a", map[string]any{"body": map[string]any{
+		"name": "vm-url", "machineType": "projects/proj/zones/us-central1-a/machineTypes/e2-micro",
+	}}))); err != nil {
+		t.Fatalf("full machine-type URL must be accepted, got %v", err)
+	}
+
+	// Real machine types missing from the advertised catalog must still be
+	// accepted (the catalog is a subset, not the universe).
+	for i, mt := range []string{"e2-standard-4", "n2-highmem-8", "c3-highcpu-4", "custom-2-4096", "n2-custom-2-4096", "n2-custom-2-4096-ext"} {
+		if _, err := p.InstancesInsert(ctx, newNR(zonal("us-central1-a", map[string]any{"body": map[string]any{
+			"name": fmt.Sprintf("vm-real-%d", i), "machineType": mt,
+		}}))); err != nil {
+			t.Errorf("real machine type %q must be accepted, got %v", mt, err)
+		}
+	}
+
+	// An absent machine type defaults to e2-micro.
+	if _, err := p.InstancesInsert(ctx, newNR(zonal("us-central1-a", map[string]any{"body": map[string]any{
+		"name": "vm-default",
+	}}))); err != nil {
+		t.Fatalf("insert without machineType: %v", err)
+	}
+	inst, err := p.InstancesGet(ctx, newNR(zonal("us-central1-a", map[string]any{"instance": "vm-default"})))
+	if err != nil {
+		t.Fatalf("get default instance: %v", err)
+	}
+	if !strings.Contains(str(inst.Data["machineType"]), "machineTypes/"+defaultMachineType) {
+		t.Errorf("default machineType = %v, want %s", inst.Data["machineType"], defaultMachineType)
+	}
+}
+
+// TestListFilterThroughHandlers exercises the documented filter subset through
+// the provider handlers (not just the parser).
+func TestListFilterThroughHandlers(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	for _, n := range []string{"web-a", "web-b", "db-a"} {
+		mustCreateInstance(t, p, "us-central1-a", n)
+	}
+
+	// Filter by name equality.
+	resp, err := p.InstancesList(ctx, newNR(zonal("us-central1-a", map[string]any{"filter": "name = web-a"})))
+	if err != nil {
+		t.Fatalf("filtered list: %v", err)
+	}
+	items, _ := resp.Data["items"].([]any)
+	if len(items) != 1 || stringField(items[0].(map[string]any), "name") != "web-a" {
+		t.Fatalf("name filter = %v", items)
+	}
+
+	// Filter by status and by labels (instances are RUNNING with env=test).
+	for _, expr := range []string{"status = RUNNING", "labels.env = test"} {
+		resp, err := p.InstancesList(ctx, newNR(zonal("us-central1-a", map[string]any{"filter": expr})))
+		if err != nil {
+			t.Fatalf("filter %q: %v", expr, err)
+		}
+		if items, _ := resp.Data["items"].([]any); len(items) != 3 {
+			t.Errorf("filter %q = %d items, want 3", expr, len(items))
+		}
+	}
+
+	// Negation.
+	resp, err = p.InstancesList(ctx, newNR(zonal("us-central1-a", map[string]any{"filter": "name != web-a"})))
+	if err != nil {
+		t.Fatalf("negated filter: %v", err)
+	}
+	if items, _ := resp.Data["items"].([]any); len(items) != 2 {
+		t.Errorf("name != web-a = %d items, want 2", len(items))
+	}
+
+	// A filter outside the subset fails loud rather than returning everything.
+	if _, err := p.InstancesList(ctx, newNR(zonal("us-central1-a", map[string]any{"filter": "cpuPlatform eq .*"}))); !isCode(err, "InvalidArgument") {
+		t.Fatalf("unsupported filter must be InvalidArgument, got %v", err)
+	}
+}
+
+// TestAggregatedListPaging covers the documented maxResults/pageToken cursor
+// over the flattened instance set, re-grouped by zone.
+func TestAggregatedListPaging(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	mustCreateInstance(t, p, "us-central1-a", "vm-1")
+	mustCreateInstance(t, p, "us-central1-a", "vm-2")
+	mustCreateInstance(t, p, "us-east1-b", "vm-3")
+
+	seen := map[string]bool{}
+	token := ""
+	pages := 0
+	for {
+		params := map[string]any{"maxResults": 1}
+		if token != "" {
+			params["pageToken"] = token
+		}
+		resp, err := p.InstancesAggregatedList(ctx, newNR(params))
+		if err != nil {
+			t.Fatalf("aggregated page: %v", err)
+		}
+		if resp.Data["kind"] != kindInstanceAggregatedList {
+			t.Errorf("kind = %v", resp.Data["kind"])
+		}
+		items, _ := resp.Data["items"].(map[string]any)
+		for _, g := range items {
+			group, _ := g.(map[string]any)
+			insts, _ := group["instances"].([]any)
+			for _, i := range insts {
+				name := stringField(i.(map[string]any), "name")
+				if seen[name] {
+					t.Errorf("instance %q returned on more than one page", name)
+				}
+				seen[name] = true
+			}
+		}
+		token, _ = resp.Data["nextPageToken"].(string)
+		pages++
+		if token == "" {
+			break
+		}
+		if pages > 10 {
+			t.Fatal("paging did not terminate")
+		}
+	}
+	if len(seen) != 3 {
+		t.Fatalf("paged aggregated list returned %d instances, want 3: %v", len(seen), seen)
+	}
+	if pages != 3 {
+		t.Errorf("pages = %d, want 3", pages)
+	}
+
+	// The aggregated list also honours the filter.
+	resp, err := p.InstancesAggregatedList(ctx, newNR(map[string]any{"filter": "name = vm-3"}))
+	if err != nil {
+		t.Fatalf("filtered aggregated list: %v", err)
+	}
+	items, _ := resp.Data["items"].(map[string]any)
+	if _, ok := items["zones/us-east1-b"]; !ok {
+		t.Errorf("filtered aggregated list = %v", items)
+	}
+	if _, ok := items["zones/us-central1-a"]; ok {
+		t.Errorf("zone a must be filtered out: %v", items)
+	}
+}
+
+// TestListParamsPageSizeDefaults pins Compute Engine's documented 500-result
+// default and 0-500 range (the shared paging helper defaults to 1000).
+func TestListParamsPageSizeDefaults(t *testing.T) {
+	cases := []struct {
+		label  string
+		params map[string]any
+		want   int
+	}{
+		{"absent", nil, defaultComputePageSize},
+		{"maxResults int", map[string]any{"maxResults": 2}, 2},
+		{"maxResults string", map[string]any{"maxResults": "3"}, 3},
+		{"zero means default", map[string]any{"maxResults": 0}, defaultComputePageSize},
+		{"clamped to max", map[string]any{"maxResults": 501}, maxComputePageSize},
+		{"at max", map[string]any{"maxResults": 500}, 500},
+		// Compute Engine has no pageSize parameter; it must not override maxResults.
+		{"pageSize ignored", map[string]any{"pageSize": 7}, defaultComputePageSize},
+	}
+	for _, tc := range cases {
+		if got := listParams(newNR(tc.params))["pageSize"]; got != tc.want {
+			t.Errorf("%s: pageSize = %v, want %d", tc.label, got, tc.want)
+		}
 	}
 }
 
