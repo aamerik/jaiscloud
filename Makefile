@@ -141,7 +141,7 @@ IMAGE             := jaiscloud-aws
 # (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
 JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
 
-.PHONY: lint lint-gcp lint-pagination help build build-all build-ui build-ui-gcp docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools clean \
+.PHONY: lint lint-gcp lint-pagination help build build-all build-ui build-ui-gcp docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools test-gcp-coverage test-gcp-coverage-update clean \
         server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         server-ui server-ui-gcp stop-server up-docker down-docker up-k8s down-k8s \
@@ -303,6 +303,18 @@ test-dataproc-streaming: ## Dataproc streaming/restart contract tests (schedulin
 
 test-gcp-tools: ## Unit tests for the GCP dev tools (gcpstatus, paginationcheck)
 	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/...
+
+test-gcp-coverage: ## GCP statement-coverage measurement + per-package ratchet (internal/gcp/...)
+	@mkdir -p bin
+	go test -count=1 -covermode=set -coverprofile=bin/gcp-coverage.out ./internal/gcp/...
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -coverage-ratchet -coverage-profile bin/gcp-coverage.out -coverage-floor docs/gcp-coverage-floor.yaml
+
+test-gcp-coverage-update: ## Rewrite docs/gcp-coverage-floor.yaml from a fresh profile (ratchet up; ALLOW_LOWER=1 to drop)
+	@mkdir -p bin
+	go test -count=1 -covermode=set -coverprofile=bin/gcp-coverage.out ./internal/gcp/...
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -coverage-floor-update -coverage-profile bin/gcp-coverage.out -coverage-floor docs/gcp-coverage-floor.yaml $(if $(ALLOW_LOWER),-allow-lower,)
 
 ##@ Server — foreground (Ctrl-C to stop)
 
@@ -1440,7 +1452,7 @@ test-e2e: test-e2e-docker-all test-e2e-k8s-all test-e2e-persistence test-e2e-ice
 
 test-all: test test-integration test-e2e ## Unit tests + integration tests + all e2e suites
 
-test-all-gcp: ga-check test-gcp test-integration-gcp test-e2e-gcp-persistence gcp-status-behavioral-gate gcp-status-depth-gate ## GCP aggregate: unit + integration + conformance (ga-check) + persistence + behavioral-coverage + depth gates
+test-all-gcp: ga-check test-gcp test-integration-gcp test-e2e-gcp-persistence gcp-status-behavioral-gate gcp-status-depth-gate test-gcp-coverage ## GCP aggregate: unit + integration + conformance (ga-check) + persistence + behavioral-coverage + depth + coverage-ratchet gates
 
 # ─── Internal helpers (not shown in help) ────────────────────────────────────
 

@@ -157,7 +157,7 @@ The real jobs in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) and w
 
 | job | what it proves |
 | --- | --- |
-| `test-gcp-unit` | race-tested unit tests for `internal/gcp/...` plus the shared Spark/K8s/platform/executor packages, the `tools/gcpstatus` dev-tool tests, and the **behavioural-coverage gate** (`make gcp-status-behavioral-gate` — every `ga` service has an official-client suite or a reasoned exemption) (no services required) |
+| `test-gcp-unit` | race-tested unit tests for `internal/gcp/...` plus the shared Spark/K8s/platform/executor packages, the `tools/gcpstatus` dev-tool tests, the **behavioural-coverage gate** (`make gcp-status-behavioral-gate` — every `ga` service has an official-client suite or a reasoned exemption), the **behavioural-depth gate** (`make gcp-status-depth-gate` — every `ga` service records each of `p2`–`p5` as present or dated-exempt), and the **statement-coverage ratchet** (`make test-gcp-coverage` — no `internal/gcp` package drops below its committed per-package floor) (no services required) |
 | `test-gcp-integration` | builds and boots the binary (REST `:8080`, gRPC `:8081`), then runs the raw-HTTP integration suite and **18** official-SDK test modules |
 | `test-gcp-conformance` | records a fresh wire transcript, validates every response (and the error envelope) against the Discovery schemas — failing on any high-severity divergence — runs the gRPC message-level suite, the REST↔gRPC cross-transport parity suite, and the gcloud CLI suite, and fails if the fidelity matrix is stale |
 | `test-gcp-persistence` | with a Postgres service container, runs the `gcp_persistence` suite proving state survives process restarts |
@@ -171,6 +171,9 @@ fidelity matrix + `tests/integration/gcp` tree and fails if any `ga` service has
 official-client suite and no reasoned exemption (`docs/gcpstatus-coverage-exemptions.yaml`).
 The committed per-service map lives in
 [`docs/GCP-TESTABILITY.md` §9](GCP-TESTABILITY.md#9-behavioural-suite-contract--the-ga-definition-of-done-gated).
+`test-gcp-unit` also runs the `p2`–`p5` depth gate (§10) and the statement-coverage ratchet
+(§11): `make test-gcp-coverage` profiles `internal/gcp/...` and fails if a measured package
+drops below its committed floor in `docs/gcp-coverage-floor.yaml`.
 `make test-all-gcp` aggregates it with unit + integration + conformance (`ga-check`) + persistence.
 
 ---
