@@ -146,7 +146,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         server-ui server-ui-gcp stop-server up-docker down-docker up-k8s down-k8s \
         postgres-up postgres-reset postgres-down \
-        test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp test-gcp-load \
+        test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp test-gcp-load test-gcp-mutation \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
         test-e2e-lambda-docker test-e2e-lambda-k8s \
@@ -809,6 +809,50 @@ test-gcp-load: build-gcp ## GCP load/concurrency gate: hot paths at -c 100 (no 5
 	    grep -n -A25 "WARNING: DATA RACE" "$(LOAD_LOG)"; \
 	    exit 1; \
 	  fi
+
+# ─── GCP mutation testing (assertion strength; local, no CI gate) ────────────
+# go-mutesting (the avito-tech fork of zimmski/go-mutesting) rewrites one target
+# file at a time IN PLACE, runs the target package's own tests against the
+# mutant, and restores the file. It must therefore not run while PKG is being
+# edited: the target refuses to start when PKG has uncommitted tracked changes
+# (override with MUTATION_FORCE=1). The built-in exec keeps the pre-mutation
+# file as "<file>.tmp" while the mutant is in place, so on error or SIGINT/SIGTERM
+# the target restores every leftover "*.tmp" (never `git checkout`, which would
+# discard a developer's own edits) before exiting. report.json is written to the
+# CWD and moved to bin/ on success. Pinned for a reproducible invocation.
+#
+# Local only: a full package run is minutes, not a PR-CI budget — TD13 (the
+# test-depth wave) is a measurement/ratchet seed, not a gate.
+GOMUTESTING_VERSION ?= v0.0.0-20261002081621-9ce5f731e321
+MUTESTING_BIN       ?= $(CURDIR)/bin/go-mutesting
+MUTESTING_STAMP     ?= $(CURDIR)/bin/.go-mutesting-$(GOMUTESTING_VERSION)
+PKG                 ?= ./internal/gcp/service/datastore
+MUTATION_EXTRA      ?=
+MUTATION_TIMEOUT    ?= 60
+MUTATION_FORCE      ?=
+
+$(MUTESTING_STAMP):
+	@mkdir -p bin
+	@echo "Installing go-mutesting@$(GOMUTESTING_VERSION) into bin/ ..."
+	@GOBIN=$(CURDIR)/bin go install github.com/avito-tech/go-mutesting/cmd/go-mutesting@$(GOMUTESTING_VERSION)
+	@touch $@
+
+test-gcp-mutation: $(MUTESTING_STAMP) ## GCP mutation-testing spike: score one package's assertion strength (PKG=…; local, not PR CI)
+	@test -n "$(PKG)" || { echo "PKG must name a package or file (e.g. PKG=./internal/gcp/service/datastore)"; exit 2; }
+	@if [ -z "$(MUTATION_FORCE)" ] && [ -n "$$(git status --porcelain -- $(PKG) | grep -v '^??')" ]; then \
+	  echo "refusing: uncommitted tracked changes under $(PKG) — go-mutesting rewrites files in place."; \
+	  echo "commit or stash them first, or pass MUTATION_FORCE=1 to override."; exit 1; \
+	fi
+	@rm -f report.json
+	@rc=0; \
+	restore() { for f in $$(find $(PKG) -name '*.tmp' 2>/dev/null); do echo ">> restoring $$f"; mv -f "$$f" "$${f%.tmp}"; done; }; \
+	trap 'echo "interrupted; restoring in-place edits"; restore; exit 130' INT TERM; \
+	$(MUTESTING_BIN) --exec-timeout=$(MUTATION_TIMEOUT) $(MUTATION_EXTRA) $(PKG) || rc=$$?; \
+	restore; \
+	if [ $$rc -ne 0 ]; then echo "go-mutesting exited $$rc (no report written)"; exit $$rc; fi
+	@mkdir -p bin
+	@mv -f report.json bin/gcp-mutation-report.json
+	@echo "Mutation report: bin/gcp-mutation-report.json"
 
 test-gcp-wire-conformance: ## Offline GCP wire-conformance harness (Discovery snapshots + recorder; tag: gcp_conformance)
 	go test -count=1 -tags gcp_conformance ./tests/gcpconformance/
