@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -84,6 +85,45 @@ const computeBasePath = "https://www.googleapis.com/compute/v1/"
 
 // defaultDiskSizeGb is used when a disk create request omits sizeGb.
 const defaultDiskSizeGb = "10"
+
+// defaultMachineType is used when an instance create request omits machineType.
+const defaultMachineType = "e2-micro"
+
+// defaultComputePageSize is Compute Engine's documented maxResults default
+// (Discovery): "Acceptable values are 0 to 500, inclusive. (Default: 500)".
+// The shared paging helper defaults to 1000, so compute lists set it explicitly.
+const defaultComputePageSize = 500
+
+// maxComputePageSize is Compute Engine's documented maxResults upper bound.
+const maxComputePageSize = 500
+
+// resourceNameRE is Compute Engine's documented resource-name grammar
+// (Discovery, Instance.name): 1-63 characters matching [a-z]([-a-z0-9]*[a-z0-9])?.
+var resourceNameRE = regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])?$`)
+
+// machineTypeRE matches the wire form of a predefined machine type that is not
+// in machineTypeCatalog: <series>-<family>-<size> (e.g. e2-standard-4,
+// n2-highmem-8, c3-highcpu-4, a2-highgpu-1g). The catalog is a small stable
+// subset, so a name matching this shape is a real Compute Engine machine type
+// the emulator simply does not advertise — it must not be rejected as invalid.
+var machineTypeRE = regexp.MustCompile(`^[a-z][a-z0-9]*-[a-z][a-z0-9]*-[a-z0-9]+$`)
+
+// customMachineTypeRE matches a custom machine type. Real GCP names them
+// <series>-custom-<vCPUs>-<memMB> (e.g. n2-custom-2-4096, e2-custom-4-8192) or,
+// for N1, bare custom-<vCPUs>-<memMB>, optionally with an -ext extended-memory
+// suffix.
+var customMachineTypeRE = regexp.MustCompile(`^(?:[a-z0-9]+-)?custom-[0-9]+-[0-9]+(?:-ext)?$`)
+
+// isKnownMachineType reports whether name could be a real Compute Engine
+// machine type: an advertised catalog entry, a predefined family/size, or a
+// custom type. A name that matches none of these is not a machine type at all
+// and is rejected with 400 (real GCP).
+func isKnownMachineType(name string) bool {
+	if _, ok := machineTypeSpecFor(name); ok {
+		return true
+	}
+	return machineTypeRE.MatchString(name) || customMachineTypeRE.MatchString(name)
+}
 
 // Provider handles Compute Engine instances, disks, networks, firewalls,
 // subnetworks, machine types, zones, regions, and operations.
@@ -157,8 +197,14 @@ func (p *Provider) InstancesInsert(ctx context.Context, nr *model.NormalizedRequ
 	if name == "" {
 		return nil, model.NewProviderError("InvalidArgument", "instance name is required", 400)
 	}
+	if err := validateResourceName(name); err != nil {
+		return nil, err
+	}
 
-	inst := p.buildInstance(nr, project, zone, name, body)
+	inst, err := p.buildInstance(nr, project, zone, name, body)
+	if err != nil {
+		return nil, err
+	}
 	data, err := json.Marshal(inst)
 	if err != nil {
 		return nil, err
@@ -173,10 +219,13 @@ func (p *Provider) InstancesInsert(ctx context.Context, nr *model.NormalizedRequ
 	return provider.OK(p.recordOperation(nr, project, zone, "zones", "insert", name, stringField(inst, "targetLink"))), nil
 }
 
-func (p *Provider) buildInstance(nr *model.NormalizedRequest, project, zone, name string, body map[string]any) map[string]any {
+func (p *Provider) buildInstance(nr *model.NormalizedRequest, project, zone, name string, body map[string]any) (map[string]any, error) {
 	mtName := lastSegment(stringField(body, "machineType"))
 	if mtName == "" {
-		mtName = "e2-micro"
+		mtName = defaultMachineType
+	} else if !isKnownMachineType(mtName) {
+		return nil, model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'resource.machineType': 'machineTypes/%s'. Machine type is not offered in zone %q", mtName, zone), 400)
 	}
 	inst := map[string]any{
 		"kind":              kindInstance,
@@ -209,7 +258,7 @@ func (p *Provider) buildInstance(nr *model.NormalizedRequest, project, zone, nam
 	if v, ok := body["description"]; ok && v != nil {
 		inst["description"] = v
 	}
-	return inst
+	return inst, nil
 }
 
 func (p *Provider) InstancesGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -231,6 +280,10 @@ func (p *Provider) InstancesList(ctx context.Context, nr *model.NormalizedReques
 		return nil, err
 	}
 	items := mapsFromEntries(entries)
+	items, err = applyFilterMaps(nr, items)
+	if err != nil {
+		return nil, err
+	}
 	page, next := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
 	out := toAnySlice(page)
 	resp := map[string]any{"kind": kindInstanceList, "items": out}
@@ -240,16 +293,27 @@ func (p *Provider) InstancesList(ctx context.Context, nr *model.NormalizedReques
 	return provider.OK(resp), nil
 }
 
-// InstancesAggregatedList lists instances across every zone for the project.
-// The store's cross-scope scan requires account and region to be empty, so the
-// result is filtered by the owning project.
+// InstancesAggregatedList lists instances across every zone for the project,
+// honouring the documented maxResults/pageToken cursor and filter. The store's
+// cross-scope scan requires account and region to be empty, so the result is
+// filtered by the owning project. Paging walks the flattened instance set
+// (ordered by "zone/name"); the returned page is re-grouped by zone, so — as in
+// real GCP — only scopes with a matching instance on the current page appear.
 func (p *Provider) InstancesAggregatedList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := accountID(nr)
 	entries, err := p.resources.List(ctx, "", "", rtInstance, "")
 	if err != nil {
 		return nil, err
 	}
-	grouped := map[string][]any{}
+	f, err := compileFilter(nr)
+	if err != nil {
+		return nil, err
+	}
+	type scopedInstance struct {
+		zone string
+		m    map[string]any
+	}
+	flat := make([]scopedInstance, 0, len(entries))
 	for _, e := range entries {
 		if e.Account != project {
 			continue
@@ -258,14 +322,30 @@ func (p *Provider) InstancesAggregatedList(ctx context.Context, nr *model.Normal
 		if json.Unmarshal(e.Data, &m) != nil {
 			continue
 		}
-		key := "zones/" + e.Region
-		grouped[key] = append(grouped[key], m)
+		if !f.match(m) {
+			continue
+		}
+		flat = append(flat, scopedInstance{zone: e.Region, m: m})
 	}
-	items := make(map[string]any, len(grouped))
-	for k, v := range grouped {
-		items[k] = map[string]any{"instances": v}
+	page, next := paging.Page(flat, func(s scopedInstance) string {
+		return s.zone + "/" + stringField(s.m, "name")
+	}, listParams(nr))
+	items := map[string]any{}
+	for _, s := range page {
+		key := "zones/" + s.zone
+		group, _ := items[key].(map[string]any)
+		if group == nil {
+			group = map[string]any{}
+			items[key] = group
+		}
+		list, _ := group["instances"].([]any)
+		group["instances"] = append(list, s.m)
 	}
-	return provider.OK(map[string]any{"kind": kindInstanceAggregatedList, "items": items}), nil
+	resp := map[string]any{"kind": kindInstanceAggregatedList, "items": items}
+	if next != "" {
+		resp["nextPageToken"] = next
+	}
+	return provider.OK(resp), nil
 }
 
 func (p *Provider) InstancesDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -343,6 +423,9 @@ func (p *Provider) DisksInsert(ctx context.Context, nr *model.NormalizedRequest)
 	if name == "" {
 		return nil, model.NewProviderError("InvalidArgument", "disk name is required", 400)
 	}
+	if err := validateResourceName(name); err != nil {
+		return nil, err
+	}
 	diskType := lastSegment(stringField(body, "type"))
 	if diskType == "" {
 		diskType = "pd-standard"
@@ -401,6 +484,10 @@ func (p *Provider) DisksList(ctx context.Context, nr *model.NormalizedRequest) (
 		return nil, err
 	}
 	items := mapsFromEntries(entries)
+	items, err = applyFilterMaps(nr, items)
+	if err != nil {
+		return nil, err
+	}
 	page, next := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
 	resp := map[string]any{"kind": kindDiskList, "items": toAnySlice(page)}
 	if next != "" {
@@ -432,6 +519,9 @@ func (p *Provider) NetworksInsert(ctx context.Context, nr *model.NormalizedReque
 	name := stringField(body, "name")
 	if name == "" {
 		return nil, model.NewProviderError("InvalidArgument", "network name is required", 400)
+	}
+	if err := validateResourceName(name); err != nil {
+		return nil, err
 	}
 	auto := true
 	if v, ok := body["autoCreateSubnetworks"].(bool); ok {
@@ -481,6 +571,10 @@ func (p *Provider) NetworksList(ctx context.Context, nr *model.NormalizedRequest
 		return nil, err
 	}
 	items := mapsFromEntries(entries)
+	items, err = applyFilterMaps(nr, items)
+	if err != nil {
+		return nil, err
+	}
 	page, next := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
 	resp := map[string]any{"kind": kindNetworkList, "items": toAnySlice(page)}
 	if next != "" {
@@ -512,6 +606,9 @@ func (p *Provider) FirewallsInsert(ctx context.Context, nr *model.NormalizedRequ
 	name := stringField(body, "name")
 	if name == "" {
 		return nil, model.NewProviderError("InvalidArgument", "firewall name is required", 400)
+	}
+	if err := validateResourceName(name); err != nil {
+		return nil, err
 	}
 	network := stringField(body, "network")
 	if network == "" {
@@ -579,6 +676,10 @@ func (p *Provider) FirewallsList(ctx context.Context, nr *model.NormalizedReques
 		return nil, err
 	}
 	items := mapsFromEntries(entries)
+	items, err = applyFilterMaps(nr, items)
+	if err != nil {
+		return nil, err
+	}
 	page, next := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
 	resp := map[string]any{"kind": kindFirewallList, "items": toAnySlice(page)}
 	if next != "" {
@@ -614,6 +715,9 @@ func (p *Provider) SubnetworksInsert(ctx context.Context, nr *model.NormalizedRe
 	name := stringField(body, "name")
 	if name == "" {
 		return nil, model.NewProviderError("InvalidArgument", "subnetwork name is required", 400)
+	}
+	if err := validateResourceName(name); err != nil {
+		return nil, err
 	}
 	network := stringField(body, "network")
 	if network == "" {
@@ -674,6 +778,10 @@ func (p *Provider) SubnetworksList(ctx context.Context, nr *model.NormalizedRequ
 		return nil, err
 	}
 	items := mapsFromEntries(entries)
+	items, err = applyFilterMaps(nr, items)
+	if err != nil {
+		return nil, err
+	}
 	page, next := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
 	resp := map[string]any{"kind": kindSubnetworkList, "items": toAnySlice(page)}
 	if next != "" {
@@ -718,6 +826,10 @@ func (p *Provider) MachineTypesList(ctx context.Context, nr *model.NormalizedReq
 	for _, spec := range machineTypeCatalog {
 		objs = append(objs, machineTypeObject(nr, zone, spec))
 	}
+	objs, err := applyFilterMaps(nr, objs)
+	if err != nil {
+		return nil, err
+	}
 	page, next := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
 	resp := map[string]any{"kind": kindMachineTypeList, "items": toAnySlice(page)}
 	if next != "" {
@@ -742,6 +854,10 @@ func (p *Provider) ZonesList(ctx context.Context, nr *model.NormalizedRequest) (
 	for _, z := range zoneNames {
 		objs = append(objs, zoneObject(nr, z))
 	}
+	objs, err := applyFilterMaps(nr, objs)
+	if err != nil {
+		return nil, err
+	}
 	page, next := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
 	resp := map[string]any{"kind": kindZoneList, "items": toAnySlice(page)}
 	if next != "" {
@@ -765,6 +881,10 @@ func (p *Provider) RegionsList(ctx context.Context, nr *model.NormalizedRequest)
 	objs := make([]map[string]any, 0, len(regionNames))
 	for _, r := range regionNames {
 		objs = append(objs, regionObject(nr, r))
+	}
+	objs, err := applyFilterMaps(nr, objs)
+	if err != nil {
+		return nil, err
 	}
 	page, next := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
 	resp := map[string]any{"kind": kindRegionList, "items": toAnySlice(page)}
@@ -794,6 +914,10 @@ func (p *Provider) OperationsList(ctx context.Context, nr *model.NormalizedReque
 		return nil, err
 	}
 	items := mapsFromEntries(entries)
+	items, err = applyFilterMaps(nr, items)
+	if err != nil {
+		return nil, err
+	}
 	page, next := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
 	resp := map[string]any{"kind": kindOperationList, "items": toAnySlice(page)}
 	if next != "" {
@@ -847,9 +971,22 @@ func (p *Provider) Unimplemented(context.Context, *model.NormalizedRequest) (*mo
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+// strParam reads a string path/query parameter.
 func strParam(nr *model.NormalizedRequest, key string) string {
 	s, _ := nr.Params[key].(string)
 	return s
+}
+
+// validateResourceName enforces Compute Engine's documented resource-name
+// grammar (1-63 characters, [a-z]([-a-z0-9]*[a-z0-9])?). Real GCP rejects a
+// malformed name with 400 before doing any work; the emulator did not, so an
+// invalid name was silently accepted.
+func validateResourceName(name string) error {
+	if len(name) < 1 || len(name) > 63 || !resourceNameRE.MatchString(name) {
+		return model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'resource.name': '%s'. Must be 1-63 characters long and match the regular expression '[a-z]([-a-z0-9]*[a-z0-9])?'", name), 400)
+	}
+	return nil
 }
 
 func bodyMap(nr *model.NormalizedRequest) map[string]any {
@@ -890,21 +1027,51 @@ func scopeOf(nr *model.NormalizedRequest) string {
 }
 
 // listParams maps Compute Engine's maxResults query parameter onto the shared
-// paging helper's pageSize cursor, passing pageToken through unchanged.
+// paging helper's pageSize cursor, passing pageToken through unchanged. An
+// absent maxResults takes Compute Engine's documented default of 500 (the
+// shared helper's own default is 1000), and the documented 0-500 range is
+// enforced. Compute Engine has no pageSize parameter, so a stray one is
+// ignored.
 func listParams(nr *model.NormalizedRequest) map[string]any {
-	if _, ok := nr.Params["pageSize"]; ok {
-		return nr.Params
-	}
-	mr, ok := nr.Params["maxResults"]
-	if !ok {
-		return nr.Params
-	}
 	p := make(map[string]any, len(nr.Params)+1)
 	for k, v := range nr.Params {
 		p[k] = v
 	}
-	p["pageSize"] = mr
+	p["pageSize"] = computePageSize(nr.Params["maxResults"])
 	return p
+}
+
+// computePageSize clamps Compute Engine's maxResults to its documented 0-500
+// range; an absent, zero or unparseable value takes the documented 500 default.
+func computePageSize(v any) int {
+	n, ok := toInt(v)
+	if !ok || n <= 0 {
+		return defaultComputePageSize
+	}
+	if n > maxComputePageSize {
+		return maxComputePageSize
+	}
+	return n
+}
+
+// toInt parses a numeric query/body parameter supplied as a string, int, int64
+// or float64.
+func toInt(v any) (int, bool) {
+	switch t := v.(type) {
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(t))
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	case int:
+		return t, true
+	case int64:
+		return int(t), true
+	case float64:
+		return int(t), true
+	}
+	return 0, false
 }
 
 // absLink builds an absolute selfLink/targetLink rooted at computeBasePath,
@@ -1029,6 +1196,8 @@ var machineTypeCatalog = []machineTypeSpec{
 	{"e2-micro", 2, 1024},
 	{"e2-small", 2, 2048},
 	{"e2-medium", 2, 4096},
+	{"f1-micro", 1, 614},
+	{"g1-small", 1, 1740},
 	{"n1-standard-1", 1, 3840},
 	{"n1-standard-2", 2, 7680},
 	{"n2-standard-2", 2, 8192},
