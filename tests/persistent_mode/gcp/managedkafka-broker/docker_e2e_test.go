@@ -21,8 +21,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,14 +99,221 @@ func TestManagedKafkaBrokerDocker(t *testing.T) {
 		t.Fatalf("create topic: HTTP %d: %v", code, topicBody)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 	produceConsume(t, ctx, addr, topic)
+
+	// TD10 p2/p5 over the real broker: parallel producer sessions, parallel
+	// reader sessions over the wire, and a committed consumer group the control
+	// plane then serves (TD10 p4's consumer-group half, which the hermetic mock
+	// topology cannot exercise). A second, multi-partition topic keeps the
+	// record counts exact (the first topic already carries the smoke records).
+	const (
+		concurrentTopic = "orders-concurrent"
+		group           = "mk-depth-group"
+	)
+	code, concurrentBody := api(t, httpClient, http.MethodPost,
+		base+clusterPath(cluster)+"/topics?topicId="+concurrentTopic,
+		map[string]any{"partitionCount": 3, "replicationFactor": 1})
+	if code < 200 || code >= 300 {
+		t.Fatalf("create concurrent topic: HTTP %d: %v", code, concurrentBody)
+	}
+	produceConsumeConcurrent(t, ctx, addr, concurrentTopic, group)
+	assertConsumerGroupVisible(t, base, cluster, concurrentTopic, group)
 
 	// Delete the cluster and assert the container is reaped: the advertised
 	// loopback port stops accepting connections.
 	deleteCluster(t, base, cluster)
 	waitPortClosed(t, addr, 60*time.Second)
+}
+
+// produceConsumeConcurrent is the Managed Kafka data-plane p2/p5 gate. It
+// drives the real broker with several producer clients at once (no write is
+// lost), then several independent reader sessions at once (each sees the whole
+// stream), then commits a consumer group's offsets so the group is durable and
+// readable through the API.
+func produceConsumeConcurrent(t *testing.T, ctx context.Context, addr, topic, group string) {
+	t.Helper()
+	const (
+		producers   = 4
+		perProducer = 10
+		readers     = 3
+		total       = producers * perProducer
+	)
+	payload := func(p, i int) string { return fmt.Sprintf("p%d-m%d", p, i) }
+
+	// (1) Parallel producers to one topic.
+	var wg sync.WaitGroup
+	errs := make([]error, producers)
+	for p := 0; p < producers; p++ {
+		wg.Add(1)
+		go func(p int) {
+			defer wg.Done()
+			producer, err := kgo.NewClient(
+				kgo.SeedBrokers(addr),
+				kgo.DefaultProduceTopic(topic),
+				kgo.ClientID(fmt.Sprintf("mk-depth-producer-%d", p)),
+			)
+			if err != nil {
+				errs[p] = err
+				return
+			}
+			defer producer.Close()
+			for i := 0; i < perProducer; i++ {
+				if err := producer.ProduceSync(ctx, &kgo.Record{Value: []byte(payload(p, i))}).FirstErr(); err != nil {
+					errs[p] = err
+					return
+				}
+			}
+		}(p)
+	}
+	wg.Wait()
+	for p, err := range errs {
+		if err != nil {
+			t.Fatalf("producer %d: %v", p, err)
+		}
+	}
+
+	// (2) Parallel reader sessions: each independent client must see every
+	// record, so concurrent streamed reads do not interleave or truncate.
+	readErrs := make([]error, readers)
+	for r := 0; r < readers; r++ {
+		wg.Add(1)
+		go func(r int) {
+			defer wg.Done()
+			reader, err := kgo.NewClient(
+				kgo.SeedBrokers(addr),
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+				kgo.ClientID(fmt.Sprintf("mk-depth-reader-%d", r)),
+			)
+			if err != nil {
+				readErrs[r] = err
+				return
+			}
+			defer reader.Close()
+			seen := map[string]int{}
+			for len(seen) < total {
+				if ctx.Err() != nil {
+					readErrs[r] = fmt.Errorf("reader %d saw %d/%d records: %w", r, len(seen), total, ctx.Err())
+					return
+				}
+				fetches := reader.PollFetches(ctx)
+				if errs := fetches.Errors(); len(errs) > 0 {
+					readErrs[r] = fmt.Errorf("reader %d poll: %v", r, errs)
+					return
+				}
+				fetches.EachRecord(func(rec *kgo.Record) { seen[string(rec.Value)]++ })
+			}
+			for p := 0; p < producers; p++ {
+				for i := 0; i < perProducer; i++ {
+					if seen[payload(p, i)] == 0 {
+						readErrs[r] = fmt.Errorf("reader %d never saw %s", r, payload(p, i))
+						return
+					}
+				}
+			}
+		}(r)
+	}
+	wg.Wait()
+	for r, err := range readErrs {
+		if err != nil {
+			t.Fatalf("reader %d: %v", r, err)
+		}
+	}
+
+	// (3) Commit a consumer group so the group and its offsets are durable for
+	// the API read.
+	member, err := kgo.NewClient(
+		kgo.SeedBrokers(addr),
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.ConsumerGroup(group),
+		kgo.DisableAutoCommit(),
+		kgo.ClientID("mk-depth-group-member"),
+	)
+	if err != nil {
+		t.Fatalf("consumer group client: %v", err)
+	}
+	defer member.Close()
+	var committed []*kgo.Record
+	for len(committed) < total {
+		if ctx.Err() != nil {
+			t.Fatalf("group member committed %d/%d records: %v", len(committed), total, ctx.Err())
+		}
+		fetches := member.PollFetches(ctx)
+		if errs := fetches.Errors(); len(errs) > 0 {
+			t.Fatalf("group member poll: %v", errs)
+		}
+		fetches.EachRecord(func(rec *kgo.Record) { committed = append(committed, rec) })
+	}
+	if err := member.CommitRecords(ctx, committed...); err != nil {
+		t.Fatalf("commit group offsets: %v", err)
+	}
+}
+
+// assertConsumerGroupVisible reads the committed group back through the
+// Managed Kafka consumer-group API, paging with pageSize=1 to compose the
+// documented pageToken with the group listing.
+func assertConsumerGroupVisible(t *testing.T, base, cluster, topic, group string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	var last string
+	for time.Now().Before(deadline) {
+		found, groupTopics, err := findConsumerGroup(t, base, cluster, group)
+		if err != nil {
+			t.Fatalf("list consumer groups: %v", err)
+		}
+		if found {
+			suffix := "/topics/" + topic
+			for name := range groupTopics {
+				if strings.HasSuffix(name, suffix) {
+					return
+				}
+			}
+			last = fmt.Sprintf("group %q listed but has no committed offset for %q (topics=%v)", group, topic, groupTopics)
+		} else {
+			last = fmt.Sprintf("group %q not listed yet", group)
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("consumer group never became visible: %s", last)
+}
+
+// findConsumerGroup pages the cluster's consumer groups (pageSize=1) looking for
+// group, returning whether it was found and its committed topics map.
+func findConsumerGroup(t *testing.T, base, cluster, group string) (bool, map[string]any, error) {
+	t.Helper()
+	token := ""
+	for page := 0; page < 100; page++ {
+		u := base + clusterPath(cluster) + "/consumerGroups?pageSize=1"
+		if token != "" {
+			u += "&pageToken=" + url.QueryEscape(token)
+		}
+		code, body := api(t, httpClient, http.MethodGet, u, nil)
+		if code < 200 || code >= 300 {
+			return false, nil, fmt.Errorf("HTTP %d: %v", code, body)
+		}
+		groups, _ := body["consumerGroups"].([]any)
+		if len(groups) > 1 {
+			return false, nil, fmt.Errorf("pageSize=1 returned %d groups", len(groups))
+		}
+		for _, g := range groups {
+			m, ok := g.(map[string]any)
+			if !ok {
+				continue
+			}
+			if strings.HasSuffix(strField(m, "name"), "/"+group) {
+				topics, _ := m["topics"].(map[string]any)
+				return true, topics, nil
+			}
+		}
+		token = strField(body, "nextPageToken")
+		if token == "" {
+			return false, nil, nil
+		}
+	}
+	return false, nil, fmt.Errorf("consumer group pagination did not terminate")
 }
 
 // produceConsume writes a handful of records and reads them back over a real

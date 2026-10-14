@@ -732,7 +732,7 @@ test-integration-gcp: build-gcp ## Run GCP integration + SDK suites against an e
 	  ( cd tests/integration/gcp/sdk-dataproc && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ JAISCLOUD_DATAPROC_EVENTS_TOPIC=jaiscloud-dataproc-events go test -race -count=1 -timeout 180s ./... ); \
 	  ( cd tests/integration/gcp/sdk-bigquery && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -race -count=1 -timeout 180s ./... ); \
 	  ( cd tests/integration/gcp/sdk-metastore && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ JAISCLOUD_GCP_HMS_PORT=9083 go test -race -count=1 -timeout 300s ./... ); \
-	  ( cd tests/integration/gcp/sdk-managed-kafka && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-managed-kafka && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ GCP_EMULATOR_ENDPOINT_GRPC=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -race -count=1 -timeout 180s ./... ); \
 	  ( cd tests/integration/gcp/sdk-clouddns && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
 	  ( cd tests/integration/gcp/sdk-scheduler && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
 	  ( cd tests/integration/gcp/sdk-tasks && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
@@ -744,7 +744,7 @@ test-integration-gcp: build-gcp ## Run GCP integration + SDK suites against an e
 	  ( cd tests/integration/gcp/sdk-monitoring && MONITORING_EMULATOR_HOST=localhost:8081 go test -count=1 -timeout 120s ./... ); \
 	  ( cd tests/integration/gcp/sdk-datastore && DATASTORE_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... ); \
 	  ( cd tests/integration/gcp/sdk-logging && LOGGING_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... ); \
-	  ( cd tests/integration/gcp/sdk-gcs-grpc && STORAGE_EMULATOR_HOST_GRPC=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-gcs-grpc && STORAGE_EMULATOR_HOST_GRPC=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -race -count=1 -timeout 180s ./... ); \
 	  ( cd tests/integration/gcp/sdk-pubsub && PUBSUB_EMULATOR_HOST=localhost:8081 GCP_EMULATOR_PROJECT=test-project go test -count=1 -timeout 120s ./... )
 
 test-lro-async-gcp: build-gcp ## Run the opt-in async-LRO live e2e gate (JAISCLOUD_LRO_MODE=async, delay 2s)
