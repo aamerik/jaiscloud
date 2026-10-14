@@ -57,7 +57,7 @@ func TestLROAsync(t *testing.T) {
 		{
 			name:       "workflows",
 			createPath: "/v1/projects/" + lroProject + "/locations/" + lroLocation + "/workflows?workflowId=async-wf",
-			createBody: `{"sourceContents":"main:\n  steps:\n    - return: ok"}`,
+			createBody: `{"sourceContents":"main:\n  steps:\n    - done:\n        return: ok"}`,
 			wantName:   "projects/" + lroProject + "/locations/" + lroLocation + "/workflows/async-wf",
 		},
 		{

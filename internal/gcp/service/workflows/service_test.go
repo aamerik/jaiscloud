@@ -167,7 +167,7 @@ func TestWorkflowCRUDAndLRO(t *testing.T) {
 	}
 
 	// List.
-	page, _, err := s.ListWorkflows(ctx, "proj", "us-central1", 0, "")
+	page, _, err := s.ListWorkflows(ctx, "proj", "us-central1", "", "", 0, "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

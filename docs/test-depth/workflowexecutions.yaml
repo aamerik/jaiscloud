@@ -1,4 +1,4 @@
-# Behavioural depth record - workflowexecutions (TD1).
+# Behavioural depth record - workflowexecutions (TD1, filled in by TD9).
 #
 # p2-p5 are defined in docs/GCP-TESTABILITY.md §10. Each class is either
 # `present` (asserted by the official-client suite(s) listed) or `exempt`
@@ -7,21 +7,18 @@
 service: workflowexecutions
 classes:
   p2:
-    state: exempt
-    reason: "no concurrent execution contention suite"
-    owner: TD9
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-workflows]
+    note: "eight parallel CreateExecution calls on one workflow all land exactly once with distinct execution ids and the listing shows every one of them with no duplicate or lost record — a -race client"
   p3:
     state: present
     suites: [sdk-workflows]
-    note: "failing-step execution error envelope"
+    note: "a failing step yields a FAILED execution whose error.payload parses to {message, tags} with a non-empty context, persisted across get; an unknown execution is 404; an unsupported execution-list filter (uid, an OR form) is 400 rather than a silently unfiltered list"
   p4:
-    state: exempt
-    reason: "no execution listing+filter suite"
-    owner: TD9
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-workflows]
+    note: "executions.list honours pageSize/pageToken with a cross-page walk over every execution exactly once — ordered by the documented default (descending createTime) or an explicit orderBy (executionId/state/time) — composed with filter (state, labels.<key> incl. the labels.\"key\":value form, executionId; the remaining accepted fields workflowRevisionId/timestamps are unit-tested) and the BASIC-vs-FULL view projection (default list BASIC, default get FULL)"
   p5:
-    state: exempt
-    reason: "no long-running execution/cancel suite"
-    owner: TD9
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-workflows]
+    note: "cancel on a terminal (synchronously-run) execution is the documented no-op that returns it unchanged, cancel of a missing execution is 404, a 12-execution listing walks every page, and the async-LRO create poll settles through the official client under JAISCLOUD_LRO_MODE=async + JAISCLOUD_LRO_ASYNC=1"

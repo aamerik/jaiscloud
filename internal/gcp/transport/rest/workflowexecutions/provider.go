@@ -72,7 +72,9 @@ func (p *Provider) GetExecution(ctx context.Context, nr *model.NormalizedRequest
 func (p *Provider) ListExecutions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
 	page, next, err := p.core.ListExecutions(ctx, project, strParam(nr, "location"), strParam(nr, "workflowId"),
-		viewFromParam(strParam(nr, "view"), core.ViewBasic), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		viewFromParam(strParam(nr, "view"), core.ViewBasic),
+		strParam(nr, "filter"), strParam(nr, "orderBy"),
+		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

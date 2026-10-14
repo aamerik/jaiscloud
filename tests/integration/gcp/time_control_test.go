@@ -531,7 +531,7 @@ func TestLROAsyncClockDeadline(t *testing.T) {
 	wfID := "clock-lro-wf-" + tcSuffix()
 	resp, body := do(t, http.MethodPost,
 		"/v1/projects/"+proj+"/locations/"+loc+"/workflows?workflowId="+wfID,
-		[]byte(`{"sourceContents":"main:\n  steps:\n    - return: ok"}`), tcJSONHeaders())
+		[]byte(`{"sourceContents":"main:\n  steps:\n    - done:\n        return: ok"}`), tcJSONHeaders())
 	require.Equal(t, http.StatusOK, resp.StatusCode, "create workflow: %s", body)
 
 	op := jsonMap(t, body)

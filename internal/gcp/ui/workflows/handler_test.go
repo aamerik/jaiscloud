@@ -124,7 +124,7 @@ func wf(id, location string) workflowsstore.Workflow {
 		State:          "ACTIVE",
 		RevisionID:     "000001-a4d",
 		ServiceAccount: "sa@p.iam.gserviceaccount.com",
-		SourceContents: "main:\n  steps:\n    - return: 1",
+		SourceContents: "main:\n  steps:\n    - done:\n        return: 1",
 		CallLogLevel:   "LOG_ERRORS_ONLY",
 		CreateTime:     time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC),
 	}

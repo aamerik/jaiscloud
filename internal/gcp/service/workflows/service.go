@@ -105,21 +105,42 @@ type UpdateInput struct {
 	CallLogLevel   string
 }
 
-// ListWorkflows returns a cursor page of the workflows in a location. filter
-// and orderBy are accepted by the wire but ignored (documented limitation).
-func (s *Service) ListWorkflows(ctx context.Context, project, location string, pageSize int, pageToken string) ([]workflowsstore.Workflow, string, error) {
+// ListWorkflows returns a cursor page of the workflows in a location, applying
+// the documented AIP-160 filter and orderBy. An empty filter matches every
+// workflow; a filter or orderBy outside the supported grammar is
+// InvalidArgument (never silently ignored). A negative pageSize is rejected.
+func (s *Service) ListWorkflows(ctx context.Context, project, location, filter, orderBy string, pageSize int, pageToken string) ([]workflowsstore.Workflow, string, error) {
 	if location == "" {
 		return nil, "", invalidArgument("missing location")
+	}
+	if pageSize < 0 {
+		return nil, "", invalidArgument("pageSize must not be negative")
+	}
+	nameOf := func(w workflowsstore.Workflow) string { return WorkflowName(project, location, w.ID) }
+	flt, err := compileWorkflowFilter(filter, nameOf)
+	if err != nil {
+		return nil, "", err
+	}
+	order, err := workflowOrderSpec.Parse(orderBy)
+	if err != nil {
+		return nil, "", invalidArgument("workflows ListWorkflows orderBy: " + err.Error())
 	}
 	wfs, err := s.workflows.ListWorkflows(ctx, project, location)
 	if err != nil {
 		return nil, "", mapStoreError(err)
 	}
+	out := make([]workflowsstore.Workflow, 0, len(wfs))
+	for _, w := range wfs {
+		if flt.match(w) {
+			out = append(out, w)
+		}
+	}
+	order.Sort(out)
 	params := map[string]any{"pageSize": clampPageSize(pageSize)}
 	if pageToken != "" {
 		params["pageToken"] = pageToken
 	}
-	page, next := paging.Page(wfs, func(w workflowsstore.Workflow) string { return w.ID }, params)
+	page, next := paging.PageOrdered(out, params, order.Cursor, order.AfterCursor)
 	return page, next, nil
 }
 
@@ -284,8 +305,11 @@ func (s *Service) CreateWorkflow(ctx context.Context, project, location string, 
 	if location == "" {
 		return workflowsstore.Workflow{}, workflowsstore.Operation{}, invalidArgument("missing location")
 	}
-	if in.ID == "" {
-		return workflowsstore.Workflow{}, workflowsstore.Operation{}, invalidArgument("missing workflowId")
+	if err := validateWorkflowID(in.ID); err != nil {
+		return workflowsstore.Workflow{}, workflowsstore.Operation{}, err
+	}
+	if err := validateSource(in.SourceContents); err != nil {
+		return workflowsstore.Workflow{}, workflowsstore.Operation{}, err
 	}
 	now := clock.Now().UTC()
 	w := workflowsstore.Workflow{
@@ -322,6 +346,9 @@ func (s *Service) UpdateWorkflow(ctx context.Context, project, location string, 
 	if location == "" || in.ID == "" {
 		return workflowsstore.Workflow{}, workflowsstore.Operation{}, invalidArgument("missing workflow name")
 	}
+	if err := validateWorkflowID(in.ID); err != nil {
+		return workflowsstore.Workflow{}, workflowsstore.Operation{}, err
+	}
 	masked, err := maskedFields(in.UpdateMask)
 	if err != nil {
 		return workflowsstore.Workflow{}, workflowsstore.Operation{}, err
@@ -331,6 +358,11 @@ func (s *Service) UpdateWorkflow(ctx context.Context, project, location string, 
 			return true // no mask: the entire workflow is updated
 		}
 		return masked[field]
+	}
+	if apply("sourceContents") {
+		if err := validateSource(in.SourceContents); err != nil {
+			return workflowsstore.Workflow{}, workflowsstore.Operation{}, err
+		}
 	}
 	w, err := s.workflows.UpdateWorkflowAtomic(ctx, project, location, in.ID, func(w workflowsstore.Workflow) (workflowsstore.Workflow, error) {
 		now := clock.Now().UTC()

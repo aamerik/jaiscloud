@@ -728,7 +728,7 @@ test-integration-gcp: build-gcp ## Run GCP integration + SDK suites against an e
 	  echo "Running REST SDK suites..."; \
 	  ( cd tests/integration/gcp/sdk && STORAGE_EMULATOR_HOST=http://localhost:8080 go test -count=1 -timeout 120s ./... ); \
 	  ( cd tests/integration/gcp/sdk-rest && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
-	  ( cd tests/integration/gcp/sdk-workflows && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -count=1 -timeout 120s ./... ); \
+	  ( cd tests/integration/gcp/sdk-workflows && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -race -count=1 -timeout 180s ./... ); \
 	  ( cd tests/integration/gcp/sdk-dataproc && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ JAISCLOUD_DATAPROC_EVENTS_TOPIC=jaiscloud-dataproc-events go test -race -count=1 -timeout 180s ./... ); \
 	  ( cd tests/integration/gcp/sdk-bigquery && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ go test -race -count=1 -timeout 180s ./... ); \
 	  ( cd tests/integration/gcp/sdk-metastore && GCP_EMULATOR_ENDPOINT=http://localhost:8080/ JAISCLOUD_GCP_HMS_PORT=9083 go test -race -count=1 -timeout 300s ./... ); \

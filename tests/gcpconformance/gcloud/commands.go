@@ -44,8 +44,9 @@ type Command struct {
 const ConformanceText = "jaiscloud gcloud conformance"
 
 // WorkflowSource is a minimal, valid workflow definition accepted by the
-// emulator's workflows provider.
-const WorkflowSource = "main:\n  steps:\n  - return: ok\n"
+// emulator's workflows provider. The step body must be a mapping (a bare
+// `- return: ok` shorthand is not a valid definition and create rejects it).
+const WorkflowSource = "main:\n  steps:\n  - done:\n      return: ok\n"
 
 // fixtures are the per-run values baked into the command table. Resource names
 // are suffixed with a run-unique ID so the suite is safe to run against a
