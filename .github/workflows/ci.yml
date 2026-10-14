@@ -318,7 +318,7 @@ jobs:
         working-directory: tests/integration/gcp/sdk-bigquery
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Metastore SDK tests
         working-directory: tests/integration/gcp/sdk-metastore
