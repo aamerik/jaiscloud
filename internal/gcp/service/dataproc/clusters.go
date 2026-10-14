@@ -149,15 +149,29 @@ func (s *Service) GetCluster(ctx context.Context, project, region, name string) 
 
 // ListClusters returns a cursor page of the clusters in a region, settling each
 // transitional cluster first and dropping any whose delayed delete completed.
-func (s *Service) ListClusters(ctx context.Context, project, region string, pageSize int, pageToken string) ([]dpstore.Cluster, string, error) {
+// filter is the bounded dataproc.v1.ListClustersRequest.filter grammar
+// (status.state, clusterName, labels.<key>); it is applied before pagination so
+// pageToken cursors stay stable. A malformed or unsupported filter is
+// InvalidArgument — never a silently unfiltered list.
+func (s *Service) ListClusters(ctx context.Context, project, region, filter string, pageSize int, pageToken string) ([]dpstore.Cluster, string, error) {
 	if region == "" {
 		return nil, "", invalidArgument("missing region")
+	}
+	if err := validatePageSize(pageSize); err != nil {
+		return nil, "", err
+	}
+	filter = strings.TrimSpace(filter)
+	var compiled clusterFilter
+	if filter != "" {
+		var err error
+		if compiled, err = compileClusterFilter(filter); err != nil {
+			return nil, "", err
+		}
 	}
 	clusters, err := s.store.ListClusters(ctx, project, region)
 	if err != nil {
 		return nil, "", err
 	}
-	// filter is accepted but ignored (documented limitation, matches workflows).
 	settled := make([]dpstore.Cluster, 0, len(clusters))
 	for _, c := range clusters {
 		advanced, err := s.advanceCluster(ctx, project, region, c.Name)
@@ -166,6 +180,9 @@ func (s *Service) ListClusters(ctx context.Context, project, region string, page
 		}
 		if err != nil {
 			return nil, "", err
+		}
+		if filter != "" && !compiled.match(advanced) {
+			continue
 		}
 		settled = append(settled, advanced)
 	}

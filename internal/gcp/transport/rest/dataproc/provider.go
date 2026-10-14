@@ -87,7 +87,8 @@ func (p *Provider) GetCluster(ctx context.Context, nr *model.NormalizedRequest) 
 }
 
 func (p *Provider) ListClusters(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	page, next, err := p.core.ListClusters(ctx, p.project(nr), strParam(nr, "region"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	page, next, err := p.core.ListClusters(ctx, p.project(nr), strParam(nr, "region"),
+		strParam(nr, "filter"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

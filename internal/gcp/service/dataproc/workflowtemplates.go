@@ -76,6 +76,9 @@ func (s *Service) ListWorkflowTemplates(ctx context.Context, project, region str
 	if region == "" {
 		return nil, "", invalidArgument("missing region")
 	}
+	if err := validatePageSize(pageSize); err != nil {
+		return nil, "", err
+	}
 	all, err := s.store.ListWorkflowTemplates(ctx, project, region)
 	if err != nil {
 		return nil, "", err
