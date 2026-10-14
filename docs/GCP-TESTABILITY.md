@@ -429,10 +429,10 @@ answers like real GCP), while this proves an official client can drive a
   [`docs/gcpstatus-coverage-exemptions.yaml`](gcpstatus-coverage-exemptions.yaml)
   naming the service and *why* no `tests/integration/gcp` module is warranted —
   a stateless surface already covered by the IAM + conformance suites
-  (`iamcredentials`), a gRPC-only wire service whose core a sibling suite drives
-  (`firestoreadmin`), or an executor-backed service whose lifecycle the
-  k3d/Docker e2e gates prove (`run`). The gate accepts a service with either a
-  suite **or** an exemption; a typo'd/unknown exempt service fails loud.
+  (`iamcredentials`) or a gRPC-only wire service whose core a sibling suite drives
+  (`firestoreadmin`). The gate accepts a service with either a suite **or** an
+  exemption; a typo'd/unknown exempt service fails loud, as does a stale
+  exemption for a service that now has a suite.
 
 **How it is measured — derived, never hand-written.** `tools/gcpstatus` joins
 three independent sources — the service registry (`internal/gcp/adapter`), the
@@ -484,7 +484,7 @@ or carries a reasoned exemption.
 | `workflowexecutions` | grpc, rest | `sdk-workflows` | suite |
 | `functions` | grpc, rest | `sdk-rest` | suite |
 | `container` | grpc, rest | `sdk-container` | suite |
-| `run` | grpc, rest | — | exempt (executor e2e: `test-e2e-cloudrun-k8s` / `-docker`) |
+| `run` | grpc, rest | `sdk-run` | suite |
 | `compute` | rest | `sdk-compute` | limited — not required |
 | `cloudsql` | rest | `sdk-cloudsql` | limited — not required |
 | `clouddns` | rest | `sdk-clouddns` | limited — not required |

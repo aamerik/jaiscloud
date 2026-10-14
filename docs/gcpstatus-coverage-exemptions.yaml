@@ -35,14 +35,3 @@ exemptions:
       gRPC message-level conformance suite (4/4 checks). A dedicated behavioral
       module would re-assert the same calls with no create/read/list/delete
       lifecycle to cover.
-
-  - service: run
-    reason: >-
-      Cloud Run's behavioral lifecycle is proven by the executor-backed e2e
-      gates under tests/persistent_mode/gcp/cloudrun (`make
-      test-e2e-cloudrun-k8s` on k3d and `make test-e2e-cloudrun-docker` on the
-      local daemon), which need a real K8s/Docker backend and are intentionally
-      outside tests/integration/gcp (that harness boots the emulator with no
-      executor). Cloud Run is wire-gated by the REST wire-conformance and gRPC
-      conformance suites, and its data plane by the k3d gate asserted in
-      docs/GA.md.

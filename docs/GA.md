@@ -461,15 +461,19 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   Revisions are always-on — there is no idle reaper; a runtime is torn down on service delete, a
   template-changing update, `/_jaiscloud/reset`, or the startup orphan sweep. The proxy maps a
   missing service to `404`, no ready runtime to `503`, a dial failure to `502`, and a timeout to
-  `504`. Cloud Run shares the `/v2/projects/{p}/locations/{l}`
+  `504`. The control plane is gated in CI by the official-client suite
+  `tests/integration/gcp/sdk-run` (`make test-integration-gcp`, plus the async
+  shape under `make test-lro-async-gcp`). Cloud Run shares the `/v2/projects/{p}/locations/{l}`
   namespace with Cloud Functions and Cloud Tasks on the single emulator origin, so it is claimed by
   resource segment (`services`/`revisions`) and by run-prefixed operation ids
   (`operation-run-<uuid>`); the bare `.../operations` list path is path-ambiguous and stays with
   Cloud Functions by design (run operations remain reachable by their prefixed id). Terraform/gcloud
   reach the same surface under a `/run` path prefix; the gRPC surface is the same core, so the
   transports cannot drift, and the stock `run/apiv2` client is gated by the gRPC conformance suite.
-  Jobs, WorkerPools, traffic splitting, autoscaling/scale-to-zero, sidecars, volumes, custom domains,
-  probes and IAM invocation enforcement are not modelled. The k8s executor shares the Pod/ClusterIP-Service lifecycle helper
+  Jobs, WorkerPools, autoscaling/scale-to-zero, sidecars, volumes, custom domains,
+  probes and IAM invocation enforcement are not modelled. Traffic targets are stored and reflected in
+  `trafficStatuses`, but the split is not enforced for invocation (the mock/k8s runtime always
+  proxies to the latest ready revision). The k8s executor shares the Pod/ClusterIP-Service lifecycle helper
   in `internal/k8shelpers` with Managed Kafka; the docker executor (`JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=docker`)
   runs each revision as a container on the local Docker daemon with a published loopback port. Both share the
   routing/proxy code, and neither changes the wire contract. The execution
