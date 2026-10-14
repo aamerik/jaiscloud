@@ -47,6 +47,12 @@ type DockerConfig struct {
 	PollInterval time.Duration
 	// ReapTimeout bounds a best-effort container teardown; defaults to 30s.
 	ReapTimeout time.Duration
+	// Addressing is how the emulator reaches the driver containers it launches:
+	// host (host.docker.internal maps to the daemon host) or container (the
+	// driver reaches the emulator by name on the shared network). The zero value
+	// is host mode. The startup wiring resolves it with docker.ResolveAddressing
+	// and gates docker mode on docker.Probe.
+	Addressing docker.Addressing
 }
 
 // DockerHandle identifies a submitted Docker driver container. It is opaque to
@@ -68,6 +74,7 @@ type DockerDriver struct {
 	client       *docker.Client
 	platform     *platform.PlatformConfig
 	instanceID   string
+	addr         docker.Addressing
 	pollInterval time.Duration
 	reapTimeout  time.Duration
 	logger       *slog.Logger
@@ -97,6 +104,7 @@ func NewDockerDriver(cfg DockerConfig) *DockerDriver {
 		client:       docker.New(docker.Config{Logger: logger, Socket: cfg.Socket, Client: cfg.Client}),
 		platform:     cfg.Platform,
 		instanceID:   cfg.InstanceID,
+		addr:         cfg.Addressing,
 		pollInterval: poll,
 		reapTimeout:  reap,
 		logger:       logger,
@@ -234,10 +242,17 @@ type dockerDriverSpec struct {
 func (d *DockerDriver) startContainer(ctx context.Context, spec dockerDriverSpec) (string, error) {
 	hostCfg := map[string]any{
 		"AutoRemove": false,
+	}
+	if !d.addr.Containerized() {
 		// Make the emulator host reachable from the container under the same
 		// name the Iceberg/HMS harnesses use, so a GCSEndpoint of
-		// http://host.docker.internal:<port> resolves.
-		"ExtraHosts": []string{"host.docker.internal:host-gateway"},
+		// http://host.docker.internal:<port> resolves. In container deployment
+		// mode the emulator is not on the daemon host — the driver reaches it by
+		// name on the shared network instead.
+		hostCfg["ExtraHosts"] = []string{"host.docker.internal:host-gateway"}
+	}
+	if d.addr.Network != "" {
+		hostCfg["NetworkMode"] = d.addr.Network
 	}
 	var env = append([]string{}, spec.env...)
 	binds, platformEnv, pErr := docker.BindsAndEnv(d.platform)

@@ -89,7 +89,19 @@ func dockerHealthAt(ctx context.Context, socket string) RuntimeEngineHealth {
 	if resp.StatusCode != http.StatusOK {
 		return RuntimeEngineHealth{Available: false, Detail: fmt.Sprintf("docker /_ping = %d%s", resp.StatusCode, ignored)}
 	}
-	return RuntimeEngineHealth{Available: true, Detail: "docker daemon reachable on " + socket + ignored}
+	// The socket answering is not the whole story: a containerized emulator
+	// (its own network namespace, the daemon's filesystem) cannot reach a
+	// workload on a host-published port or bind-mount an emulator-local path.
+	// Report that in the health view rather than claiming the backend works.
+	addr := docker.ResolveAddressing("")
+	if err := addr.Validate(); err != nil {
+		return RuntimeEngineHealth{Available: false, Detail: fmt.Sprintf("docker daemon reachable on %s, but %s%s", socket, err.Error(), ignored)}
+	}
+	detail := "docker daemon reachable on " + socket + ignored
+	if addr.Containerized() {
+		detail = fmt.Sprintf("docker daemon reachable on %s (container deployment: workloads addressed by name on %s)%s", socket, addr.Network, ignored)
+	}
+	return RuntimeEngineHealth{Available: true, Detail: detail}
 }
 
 // kubernetesHealth reports whether the same client the executors use can reach

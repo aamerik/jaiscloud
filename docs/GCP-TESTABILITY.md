@@ -160,23 +160,35 @@ behind a wire-conformant API.
 > fidelity tier; a backend a service does not wire is a capability gap (listed in
 > its cell and the console's availability matrix), not a shallower tier.
 >
-> **Host-only `docker` executor.** The `docker` backend assumes the emulator process
-> runs on the same host as the Docker daemon: it reaches workloads on the host
-> loopback (`127.0.0.1`/`localhost:<publishedPort>`) and bind-mounts emulator-local
-> paths (code archives, layers, the platform TLS PEM bundle). Running the emulator
-> itself as a container (`docker-compose.yml` mounts the socket and defaults
-> `JAISCLOUD_EXECUTOR_MODE=docker`) is therefore **not supported** — the startup
-> probe only checks the socket, reports the backend reachable, and then invocations
-> and mounts fail. Use the `k8s` backend for an in-cluster emulator; the
-> containerized-docker fix is tracked as backlog item **CDE1**.
+> **`docker` executor deployment.** The `docker` backend has two deployments,
+> selected by the emulator's own environment and resolved once at startup by
+> `docker.ResolveAndProbe`. **Host** (the default, and by default the deployment
+> when nothing indicates otherwise) is the emulator process running on the same
+> host as the Docker daemon: it reaches workloads on the host loopback
+> (`127.0.0.1`/`localhost:<publishedPort>`) and bind-mounts emulator-local paths
+> (code archives, layers, the platform TLS PEM bundle). **Container** is the
+> emulator itself running as a container on that daemon (the socket
+> bind-mounted, as `docker-compose.yml` does): it addresses workloads by
+> container name on `JAISCLOUD_DOCKER_NETWORK` (publishing no host port, since a
+> host-published port is unreachable from the emulator's own network namespace)
+> and stages bind sources under `JAISCLOUD_DOCKER_BIND_ROOT`, a directory
+> bind-mounted at the same path on the daemon host. The mode is auto-detected
+> (Docker/Kubernetes container markers) and may be forced with
+> `JAISCLOUD_DOCKER_MODE=host|container`; a host-networked container that shares
+> the daemon host must set `host`. `docker-compose.yml` sets
+> `JAISCLOUD_DOCKER_MODE=container` with the shared network and bind root, so its
+> docker executor works rather than failing after startup.
 >
-> **Startup fallback probe.** A requested `docker`/`k8s` backend is probed once at
-> startup and degrades to `mock` (reported truthfully in the console) when the
-> probe fails: the `docker` probe pings the daemon socket; the `k8s` probe builds
-> the Kubernetes client (`k8shelpers.NewClient`). The `k8s` probe is a
-> client-construction check, not a reachability check — a *configured but
-> unreachable* cluster still reports engine-backed and fails on first use, as in
-> the host-only `docker` case above.
+> **Startup fallback probe.** A requested `docker`/`k8s` backend is probed once
+> at startup and degrades to `mock` (reported truthfully in the console) when the
+> probe fails: the `docker` probe pings the daemon socket **and** validates the
+> deployment addressing (a containerized emulator without
+> `JAISCLOUD_DOCKER_NETWORK` cannot reach its workloads, however reachable the
+> daemon is), so it no longer reports a backend "reachable" that fails on the
+> first invoke or bind mount; the `k8s` probe builds the Kubernetes client
+> (`k8shelpers.NewClient`). The `k8s` probe is a client-construction check, not a
+> reachability check — a *configured but unreachable* cluster still reports
+> engine-backed and fails on first use.
 
 | Depth | Services | What you can actually rely on locally |
 | --- | --- | --- |

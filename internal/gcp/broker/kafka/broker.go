@@ -33,6 +33,7 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	"jaiscloud/internal/docker"
 	core "jaiscloud/internal/gcp/service/managedkafka"
 	"jaiscloud/internal/platform"
 )
@@ -163,6 +164,14 @@ type Config struct {
 	// ReadyTimeout bounds the docker broker readiness wait; defaults to
 	// brokerReadyTimeout.
 	ReadyTimeout time.Duration
+	// Network is the Docker network a docker broker container joins; empty uses
+	// the daemon default (host mode relies on the published loopback port).
+	Network string
+	// Addressing is how the emulator reaches the broker containers it launches:
+	// host (published loopback port) or container (by container name on the
+	// shared network). The zero value is host mode. The startup wiring resolves
+	// it with docker.ResolveAddressing and gates docker mode on docker.Probe.
+	Addressing docker.Addressing
 	// Logger receives lifecycle logs (default slog.Default()).
 	Logger *slog.Logger
 }

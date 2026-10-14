@@ -26,6 +26,7 @@ const dockerInvokeTimeout = 16 * time.Minute
 // warmContainer holds the state of a running Docker container for one function.
 type warmContainer struct {
 	id       string
+	name     string // container name; the address in container deployment mode
 	hostPort int
 	lastUsed time.Time
 	codeDir  string // temp dir holding extracted function code; empty = not mounted
@@ -39,8 +40,9 @@ type DockerExecutor struct {
 	cfg          Config
 	profile      Profile
 	platform     *platform.PlatformConfig
-	docker       *docker.Client // shared Docker Engine API client (local socket)
-	invokeClient *http.Client   // talks to the container's published port over TCP
+	addr         docker.Addressing // how the emulator reaches its containers
+	docker       *docker.Client    // shared Docker Engine API client (local socket)
+	invokeClient *http.Client      // talks to the container's published port over TCP
 	mu           sync.Mutex
 	containers   map[string]*warmContainer // functionName → container
 	nextPort     int
@@ -77,12 +79,15 @@ func NewDockerExecutor(cfg Config, profile Profile, plat *platform.PlatformConfi
 		cfg:        cfg,
 		profile:    profile,
 		platform:   plat,
+		addr:       cfg.Addressing,
 		docker:     docker.New(docker.Config{}),
 		containers: make(map[string]*warmContainer),
 		nextPort:   9100,
 		done:       make(chan struct{}),
-		// The invoke request goes to the container's published port over TCP,
-		// NOT through the Docker API socket the `docker` client dials.
+		// The invoke request reaches the container over TCP — on the published
+		// host loopback port, or by container name on the shared network when
+		// the emulator itself is containerized — NOT through the Docker API
+		// socket the `docker` client dials.
 		invokeClient: &http.Client{Timeout: dockerInvokeTimeout},
 	}
 	for _, opt := range opts {
@@ -104,7 +109,7 @@ func (e *DockerExecutor) Invoke(ctx context.Context, req Request) (Result, error
 	}
 
 	inv := e.profile.Invocation(req)
-	url := fmt.Sprintf("http://localhost:%d%s", c.hostPort, inv.Path)
+	url := e.addr.URL(c.name, e.profile.InvocationPort(), c.hostPort) + inv.Path
 	httpReq, err := http.NewRequestWithContext(ctx, inv.Method, url, bytes.NewReader(inv.Body))
 	if err != nil {
 		return Result{}, fmt.Errorf("executor docker: build request: %w", err)
@@ -199,7 +204,7 @@ func (e *DockerExecutor) getOrStart(ctx context.Context, req Request) (*warmCont
 	e.mu.Unlock()
 
 	image := e.profile.ImageForRuntime(e.cfg, req)
-	id, codeDir, optDir, err := e.startContainer(ctx, req, image, port)
+	name, id, codeDir, optDir, err := e.startContainer(ctx, req, image, port)
 	if err != nil {
 		// Remove the sentinel so the next caller can retry.
 		e.mu.Lock()
@@ -210,16 +215,16 @@ func (e *DockerExecutor) getOrStart(ctx context.Context, req Request) (*warmCont
 		return nil, err
 	}
 
-	c := &warmContainer{id: id, hostPort: port, lastUsed: clock.RealNow(), codeDir: codeDir, optDir: optDir}
+	c := &warmContainer{id: id, name: name, hostPort: port, lastUsed: clock.RealNow(), codeDir: codeDir, optDir: optDir}
 	e.mu.Lock()
 	e.containers[req.FunctionName] = c
 	e.mu.Unlock()
 	return c, nil
 }
 
-func (e *DockerExecutor) startContainer(ctx context.Context, req Request, image string, hostPort int) (id string, codeDir string, optDir string, err error) {
+func (e *DockerExecutor) startContainer(ctx context.Context, req Request, image string, hostPort int) (name string, id string, codeDir string, optDir string, err error) {
 	pfx := e.profile.WorkloadNamePrefix(e.cfg.InstanceID)
-	name := pfx + sanitizeName(req.FunctionName) + "-" + shortID()
+	name = pfx + sanitizeName(req.FunctionName) + "-" + shortID()
 
 	env := DockerEnv(e.profile.RuntimeEnv(e.cfg, req))
 
@@ -239,7 +244,7 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req Request, image 
 	// Extract and mount function code when a code loader is available.
 	if e.codeLoader != nil && req.AccountID != "" && codeKey(req) != "" {
 		if zipBytes, loadErr := e.codeLoader.LoadCode(context.Background(), req.AccountID, codeKey(req), "$LATEST"); loadErr == nil && len(zipBytes) > 0 {
-			if dir, mkErr := os.MkdirTemp("", "executor-code-*"); mkErr == nil {
+			if dir, mkErr := e.addr.TempDir("executor-code-*"); mkErr == nil {
 				if extErr := ExtractZip(zipBytes, dir); extErr == nil {
 					codeDir = dir
 					binds = append(binds, dir+":"+mountDir+":ro")
@@ -253,7 +258,7 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req Request, image 
 	layerDir := e.profile.LayerMountDir()
 	if layerDir != "" && e.layerLoader != nil && len(req.Layers) > 0 {
 		var mkErr error
-		optDir, mkErr = os.MkdirTemp("", "executor-opt-*")
+		optDir, mkErr = e.addr.TempDir("executor-opt-*")
 		if mkErr == nil {
 			anyLayerMounted := false
 			for _, layer := range req.Layers {
@@ -286,11 +291,15 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req Request, image 
 
 	portKey := fmt.Sprintf("%d/tcp", e.profile.InvocationPort())
 	hostConfig := map[string]any{
-		"PortBindings": map[string]any{
-			portKey: []map[string]any{{"HostPort": fmt.Sprintf("%d", hostPort)}},
-		},
-		"NetworkMode": e.cfg.Network,
+		// In container deployment mode the workload is reached by container
+		// name on the shared network, so nothing is published on the host — a
+		// published port would be on the daemon's host, unreachable from the
+		// emulator's own network namespace.
+		"NetworkMode": e.addressNetwork(),
 		"Memory":      int64(req.MemoryMB) * 1024 * 1024,
+	}
+	if bindings := e.addr.PortBindings(e.profile.InvocationPort(), hostPort); bindings != nil {
+		hostConfig["PortBindings"] = bindings
 	}
 	if len(binds) > 0 {
 		hostConfig["Binds"] = binds
@@ -309,25 +318,40 @@ func (e *DockerExecutor) startContainer(ctx context.Context, req Request, image 
 	if args := e.profile.ContainerArgs(req); len(args) > 0 {
 		createBody["Cmd"] = args
 	}
+	// Container mode registers the workload's (DNS-safe, ≤63-byte) network alias
+	// so a long container name is still addressable by name.
+	if nc := e.addr.NetworkingConfig(name); nc != nil {
+		createBody["NetworkingConfig"] = nc
+	}
 	body, _ := json.Marshal(createBody)
 
 	containerID, createErr := e.docker.Create(ctx, name, body)
 	if createErr != nil {
-		return "", codeDir, optDir, createErr
+		return name, "", codeDir, optDir, createErr
 	}
 
 	_, statusCode, startErr := e.docker.Call(ctx, http.MethodPost, "/containers/"+containerID+"/start", nil)
 	if startErr != nil {
-		return "", codeDir, optDir, fmt.Errorf("docker start: %w", startErr)
+		return name, "", codeDir, optDir, fmt.Errorf("docker start: %w", startErr)
 	}
 	if statusCode >= 300 {
-		return "", codeDir, optDir, fmt.Errorf("docker start: HTTP %d", statusCode)
+		return name, "", codeDir, optDir, fmt.Errorf("docker start: HTTP %d", statusCode)
 	}
 
 	// Brief readiness wait.
 	time.Sleep(500 * time.Millisecond)
-	slog.Info("executor docker: started container", "function", req.FunctionName, "port", hostPort)
-	return containerID, codeDir, optDir, nil
+	slog.Info("executor docker: started container", "function", req.FunctionName, "address", e.addr.HostPort(name, e.profile.InvocationPort(), hostPort))
+	return name, containerID, codeDir, optDir, nil
+}
+
+// addressNetwork is the NetworkMode the workload joins: the shared network when
+// the emulator is containerized (so the workload is resolvable by name), else
+// the executor's configured network.
+func (e *DockerExecutor) addressNetwork() string {
+	if e.addr.Network != "" {
+		return e.addr.Network
+	}
+	return e.cfg.Network
 }
 
 func (e *DockerExecutor) removeContainer(functionName string) {
