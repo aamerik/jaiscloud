@@ -146,7 +146,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         server-ui server-ui-gcp stop-server up-docker down-docker up-k8s down-k8s \
         postgres-up postgres-reset postgres-down \
-        test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp \
+        test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp test-gcp-load \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
         test-e2e-lambda-docker test-e2e-lambda-k8s \
@@ -785,6 +785,30 @@ test-throttle-gcp: build-gcp ## Run the opt-in throttle/quota injection live e2e
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-throttle.log; exit 1; fi; sleep 1; \
 	  done; echo "  ready (REST :8080, gRPC :8081, throttle fault injection scoped to storage)"; \
 	  JAISCLOUD_THROTTLE=1 go test -race -count=1 -timeout 120s ./tests/integration/gcp/ -run TestThrottle
+
+LOAD_CONCURRENCY ?= 100
+LOAD_WINDOW      ?= 5s
+LOAD_RACE        ?= 0
+LOAD_LOG         ?= /tmp/jaiscloud-gcp-load.log
+
+test-gcp-load: build-gcp ## GCP load/concurrency gate: hot paths at -c 100 (no 5xx, bounded goroutine/memory growth; LOAD_RACE=1 for a race-instrumented emulator) — local + nightly, not PR CI
+	@if [ "$(LOAD_RACE)" = "1" ]; then \
+	  echo "Building race-instrumented jaiscloud-gcp..."; \
+	  CGO_ENABLED=1 go build -race -o bin/jaiscloud-gcp-load-race ./cmd/jaiscloud-gcp/ || exit 1; \
+	fi
+	@echo "Running GCP load/concurrency gate (concurrency=$(LOAD_CONCURRENCY), window=$(LOAD_WINDOW), race=$(LOAD_RACE))..."
+	@set -e; \
+	  JAISCLOUD_LOAD=1 \
+	  JAISCLOUD_LOAD_CONCURRENCY=$(LOAD_CONCURRENCY) \
+	  JAISCLOUD_LOAD_WINDOW=$(LOAD_WINDOW) \
+	  JAISCLOUD_LOAD_LOG=$(LOAD_LOG) \
+	  JAISCLOUD_GCP_BINARY=$(if $(filter 1,$(LOAD_RACE)),$(CURDIR)/bin/jaiscloud-gcp-load-race,) \
+	  go test -v -count=1 -timeout 10m ./tests/integration/gcp/loadtest/; \
+	  if [ "$(LOAD_RACE)" = "1" ] && grep -q "WARNING: DATA RACE" "$(LOAD_LOG)" 2>/dev/null; then \
+	    echo "ERROR: the race detector reported a data race in jaiscloud-gcp:"; \
+	    grep -n -A25 "WARNING: DATA RACE" "$(LOAD_LOG)"; \
+	    exit 1; \
+	  fi
 
 test-gcp-wire-conformance: ## Offline GCP wire-conformance harness (Discovery snapshots + recorder; tag: gcp_conformance)
 	go test -count=1 -tags gcp_conformance ./tests/gcpconformance/
