@@ -11,6 +11,7 @@
 | rule | flags | fix |
 |---|---|---|
 | `clock` | `time.Now()` / `time.Since()` / `time.Until()` | use `clock.Now()` (business) or `clock.RealNow()` (infrastructure) |
+| `clock-realnow` | a `clock.Now()` driving a wall-clock wait (poll-loop condition, a derived deadline compared inside a loop, or an argument to `time.Sleep`/`After`/`NewTimer`/`NewTicker`/`Tick`/`context.WithDeadline`) | use `clock.RealNow()` for infrastructure time |
 | `resource-prefix` | a literal `projects/…`, `organizations/…` or `folders/…` used to **build** a name (`+` operand or `fmt.Sprintf`/`Sprint`/`Sprintln`/`strings.Join` argument) | build it with `internal/gcp/resource.ResourceID` |
 | `store-sentinel` | `==` / `!=` against `store.ErrNotFound` / `store.ErrAlreadyExists` | use `errors.Is` |
 | `unsafe-assert` | a `.(string)` type assertion not in comma-ok form | use `s, ok := x.(string)` |

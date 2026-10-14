@@ -306,6 +306,59 @@ evidence for any of them.
       paths. Add each client SDK/language in use to the conformance matrix rather
       than assuming one client's pass transfers.
 
+### Clock correctness — business vs infrastructure time (TD15)
+
+`CLAUDE.md` §Time splits the two clocks: `clock.Now()` is the controllable
+**business** clock (frozen/offset by `POST /_jaiscloud/clock`), and
+`clock.RealNow()` is the **infrastructure** wall clock — container lifecycle,
+keepalive/GC tickers, request latency, TLS/token windows, rate-limiter refill.
+Choosing wrong compiles and ships silently. `gcplint`'s `clock` rule bans bare
+`time.Now()`/`time.Since`/`time.Until`; the `clock-realnow` rule flags a
+`clock.Now()` that drives a wall-clock wait — a poll-loop condition, a derived
+deadline compared inside a loop, or an argument to a wall-clock primitive
+(`time.Sleep`/`After`/`NewTimer`/`NewTicker`/`Tick`, `context.WithDeadline`). The
+rule is conservative; deliberate exceptions belong in
+`tools/lint/gcplint/allowlist.txt`.
+
+The TD15 audit classified every `clock.Now`/`clock.RealNow` call site under
+`internal/gcp/**` and `cmd/jaiscloud-gcp`:
+
+| category | example | verdict |
+| --- | --- | --- |
+| business timestamp (wire metadata, state transitions, LRO settle, TTL) | providers/stores, `lro.Pending`, Datastore txn expiry | `clock.Now()` — correct |
+| token-bucket refill / rate limiting | `throttle`, Tasks dispatch bucket | `clock.RealNow()` — correct |
+| container/pod readiness wait | `runexec`, `broker/kafka` | `clock.RealNow()` — correct |
+| resumable-upload session GC/TTL | storage (REST + gRPC), BigQuery | `clock.RealNow()` — correct |
+| bounded long-poll wait | Pub/Sub `longPoll` (REST + gRPC) | was `clock.Now()` — **fixed to `clock.RealNow()`** |
+
+Two sites were genuine misuses: the Pub/Sub `longPoll` deadline in
+`provider/pubsub` and `grpc/pubsub` derived its bounded window from the business
+clock, so a frozen test clock made an empty long poll never return (the loop has
+no other exit). Both now measure the request-bounded window with
+`clock.RealNow()`; the `Pull` retention/ack-deadline inputs stay `clock.Now()`
+(business). Regression tests: `TestPubSubLongPollBoundedFrozenClock` (REST) and
+`TestLongPollBoundedFrozenClock` (gRPC).
+
+**Deferral:** the `clock-realnow` rule does not statically catch the
+token-bucket *elapsed-refill* shape (`now := clock.Now(); now.Sub(last)`), because
+a business "elapsed since" is indistinguishable from an infrastructure one
+without dataflow — the in-tree buckets (`throttle`, Tasks) already use
+`clock.RealNow()` and are covered by review.
+
+Time-driven engines expose a deterministic trigger so a test never sleeps: a
+**real** wall-time ticker for production, plus a synchronous `TickNow` behind an
+admin endpoint driven by the **business** clock.
+
+| engine | deterministic trigger | production ticker | exercised by |
+| --- | --- | --- | --- |
+| Scheduler | `POST /_jaiscloud/scheduler-tick` | 1s `time.NewTicker` | `time_control_test.go`, `sdk-scheduler`, `scheduler_dataproc_hop_k8s` |
+| Tasks | `POST /_jaiscloud/tasks-tick` (+ `RunTask`) | 1s `time.NewTicker` | `sdk-tasks` |
+| Monitoring | `POST /_jaiscloud/monitoring-tick` | 30s `time.NewTicker` | `monitoring_alert_test.go`, `admin/monitoring_tick_test.go` |
+
+Eventarc (the GCP analogue of AWS EventBridge) is **event-driven**, not
+time-driven: delivery runs on the producing event with real HTTP timeouts, so it
+has no tick engine to freeze.
+
 Additional service-specific caveats live in
 [`README-GCP.md` → Known Limitations](../README-GCP.md#known-limitations); read the
 section for every service you touch.

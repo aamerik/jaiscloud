@@ -21,6 +21,7 @@ func TestRules(t *testing.T) {
 
 	analysistest.Run(t, analysistest.TestData(), Analyzer,
 		"jaiscloud/example/clock",
+		"jaiscloud/example/realnow",
 		"jaiscloud/example/prefix",
 		"jaiscloud/example/sentinel",
 		"jaiscloud/example/assert",

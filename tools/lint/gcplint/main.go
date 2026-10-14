@@ -6,6 +6,7 @@
 // Rules:
 //
 //	clock                — time.Now()/time.Since()/time.Until() instead of internal/clock
+//	clock-realnow        — a clock.Now() driving a wall-clock wait/deadline instead of clock.RealNow()
 //	resource-prefix      — a literal "projects/…"/"organizations/…"/"folders/…" used to build a
 //	                       resource name instead of internal/gcp/resource.ResourceID
 //	store-sentinel       — == / != against store.ErrNotFound / store.ErrAlreadyExists
