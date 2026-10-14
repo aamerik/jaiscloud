@@ -118,7 +118,7 @@ func TestCoreChannelRoundTrip(t *testing.T) {
 	if _, err := svc.GetChannel(ctx, "proj", "us-central1", "c1"); err == nil {
 		t.Fatal("expected NotFound after delete")
 	}
-	providers, _, err := svc.ListProviders(ctx, "proj", "us-central1", 0, "")
+	providers, _, err := svc.ListProviders(ctx, "proj", "us-central1", "", "", 0, "")
 	if err != nil || len(providers) == 0 {
 		t.Fatalf("ListProviders = %v, %v", providers, err)
 	}

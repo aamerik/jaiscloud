@@ -11,6 +11,7 @@ package grpcconformance
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	eventarc "cloud.google.com/go/eventarc/apiv1"
 	eventarcpb "cloud.google.com/go/eventarc/apiv1/eventarcpb"
@@ -144,23 +145,68 @@ func checkEAListMessageBuses(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer client.Close()
-	name, err := ensureEAMessageBus(ctx, client, cfg, cfg.ResourceName("gcpc-ea-mb-list"))
+	id := cfg.ResourceName("gcpc-ea-mb-list")
+	name, err := ensureEAMessageBus(ctx, client, cfg, id)
 	if err != nil {
 		return err
 	}
+
+	// The unfiltered list contains the created bus.
+	found := false
 	it := client.ListMessageBuses(ctx, &eventarcpb.ListMessageBusesRequest{Parent: eventarcParent(cfg)})
 	for {
 		got, err := it.Next()
 		if err == iterator.Done {
-			return fmt.Errorf("ListMessageBuses did not include %q", name)
+			break
 		}
 		if err != nil {
 			return fmt.Errorf("ListMessageBuses: %w", err)
 		}
 		if got.GetName() == name {
-			return nil
+			found = true
 		}
 	}
+	if !found {
+		return fmt.Errorf("ListMessageBuses did not include %q", name)
+	}
+
+	// The documented `filter` restricts the list and `orderBy` sorts it: a
+	// client filtering on the created bus's name must see only matches, in
+	// non-increasing name order. Before TD17 both were silently dropped.
+	prev := ""
+	count := 0
+	ordered := client.ListMessageBuses(ctx, &eventarcpb.ListMessageBusesRequest{
+		Parent: eventarcParent(cfg), Filter: fmt.Sprintf("name:%q", id), OrderBy: "name desc",
+	})
+	for {
+		got, err := ordered.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("filtered ListMessageBuses: %w", err)
+		}
+		if !strings.Contains(got.GetName(), id) {
+			return fmt.Errorf("filter name:%q returned %q", id, got.GetName())
+		}
+		if prev != "" && got.GetName() > prev {
+			return fmt.Errorf("orderBy name desc returned %q before %q", prev, got.GetName())
+		}
+		prev = got.GetName()
+		count++
+	}
+	if count == 0 {
+		return fmt.Errorf("filtered ListMessageBuses returned nothing")
+	}
+
+	// An unsupported filter is InvalidArgument, never a silently unfiltered
+	// list.
+	if _, err := client.ListMessageBuses(ctx, &eventarcpb.ListMessageBusesRequest{
+		Parent: eventarcParent(cfg), Filter: "bogus=1",
+	}).Next(); status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("bogus filter code = %v, want InvalidArgument", status.Code(err))
+	}
+	return nil
 }
 
 func checkEAUpdateMessageBus(ctx context.Context, cfg Config) error {

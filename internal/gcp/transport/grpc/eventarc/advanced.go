@@ -35,7 +35,7 @@ func (s *Service) GetMessageBus(ctx context.Context, req *eventarcpb.GetMessageB
 func (s *Service) ListMessageBuses(ctx context.Context, req *eventarcpb.ListMessageBusesRequest) (*eventarcpb.ListMessageBusesResponse, error) {
 	project := s.projectFor(ctx, req.GetParent())
 	rn := core.ParseName(req.GetParent())
-	page, next, err := s.core.ListAdvanced(ctx, project, core.MessageBusKind, rn.Location, int(req.GetPageSize()), req.GetPageToken())
+	page, next, err := s.core.ListAdvanced(ctx, project, core.MessageBusKind, rn.Location, req.GetFilter(), req.GetOrderBy(), int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, grpcutil.GRPCStatus(err)
 	}
@@ -103,7 +103,7 @@ func (s *Service) GetEnrollment(ctx context.Context, req *eventarcpb.GetEnrollme
 func (s *Service) ListEnrollments(ctx context.Context, req *eventarcpb.ListEnrollmentsRequest) (*eventarcpb.ListEnrollmentsResponse, error) {
 	project := s.projectFor(ctx, req.GetParent())
 	rn := core.ParseName(req.GetParent())
-	page, next, err := s.core.ListAdvanced(ctx, project, core.EnrollmentKind, rn.Location, int(req.GetPageSize()), req.GetPageToken())
+	page, next, err := s.core.ListAdvanced(ctx, project, core.EnrollmentKind, rn.Location, req.GetFilter(), req.GetOrderBy(), int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, grpcutil.GRPCStatus(err)
 	}
@@ -161,7 +161,7 @@ func (s *Service) GetPipeline(ctx context.Context, req *eventarcpb.GetPipelineRe
 func (s *Service) ListPipelines(ctx context.Context, req *eventarcpb.ListPipelinesRequest) (*eventarcpb.ListPipelinesResponse, error) {
 	project := s.projectFor(ctx, req.GetParent())
 	rn := core.ParseName(req.GetParent())
-	page, next, err := s.core.ListAdvanced(ctx, project, core.PipelineKind, rn.Location, int(req.GetPageSize()), req.GetPageToken())
+	page, next, err := s.core.ListAdvanced(ctx, project, core.PipelineKind, rn.Location, req.GetFilter(), req.GetOrderBy(), int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, grpcutil.GRPCStatus(err)
 	}
@@ -219,7 +219,7 @@ func (s *Service) GetGoogleApiSource(ctx context.Context, req *eventarcpb.GetGoo
 func (s *Service) ListGoogleApiSources(ctx context.Context, req *eventarcpb.ListGoogleApiSourcesRequest) (*eventarcpb.ListGoogleApiSourcesResponse, error) {
 	project := s.projectFor(ctx, req.GetParent())
 	rn := core.ParseName(req.GetParent())
-	page, next, err := s.core.ListAdvanced(ctx, project, core.GoogleApiSourceKind, rn.Location, int(req.GetPageSize()), req.GetPageToken())
+	page, next, err := s.core.ListAdvanced(ctx, project, core.GoogleApiSourceKind, rn.Location, req.GetFilter(), req.GetOrderBy(), int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, grpcutil.GRPCStatus(err)
 	}
@@ -277,7 +277,9 @@ func (s *Service) GetChannelConnection(ctx context.Context, req *eventarcpb.GetC
 func (s *Service) ListChannelConnections(ctx context.Context, req *eventarcpb.ListChannelConnectionsRequest) (*eventarcpb.ListChannelConnectionsResponse, error) {
 	project := s.projectFor(ctx, req.GetParent())
 	rn := core.ParseName(req.GetParent())
-	page, next, err := s.core.ListAdvanced(ctx, project, core.ChannelConnectionKind, rn.Location, int(req.GetPageSize()), req.GetPageToken())
+	// channelConnections.list documents neither filter nor orderBy, so both are
+	// passed empty (the request message carries no such fields anyway).
+	page, next, err := s.core.ListAdvanced(ctx, project, core.ChannelConnectionKind, rn.Location, "", "", int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, grpcutil.GRPCStatus(err)
 	}

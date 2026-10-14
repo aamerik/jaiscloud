@@ -58,7 +58,7 @@ func TestAdvancedCRUD(t *testing.T) {
 			if err != nil || got.Etag != rec.Etag {
 				t.Fatalf("GetAdvanced = %+v, %v", got, err)
 			}
-			page, _, err := s.ListAdvanced(ctx, "proj", k, "us-central1", 0, "")
+			page, _, err := s.ListAdvanced(ctx, "proj", k, "us-central1", "", "", 0, "")
 			if err != nil || len(page) != 1 {
 				t.Fatalf("ListAdvanced = %d items, %v", len(page), err)
 			}

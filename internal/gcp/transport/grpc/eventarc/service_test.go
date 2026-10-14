@@ -433,3 +433,84 @@ func TestAdvancedIAMGRPC(t *testing.T) {
 		t.Fatalf("missing pipeline IAM = %v, want NotFound", err)
 	}
 }
+
+// TestListMessageBusesFilterAndOrder verifies the documented filter/orderBy
+// request fields reach the core through gRPC rather than being dropped (TD17).
+func TestListMessageBusesFilterAndOrder(t *testing.T) {
+	ctx := context.Background()
+	s := newGRPCService()
+	parent := "projects/proj/locations/us-central1"
+	for _, mb := range []struct{ id, dn, env string }{
+		{"mb1", "alpha", "test"}, {"mb2", "beta", "prod"}, {"mb3", "gamma", "test"},
+	} {
+		if _, err := s.CreateMessageBus(ctx, &eventarcpb.CreateMessageBusRequest{
+			Parent: parent, MessageBusId: mb.id,
+			MessageBus: &eventarcpb.MessageBus{DisplayName: mb.dn, Labels: map[string]string{"env": mb.env}},
+		}); err != nil {
+			t.Fatalf("CreateMessageBus %s: %v", mb.id, err)
+		}
+	}
+
+	names := func(req *eventarcpb.ListMessageBusesRequest) []string {
+		t.Helper()
+		list, err := s.ListMessageBuses(ctx, req)
+		if err != nil {
+			t.Fatalf("ListMessageBuses(%v): %v", req, err)
+		}
+		out := make([]string, 0, len(list.GetMessageBuses()))
+		for _, mb := range list.GetMessageBuses() {
+			out = append(out, mb.GetName())
+		}
+		return out
+	}
+
+	got := names(&eventarcpb.ListMessageBusesRequest{Parent: parent, Filter: "labels.env=test"})
+	want := []string{
+		"projects/proj/locations/us-central1/messageBuses/mb1",
+		"projects/proj/locations/us-central1/messageBuses/mb3",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("filtered message buses = %v, want %v", got, want)
+	}
+
+	got = names(&eventarcpb.ListMessageBusesRequest{Parent: parent, OrderBy: "name desc"})
+	want = []string{
+		"projects/proj/locations/us-central1/messageBuses/mb3",
+		"projects/proj/locations/us-central1/messageBuses/mb2",
+		"projects/proj/locations/us-central1/messageBuses/mb1",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("message buses orderBy name desc = %v, want %v", got, want)
+	}
+
+	if _, err := s.ListMessageBuses(ctx, &eventarcpb.ListMessageBusesRequest{Parent: parent, Filter: "bogus=1"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("bad filter code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
+// TestListProvidersFilterAndOrder verifies providers.list honors filter/orderBy
+// through gRPC (TD17).
+func TestListProvidersFilterAndOrder(t *testing.T) {
+	ctx := context.Background()
+	s := newGRPCService()
+	parent := "projects/proj/locations/us-central1"
+
+	list, err := s.ListProviders(ctx, &eventarcpb.ListProvidersRequest{Parent: parent, OrderBy: "displayName desc"})
+	if err != nil {
+		t.Fatalf("ListProviders: %v", err)
+	}
+	if len(list.GetProviders()) < 2 {
+		t.Fatalf("providers = %v", list.GetProviders())
+	}
+	if list.GetProviders()[0].GetDisplayName() != "Cloud Storage" {
+		t.Errorf("first provider = %q, want Cloud Storage", list.GetProviders()[0].GetDisplayName())
+	}
+
+	list, err = s.ListProviders(ctx, &eventarcpb.ListProvidersRequest{Parent: parent, Filter: `displayName:"Storage"`})
+	if err != nil {
+		t.Fatalf("ListProviders filter: %v", err)
+	}
+	if len(list.GetProviders()) != 1 || list.GetProviders()[0].GetDisplayName() != "Cloud Storage" {
+		t.Errorf("filtered providers = %v", list.GetProviders())
+	}
+}

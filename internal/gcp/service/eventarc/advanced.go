@@ -144,6 +144,12 @@ var AdvancedKinds = []Kind{
 	MessageBusKind, EnrollmentKind, PipelineKind, GoogleApiSourceKind, ChannelConnectionKind,
 }
 
+// HasListParams reports whether the kind's list method documents the
+// filter/orderBy request parameters. Every advanced collection except
+// channelConnections — whose Discovery method carries only pageSize/pageToken —
+// does.
+func (k Kind) HasListParams() bool { return k != ChannelConnectionKind }
+
 // advancedNotFound builds the canonical NotFound error for a kind.
 func advancedNotFound(k Kind) error {
 	return model.NewProviderError("NotFound", strings.ToLower(k.Proto)+" not found", 404)
@@ -224,7 +230,8 @@ func (s *Service) getAdvanced(ctx context.Context, project string, k Kind, locat
 	return rec, nil
 }
 
-// listAdvancedAll returns every record of a kind in a location, sorted by id.
+// listAdvancedAll returns every record of a kind in a location (unordered; the
+// caller filters and orders).
 func (s *Service) listAdvancedAll(ctx context.Context, project string, k Kind, location string) ([]AdvancedRecord, error) {
 	if s.resources == nil {
 		return nil, nil
@@ -514,16 +521,37 @@ func (s *Service) GetAdvanced(ctx context.Context, project string, k Kind, locat
 	return s.getAdvanced(ctx, project, k, location, id)
 }
 
-// ListAdvanced returns a cursor page of a collection in a location.
-func (s *Service) ListAdvanced(ctx context.Context, project string, k Kind, location string, pageSize int, pageToken string) ([]AdvancedRecord, string, error) {
+// ListAdvanced returns a cursor page of a collection in a location, restricted
+// by the AIP-160 filter and ordered by orderBy (both documented on the
+// collection's list method; see listparams.go). An empty filter matches every
+// record and an empty orderBy is the default ascending-by-id order.
+func (s *Service) ListAdvanced(ctx context.Context, project string, k Kind, location, filter, orderBy string, pageSize int, pageToken string) ([]AdvancedRecord, string, error) {
 	if location == "" {
 		return nil, "", invalidArgument("missing location")
+	}
+	label := "eventarc " + k.ListMethod
+	compiledFilter, err := compileListFilter(label, filter, advancedFilterFields(project, k))
+	if err != nil {
+		return nil, "", err
+	}
+	order, err := advancedOrderSpec(k).Parse(orderBy)
+	if err != nil {
+		return nil, "", invalidArgument(label + " orderBy: " + err.Error())
 	}
 	recs, err := s.listAdvancedAll(ctx, project, k, location)
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(recs, func(r AdvancedRecord) string { return r.ID }, pageParams(pageSize, pageToken))
+	filtered := make([]AdvancedRecord, 0, len(recs))
+	for _, r := range recs {
+		if compiledFilter.match(r) {
+			filtered = append(filtered, r)
+		}
+	}
+	// The page cursor is applied after the filter and in the caller's order, so
+	// paginating a filtered/ordered list never resumes in a different one.
+	order.Sort(filtered)
+	page, next := paging.PageOrdered(filtered, pageParams(pageSize, pageToken), order.Cursor, order.AfterCursor)
 	return page, next, nil
 }
 

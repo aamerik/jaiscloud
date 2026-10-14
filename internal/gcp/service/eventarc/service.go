@@ -852,16 +852,23 @@ func (s *Service) GetChannel(ctx context.Context, project, location, channelID s
 	return c, nil
 }
 
-// ListChannels returns a cursor page of the channels in a location.
-func (s *Service) ListChannels(ctx context.Context, project, location string, pageSize int, pageToken string) ([]eventarcstore.Channel, string, error) {
+// ListChannels returns a cursor page of the channels in a location, ordered by
+// the documented channels.list orderBy (see listparams.go). An empty orderBy is
+// the default ascending-by-name order.
+func (s *Service) ListChannels(ctx context.Context, project, location, orderBy string, pageSize int, pageToken string) ([]eventarcstore.Channel, string, error) {
 	if location == "" {
 		return nil, "", invalidArgument("missing location")
+	}
+	order, err := channelOrderSpec.Parse(orderBy)
+	if err != nil {
+		return nil, "", invalidArgument("eventarc ListChannels orderBy: " + err.Error())
 	}
 	channels, err := s.store.ListChannels(ctx, project, location)
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(channels, func(c eventarcstore.Channel) string { return c.Name }, pageParams(pageSize, pageToken))
+	order.Sort(channels)
+	page, next := paging.PageOrdered(channels, pageParams(pageSize, pageToken), order.Cursor, order.AfterCursor)
 	return page, next, nil
 }
 
