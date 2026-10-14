@@ -12,18 +12,20 @@
 // deferred and route to an explicit Unimplemented (501) rather than the
 // codec's 404.
 //
-// jobs.insert also accepts a configuration.load job: a single gs:// source
-// object (resolved through the injected SourceReader against the emulated GCS)
-// is decoded as NEWLINE_DELIMITED_JSON or CSV, coerced to the destination
-// schema and written per writeDisposition, synchronously, with statistics.load
-// on the job. The same decoder backs the media-upload endpoint the official
-// clients use for load_table_from_file: a multipart/related jobs.insert, or a
-// resumable session (POST /upload/bigquery/v2/.../jobs then PUT chunks with
-// Content-Range). Everything outside that subset (autodetect, Parquet/Avro/ORC,
-// compression, wildcards, partitioning, a non-default quote) fails loud
-// (400/501); a data-level failure (too many bad records, WRITE_EMPTY on a
-// non-empty table) is reported in status.errorResult like real BigQuery. See
-// load.go.
+// jobs.insert also accepts a configuration.load job: one or more gs:// source
+// objects (a single object, a single-'*' wildcard, or a list; resolved through
+// the injected SourceReader against the emulated GCS) are decoded as
+// NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro — gzip is auto-detected for the
+// text formats — coerced to the destination schema (explicit or autodetected)
+// and written per writeDisposition, synchronously, with statistics.load on the
+// job. The same decoder backs the media-upload endpoint the official clients use
+// for load_table_from_file: a multipart/related jobs.insert, or a resumable
+// session (POST /upload/bigquery/v2/.../jobs then PUT chunks with Content-Range).
+// Everything outside that subset (ORC, partitioning/clustering,
+// schemaUpdateOptions, a non-default quote/encoding, a multi-'*' wildcard)
+// fails loud (400/501); a data-level failure (too many bad records, WRITE_EMPTY
+// on a non-empty table) is reported in status.errorResult like real BigQuery.
+// See load.go.
 //
 // Known limitations (emulator simplifications, documented rather than fixed):
 //   - tabledata.insertAll honors insertId (best-effort duplicate suppression
@@ -42,6 +44,14 @@
 //   - List methods emit the Discovery summary subsets: datasets.list uses
 //     DatasetList.datasets, tables.list uses TableList.tables, and jobs.list
 //     uses JobList.jobs (ListFormatJob, which omits etag).
+//   - jobs.query/getQueryResults honor result-set paging: jobs.query honors
+//     maxResults (returning pageRowCount + pageToken) and getQueryResults
+//     honors maxResults/pageToken/startIndex. Like real GCP's jobs.query, an
+//     unset maxResults imposes no row limit (only the engine's scan guard
+//     applies), so the complete bounded result set is returned in one page;
+//     getQueryResults likewise returns the whole set when maxResults is unset.
+//     getQueryResults re-executes the stored query (BQ6: the store stays the
+//     single source of truth, so a write between pages is visible).
 //   - projects.getServiceAccount returns a synthetic
 //     bq-{project}@gcp-sa-bigquery.iam.gserviceaccount.com email rather than a
 //     real service account.
@@ -168,6 +178,40 @@ func mapValue(m map[string]any, key string) map[string]any {
 func strValue(m map[string]any, key string) string {
 	s, _ := m[key].(string)
 	return s
+}
+
+// maxResultsBody parses the optional maxResults field off a decoded jobs.query
+// request body, defaulting to 0 (no page limit). A present but non-integer or
+// negative value is InvalidArgument, matching the real API's rejection.
+func maxResultsBody(m map[string]any) (int, error) {
+	raw, ok := m["maxResults"]
+	if !ok || raw == nil {
+		return 0, nil
+	}
+	switch v := raw.(type) {
+	case float64:
+		if v < 0 || float64(int(v)) != v {
+			return 0, invalidArgument("maxResults must be a non-negative integer")
+		}
+		return int(v), nil
+	case int:
+		if v < 0 {
+			return 0, invalidArgument("maxResults must be a non-negative integer")
+		}
+		return v, nil
+	case int64:
+		if v < 0 {
+			return 0, invalidArgument("maxResults must be a non-negative integer")
+		}
+		return int(v), nil
+	case string:
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return 0, invalidArgument("maxResults must be a non-negative integer")
+		}
+		return n, nil
+	}
+	return 0, invalidArgument("maxResults must be a non-negative integer")
 }
 
 func stringMap(m map[string]any, key string) map[string]string {
@@ -429,6 +473,9 @@ func (p *Provider) GetDataset(ctx context.Context, nr *model.NormalizedRequest) 
 }
 
 func (p *Provider) ListDatasets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if _, err := nonNegativeIntParam(nr, "maxResults"); err != nil {
+		return nil, err
+	}
 	datasets, err := p.store.ListDatasets(ctx, projectOf(nr))
 	if err != nil {
 		return nil, err
@@ -546,6 +593,9 @@ func (p *Provider) ListTables(ctx context.Context, nr *model.NormalizedRequest) 
 	datasetID := strParam(nr, "datasetId")
 	if datasetID == "" {
 		return nil, invalidArgument("datasetId is required")
+	}
+	if _, err := nonNegativeIntParam(nr, "maxResults"); err != nil {
+		return nil, err
 	}
 	tables, err := p.store.ListTables(ctx, projectOf(nr), datasetID)
 	if err != nil {
@@ -895,8 +945,11 @@ func (p *Provider) ListRows(ctx context.Context, nr *model.NormalizedRequest) (*
 	if datasetID == "" || tableID == "" {
 		return nil, invalidArgument("datasetId and tableId are required")
 	}
-	startIndex, err := startIndexParam(nr)
+	startIndex, err := nonNegativeIntParam(nr, "startIndex")
 	if err != nil {
+		return nil, err
+	}
+	if _, err := nonNegativeIntParam(nr, "maxResults"); err != nil {
 		return nil, err
 	}
 	t, err := p.store.GetTable(ctx, projectOf(nr), datasetID, tableID)
@@ -934,16 +987,17 @@ func (p *Provider) ListRows(ctx context.Context, nr *model.NormalizedRequest) (*
 	return provider.OK(resp), nil
 }
 
-// startIndexParam parses the tabledata.list startIndex query parameter,
-// defaulting to 0. A non-numeric or negative value is InvalidArgument.
-func startIndexParam(nr *model.NormalizedRequest) (int, error) {
-	raw := strParam(nr, "startIndex")
+// nonNegativeIntParam parses an optional non-negative integer query parameter,
+// defaulting to 0 when absent. A non-numeric or negative value is
+// InvalidArgument (real GCP rejects a malformed uint32 rather than ignoring it).
+func nonNegativeIntParam(nr *model.NormalizedRequest, key string) (int, error) {
+	raw := strParam(nr, key)
 	if raw == "" {
 		return 0, nil
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 0 {
-		return 0, invalidArgument("startIndex must be a non-negative integer")
+		return 0, invalidArgument(key + " must be a non-negative integer")
 	}
 	return n, nil
 }
@@ -1259,6 +1313,9 @@ func (p *Provider) GetJob(ctx context.Context, nr *model.NormalizedRequest) (*mo
 }
 
 func (p *Provider) ListJobs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	if _, err := nonNegativeIntParam(nr, "maxResults"); err != nil {
+		return nil, err
+	}
 	jobs, err := p.store.ListJobs(ctx, projectOf(nr))
 	if err != nil {
 		return nil, err
@@ -1307,6 +1364,10 @@ func (p *Provider) Query(ctx context.Context, nr *model.NormalizedRequest) (*mod
 	if boolValue(body, "useLegacySql") {
 		return nil, invalidQuery("legacy SQL is not supported; use standard SQL (useLegacySql=false)")
 	}
+	maxResults, err := maxResultsBody(body)
+	if err != nil {
+		return nil, err
+	}
 	if boolValue(body, "dryRun") {
 		// Dry run: validate the query (surfacing the same errors a real run
 		// would) but perform no DDL/DML mutation, return no rows, and persist
@@ -1353,13 +1414,31 @@ func (p *Provider) Query(ctx context.Context, nr *model.NormalizedRequest) (*mod
 	if err := p.store.CreateJob(ctx, projectOf(nr), j); err != nil {
 		return nil, mapErr(err)
 	}
-	return provider.OK(encodeQueryResult("queryResponse", projectOf(nr), jobID, strValue(body, "location"), res, false)), nil
+	resp := encodeQueryResult("queryResponse", projectOf(nr), jobID, strValue(body, "location"), res, false)
+	// maxResults pages the result set: a truncated first page carries a
+	// pageToken the client passes to getQueryResults for the next page.
+	pageQueryResponse(resp, 0, maxResults, true)
+	return provider.OK(resp), nil
 }
 
 func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	jobID := strParam(nr, "jobId")
 	if jobID == "" {
 		return nil, invalidArgument("jobId is required")
+	}
+	// Validate the paging input up front so it is rejected the same way for a
+	// SELECT job and a DML/DDL job (which returns before executing anything).
+	startIndex, err := nonNegativeIntParam(nr, "startIndex")
+	if err != nil {
+		return nil, err
+	}
+	maxResults, err := nonNegativeIntParam(nr, "maxResults")
+	if err != nil {
+		return nil, err
+	}
+	start, err := resolveResultPageStart(startIndex, strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
 	}
 	j, err := p.store.GetJob(ctx, projectOf(nr), jobID)
 	if err != nil {
@@ -1387,7 +1466,9 @@ func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(encodeQueryResult("getQueryResultsResponse", projectOf(nr), jobID, jobLocation(j), res, false)), nil
+	resp := encodeQueryResult("getQueryResultsResponse", projectOf(nr), jobID, jobLocation(j), res, false)
+	pageQueryResponse(resp, start, maxResults, false)
+	return provider.OK(resp), nil
 }
 
 // jobQueryStats returns the statementType and DML affected-row count persisted

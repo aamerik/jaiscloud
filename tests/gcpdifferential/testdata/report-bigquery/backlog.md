@@ -81,7 +81,7 @@ HTTP 400, 12 accepted divergence(s) triaged.
 
 SQL: `SELECT dept_id, COUNT(*) FROM employees GROUP BY dept_id ORDER BY dept_id`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -91,7 +91,7 @@ HTTP 200, 11 accepted divergence(s) triaged.
 
 SQL: `SELECT 1 + 'a'`
 
-HTTP 200, 7 accepted divergence(s) triaged.
+HTTP 200, 8 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -102,7 +102,7 @@ HTTP 200, 7 accepted divergence(s) triaged.
 
 SQL: `SELECT 1/0`
 
-HTTP 200, 7 accepted divergence(s) triaged.
+HTTP 200, 8 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -113,7 +113,7 @@ HTTP 200, 7 accepted divergence(s) triaged.
 
 SQL: `SELECT CASE WHEN 1=1 THEN 'y' ELSE 'n' END`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -124,7 +124,7 @@ HTTP 200, 11 accepted divergence(s) triaged.
 
 SQL: `SELECT CAST(3.7 AS INT64)`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -304,7 +304,7 @@ HTTP 400, 12 accepted divergence(s) triaged.
 
 SQL: `SELECT id FROM nums ORDER BY id LIMIT 1 OFFSET 1`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -314,7 +314,7 @@ HTTP 200, 11 accepted divergence(s) triaged.
 
 SQL: `SELECT id FROM nums ORDER BY id DESC LIMIT 2`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -324,7 +324,7 @@ HTTP 200, 11 accepted divergence(s) triaged.
 
 SQL: `SELECT id FROM nums WHERE id > 1 ORDER BY id`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -334,7 +334,7 @@ HTTP 200, 11 accepted divergence(s) triaged.
 
 SQL: `SELECT a.id, b.id FROM nums a JOIN nums b ON a.id = b.id ORDER BY a.id`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -346,7 +346,7 @@ HTTP 200, 11 accepted divergence(s) triaged.
 
 SQL: `SELECT 1 = NULL`
 
-HTTP 200, 7 accepted divergence(s) triaged.
+HTTP 200, 8 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -357,7 +357,7 @@ HTTP 200, 7 accepted divergence(s) triaged.
 
 SQL: `SELECT NULL = NULL`
 
-HTTP 200, 7 accepted divergence(s) triaged.
+HTTP 200, 8 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -368,7 +368,7 @@ HTTP 200, 7 accepted divergence(s) triaged.
 
 SQL: `SELECT NULL`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -413,7 +413,7 @@ HTTP 400, 12 accepted divergence(s) triaged.
 
 SQL: `SELECT id FROM nums WHERE id > 1 UNION ALL SELECT id FROM nums WHERE id < 3 ORDER BY id`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -440,7 +440,7 @@ HTTP 400, 12 accepted divergence(s) triaged.
 
 SQL: `SELECT id FROM (SELECT id FROM nums WHERE id > 1) ORDER BY id`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -450,7 +450,7 @@ HTTP 200, 11 accepted divergence(s) triaged.
 
 SQL: `SELECT id FROM nums WHERE id IN (SELECT id FROM nums WHERE id > 1) ORDER BY id`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -460,7 +460,7 @@ HTTP 200, 11 accepted divergence(s) triaged.
 
 SQL: `SELECT id, COUNT(*) OVER () c FROM nums ORDER BY id`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -470,7 +470,7 @@ HTTP 200, 11 accepted divergence(s) triaged.
 
 SQL: `SELECT id, LAG(id) OVER (ORDER BY id) lg FROM nums ORDER BY id`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -497,7 +497,7 @@ HTTP 400, 12 accepted divergence(s) triaged.
 
 SQL: `SELECT id, RANK() OVER (ORDER BY id) rk FROM nums ORDER BY id`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
@@ -507,7 +507,7 @@ HTTP 200, 11 accepted divergence(s) triaged.
 
 SQL: `SELECT id, ROW_NUMBER() OVER (ORDER BY id) rn FROM nums ORDER BY id`
 
-HTTP 200, 11 accepted divergence(s) triaged.
+HTTP 200, 10 accepted divergence(s) triaged.
 
 | kind | location | real GCP | emulator |
 | --- | --- | --- | --- |
