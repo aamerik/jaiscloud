@@ -1,4 +1,4 @@
-# Behavioural depth record - workflows (TD1).
+# Behavioural depth record - workflows (TD1, filled in by TD9).
 #
 # p2-p5 are defined in docs/GCP-TESTABILITY.md §10. Each class is either
 # `present` (asserted by the official-client suite(s) listed) or `exempt`
@@ -7,21 +7,18 @@
 service: workflows
 classes:
   p2:
-    state: exempt
-    reason: "no concurrent execution contention suite"
-    owner: TD9
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-workflows]
+    note: "eight goroutines racing one workflowId produce exactly one winner and 409 losers; eight concurrent sourceContents updates each mint a distinct revision with no lost update (the store's atomic update serialises them) — asserted from a -race client"
   p3:
     state: present
     suites: [sdk-workflows]
-    note: "malformed source and failing-step error envelopes"
+    note: "a malformed sourceContents and an invalid workflowId are rejected at create with 400 (the definition is validated with the engine's own parser before it is stored, as real Cloud Workflows does), a duplicate workflowId is 409, and an unknown workflow or workflow revision is 404"
   p4:
-    state: exempt
-    reason: "no execution/revision listing+filter suite"
-    owner: TD9
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-workflows]
+    note: "workflows.list honours filter and orderBy composed with pageSize/pageToken: the suite walks a page, filters by labels.<key> and name (labels.\"key\":value included) and sorts by name desc, while the remaining accepted fields (state, revisionId, createTime, updateTime) are asserted by the package unit tests; a filter or orderBy outside the grammar fails loud with 400 rather than returning an unfiltered/default-ordered list"
   p5:
-    state: exempt
-    reason: "no long-running execution/cancel suite"
-    owner: TD9
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-workflows]
+    note: "listRevisions is walked page-by-page newest-first and the revision lineage holds: a sourceContents change mints a revision, a description-only change does not, and a named revision returns its immutable source snapshot (the async-LRO operations.get poll over the create operation is covered by sdk-workflows under JAISCLOUD_LRO_ASYNC=1)"

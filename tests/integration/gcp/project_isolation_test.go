@@ -236,6 +236,16 @@ const isoWorkflowExecParent = "iso-wf"
 // rejects a non-mapping source), passed as a JSON sourceContents string.
 const isoWorkflowSource = `{"sourceContents":"main:\n  steps:\n    - done:\n        return: 1\n"}`
 
+// seedIsoWorkflowExecParent creates the parent workflow executions hang off,
+// tolerating AlreadyExists: both the create leg and the negative-side list leg
+// seed it, and executions.list under an unknown workflow is 404.
+func seedIsoWorkflowExecParent(t *testing.T, p string) {
+	t.Helper()
+	wfPath := fmt.Sprintf("/v1/projects/%s/locations/us-central1/workflows?workflowId=%s", p, isoWorkflowExecParent)
+	st, b := isoCall(t, "POST", wfPath, isoWorkflowSource)
+	require.Contains(t, []int{http.StatusOK, http.StatusConflict}, st, "seed parent workflow in %s: %s", p, string(b))
+}
+
 const isoMonitorPolicyBody = `{"displayName":"iso","combiner":"OR","enabled":true,"conditions":[{"displayName":"c","conditionThreshold":{"filter":"metric.type = \"custom.googleapis.com/iso\"","comparison":"COMPARISON_GT","thresholdValue":1}}]}`
 
 // isoMonitorChannelBody is a printf template taking the owning project.
@@ -288,15 +298,17 @@ func isoIDCases() []idCase {
 			// on the emulator surface, so the delete leg is skipped.
 			name: "workflowexecutions",
 			create: func(t *testing.T, p string) string {
-				wfPath := fmt.Sprintf("/v1/projects/%s/locations/us-central1/workflows?workflowId=%s", p, isoWorkflowExecParent)
-				st, b := isoCall(t, "POST", wfPath, isoWorkflowSource)
-				require.Equal(t, http.StatusOK, st, "seed parent workflow in %s: %s", p, string(b))
+				seedIsoWorkflowExecParent(t, p)
 				execPath := fmt.Sprintf("/v1/projects/%s/locations/us-central1/workflows/%s/executions", p, isoWorkflowExecParent)
-				st, b = isoCall(t, "POST", execPath, "{}")
+				st, b := isoCall(t, "POST", execPath, "{}")
 				require.Equal(t, http.StatusOK, st, "create execution in %s: %s", p, string(b))
 				return isoIDFromBody(t, b, "execution in "+p)
 			},
 			list: func(t *testing.T, p string) []string {
+				// The negative-side list runs in a project that never created
+				// an execution; its parent workflow must still exist for
+				// executions.list to succeed (an unknown parent is 404).
+				seedIsoWorkflowExecParent(t, p)
 				path := fmt.Sprintf("/v1/projects/%s/locations/us-central1/workflows/%s/executions", p, isoWorkflowExecParent)
 				return isoNameLeaves(t, isoGET(t, path), "executions")
 			},
@@ -515,7 +527,7 @@ func isoCases() []isoCase {
 			name: "workflows",
 			create: func(t *testing.T, p, leaf string) {
 				path := fmt.Sprintf("/v1/projects/%s/locations/us-central1/workflows?workflowId=%s", p, leaf)
-				st, b := isoCall(t, "POST", path, `{"sourceContents":"main:{steps:[]}"}`)
+				st, b := isoCall(t, "POST", path, isoWorkflowSource)
 				require.Equal(t, http.StatusOK, st, "create workflow in %s: %s", p, string(b))
 			},
 			list: func(t *testing.T, p, leaf string) []string {

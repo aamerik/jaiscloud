@@ -48,7 +48,7 @@ function emptyInput(): FormState {
     description: '',
     serviceAccount: '',
     callLogLevel: 'LOG_ERRORS_ONLY',
-    sourceContents: 'main:\n  steps:\n    - return: "hello"\n',
+    sourceContents: 'main:\n  steps:\n    - done:\n        return: "hello"\n',
     labels: '',
     userEnvVars: '',
   }

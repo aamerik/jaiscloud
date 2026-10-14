@@ -95,6 +95,7 @@ func (p *Provider) project(nr *model.NormalizedRequest) string {
 func (p *Provider) ListWorkflows(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
 	page, next, err := p.core.ListWorkflows(ctx, project, strParam(nr, "location"),
+		strParam(nr, "filter"), strParam(nr, "orderBy"),
 		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err

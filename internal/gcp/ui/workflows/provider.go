@@ -106,7 +106,7 @@ func (p *Provider) DeleteWorkflow(ctx context.Context, project, location, id str
 
 // ListExecutions implements ProviderInterface, always at full view.
 func (p *Provider) ListExecutions(ctx context.Context, project, location, workflowID string, pageSize int, pageToken string) ([]workflowsstore.Execution, string, error) {
-	return p.executions.ListExecutions(ctx, project, location, workflowID, workflowexecutionscore.ViewFull, pageSize, pageToken)
+	return p.executions.ListExecutions(ctx, project, location, workflowID, workflowexecutionscore.ViewFull, "", "", pageSize, pageToken)
 }
 
 // GetExecution implements ProviderInterface, always at full view.

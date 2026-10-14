@@ -56,6 +56,7 @@ func (s *Service) projectFor(ctx context.Context, name string) string {
 func (s *Service) ListWorkflows(ctx context.Context, req *workflowspb.ListWorkflowsRequest) (*workflowspb.ListWorkflowsResponse, error) {
 	project := s.projectFor(ctx, req.GetParent())
 	page, next, err := s.core.ListWorkflows(ctx, project, core.LocationFromName(req.GetParent()),
+		req.GetFilter(), req.GetOrderBy(),
 		int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, mapError(err)

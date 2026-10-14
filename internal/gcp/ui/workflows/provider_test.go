@@ -8,6 +8,11 @@ import (
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
 )
 
+// validSource is a minimal structurally-valid workflow definition. create and
+// update validate the definition (as real Cloud Workflows does), so these
+// management-path tests must seed a source the engine accepts.
+const validSource = "main:\n  steps:\n    - done:\n        return: ok\n"
+
 // newTestProvider wires the real Workflows core over a memory store. The
 // executions core is nil: these tests exercise the management path only.
 func newTestProvider() (*Provider, *workflowscore.Service) {
@@ -19,8 +24,8 @@ func TestProvider_ListWorkflowsByProject_AggregatesAndSorts(t *testing.T) {
 	p, core := newTestProvider()
 	ctx := context.Background()
 	for _, in := range []workflowscore.CreateInput{
-		{ID: "alpha", SourceContents: "main: 1"},
-		{ID: "beta", SourceContents: "main: 2"},
+		{ID: "alpha", SourceContents: validSource},
+		{ID: "beta", SourceContents: validSource},
 	} {
 		loc := "us-central1"
 		if in.ID == "beta" {
@@ -31,7 +36,7 @@ func TestProvider_ListWorkflowsByProject_AggregatesAndSorts(t *testing.T) {
 		}
 	}
 	// A different project must not leak in.
-	if _, _, err := core.CreateWorkflow(ctx, "other-project", "us-central1", workflowscore.CreateInput{ID: "gamma", SourceContents: "main: 3"}); err != nil {
+	if _, _, err := core.CreateWorkflow(ctx, "other-project", "us-central1", workflowscore.CreateInput{ID: "gamma", SourceContents: validSource}); err != nil {
 		t.Fatalf("seed other project: %v", err)
 	}
 
@@ -55,7 +60,7 @@ func TestProvider_UpdateWorkflow_DefaultMaskRoundTripsSource(t *testing.T) {
 	p, core := newTestProvider()
 	ctx := context.Background()
 	created, _, err := core.CreateWorkflow(ctx, "test-project", "us-central1", workflowscore.CreateInput{
-		ID: "alpha", SourceContents: "ORIGINAL", Description: "d",
+		ID: "alpha", SourceContents: validSource, Description: "d",
 	})
 	if err != nil {
 		t.Fatalf("seed: %v", err)
@@ -65,12 +70,12 @@ func TestProvider_UpdateWorkflow_DefaultMaskRoundTripsSource(t *testing.T) {
 	// must not bump the revision.
 	updated, err := p.UpdateWorkflow(ctx, "test-project", "us-central1", "alpha", WorkflowUpdateInput{
 		Description:    "new",
-		SourceContents: "ORIGINAL",
+		SourceContents: validSource,
 	})
 	if err != nil {
 		t.Fatalf("UpdateWorkflow: %v", err)
 	}
-	if updated.Description != "new" || updated.SourceContents != "ORIGINAL" {
+	if updated.Description != "new" || updated.SourceContents != validSource {
 		t.Fatalf("unexpected update: %+v", updated)
 	}
 	if updated.RevisionID != created.RevisionID {
@@ -82,7 +87,7 @@ func TestProvider_UpdateWorkflow_ExplicitMaskPreservesOtherFields(t *testing.T) 
 	p, core := newTestProvider()
 	ctx := context.Background()
 	if _, _, err := core.CreateWorkflow(ctx, "test-project", "us-central1", workflowscore.CreateInput{
-		ID: "alpha", SourceContents: "ORIGINAL", Description: "d",
+		ID: "alpha", SourceContents: validSource, Description: "d",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -96,7 +101,7 @@ func TestProvider_UpdateWorkflow_ExplicitMaskPreservesOtherFields(t *testing.T) 
 	if err != nil {
 		t.Fatalf("UpdateWorkflow: %v", err)
 	}
-	if updated.SourceContents != "ORIGINAL" {
+	if updated.SourceContents != validSource {
 		t.Fatalf("explicit mask did not preserve source: %+v", updated)
 	}
 }
