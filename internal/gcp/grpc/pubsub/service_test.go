@@ -10,6 +10,7 @@ import (
 	iampb "cloud.google.com/go/iam/apiv1/iampb"
 	pubsubpb "cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/crypto"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
@@ -1269,5 +1270,47 @@ func TestPubSubDeadLetterPolicyValidationGRPC(t *testing.T) {
 	}
 	if got := created.GetDeadLetterPolicy().GetMaxDeliveryAttempts(); got != 5 {
 		t.Fatalf("maxDeliveryAttempts default = %d, want 5", got)
+	}
+}
+
+// TestLongPollBoundedFrozenClock mirrors the REST provider's TD15 regression:
+// the gRPC long-poll window is real wall time, so a frozen business clock still
+// returns an empty pull within the bounded window instead of polling forever.
+func TestLongPollBoundedFrozenClock(t *testing.T) {
+	at := time.Date(2024, 3, 15, 10, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: at})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
+
+	pub, subc, _, _, cleanup := pubsubTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const topic = "projects/test/topics/frozen-longpoll"
+	const sub = "projects/test/subscriptions/frozen-longpoll"
+	if _, err := pub.CreateTopic(ctx, &pubsubpb.Topic{Name: topic}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if _, err := subc.CreateSubscription(ctx, &pubsubpb.Subscription{Name: sub, Topic: topic}); err != nil {
+		t.Fatalf("CreateSubscription: %v", err)
+	}
+
+	done := make(chan int, 1)
+	go func() {
+		resp, err := subc.Pull(ctx, &pubsubpb.PullRequest{Subscription: sub, MaxMessages: 10})
+		if err != nil {
+			t.Errorf("Pull: %v", err)
+			done <- -1
+			return
+		}
+		done <- len(resp.GetReceivedMessages())
+	}()
+
+	select {
+	case n := <-done:
+		if n != 0 {
+			t.Fatalf("expected 0 messages, got %d", n)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("empty gRPC long-poll did not return under a frozen clock; deadline used the business clock")
 	}
 }

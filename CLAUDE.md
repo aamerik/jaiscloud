@@ -434,6 +434,13 @@ time.Until(x)                 →    x.Sub(clock.Now())
 - `k8shelpers/` — Spark job execution wall time tracking
 - `internal/clock/clock.go` — `OffsetClock` and `RealClock` implementations (the clock package itself)
 
+`gcplint` enforces the split: the `clock` rule rejects bare
+`time.Now()`/`time.Since`/`time.Until`, and the `clock-realnow` rule flags a
+`clock.Now()` that drives a wall-clock wait (a poll-loop condition, a derived
+deadline compared inside a loop, or an argument to
+`time.Sleep`/`After`/`NewTimer`/`NewTicker`/`Tick`/`context.WithDeadline`).
+Documented exceptions go in `tools/lint/gcplint/allowlist.txt`.
+
 ### DynamoDB x-amz-crc32
 
 Every DynamoDB response **must** include `x-amz-crc32: <crc32_of_body>`. AWS SDK v2 validates it; missing → SDK fails to drain body. Set in `DynamoDBCodec.Encode`.

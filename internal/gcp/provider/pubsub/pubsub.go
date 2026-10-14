@@ -858,17 +858,18 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 }
 
 // longPoll repeatedly claims messages until at least one is deliverable or the
-// bounded window elapses. The deadline is derived from clock.Now() (so a frozen
-// test clock yields a consistent remaining duration) while time.Sleep drives the
-// real poll cadence — the emulator's analogue of SQS WaitForMessages.
+// bounded window elapses. The window is a request-bounded wall-clock deadline
+// (clock.RealNow), so a frozen or offset business clock cannot stall or skew the
+// poll — the emulator's analogue of SQS WaitForMessages. The retention and
+// ack-deadline inputs to Pull are business time and stay clock.Now().
 func (p *Provider) longPoll(ctx context.Context, queue string, maxMsgs, ackDeadline, retention int) ([]pubsubstore.Message, error) {
-	deadline := clock.Now().Add(longPollTimeout)
+	deadline := clock.RealNow().Add(longPollTimeout)
 	for {
 		msgs, err := p.messages.Pull(ctx, queue, maxMsgs, ackDeadline, retention, clock.Now())
 		if err != nil {
 			return nil, err
 		}
-		if len(msgs) > 0 || !clock.Now().Before(deadline) {
+		if len(msgs) > 0 || !clock.RealNow().Before(deadline) {
 			return msgs, nil
 		}
 		time.Sleep(longPollInterval)

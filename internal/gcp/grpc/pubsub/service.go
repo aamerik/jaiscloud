@@ -705,15 +705,18 @@ func (s *Service) buildReceivedMessages(ctx context.Context, project, queue, dlq
 }
 
 // longPoll repeatedly claims messages until at least one is deliverable or the
-// bounded window elapses.
+// bounded window elapses. The window is a request-bounded wall-clock deadline
+// (clock.RealNow), so a frozen or offset business clock cannot stall or skew the
+// poll. The retention and ack-deadline inputs to Pull are business time and stay
+// clock.Now().
 func (s *Service) longPoll(ctx context.Context, queue string, maxMsgs, ackDeadline, retention int) ([]pubsubstore.Message, error) {
-	deadline := clock.Now().Add(longPollTimeout)
+	deadline := clock.RealNow().Add(longPollTimeout)
 	for {
 		msgs, err := s.messages.Pull(ctx, queue, maxMsgs, ackDeadline, retention, clock.Now())
 		if err != nil {
 			return nil, err
 		}
-		if len(msgs) > 0 || !clock.Now().Before(deadline) {
+		if len(msgs) > 0 || !clock.RealNow().Before(deadline) {
 			return msgs, nil
 		}
 		time.Sleep(longPollInterval)

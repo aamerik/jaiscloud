@@ -60,6 +60,7 @@ func run(pass *analysis.Pass) (any, error) {
 
 		if inGCPScope(pass) {
 			checkClock(pass, file)
+			checkClockRealNow(pass, file)
 			checkResourcePrefix(pass, file)
 			checkStoreSentinel(pass, file)
 			checkUnsafeAssert(pass, file)
@@ -112,6 +113,210 @@ func checkClock(pass *analysis.Pass, file *ast.File) {
 		}
 		return true
 	})
+}
+
+// ---- rule: clock-realnow --------------------------------------------------
+
+// clockPkg is the import path of the internal clock package. A clock.Now() call
+// is resolved by package (and by a nil receiver, so a Clock interface method is
+// not confused with the package function) so the rule never fires on an
+// unrelated Now method.
+const clockPkg = "jaiscloud/internal/clock"
+
+// wallClockFuncs are the package-level scheduling/wait primitives that take a
+// wall-clock duration or deadline. A business clock (clock.Now) feeding one of
+// these is an infrastructure wait that must use clock.RealNow() so a frozen or
+// offset clock cannot stall or skew it. Keyed "<pkgpath>.<Func>"; the resolver
+// requires a package-level function, so the time.Time.After method is not
+// mistaken for time.After.
+var wallClockFuncs = map[string]bool{
+	"time.After":           true,
+	"time.AfterFunc":       true,
+	"time.Sleep":           true,
+	"time.NewTimer":        true,
+	"time.NewTicker":       true,
+	"time.Tick":            true,
+	"context.WithDeadline": true,
+}
+
+// isWallClockCall reports whether call is a package-level wall-clock primitive.
+func isWallClockCall(pass *analysis.Pass, call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	fn, ok := pass.TypesInfo.Uses[sel.Sel].(*types.Func)
+	if !ok || fn.Pkg() == nil {
+		return false
+	}
+	if sig, ok := fn.Type().(*types.Signature); !ok || sig.Recv() != nil {
+		return false
+	}
+	return wallClockFuncs[fn.Pkg().Path()+"."+fn.Name()]
+}
+
+// checkClockRealNow flags clock.Now() calls that drive a wall-clock wait — a
+// poll loop, a derived deadline compared inside a loop, or a wall-clock
+// primitive argument — where clock.RealNow() is required (CLAUDE.md §Time:
+// container lifecycle, keepalive/GC tickers, request latency, rate-limiter
+// refill). It is deliberately conservative (it may miss a misuse it cannot see
+// statically) and any genuine, documented exception is recorded in the
+// allowlist.
+func checkClockRealNow(pass *analysis.Pass, file *ast.File) {
+	ast.Inspect(file, func(n ast.Node) bool {
+		decl, ok := n.(*ast.FuncDecl)
+		if !ok || decl.Body == nil {
+			return true
+		}
+		auditClockRealNow(pass, file, decl.Body)
+		return false // auditClockRealNow descends the body itself
+	})
+}
+
+func auditClockRealNow(pass *analysis.Pass, file *ast.File, body *ast.BlockStmt) {
+	// deadlineNow maps a local variable built from clock.Now() (a derived
+	// deadline, e.g. `deadline := clock.Now().Add(timeout)`) to that call, so a
+	// comparison against the alias inside a loop is caught.
+	deadlineNow := map[string][]*ast.CallExpr{}
+	inspectLocalDeadlines(pass, body, deadlineNow)
+
+	seen := map[token.Pos]bool{}
+	flag := func(c *ast.CallExpr) {
+		if seen[c.Pos()] {
+			return
+		}
+		seen[c.Pos()] = true
+		report(pass, file, c.Pos(), "clock-realnow",
+			"clock.Now() feeds a wall-clock wait/deadline; use clock.RealNow() for infrastructure time (CLAUDE.md: container lifecycle, keepalive/GC tickers, request latency, rate-limiter refill)")
+	}
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.CallExpr:
+			// A business clock passed to a wall-clock primitive.
+			if isWallClockCall(pass, v) {
+				for _, c := range clockNowCalls(pass, v) {
+					flag(c)
+				}
+			}
+		case *ast.ForStmt:
+			// A poll loop whose condition reads the business clock.
+			for _, c := range clockNowCalls(pass, v.Cond) {
+				flag(c)
+			}
+			// A clock-derived deadline compared inside the loop body — either
+			// read fresh (`clock.Now().Before(deadline)`) or through a derived
+			// alias. Only comparisons that reference such a deadline are wait
+			// loops; a business comparison against a stored value is not.
+			ast.Inspect(v.Body, func(m ast.Node) bool {
+				call, ok := m.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || (sel.Sel.Name != "Before" && sel.Sel.Name != "After") {
+					return true
+				}
+				waitLoop := false
+				ast.Inspect(call, func(x ast.Node) bool {
+					if id, ok := x.(*ast.Ident); ok {
+						if cs := deadlineNow[id.Name]; len(cs) > 0 {
+							waitLoop = true
+							for _, c := range cs {
+								flag(c)
+							}
+						}
+					}
+					return true
+				})
+				if waitLoop {
+					for _, c := range clockNowCalls(pass, call) {
+						flag(c)
+					}
+				}
+				return true
+			})
+		}
+		return true
+	})
+}
+
+// inspectLocalDeadlines records each local variable assigned from an expression
+// that both calls clock.Now() and does duration arithmetic on it (`.Add`/
+// `.Sub`), i.e. a derived deadline. A bare `now := clock.Now()` is not recorded:
+// reading the business clock once and comparing it is not itself a wall-clock
+// wait.
+func inspectLocalDeadlines(pass *analysis.Pass, body *ast.BlockStmt, out map[string][]*ast.CallExpr) {
+	record := func(name string, rhs ast.Expr) {
+		if rhs == nil || !hasDurationMath(rhs) {
+			return
+		}
+		if cs := clockNowCalls(pass, rhs); len(cs) > 0 {
+			out[name] = append(out[name], cs...)
+		}
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.AssignStmt:
+			if len(v.Lhs) == len(v.Rhs) {
+				for i := range v.Lhs {
+					if id, ok := v.Lhs[i].(*ast.Ident); ok {
+						record(id.Name, v.Rhs[i])
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			if len(v.Names) == len(v.Values) {
+				for i := range v.Names {
+					record(v.Names[i].Name, v.Values[i])
+				}
+			}
+		}
+		return true
+	})
+}
+
+// hasDurationMath reports whether expr applies time.Duration arithmetic
+// (`.Add(`/`.Sub(`) anywhere, the shape that turns a clock instant into a
+// deadline or an elapsed duration.
+func hasDurationMath(expr ast.Expr) bool {
+	found := false
+	ast.Inspect(expr, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if ok && (sel.Sel.Name == "Add" || sel.Sel.Name == "Sub") {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// clockNowCalls returns every clock.Now() package-function call nested in node.
+func clockNowCalls(pass *analysis.Pass, node ast.Node) []*ast.CallExpr {
+	if node == nil {
+		return nil
+	}
+	var out []*ast.CallExpr
+	ast.Inspect(node, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		fn, ok := pass.TypesInfo.Uses[sel.Sel].(*types.Func)
+		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != clockPkg || fn.Name() != "Now" {
+			return true
+		}
+		if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
+			return true // a Clock method, not the package function
+		}
+		out = append(out, call)
+		return true
+	})
+	return out
 }
 
 // ---- rule: resource-prefix ------------------------------------------------
