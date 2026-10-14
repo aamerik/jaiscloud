@@ -7,8 +7,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -19,14 +27,17 @@ import (
 // This file covers the cross-cutting snapshot invariants for the GCP binary in
 // **memory mode** (no --dsn): the exported envelope schema, an
 // export → reset → import round-trip across a cross-section of store kinds, a
-// project-scoped reset, and a seeded negative proving the round-trip assertion
-// is not vacuous.
+// project-scoped and a global reset, the envelope validation negatives
+// (schema-version and cloud mismatch are rejected without mutating state), a
+// real process restart proving memory-mode state (metadata + blob bytes)
+// survives a SIGTERM/relaunch cycle, and seeded negatives proving each
+// assertion is not vacuous.
 //
-// The exhaustive per-service round-trip against Postgres (--dsn) already lives
-// in tests/persistent_mode/gcp/parity (TestSnapshotRoundTrip, tag
-// gcp_persistence) and is deliberately NOT duplicated here. This suite is what
-// `go test ./tests/integration/gcp/` and `make test-integration-gcp` run, so no
-// Makefile/CI wiring is needed.
+// The exhaustive per-service round-trip and restart against Postgres (--dsn)
+// already lives in tests/persistent_mode/gcp/... (tag gcp_persistence, run by
+// the CI test-gcp-persistence job) and is deliberately NOT duplicated here.
+// This suite is what `go test ./tests/integration/gcp/` and
+// `make test-integration-gcp` run, so no Makefile/CI wiring is needed.
 
 // exportSnapshot fetches GET /_jaiscloud/export and asserts the response is a
 // gzip tarball, returning its raw bytes.
@@ -413,4 +424,356 @@ func TestResetScope_Project(t *testing.T) {
 		"project A's zone must be wiped by a reset scoped to project A")
 	require.Equal(t, http.StatusOK, getStatus(t, zonePathB),
 		"project B's same-named zone must survive a reset scoped to project A")
+}
+
+// TestResetScope_Global verifies the unscoped reset (no ?account=) wipes every
+// project's state, mirroring AWS's TestResetScope_GlobalReset. It is the
+// complement of TestResetScope_Project: that test pins the scoped path, this
+// one pins that the default reset really is global (a regression that made the
+// default scoped to one account would leave the other project's resource).
+func TestResetScope_Global(t *testing.T) {
+	resetState(t)
+
+	const (
+		projectA = "global-scope-project-a"
+		projectB = "global-scope-project-b"
+		topic    = "global-scope-topic"
+	)
+	topicPathA := "/v1/projects/" + projectA + "/topics/" + topic
+	topicPathB := "/v1/projects/" + projectB + "/topics/" + topic
+
+	mustPost(t, "PUT", topicPathA, "{}")
+	mustPost(t, "PUT", topicPathB, "{}")
+	require.Equal(t, http.StatusOK, getStatus(t, topicPathA))
+	require.Equal(t, http.StatusOK, getStatus(t, topicPathB))
+
+	// Unscoped reset.
+	resp, body := do(t, "POST", "/_jaiscloud/reset", nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "global reset: %s", body)
+
+	require.Equal(t, http.StatusNotFound, getStatus(t, topicPathA),
+		"a global reset must wipe project A's state")
+	require.Equal(t, http.StatusNotFound, getStatus(t, topicPathB),
+		"a global reset must wipe project B's state")
+}
+
+// TestExportImport_RejectSchemaVersion verifies the import path honours the
+// envelope's schema version: a snapshot written by an older or newer binary is
+// rejected with 409 schema_version_mismatch (internal/admin/admin.go Step 1)
+// and — because the version check runs before reset_first — the rejection does
+// not mutate the running instance's state.
+func TestExportImport_RejectSchemaVersion(t *testing.T) {
+	resetState(t)
+
+	// Seed one resource so a rejected import has state it must leave untouched.
+	const project = "reject-schema-project"
+	sfx := uniqueSuffix()
+	bucket := "reject-schema-bucket-" + sfx
+	mustPost(t, "POST", "/storage/v1/b?project="+project, `{"name":"`+bucket+`"}`)
+
+	tarball := exportSnapshot(t)
+
+	for _, tc := range []struct {
+		name    string
+		version int
+	}{
+		{"too-old", version.CodeSnapshotVersion - 1},
+		{"too-new", version.CodeSnapshotVersion + 1},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tampered := mutateSnapshot(t, tarball, func(e *version.Envelope) {
+				e.SchemaVersion = tc.version
+			})
+			require.Equal(t, tc.version, readSnapshotEnvelope(t, tampered).SchemaVersion)
+
+			body := importSnapshot(t, tampered, true, http.StatusConflict)
+			require.Contains(t, string(body), "schema_version_mismatch",
+				"a schema-v%d snapshot must be rejected with the documented error", tc.version)
+
+			// The rejected import must not have wiped or altered state.
+			require.Equal(t, http.StatusOK, getStatus(t, "/storage/v1/b/"+bucket),
+				"a rejected import must leave existing state intact")
+		})
+	}
+}
+
+// TestExportImport_RejectCloudMismatch verifies the envelope's cloud tag is
+// honoured: a snapshot tagged for another cloud is rejected with 409
+// cloud_mismatch and does not mutate the running instance's state.
+func TestExportImport_RejectCloudMismatch(t *testing.T) {
+	resetState(t)
+
+	const project = "reject-cloud-project"
+	sfx := uniqueSuffix()
+	topic := "reject-cloud-topic-" + sfx
+	topicPath := "/v1/projects/" + project + "/topics/" + topic
+	mustPost(t, "PUT", topicPath, "{}")
+
+	tarball := exportSnapshot(t)
+	tampered := mutateSnapshot(t, tarball, func(e *version.Envelope) {
+		e.Cloud = "aws"
+	})
+	require.Equal(t, "aws", readSnapshotEnvelope(t, tampered).Cloud)
+
+	body := importSnapshot(t, tampered, true, http.StatusConflict)
+	require.Contains(t, string(body), "cloud_mismatch",
+		"a snapshot tagged for another cloud must be rejected with the documented error")
+	require.Equal(t, http.StatusOK, getStatus(t, topicPath),
+		"a rejected import must leave existing state intact")
+}
+
+// TestMemoryRestart_StateSurvives is the GCP analogue of the AWS
+// tests/integration/memory_restart_test.go. It starts jaiscloud-gcp in memory
+// mode (no --dsn) against a temp --data-dir, seeds a cross-section of stores,
+// SIGTERMs the process (which runs SnapshotLoop.Stop → a final state.json +
+// blob save), relaunches from the same data-dir and instance id, and asserts
+// every seed survived — metadata through state.json, object bytes through the
+// session blob dir / snapshot blobs/ entries.
+//
+// A SIGKILL would not exercise this path: the final save happens on graceful
+// shutdown. The binary is located via JAISCLOUD_GCP_BINARY or
+// ../../../jaiscloud-gcp (CI builds it at the repo root); the test skips when
+// it is absent so a plain `go test ./tests/integration/gcp/` stays green.
+func TestMemoryRestart_StateSurvives(t *testing.T) {
+	binary := restartBinary(t)
+
+	dataDir := t.TempDir()
+	// A fixed instance id pins the session blob dir (/tmp/jaiscloud-<id>/blobs)
+	// across both launches — the memory backend's byte store.
+	instanceID := fmt.Sprintf("gcp-restart-%d", freePort(t))
+	port, grpcPort, hmsPort := freePort(t), freePort(t), freePort(t)
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+
+	t.Cleanup(func() { os.RemoveAll(filepath.Join(os.TempDir(), "jaiscloud-"+instanceID)) })
+
+	const project = "restart-project"
+	sfx := uniqueSuffix()
+
+	bucket := "restart-bucket-" + sfx
+	object := "restart-obj-" + sfx + ".txt"
+	const objectBody = "hello-memory-restart"
+	topic := "restart-topic-" + sfx
+	sub := "restart-sub-" + sfx
+	secret := "restart-secret-" + sfx
+	keyring := "restart-kr-" + sfx
+	cryptokey := "restart-key-" + sfx
+	zone := "restart-zone-" + sfx
+	job := "restart-job-" + sfx
+	queue := "restart-queue-" + sfx
+	goneTopic := "restart-gone-" + sfx
+	goneTopicPath := "/v1/projects/" + project + "/topics/" + goneTopic
+
+	// mustCallAt performs a mutating request against the restart server and
+	// asserts the expected status.
+	mustCallAt := func(method, path, body string, want int) {
+		t.Helper()
+		var payload []byte
+		headers := map[string]string{}
+		if body != "" {
+			payload = []byte(body)
+			headers["Content-Type"] = "application/json"
+		}
+		resp, b := doAt(t, base, method, path, payload, headers)
+		require.Equalf(t, want, resp.StatusCode, "%s %s: %s", method, path, b)
+	}
+
+	// verifyPresent reads every seed back, requiring 200 and — for GCS — the
+	// exact object bytes, proving the blob store (not just metadata) survived.
+	verifyPresent := func(phase string) {
+		t.Helper()
+		checks := []struct {
+			path string
+			want string
+		}{
+			{"/storage/v1/b/" + bucket, ""},
+			{"/storage/v1/b/" + bucket + "/o/" + object, ""},
+			{"/v1/projects/" + project + "/topics/" + topic, ""},
+			{"/v1/projects/" + project + "/subscriptions/" + sub, ""},
+			{"/v1/projects/" + project + "/secrets/" + secret, `"suite":"memory-restart"`},
+			{"/v1/projects/" + project + "/locations/global/keyRings/" + keyring, ""},
+			{"/v1/projects/" + project + "/locations/global/keyRings/" + keyring + "/cryptoKeys/" + cryptokey, ""},
+			{"/v1/projects/" + project + "/locations/us-central1/jobs/" + job, ""},
+			{"/v2/projects/" + project + "/locations/us-central1/queues/" + queue, ""},
+			{"/dns/v1/projects/" + project + "/managedZones/" + zone, ""},
+		}
+		for _, c := range checks {
+			resp, b := doAt(t, base, "GET", c.path, nil, nil)
+			require.Equalf(t, http.StatusOK, resp.StatusCode, "%s: GET %s: %s", phase, c.path, b)
+			if c.want != "" {
+				require.Containsf(t, string(b), c.want, "%s: GET %s body", phase, c.path)
+			}
+		}
+		resp, b := doAt(t, base, "GET", "/storage/v1/b/"+bucket+"/o/"+object+"?alt=media", nil, nil)
+		require.Equal(t, http.StatusOK, resp.StatusCode, "%s: GET object media: %s", phase, b)
+		require.Equal(t, objectBody, string(b), "%s: object bytes must survive the restart", phase)
+	}
+
+	// ── Launch 1: seed ───────────────────────────────────────────────────────
+	cmd1 := startRestartServer(t, binary, dataDir, instanceID, port, grpcPort, hmsPort)
+	waitRestartReady(t, base)
+
+	mustCallAt("POST", "/storage/v1/b?project="+project, `{"name":"`+bucket+`"}`, http.StatusOK)
+	{
+		resp, b := doAt(t, base, "POST", "/upload/storage/v1/b/"+bucket+"/o?uploadType=media&name="+object,
+			[]byte(objectBody), map[string]string{"Content-Type": "text/plain"})
+		require.Equal(t, http.StatusOK, resp.StatusCode, "upload object: %s", b)
+	}
+	mustCallAt("PUT", "/v1/projects/"+project+"/topics/"+topic, "{}", http.StatusOK)
+	mustCallAt("PUT", "/v1/projects/"+project+"/subscriptions/"+sub+"?subscriptionId="+sub,
+		`{"topic":"projects/`+project+`/topics/`+topic+`"}`, http.StatusOK)
+	mustCallAt("POST", "/v1/projects/"+project+"/secrets?secretId="+secret,
+		`{"replication":{"automatic":{}},"annotations":{"suite":"memory-restart"}}`, http.StatusOK)
+	mustCallAt("POST", "/v1/projects/"+project+"/locations/global/keyRings?keyRingId="+keyring, "{}", http.StatusOK)
+	mustCallAt("POST", "/v1/projects/"+project+"/locations/global/keyRings/"+keyring+
+		"/cryptoKeys?cryptoKeyId="+cryptokey, `{"purpose":"ENCRYPT_DECRYPT"}`, http.StatusOK)
+	mustCallAt("POST", "/v1/projects/"+project+"/locations/us-central1/jobs",
+		`{"name":"projects/`+project+`/locations/us-central1/jobs/`+job+
+			`","schedule":"* * * * *","timeZone":"UTC",`+
+			`"httpTarget":{"uri":"http://example.test/hook","httpMethod":"GET"}}`, http.StatusOK)
+	mustCallAt("POST", "/v2/projects/"+project+"/locations/us-central1/queues",
+		`{"name":"projects/`+project+`/locations/us-central1/queues/`+queue+`"}`, http.StatusOK)
+	mustCallAt("POST", "/dns/v1/projects/"+project+"/managedZones",
+		`{"name":"`+zone+`","dnsName":"`+zone+`.example.com."}`, http.StatusOK)
+	// A resource deleted before the restart must stay deleted after it.
+	mustCallAt("PUT", goneTopicPath, "{}", http.StatusOK)
+
+	verifyPresent("seeded")
+	mustCallAt("DELETE", goneTopicPath, "", http.StatusOK)
+
+	// ── Graceful stop: SIGTERM runs the final snapshot save ──────────────────
+	stopRestartServer(t, cmd1)
+
+	// ── Launch 2: restart from the same data-dir ─────────────────────────────
+	cmd2 := startRestartServer(t, binary, dataDir, instanceID, port, grpcPort, hmsPort)
+	t.Cleanup(func() { stopRestartServer(t, cmd2) })
+	waitRestartReady(t, base)
+
+	verifyPresent("after restart")
+	require.Equal(t, http.StatusNotFound, getStatusAt(t, base, goneTopicPath),
+		"a topic deleted before the restart must not be resurrected by the restore")
+}
+
+// ── process-restart helpers ──────────────────────────────────────────────────
+
+// restartBinary resolves the jaiscloud-gcp binary for the restart test, or
+// skips the test when it has not been built.
+func restartBinary(t *testing.T) string {
+	t.Helper()
+	if b := os.Getenv("JAISCLOUD_GCP_BINARY"); b != "" {
+		if _, err := os.Stat(b); err == nil {
+			return b
+		}
+		t.Skipf("JAISCLOUD_GCP_BINARY=%q not found", b)
+	}
+	candidates := []string{
+		"../../../jaiscloud-gcp", // CI builds it at the repo root
+		filepath.Join(os.Getenv("GOPATH"), "bin", "jaiscloud-gcp"),
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	t.Skip("jaiscloud-gcp binary not found; run: go build -o jaiscloud-gcp ./cmd/jaiscloud-gcp/")
+	return ""
+}
+
+// freePort returns an available localhost TCP port. The restart server must not
+// reuse the ports of the emulator the rest of the package talks to (:8080 REST,
+// :8081 gRPC, :9083 HMS).
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err, "find free port")
+	p := l.Addr().(*net.TCPAddr).Port
+	require.NoError(t, l.Close())
+	return p
+}
+
+// restartWriter forwards the child process's output to the test log.
+type restartWriter struct {
+	t      *testing.T
+	prefix string
+	buf    string
+}
+
+func (w *restartWriter) Write(p []byte) (int, error) {
+	w.buf += string(p)
+	for {
+		i := strings.IndexByte(w.buf, '\n')
+		if i < 0 {
+			break
+		}
+		w.t.Log(w.prefix + w.buf[:i])
+		w.buf = w.buf[i+1:]
+	}
+	return len(p), nil
+}
+
+// startRestartServer starts jaiscloud-gcp in memory mode (no --dsn) against
+// dataDir, with the given instance id so the session blob dir is stable across
+// launches. All three listeners use caller-supplied ports.
+func startRestartServer(t *testing.T, binary, dataDir, instanceID string, port, grpcPort, hmsPort int) *exec.Cmd {
+	t.Helper()
+	cmd := exec.Command(binary, "start",
+		"--port", strconv.Itoa(port),
+		"--grpc-port", strconv.Itoa(grpcPort),
+		"--hms-port", strconv.Itoa(hmsPort),
+		"--data-dir", dataDir,
+		"--log-level", "warn",
+	)
+	cmd.Env = append(os.Environ(),
+		"JAISCLOUD_EPHEMERAL=false",
+		"JAISCLOUD_STATE_DIR="+dataDir,
+		"JAISCLOUD_INSTANCE_ID="+instanceID,
+	)
+	cmd.Stdout = &restartWriter{t: t, prefix: fmt.Sprintf("jaiscloud-gcp[%d]: ", port)}
+	cmd.Stderr = &restartWriter{t: t, prefix: fmt.Sprintf("jaiscloud-gcp[%d] ERR: ", port)}
+	require.NoError(t, cmd.Start(), "start jaiscloud-gcp on port %d", port)
+	return cmd
+}
+
+// waitRestartReady polls the health endpoint until the process is ready.
+func waitRestartReady(t *testing.T, base string) {
+	t.Helper()
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := clock.RealNow().Add(30 * time.Second)
+	for clock.RealNow().Before(deadline) {
+		if resp, err := client.Get(base + "/_jaiscloud/health"); err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("jaiscloud-gcp at %s did not become healthy within 30s", base)
+}
+
+// stopRestartServer SIGTERMs the process and waits for a clean exit (which runs
+// SnapshotLoop.Stop → a final state.json + blob save). It kills the process if
+// it does not exit within 20s.
+func stopRestartServer(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+		t.Log("warning: jaiscloud-gcp did not stop within 20s after SIGTERM; killed")
+	}
+}
+
+// getStatusAt issues a GET against base and returns the HTTP status code.
+func getStatusAt(t *testing.T, base, path string) int {
+	t.Helper()
+	resp, _ := doAt(t, base, "GET", path, nil, nil)
+	return resp.StatusCode
 }
