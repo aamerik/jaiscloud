@@ -1280,3 +1280,93 @@ func TestAdvancedSurfaceREST(t *testing.T) {
 		t.Fatal("message bus still present after delete")
 	}
 }
+
+// TestAdvancedListFilterAndOrderREST verifies the documented filter/orderBy
+// parameters reach the core through the REST routes rather than being dropped:
+// the advanced list handlers read neither, so a client that sorted or filtered
+// silently got the unfiltered, name-ascending list (TD17).
+func TestAdvancedListFilterAndOrderREST(t *testing.T) {
+	ctx := context.Background()
+	p, _, _ := newProvider()
+	routes := p.Routes()
+
+	call := func(t *testing.T, key string, params map[string]any) *model.ProviderResponse {
+		t.Helper()
+		h := routes[key]
+		if h == nil {
+			t.Fatalf("route %q not registered", key)
+		}
+		resp, err := h(ctx, newNR(params))
+		if err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+		return resp
+	}
+	// names extracts a list response's resource names in order.
+	names := func(resp *model.ProviderResponse, field string) []string {
+		items, _ := resp.Data[field].([]any)
+		out := make([]string, 0, len(items))
+		for _, it := range items {
+			m, _ := it.(map[string]any)
+			out = append(out, fmt.Sprint(m["name"]))
+		}
+		return out
+	}
+	// status returns a ProviderError's HTTP status, or 0 for any other error.
+	status := func(err error) int {
+		if perr, ok := err.(*model.ProviderError); ok {
+			return perr.HTTPStatus
+		}
+		return 0
+	}
+
+	for _, mb := range []struct{ id, dn, env string }{
+		{"mb1", "alpha", "test"}, {"mb2", "beta", "prod"}, {"mb3", "gamma", "test"},
+	} {
+		call(t, "Eventarc.CreateMessageBus", map[string]any{
+			"location": "us-central1", "messageBusId": mb.id,
+			"body": map[string]any{"displayName": mb.dn, "labels": map[string]any{"env": mb.env}},
+		})
+	}
+
+	if got, want := names(call(t, "Eventarc.ListMessageBuses",
+		map[string]any{"location": "us-central1", "filter": "labels.env=test"}), "messageBuses"),
+		[]string{"projects/proj/locations/us-central1/messageBuses/mb1", "projects/proj/locations/us-central1/messageBuses/mb3"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("filtered message buses = %v, want %v", got, want)
+	}
+	if got, want := names(call(t, "Eventarc.ListMessageBuses",
+		map[string]any{"location": "us-central1", "orderBy": "name desc"}), "messageBuses"),
+		[]string{"projects/proj/locations/us-central1/messageBuses/mb3", "projects/proj/locations/us-central1/messageBuses/mb2", "projects/proj/locations/us-central1/messageBuses/mb1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("message buses orderBy name desc = %v, want %v", got, want)
+	}
+
+	// An unsupported filter/orderBy is InvalidArgument, never a silently
+	// unfiltered list.
+	if _, err := routes["Eventarc.ListMessageBuses"](ctx, newNR(map[string]any{"location": "us-central1", "filter": "bogus=1"})); status(err) != 400 {
+		t.Errorf("bad message bus filter err = %v, want 400", err)
+	}
+	if _, err := routes["Eventarc.ListMessageBuses"](ctx, newNR(map[string]any{"location": "us-central1", "orderBy": "bogus"})); status(err) != 400 {
+		t.Errorf("bad message bus orderBy err = %v, want 400", err)
+	}
+
+	// channels.list honors orderBy (it documents no filter).
+	call(t, "Eventarc.CreateChannel", map[string]any{"location": "us-central1", "channelId": "ch1", "body": map[string]any{}})
+	call(t, "Eventarc.CreateChannel", map[string]any{"location": "us-central1", "channelId": "ch2", "body": map[string]any{}})
+	if got, want := names(call(t, "Eventarc.ListChannels",
+		map[string]any{"location": "us-central1", "orderBy": "name desc"}), "channels"),
+		[]string{"projects/proj/locations/us-central1/channels/ch2", "projects/proj/locations/us-central1/channels/ch1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("channels orderBy name desc = %v, want %v", got, want)
+	}
+
+	// providers.list honors filter and orderBy.
+	if got, want := names(call(t, "Eventarc.ListProviders",
+		map[string]any{"location": "us-central1", "filter": `displayName:"Storage"`}), "providers"),
+		[]string{"projects/proj/locations/us-central1/providers/storage.googleapis.com"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("filtered providers = %v, want %v", got, want)
+	}
+	if got, want := names(call(t, "Eventarc.ListProviders",
+		map[string]any{"location": "us-central1", "orderBy": "displayName desc"}), "providers"),
+		[]string{"projects/proj/locations/us-central1/providers/storage.googleapis.com", "projects/proj/locations/us-central1/providers/pubsub.googleapis.com"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("providers orderBy displayName desc = %v, want %v", got, want)
+	}
+}

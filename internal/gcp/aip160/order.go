@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // TimeLayout is the fixed-width RFC3339 layout for timestamp sort/filter keys.
@@ -14,6 +15,19 @@ import (
 // invert. A fixed nine-digit fraction keeps the text order chronological, so a
 // string comparison is a time comparison.
 const TimeLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+// ParseTime parses an AIP-160 filter/sort timestamp value: an RFC3339
+// timestamp, or a YYYY-MM-DD date (which AIP-160 interprets as that day's
+// midnight). A value in any other form is an error so the caller can reject it
+// rather than compare against a zero time.
+func ParseTime(s string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("value %q is not an RFC3339 timestamp or a YYYY-MM-DD date", s)
+}
 
 // OrderField is one orderable field a list surface documents: its canonical
 // name and how to read the field's value from an item.

@@ -183,7 +183,10 @@ func (p *Provider) GetChannel(ctx context.Context, nr *model.NormalizedRequest) 
 
 func (p *Provider) ListChannels(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListChannels(ctx, project, strParam(nr, "location"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	// channels.list documents only orderBy (no filter), so a `filter` query
+	// parameter is not read here.
+	page, next, err := p.core.ListChannels(ctx, project, strParam(nr, "location"),
+		strParam(nr, "orderBy"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +226,8 @@ func (p *Provider) DeleteChannel(ctx context.Context, nr *model.NormalizedReques
 func (p *Provider) ListProviders(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
 	location := strParam(nr, "location")
-	page, next, err := p.core.ListProviders(ctx, project, location, intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	page, next, err := p.core.ListProviders(ctx, project, location,
+		strParam(nr, "filter"), strParam(nr, "orderBy"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +342,14 @@ func (p *Provider) advancedGet(k core.Kind) provider.HandlerFunc {
 func (p *Provider) advancedList(k core.Kind) provider.HandlerFunc {
 	return func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 		project := p.project(nr)
-		page, next, err := p.core.ListAdvanced(ctx, project, k, strParam(nr, "location"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		// Only the kinds whose list method documents filter/orderBy honor them;
+		// channelConnections.list carries only pageSize/pageToken.
+		filter, orderBy := "", ""
+		if k.HasListParams() {
+			filter, orderBy = strParam(nr, "filter"), strParam(nr, "orderBy")
+		}
+		page, next, err := p.core.ListAdvanced(ctx, project, k, strParam(nr, "location"),
+			filter, orderBy, intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
 		if err != nil {
 			return nil, err
 		}

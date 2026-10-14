@@ -134,3 +134,30 @@ func TestTimeLayoutIsFixedWidth(t *testing.T) {
 		t.Fatalf("textual order must be chronological: %q !< %q", whole, frac)
 	}
 }
+
+func TestParseTime(t *testing.T) {
+	cases := []struct {
+		in   string
+		want time.Time
+	}{
+		{"2026-01-02T03:04:05Z", time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
+		{"2026-01-02T03:04:05.100Z", time.Date(2026, 1, 2, 3, 4, 5, 100_000_000, time.UTC)},
+		{"2026-01-02T03:04:05+01:00", time.Date(2026, 1, 2, 2, 4, 5, 0, time.UTC)},
+		{"2026-01-02", time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)},
+	}
+	for _, tc := range cases {
+		got, err := ParseTime(tc.in)
+		if err != nil {
+			t.Errorf("ParseTime(%q): %v", tc.in, err)
+			continue
+		}
+		if !got.Equal(tc.want) {
+			t.Errorf("ParseTime(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+	for _, bad := range []string{"", "yesterday", "2026-13-01", "03:04:05"} {
+		if _, err := ParseTime(bad); err == nil {
+			t.Errorf("ParseTime(%q) = nil error, want an error", bad)
+		}
+	}
+}

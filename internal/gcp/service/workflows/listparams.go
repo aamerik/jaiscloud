@@ -215,7 +215,7 @@ func parseWorkflowTimeClause(p *aip160.Parser, key, op string, get func(workflow
 	if !ok {
 		return nil, fmt.Errorf("%s value must be an RFC3339 timestamp or YYYY-MM-DD date, got %s", key, aip160.TokenText(valTok))
 	}
-	bound, err := parseFilterTime(val)
+	bound, err := aip160.ParseTime(val)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %v", key, err)
 	}
@@ -237,16 +237,6 @@ func parseWorkflowTimeClause(p *aip160.Parser, key, op string, get func(workflow
 			return got >= want
 		}
 	}), nil
-}
-
-// parseFilterTime parses an AIP-160 filter timestamp value.
-func parseFilterTime(s string) (time.Time, error) {
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02"} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t, nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("value %q is not an RFC3339 timestamp or a YYYY-MM-DD date", s)
 }
 
 // ─── orderBy ──────────────────────────────────────────────────────────────────

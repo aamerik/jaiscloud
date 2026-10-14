@@ -108,7 +108,7 @@ func (s *Service) GetChannel(ctx context.Context, req *eventarcpb.GetChannelRequ
 func (s *Service) ListChannels(ctx context.Context, req *eventarcpb.ListChannelsRequest) (*eventarcpb.ListChannelsResponse, error) {
 	project := s.projectFor(ctx, req.GetParent())
 	rn := core.ParseName(req.GetParent())
-	page, next, err := s.core.ListChannels(ctx, project, rn.Location, int(req.GetPageSize()), req.GetPageToken())
+	page, next, err := s.core.ListChannels(ctx, project, rn.Location, req.GetOrderBy(), int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, grpcutil.GRPCStatus(err)
 	}
@@ -166,7 +166,7 @@ func (s *Service) GetProvider(ctx context.Context, req *eventarcpb.GetProviderRe
 func (s *Service) ListProviders(ctx context.Context, req *eventarcpb.ListProvidersRequest) (*eventarcpb.ListProvidersResponse, error) {
 	project := s.projectFor(ctx, req.GetParent())
 	rn := core.ParseName(req.GetParent())
-	page, next, err := s.core.ListProviders(ctx, project, rn.Location, int(req.GetPageSize()), req.GetPageToken())
+	page, next, err := s.core.ListProviders(ctx, project, rn.Location, req.GetFilter(), req.GetOrderBy(), int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, grpcutil.GRPCStatus(err)
 	}
