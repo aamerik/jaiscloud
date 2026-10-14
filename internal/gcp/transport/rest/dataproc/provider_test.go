@@ -653,6 +653,68 @@ func TestListJobs_FilterAndMatcher(t *testing.T) {
 	}
 }
 
+// TestListClusters_FilterAndPageSize verifies the REST query params filter and
+// pageSize are honored (and a negative pageSize is 400).
+func TestListClusters_FilterAndPageSize(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	create := func(name string, labels map[string]any) {
+		t.Helper()
+		if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+			"region": "us-central1",
+			"body":   map[string]any{"projectId": "proj", "clusterName": name, "labels": labels},
+		})); err != nil {
+			t.Fatalf("CreateCluster(%s): %v", name, err)
+		}
+	}
+	create("c1", map[string]any{"env": "staging"})
+	create("c2", map[string]any{"env": "prod"})
+	create("c3", map[string]any{"env": "staging"})
+
+	names := func(params map[string]any) string {
+		t.Helper()
+		params["region"] = "us-central1"
+		resp, err := p.ListClusters(ctx, testNR(params))
+		if err != nil {
+			t.Fatalf("ListClusters(%v): %v", params, err)
+		}
+		clusters, _ := resp.Data["clusters"].([]any)
+		out := make([]string, 0, len(clusters))
+		for _, raw := range clusters {
+			c, _ := raw.(map[string]any)
+			if n, ok := c["clusterName"].(string); ok {
+				out = append(out, n)
+			}
+		}
+		sort.Strings(out)
+		return strings.Join(out, ",")
+	}
+
+	if got := names(map[string]any{}); got != "c1,c2,c3" {
+		t.Fatalf("unfiltered list = %q, want c1,c2,c3", got)
+	}
+	if got := names(map[string]any{"filter": `labels.env = staging`}); got != "c1,c3" {
+		t.Fatalf("label filter = %q, want c1,c3", got)
+	}
+	if got := names(map[string]any{"filter": `status.state = ACTIVE`}); got != "c1,c2,c3" {
+		t.Fatalf("ACTIVE filter = %q, want c1,c2,c3", got)
+	}
+	if got := names(map[string]any{"filter": `status.state = INACTIVE`}); got != "" {
+		t.Fatalf("INACTIVE filter = %q, want none", got)
+	}
+
+	if _, err := p.ListClusters(ctx, testNR(map[string]any{"region": "us-central1", "filter": "bogus = 1"})); err == nil {
+		t.Fatal("malformed filter should be InvalidArgument")
+	} else if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 400 {
+		t.Fatalf("malformed filter error = %v, want 400", err)
+	}
+	if _, err := p.ListClusters(ctx, testNR(map[string]any{"region": "us-central1", "pageSize": -1})); err == nil {
+		t.Fatal("negative pageSize should be InvalidArgument")
+	} else if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 400 {
+		t.Fatalf("negative pageSize error = %v, want 400", err)
+	}
+}
+
 func TestSubmitJobAsOperation(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()

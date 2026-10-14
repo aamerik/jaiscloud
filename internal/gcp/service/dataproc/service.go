@@ -324,6 +324,16 @@ func invalidArgument(msg string) error {
 	return model.NewProviderError("InvalidArgument", msg, 400)
 }
 
+// validatePageSize rejects a negative pageSize. The API's pageSize is a
+// non-negative count, so a negative value is InvalidArgument rather than a
+// silently clamped or ignored input; 0 means "unset" and takes the default.
+func validatePageSize(pageSize int) error {
+	if pageSize < 0 {
+		return invalidArgument("pageSize must be non-negative")
+	}
+	return nil
+}
+
 // mapErr maps a dataproc store error onto a canonical provider error.
 func mapErr(err error) error {
 	switch {

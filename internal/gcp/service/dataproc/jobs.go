@@ -190,6 +190,9 @@ func (s *Service) ListJobs(ctx context.Context, project, region, clusterName, fi
 	if region == "" {
 		return nil, "", invalidArgument("missing region")
 	}
+	if err := validatePageSize(pageSize); err != nil {
+		return nil, "", err
+	}
 	filter = strings.TrimSpace(filter)
 	var compiled jobFilter
 	if filter != "" {
