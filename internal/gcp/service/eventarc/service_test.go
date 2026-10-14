@@ -90,7 +90,7 @@ func TestCoreTriggerRoundTrip(t *testing.T) {
 	if got.Name != "t1" || got.UID != trig.UID {
 		t.Fatalf("get = %+v", got)
 	}
-	page, _, err := svc.ListTriggers(ctx, "proj", "us-central1", 0, "")
+	page, _, err := svc.ListTriggers(ctx, "proj", "us-central1", "", "", 0, "")
 	if err != nil || len(page) != 1 {
 		t.Fatalf("ListTriggers = %v, %v", page, err)
 	}

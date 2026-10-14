@@ -2,6 +2,7 @@ package eventarc
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	eventarcpb "cloud.google.com/go/eventarc/apiv1/eventarcpb"
@@ -251,6 +252,56 @@ func TestTriggerIAM(t *testing.T) {
 	// IAM against a missing trigger is NotFound.
 	if _, err := s.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{Resource: "projects/proj/locations/us-central1/triggers/missing"}); status.Code(err) != codes.NotFound {
 		t.Fatalf("missing trigger: code = %v, want NotFound", status.Code(err))
+	}
+}
+
+// TestListTriggersFilterAndOrderGRPC verifies the proto's filter/order_by
+// fields reach the core (the gRPC adapter previously passed neither on).
+func TestListTriggersFilterAndOrderGRPC(t *testing.T) {
+	ctx := context.Background()
+	s := newGRPCServiceWithWorkflow(t)
+	parent := "projects/proj/locations/us-central1"
+	create := func(id string, dest *eventarcpb.Destination) {
+		t.Helper()
+		if _, err := s.CreateTrigger(ctx, &eventarcpb.CreateTriggerRequest{
+			Parent: parent, TriggerId: id,
+			Trigger: &eventarcpb.Trigger{
+				Destination:  dest,
+				EventFilters: []*eventarcpb.EventFilter{{Attribute: "type", Value: "x"}},
+			},
+		}); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	create("t1", &eventarcpb.Destination{Descriptor_: &eventarcpb.Destination_Workflow{Workflow: "projects/proj/locations/us-central1/workflows/w1"}})
+	create("t2", &eventarcpb.Destination{Descriptor_: &eventarcpb.Destination_CloudRun{CloudRun: &eventarcpb.CloudRun{Service: "svc", Region: "us-central1"}}})
+
+	names := func(req *eventarcpb.ListTriggersRequest) []string {
+		t.Helper()
+		req.Parent = parent
+		list, err := s.ListTriggers(ctx, req)
+		if err != nil {
+			t.Fatalf("ListTriggers %+v: %v", req, err)
+		}
+		out := make([]string, 0, len(list.GetTriggers()))
+		for _, tr := range list.GetTriggers() {
+			out = append(out, tr.GetName())
+		}
+		return out
+	}
+
+	if got := names(&eventarcpb.ListTriggersRequest{Filter: "destination:workflow"}); len(got) != 1 || !strings.HasSuffix(got[0], "/t1") {
+		t.Errorf("filter=destination:workflow = %v", got)
+	}
+	got := names(&eventarcpb.ListTriggersRequest{OrderBy: "name desc"})
+	if len(got) != 2 || !strings.HasSuffix(got[0], "/t2") || !strings.HasSuffix(got[1], "/t1") {
+		t.Errorf("order_by=name desc = %v", got)
+	}
+	if _, err := s.ListTriggers(ctx, &eventarcpb.ListTriggersRequest{Parent: parent, OrderBy: "bogus"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("bad order_by: code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := s.ListTriggers(ctx, &eventarcpb.ListTriggersRequest{Parent: parent, Filter: "bogus=1"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("bad filter: code = %v, want InvalidArgument", status.Code(err))
 	}
 }
 

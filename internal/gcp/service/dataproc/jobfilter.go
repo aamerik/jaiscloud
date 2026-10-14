@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/gcp/aip160"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
 )
 
@@ -81,11 +82,11 @@ func compileJobFilter(s string) (jobFilter, error) {
 	if strings.TrimSpace(s) == "" {
 		return jobFilter{}, nil
 	}
-	toks, err := tokenizeFilter(s)
+	toks, err := aip160.Tokenize(s)
 	if err != nil {
 		return jobFilter{}, invalidArgument("dataproc ListJobs filter: " + err.Error())
 	}
-	preds, err := (&filterParser{toks: toks}).parseClauses(parseJobClause)
+	preds, err := aip160.NewParser(toks).ParseClauses(parseJobClause)
 	if err != nil {
 		return jobFilter{}, invalidArgument("dataproc ListJobs filter: " + err.Error())
 	}
@@ -181,48 +182,48 @@ func (p jobInsertTimePredicate) match(j dpstore.Job) bool {
 
 // parseJobClause parses one jobs.list filter clause (`field op value`) into the
 // matching jobPredicate, returned as an `any` for the shared clause sequencer.
-func parseJobClause(p *filterParser) (any, error) {
-	keyTok := p.next()
-	if keyTok.kind != filterIdent {
-		return nil, fmt.Errorf("expected field, got %s", filterTokenText(keyTok))
+func parseJobClause(p *aip160.Parser) (any, error) {
+	keyTok := p.Next()
+	if keyTok.Kind != aip160.KindIdent {
+		return nil, fmt.Errorf("expected field, got %s", aip160.TokenText(keyTok))
 	}
-	key := keyTok.text
+	key := keyTok.Text
 
-	opTok := p.next()
-	if opTok.kind != filterOp {
-		return nil, fmt.Errorf("expected operator after %q, got %s", key, filterTokenText(opTok))
+	opTok := p.Next()
+	if opTok.Kind != aip160.KindOp {
+		return nil, fmt.Errorf("expected operator after %q, got %s", key, aip160.TokenText(opTok))
 	}
-	op := opTok.text
+	op := opTok.Text
 
 	switch {
 	case key == "status.state":
 		if op != "=" {
 			return nil, fmt.Errorf("unsupported operator %q on status.state (only \"=\" is supported)", op)
 		}
-		valTok := p.next()
-		if valTok.kind != filterIdent {
-			return nil, fmt.Errorf("status.state value must be ACTIVE or NON_ACTIVE, got %s", filterTokenText(valTok))
+		valTok := p.Next()
+		if valTok.Kind != aip160.KindIdent {
+			return nil, fmt.Errorf("status.state value must be ACTIVE or NON_ACTIVE, got %s", aip160.TokenText(valTok))
 		}
-		switch valTok.text {
+		switch valTok.Text {
 		case "ACTIVE":
 			return jobStatePredicate{active: true}, nil
 		case "NON_ACTIVE":
 			return jobStatePredicate{active: false}, nil
 		default:
-			return nil, fmt.Errorf("unsupported status.state %q (only ACTIVE and NON_ACTIVE are supported)", valTok.text)
+			return nil, fmt.Errorf("unsupported status.state %q (only ACTIVE and NON_ACTIVE are supported)", valTok.Text)
 		}
 
 	case key == "insertTime":
 		if !jobInsertTimeOps[op] {
 			return nil, fmt.Errorf("unsupported operator %q on insertTime", op)
 		}
-		valTok := p.next()
-		if valTok.kind != filterString {
-			return nil, fmt.Errorf("insertTime value must be a double-quoted RFC3339 timestamp, got %s", filterTokenText(valTok))
+		valTok := p.Next()
+		if valTok.Kind != aip160.KindString {
+			return nil, fmt.Errorf("insertTime value must be a double-quoted RFC3339 timestamp, got %s", aip160.TokenText(valTok))
 		}
-		ts, err := time.Parse(time.RFC3339, valTok.text)
+		ts, err := time.Parse(time.RFC3339, valTok.Text)
 		if err != nil {
-			return nil, fmt.Errorf("invalid insertTime timestamp %q", valTok.text)
+			return nil, fmt.Errorf("invalid insertTime timestamp %q", valTok.Text)
 		}
 		return jobInsertTimePredicate{op: op, ts: ts}, nil
 
@@ -234,13 +235,13 @@ func parseJobClause(p *filterParser) (any, error) {
 		if op != "=" {
 			return nil, fmt.Errorf("unsupported operator %q on %s (only \"=\" is supported)", op, key)
 		}
-		valTok := p.next()
-		if valTok.kind == filterStar {
+		valTok := p.Next()
+		if valTok.Kind == aip160.KindStar {
 			return jobLabelExistsPredicate{key: lk}, nil
 		}
-		val, ok := filterTokenValue(valTok)
+		val, ok := aip160.TokenValue(valTok)
 		if !ok {
-			return nil, fmt.Errorf("label value must be a value or \"*\", got %s", filterTokenText(valTok))
+			return nil, fmt.Errorf("label value must be a value or \"*\", got %s", aip160.TokenText(valTok))
 		}
 		return jobLabelEqualsPredicate{key: lk, value: val}, nil
 

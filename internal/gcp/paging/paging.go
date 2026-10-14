@@ -44,6 +44,36 @@ func Page[T any](items []T, key func(T) string, params map[string]any) (page []T
 	return page, nextToken
 }
 
+// PageOrdered applies pageSize/pageToken cursor pagination to items the caller
+// has already ordered. cursor returns an item's cursor payload (the value that
+// identifies its position, before the page token's base64 encoding) and
+// afterCursor reports whether item sorts strictly after the position a decoded
+// token denotes. Unlike Page it never sorts, so a non-name orderBy (a service
+// list whose caller supplied orderBy) composes with pagination instead of the
+// token silently resuming in a different order. As in Page, a token that cannot
+// be decoded is treated as absent, so the scan restarts at the first item.
+func PageOrdered[T any](items []T, params map[string]any,
+	cursor func(T) string, afterCursor func(item T, token string) bool) (page []T, nextToken string) {
+	size := PageSize(params)
+	start := 0
+	if tok, _ := params["pageToken"].(string); tok != "" {
+		if cur := decodeCursor(tok); cur != "" {
+			for start < len(items) && !afterCursor(items[start], cur) {
+				start++
+			}
+		}
+	}
+	end := start + size
+	if end > len(items) {
+		end = len(items)
+	}
+	page = items[start:end]
+	if end < len(items) {
+		nextToken = encodeCursor(cursor(items[end-1]))
+	}
+	return page, nextToken
+}
+
 // PageSize parses the pageSize query parameter (string, int, or float64),
 // falling back to the GCP default of 1000.
 func PageSize(params map[string]any) int {

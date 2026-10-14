@@ -644,16 +644,36 @@ func (s *Service) GetTrigger(ctx context.Context, project, location, triggerID s
 	return t, nil
 }
 
-// ListTriggers returns a cursor page of the triggers in a location.
-func (s *Service) ListTriggers(ctx context.Context, project, location string, pageSize int, pageToken string) ([]eventarcstore.Trigger, string, error) {
+// ListTriggers returns a cursor page of the triggers in a location, restricted
+// by the AIP-160 filter and ordered by orderBy (both documented on
+// triggers.list; see triggerlist.go). An empty filter matches every trigger and
+// an empty orderBy is the default ascending-by-name order.
+func (s *Service) ListTriggers(ctx context.Context, project, location, filter, orderBy string, pageSize int, pageToken string) ([]eventarcstore.Trigger, string, error) {
 	if location == "" {
 		return nil, "", invalidArgument("missing location")
+	}
+	compiledFilter, err := compileTriggerListFilter(filter)
+	if err != nil {
+		return nil, "", err
+	}
+	order, err := compileTriggerOrder(orderBy)
+	if err != nil {
+		return nil, "", err
 	}
 	triggers, err := s.store.ListTriggers(ctx, project, location)
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(triggers, func(t eventarcstore.Trigger) string { return t.Name }, pageParams(pageSize, pageToken))
+	filtered := make([]eventarcstore.Trigger, 0, len(triggers))
+	for _, t := range triggers {
+		if compiledFilter.match(t) {
+			filtered = append(filtered, t)
+		}
+	}
+	// The page cursor is applied after the filter and in the caller's order, so
+	// paginating a filtered/ordered list never resumes in a different one.
+	page, next := paging.PageOrdered(orderTriggers(filtered, order), pageParams(pageSize, pageToken),
+		order.cursor, order.afterCursor)
 	return page, next, nil
 }
 
