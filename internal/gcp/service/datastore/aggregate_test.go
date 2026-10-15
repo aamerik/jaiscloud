@@ -144,6 +144,16 @@ func TestRunAggregationQuery(t *testing.T) {
 	if _, err := s.RunAggregationQuery(ctx, "p", &AggregationQuery{Nested: nested, Aggregations: six}, nil); err == nil {
 		t.Fatal("more than five aggregations must be rejected")
 	}
+	// A malformed nested filter is rejected up front, before the reduction
+	// runs (the RunAggregationQuery half of the up-front validation). (TD21)
+	if _, err := s.RunAggregationQuery(ctx, "p", &AggregationQuery{
+		Nested: Query{Kind: "Task", Filter: &Filter{Property: &PropertyFilter{
+			Property: "n", Op: PropertyIn, Value: valInt(1),
+		}}},
+		Aggregations: []Aggregation{countAgg(nil)},
+	}, nil); err == nil {
+		t.Fatal("an IN filter without an array value must be rejected")
+	}
 
 	// Exactly five is allowed, and unnamed aggregations get property_1..N.
 	five := make([]Aggregation, 5)

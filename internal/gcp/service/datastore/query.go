@@ -13,34 +13,34 @@ import (
 // PropertyFilter EQUAL, NOT_EQUAL, IN, the four comparison operators
 // (LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL), and the
 // special "__key__ HAS ANCESTOR", plus CompositeFilter AND over those property
-// filters. Unsupported operators (NOT_IN, OR, unspecified/unknown) return an
-// InvalidArgument error rather than matching everything.
+// filters. Its static shape is enforced by validateFilter — the same authority
+// RunQuery and RunAggregationQuery call once up front — so an unsupported
+// operator (NOT_IN, OR, unspecified/unknown), IN without a non-empty array, or
+// an empty AND fails closed with InvalidArgument rather than matching
+// everything, whether or not the scan reaches a candidate.
 func matchesFilter(e dsstore.Entity, f *Filter) (bool, error) {
+	if err := validateFilter(f); err != nil {
+		return false, err
+	}
+	return matchValidFilter(e, f), nil
+}
+
+// matchValidFilter evaluates a filter validateFilter has already accepted.
+func matchValidFilter(e dsstore.Entity, f *Filter) bool {
 	if f == nil {
-		return true, nil
+		return true
 	}
 	if f.Property != nil {
-		return matchesPropertyFilter(e, f.Property)
+		return matchPropertyFilter(e, f.Property)
 	}
-	if f.Composite != nil {
-		cf := f.Composite
-		switch cf.Op {
-		case CompositeAnd:
-			for _, sub := range cf.Filters {
-				match, err := matchesFilter(e, sub)
-				if err != nil {
-					return false, err
-				}
-				if !match {
-					return false, nil
-				}
-			}
-			return true, nil
-		default:
-			return false, unsupportedQueryOperator(compositeOpName(cf.Op))
+	// validateFilter admits only an AND composite here, with at least one
+	// sub-filter.
+	for _, sub := range f.Composite.Filters {
+		if !matchValidFilter(e, sub) {
+			return false
 		}
 	}
-	return false, unsupportedQueryOperator("unknown filter")
+	return true
 }
 
 // unsupportedQueryOperator returns an InvalidArgument error for a filter
@@ -50,12 +50,13 @@ func unsupportedQueryOperator(op string) error {
 }
 
 // validateFilter checks a filter's static shape before any entity is scanned.
-// matchesFilter enforces the same rules per entity, but that is reached only
-// when the scan visits a candidate — so without this pass a request real
-// Datastore rejects (an unsupported operator, or IN with a non-array value)
-// would silently return an empty result set on an empty or fully-filtered
-// collection instead of failing loud. RunQuery and RunAggregationQuery call it
-// once up front.
+// It is the single authority for the contract matchesFilter relies on: without
+// the up-front pass a request real Datastore rejects (an unsupported operator,
+// IN with a non-array or empty array value, an empty AND) would be reached only
+// when the scan visits a candidate, so it would silently return an empty result
+// set on an empty or fully-filtered collection instead of failing loud. RunQuery
+// and RunAggregationQuery call it once up front; matchesFilter calls it too, so
+// no caller can reach a fail-open path.
 func validateFilter(f *Filter) error {
 	if f == nil {
 		return nil
@@ -66,6 +67,11 @@ func validateFilter(f *Filter) error {
 	if f.Composite != nil {
 		if f.Composite.Op != CompositeAnd {
 			return unsupportedQueryOperator(compositeOpName(f.Composite.Op))
+		}
+		// The Discovery requires "at least one filter is present"; an empty AND
+		// would otherwise match every entity (fail open).
+		if len(f.Composite.Filters) == 0 {
+			return invalidArgument("AND requires at least one filter")
 		}
 		for _, sub := range f.Composite.Filters {
 			if err := validateFilter(sub); err != nil {
@@ -85,9 +91,10 @@ func validatePropertyFilter(pf *PropertyFilter) error {
 		PropertyGreaterThan, PropertyGreaterThanOrEqual:
 		return nil
 	case PropertyIn:
-		// Real Datastore requires the IN operand to be an array value.
-		if pf.Value.ArrayValue == nil {
-			return invalidArgument("IN requires an array value")
+		// Real Datastore requires the IN operand to be a non-empty ArrayValue
+		// (Discovery: "That `value` is a non-empty `ArrayValue`").
+		if pf.Value.ArrayValue == nil || len(pf.Value.ArrayValue.Values) == 0 {
+			return invalidArgument("IN requires a non-empty array value")
 		}
 		return nil
 	case PropertyHasAncestor:
@@ -103,64 +110,52 @@ func validatePropertyFilter(pf *PropertyFilter) error {
 	}
 }
 
-func matchesPropertyFilter(e dsstore.Entity, pf *PropertyFilter) (bool, error) {
-	if pf == nil {
-		return false, unsupportedQueryOperator("missing property filter")
-	}
-	prop := pf.Property
-	val, ok := e.Properties[prop]
-	filterVal := pf.Value
-
+// matchPropertyFilter applies an already-validated property filter to an entity
+// (validatePropertyFilter has guaranteed a non-empty array for IN and a key
+// value on the reserved __key__ property for HAS_ANCESTOR).
+func matchPropertyFilter(e dsstore.Entity, pf *PropertyFilter) bool {
+	val, ok := e.Properties[pf.Property]
 	switch pf.Op {
 	case PropertyHasAncestor:
 		// HAS_ANCESTOR is not a property comparison: it only applies to the
 		// implicit "__key__" property and its value is a key. It matches an
 		// entity whose key path has that key as a proper prefix (the query's
 		// partition already scopes the result set).
-		if prop != keyPropertyName {
-			return false, invalidArgument("HAS_ANCESTOR requires the " + keyPropertyName + " property")
-		}
-		if filterVal.KeyValue == nil {
-			return false, invalidArgument("HAS_ANCESTOR requires a key value")
-		}
-		return keyHasAncestor(e.Key, *filterVal.KeyValue), nil
+		return keyHasAncestor(e.Key, *pf.Value.KeyValue)
 	case PropertyEqual:
-		return ok && valueEqual(val, filterVal), nil
+		return ok && valueEqual(val, pf.Value)
 	case PropertyNotEqual:
-		return ok && !valueEqual(val, filterVal), nil
+		return ok && !valueEqual(val, pf.Value)
 	case PropertyIn:
-		if filterVal.ArrayValue == nil {
-			return false, invalidArgument("IN requires an array value")
-		}
 		if !ok {
-			return false, nil
+			return false
 		}
-		for _, el := range filterVal.ArrayValue.Values {
+		for _, el := range pf.Value.ArrayValue.Values {
 			if valueEqual(val, el) {
-				return true, nil
+				return true
 			}
 		}
-		return false, nil
-	case PropertyLessThan, PropertyLessThanOrEqual, PropertyGreaterThan, PropertyGreaterThanOrEqual:
+		return false
+	default:
+		// validatePropertyFilter admits only the four ordering comparisons
+		// besides the operators above.
 		if !ok {
-			return false, nil
+			return false
 		}
-		c, comparable := valueCompare(val, filterVal)
+		c, comparable := valueCompare(val, pf.Value)
 		if !comparable {
-			return false, nil
+			return false
 		}
 		switch pf.Op {
 		case PropertyLessThan:
-			return c < 0, nil
+			return c < 0
 		case PropertyLessThanOrEqual:
-			return c <= 0, nil
+			return c <= 0
 		case PropertyGreaterThan:
-			return c > 0, nil
+			return c > 0
 		default:
-			return c >= 0, nil
+			return c >= 0
 		}
-	default:
-		return false, unsupportedQueryOperator(propertyOpName(pf.Op))
 	}
 }
 
@@ -301,9 +296,12 @@ func valueCompare(a, b dsstore.Value) (int, bool) {
 		}
 		return cmp.Compare(a.GeoPointValue.Longitude, b.GeoPointValue.Longitude), true
 	case rankKey:
-		// KeyValue holds the key's canonical string form; comparing those
-		// lexically orders the path elements (an existing approximation of the
-		// documented "by path elements" key ordering).
+		// KeyValue holds the key's canonical string form. Comparing those
+		// lexically is an approximation of the documented "by path elements
+		// (kind, identifier)" key ordering: the canonical encoding
+		// length-prefixes each field, so kinds sort by length before byte value
+		// ("1:b" < "2:aa" where the documented order is byte value, "aa" < "b")
+		// and numeric IDs sort by digit count. Recorded as TD29.
 		return cmp.Compare(*a.KeyValue, *b.KeyValue), true
 	}
 	return 0, false

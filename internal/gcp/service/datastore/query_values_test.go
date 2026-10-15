@@ -299,6 +299,7 @@ func TestValidateFilter(t *testing.T) {
 		f    *Filter
 	}{
 		{"in non-array", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valInt(1)}}},
+		{"in empty array", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valArray()}}},
 		{"in absent value", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn}}},
 		{"has ancestor wrong prop", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyHasAncestor, Value: dsstore.Value{KeyValue: &key}}}},
 		{"has ancestor non-key", &Filter{Property: &PropertyFilter{Property: keyPropertyName, Op: PropertyHasAncestor, Value: valStr("x")}}},
@@ -307,6 +308,7 @@ func TestValidateFilter(t *testing.T) {
 			{Property: &PropertyFilter{Property: "n", Op: PropertyEqual, Value: valInt(1)}},
 		}}}},
 		{"composite unspecified", &Filter{Composite: &CompositeFilter{}}},
+		{"and with no filters", &Filter{Composite: &CompositeFilter{Op: CompositeAnd}}},
 		{"and with a bad clause", &Filter{Composite: &CompositeFilter{Op: CompositeAnd, Filters: []*Filter{
 			{Property: &PropertyFilter{Property: "n", Op: PropertyEqual, Value: valInt(1)}},
 			{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valInt(2)}},
@@ -347,6 +349,7 @@ func TestMatchesFilterDispatch(t *testing.T) {
 		f    *Filter
 	}{
 		{"composite OR", &Filter{Composite: &CompositeFilter{Op: CompositeOr, Filters: []*Filter{eq}}}},
+		{"composite AND with no filters", &Filter{Composite: &CompositeFilter{Op: CompositeAnd}}},
 		{"composite unspecified", &Filter{Composite: &CompositeFilter{}}},
 		{"empty filter", &Filter{}},
 	}
@@ -363,9 +366,10 @@ func TestMatchesFilterDispatch(t *testing.T) {
 	}
 }
 
-// TestMatchesPropertyFilterOperators covers every property operator against a
-// present, absent and incomparable property.
-func TestMatchesPropertyFilterOperators(t *testing.T) {
+// TestMatchPropertyFilterOperators covers every property operator against a
+// present, absent and incomparable property. The filter shapes here are all
+// valid; the invalid-shape contract is TestValidateFilter's.
+func TestMatchPropertyFilterOperators(t *testing.T) {
 	e := entityWith("Kind", "k", map[string]dsstore.Value{
 		"n":    valInt(5),
 		"tags": valArray(valStr("a"), valStr("b")),
@@ -403,34 +407,15 @@ func TestMatchesPropertyFilterOperators(t *testing.T) {
 		{"lt cross-type int<float", &PropertyFilter{Property: "n", Op: PropertyLessThan, Value: valDbl(5)}, true},
 	}
 	for _, tc := range cases {
-		got, err := matchesPropertyFilter(e, tc.pf)
-		if err != nil {
-			t.Errorf("%s: unexpected error %v", tc.name, err)
-			continue
-		}
-		if got != tc.want {
+		if got := matchPropertyFilter(e, tc.pf); got != tc.want {
 			t.Errorf("%s: = %v, want %v", tc.name, got, tc.want)
 		}
-	}
-
-	if _, err := matchesPropertyFilter(e, nil); err == nil {
-		t.Fatal("a nil property filter must fail closed")
-	}
-	if _, err := matchesPropertyFilter(e, &PropertyFilter{Property: "n", Op: PropertyUnspecified}); err == nil {
-		t.Fatal("an unspecified operator must fail closed")
-	}
-	// IN with a non-array value is rejected (InvalidArgument), never a
-	// silent no-match. (TD21)
-	if _, err := matchesPropertyFilter(e, &PropertyFilter{Property: "n", Op: PropertyIn, Value: valInt(5)}); err == nil {
-		t.Fatal("IN with a non-array value must fail closed")
-	} else if pe := asProviderError(t, err); pe.Code != "InvalidArgument" {
-		t.Fatalf("IN non-array error code = %q, want InvalidArgument", pe.Code)
 	}
 }
 
 // TestHasAncestorGuards verifies HAS_ANCESTOR only accepts the reserved
-// __key__ property and a key value, and that a matching ancestor key is
-// satisfied end to end.
+// __key__ property and a key value (failing closed through matchesFilter), and
+// that a matching ancestor key is satisfied end to end.
 func TestHasAncestorGuards(t *testing.T) {
 	root := idKey("Parent", 1)
 	grand := dsstore.PathElement{Kind: "Parent", ID: 2, HasID: true}
@@ -440,16 +425,16 @@ func TestHasAncestorGuards(t *testing.T) {
 
 	ancestor := CanonicalKey(root)
 	pf := &PropertyFilter{Property: keyPropertyName, Op: PropertyHasAncestor, Value: dsstore.Value{KeyValue: &ancestor}}
-	if ok, err := matchesPropertyFilter(e, pf); err != nil || !ok {
+	if ok, err := matchesFilter(e, &Filter{Property: pf}); err != nil || !ok {
 		t.Fatalf("HAS_ANCESTOR match = %v,%v; want true,nil", ok, err)
 	}
 
 	wrongProp := &PropertyFilter{Property: "n", Op: PropertyHasAncestor, Value: dsstore.Value{KeyValue: &ancestor}}
-	if _, err := matchesPropertyFilter(e, wrongProp); err == nil {
+	if _, err := matchesFilter(e, &Filter{Property: wrongProp}); err == nil {
 		t.Fatal("HAS_ANCESTOR on a non-__key__ property must fail closed")
 	}
 	noKey := &PropertyFilter{Property: keyPropertyName, Op: PropertyHasAncestor, Value: valStr("not-a-key")}
-	if _, err := matchesPropertyFilter(e, noKey); err == nil {
+	if _, err := matchesFilter(e, &Filter{Property: noKey}); err == nil {
 		t.Fatal("HAS_ANCESTOR with a non-key value must fail closed")
 	}
 }
