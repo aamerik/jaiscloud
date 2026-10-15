@@ -73,7 +73,8 @@ func trafficStatuses(s runstore.Service) []any {
 		if !ok {
 			continue
 		}
-		status := map[string]any{"percent": intFrom(m["percent"]), "uri": s.Uri}
+		tag, _ := m["tag"].(string)
+		status := map[string]any{"percent": intFrom(m["percent"]), "uri": taggedURI(s.Uri, tag)}
 		if v, ok := m["type"]; ok {
 			status["type"] = v
 		}
@@ -96,6 +97,22 @@ func trafficStatuses(s runstore.Service) []any {
 		})
 	}
 	return out
+}
+
+// taggedURI rewrites a service uri into the tag-qualified form real Cloud Run
+// returns for the target carrying a traffic tag. The tag becomes the leading
+// host label — https://{tag}---{service-host} (e.g.
+// https://stable---svc-0123456789ab.us-central1.run.app) — the string the
+// Discovery's TrafficTargetStatus.tag describes as "used in the URI to
+// exclusively reference this target". An empty tag leaves the uri unchanged.
+func taggedURI(uri, tag string) string {
+	if tag == "" {
+		return uri
+	}
+	if i := strings.Index(uri, "://"); i >= 0 {
+		return uri[:i+3] + tag + "---" + uri[i+3:]
+	}
+	return uri
 }
 
 // RevisionJSON renders a stored revision as the google.cloud.run.v2.Revision

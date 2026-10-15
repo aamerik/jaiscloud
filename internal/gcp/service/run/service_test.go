@@ -604,6 +604,64 @@ func TestUpdateDoesNotAliasStoredData(t *testing.T) {
 	}
 }
 
+// TestTrafficStatusesTagQualifiedURI pins that a tagged traffic target's status
+// uri is the tag-qualified URL real Cloud Run returns
+// (https://{tag}---{service-host}), while an untagged target keeps the plain
+// service uri. The Discovery's TrafficTargetStatus.tag is "the string used in
+// the URI to exclusively reference this target".
+func TestTrafficStatusesTagQualifiedURI(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateService(ctx, "proj", "us-central1", "svc", createRequest(), false); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	body := map[string]any{"traffic": []any{
+		map[string]any{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": float64(90), "tag": "stable"},
+		map[string]any{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": float64(10)},
+	}}
+	if _, err := s.UpdateService(ctx, "proj", "us-central1", "svc", body, "traffic", false, false); err != nil {
+		t.Fatalf("update traffic: %v", err)
+	}
+	svc, err := s.GetService(ctx, "proj", "us-central1", "svc")
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	js := ServiceJSON(svc)
+	uri, _ := js["uri"].(string)
+	statuses, _ := js["trafficStatuses"].([]any)
+	if len(statuses) != 2 {
+		t.Fatalf("trafficStatuses = %v", statuses)
+	}
+	tagged, _ := statuses[0].(map[string]any)
+	untagged, _ := statuses[1].(map[string]any)
+	wantTagged := "https://stable---" + strings.TrimPrefix(uri, "https://")
+	if tagged["uri"] != wantTagged {
+		t.Errorf("tagged status uri = %v, want %v", tagged["uri"], wantTagged)
+	}
+	if untagged["uri"] != uri {
+		t.Errorf("untagged status uri = %v, want service uri %v", untagged["uri"], uri)
+	}
+}
+
+// TestTaggedURIShapes locks the tag-prefix transformation across the uri shapes
+// the emulator can synthesize: the https mock form, the http+port k8s-execution
+// form, and the empty-tag / scheme-less edges.
+func TestTaggedURIShapes(t *testing.T) {
+	cases := []struct {
+		uri, tag, want string
+	}{
+		{"https://svc-abc.us-central1.run.app", "stable", "https://stable---svc-abc.us-central1.run.app"},
+		{"http://svc-abc.us-central1.run.app:8080", "canary", "http://canary---svc-abc.us-central1.run.app:8080"},
+		{"https://svc-abc.us-central1.run.app", "", "https://svc-abc.us-central1.run.app"},
+		{"svc-abc.us-central1.run.app", "stable", "svc-abc.us-central1.run.app"},
+	}
+	for _, c := range cases {
+		if got := taggedURI(c.uri, c.tag); got != c.want {
+			t.Errorf("taggedURI(%q, %q) = %q, want %q", c.uri, c.tag, got, c.want)
+		}
+	}
+}
+
 // templateImage extracts containers[0].image from a stored service's writable
 // Data, or "" when absent.
 func templateImage(data map[string]any) string {
