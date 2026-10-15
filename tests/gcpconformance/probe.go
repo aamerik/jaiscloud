@@ -3,7 +3,9 @@
 package gcpconformance
 
 import (
+	"crypto/md5"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -734,6 +736,17 @@ func isPositionalPrefixPlaceholder(name string) bool {
 	return rest == "" || rest == "1"
 }
 
+// requestUUID returns a stable RFC 4122 UUID for a probe's requestId parameter.
+// The seed (method id + owning collection + per-operation token) is unique per
+// synthesized request, so no probe replays another's operation and a probe's
+// setup-create never shares the token with the mutation it stages.
+func requestUUID(methodID, collection, suffix, token string) string {
+	sum := md5.Sum([]byte(methodID + "\x00" + collection + "\x00" + suffix + "\x00" + token))
+	sum[6] = (sum[6] & 0x0f) | 0x40 // RFC 4122 version 4
+	sum[8] = (sum[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", sum[0:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
+}
+
 // deriveID builds a valid, deterministic resource id from the owning collection
 // segment plus the per-operation token.
 func deriveID(collection, suffix, token string) string {
@@ -767,6 +780,16 @@ func queryParams(svc string, m *Method, suffix string, tokens map[string]string)
 	for _, n := range names {
 		p := m.Parameters[n]
 		if p == nil || p.Location != "query" {
+			continue
+		}
+		if n == "requestId" {
+			// The Discovery schema types requestId as an idempotency token —
+			// a UUID that replays the original operation when repeated — so a
+			// synthetic non-UUID token would be rejected on input, and sharing
+			// one token across a probe's setup-create and its own mutation
+			// would make the mutation replay the create. Derive a UUID unique
+			// to this request (method + target + token).
+			q.Set(n, requestUUID(m.ID, lastLiteral, suffix, tokens[lastLiteral]))
 			continue
 		}
 		if strings.HasSuffix(n, "Id") {

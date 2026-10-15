@@ -37,6 +37,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"jaiscloud/internal/clock"
@@ -54,6 +55,9 @@ const (
 	rtFirewall   = "gcp_compute_firewall"
 	rtSubnetwork = "gcp_compute_subnetwork"
 	rtOperation  = "gcp_compute_operation"
+	// rtRequestID holds the requestId → operation idempotency mapping for
+	// mutating methods, keyed by the requestId at the request's scope.
+	rtRequestID = "gcp_compute_request_id"
 )
 
 // Kind constants for the GCP wire envelope.
@@ -114,6 +118,14 @@ var machineTypeRE = regexp.MustCompile(`^[a-z][a-z0-9]*-[a-z][a-z0-9]*-[a-z0-9]+
 // suffix.
 var customMachineTypeRE = regexp.MustCompile(`^(?:[a-z0-9]+-)?custom-[0-9]+-[0-9]+(?:-ext)?$`)
 
+// zeroRequestID is the all-zero UUID the Compute Engine API documents as
+// unsupported for the requestId parameter.
+const zeroRequestID = "00000000-0000-0000-0000-000000000000"
+
+// requestIDRE matches the UUID form the Compute Engine API documents for the
+// requestId parameter.
+var requestIDRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 // isKnownMachineType reports whether name could be a real Compute Engine
 // machine type: an advertised catalog entry, a predefined family/size, or a
 // custom type. A name that matches none of these is not a machine type at all
@@ -129,11 +141,14 @@ func isKnownMachineType(name string) bool {
 // subnetworks, machine types, zones, regions, and operations.
 type Provider struct {
 	resources store.ResourceStore
+	// mutations serializes same-requestId mutations so a retry replays the
+	// original operation even when it overlaps an in-flight original.
+	mutations *keyedMutex
 }
 
 // New returns a Provider backed by the shared ResourceStore.
 func New(resources store.ResourceStore) *Provider {
-	return &Provider{resources: resources}
+	return &Provider{resources: resources, mutations: newKeyedMutex()}
 }
 
 // Routes maps "Compute.<Action>" keys to their handlers.
@@ -192,6 +207,14 @@ func (p *Provider) InstancesInsert(ctx context.Context, nr *model.NormalizedRequ
 	if zone == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing zone", 400)
 	}
+	replay, requestID, unlock, err := p.beginMutation(ctx, nr, project, zone)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if replay != nil {
+		return provider.OK(replay), nil
+	}
 	body := bodyMap(nr)
 	name := stringField(body, "name")
 	if name == "" {
@@ -216,7 +239,7 @@ func (p *Provider) InstancesInsert(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(p.recordOperation(nr, project, zone, "zones", "insert", name, stringField(inst, "targetLink"))), nil
+	return provider.OK(p.recordOperation(nr, project, zone, "zones", "insert", name, stringField(inst, "targetLink"), requestID)), nil
 }
 
 func (p *Provider) buildInstance(nr *model.NormalizedRequest, project, zone, name string, body map[string]any) (map[string]any, error) {
@@ -353,14 +376,23 @@ func (p *Provider) InstancesDelete(ctx context.Context, nr *model.NormalizedRequ
 	if name == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing instance", 400)
 	}
-	inst, err := p.loadMap(ctx, accountID(nr), scopeOf(nr), rtInstance, name, "instance")
+	project, scope := accountID(nr), scopeOf(nr)
+	replay, requestID, unlock, err := p.beginMutation(ctx, nr, project, scope)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.resources.Delete(ctx, accountID(nr), scopeOf(nr), rtInstance, name); err != nil {
+	defer unlock()
+	if replay != nil {
+		return provider.OK(replay), nil
+	}
+	inst, err := p.loadMap(ctx, project, scope, rtInstance, name, "instance")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.resources.Delete(ctx, project, scope, rtInstance, name); err != nil {
 		return nil, storeError(err, "instance")
 	}
-	return provider.OK(p.recordOperation(nr, accountID(nr), scopeOf(nr), "zones", "delete", name, stringField(inst, "targetLink"))), nil
+	return provider.OK(p.recordOperation(nr, project, scope, "zones", "delete", name, stringField(inst, "targetLink"), requestID)), nil
 }
 
 func (p *Provider) InstancesStart(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -384,6 +416,14 @@ func (p *Provider) setInstanceState(ctx context.Context, nr *model.NormalizedReq
 		return nil, model.NewProviderError("InvalidArgument", "missing instance", 400)
 	}
 	project, scope := accountID(nr), scopeOf(nr)
+	replay, requestID, unlock, err := p.beginMutation(ctx, nr, project, scope)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if replay != nil {
+		return provider.OK(replay), nil
+	}
 	updated, err := p.resources.UpsertAtomic(ctx, project, scope, rtInstance, name, func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
 		if !exists {
 			return store.ResourceEntry{}, store.ErrNotFound
@@ -407,7 +447,7 @@ func (p *Provider) setInstanceState(ctx context.Context, nr *model.NormalizedReq
 	if err := json.Unmarshal(updated.Data, &inst); err != nil {
 		return nil, err
 	}
-	return provider.OK(p.recordOperation(nr, project, scope, "zones", opType, name, stringField(inst, "targetLink"))), nil
+	return provider.OK(p.recordOperation(nr, project, scope, "zones", opType, name, stringField(inst, "targetLink"), requestID)), nil
 }
 
 // ─── Disk operations ──────────────────────────────────────────────────────────
@@ -417,6 +457,14 @@ func (p *Provider) DisksInsert(ctx context.Context, nr *model.NormalizedRequest)
 	zone := scopeOf(nr)
 	if zone == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing zone", 400)
+	}
+	replay, requestID, unlock, err := p.beginMutation(ctx, nr, project, zone)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if replay != nil {
+		return provider.OK(replay), nil
 	}
 	body := bodyMap(nr)
 	name := stringField(body, "name")
@@ -463,7 +511,7 @@ func (p *Provider) DisksInsert(ctx context.Context, nr *model.NormalizedRequest)
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(p.recordOperation(nr, project, zone, "zones", "insert", name, stringField(disk, "targetLink"))), nil
+	return provider.OK(p.recordOperation(nr, project, zone, "zones", "insert", name, stringField(disk, "targetLink"), requestID)), nil
 }
 
 func (p *Provider) DisksGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -501,20 +549,37 @@ func (p *Provider) DisksDelete(ctx context.Context, nr *model.NormalizedRequest)
 	if name == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing disk", 400)
 	}
-	disk, err := p.loadMap(ctx, accountID(nr), scopeOf(nr), rtDisk, name, "disk")
+	project, scope := accountID(nr), scopeOf(nr)
+	replay, requestID, unlock, err := p.beginMutation(ctx, nr, project, scope)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.resources.Delete(ctx, accountID(nr), scopeOf(nr), rtDisk, name); err != nil {
+	defer unlock()
+	if replay != nil {
+		return provider.OK(replay), nil
+	}
+	disk, err := p.loadMap(ctx, project, scope, rtDisk, name, "disk")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.resources.Delete(ctx, project, scope, rtDisk, name); err != nil {
 		return nil, storeError(err, "disk")
 	}
-	return provider.OK(p.recordOperation(nr, accountID(nr), scopeOf(nr), "zones", "delete", name, stringField(disk, "targetLink"))), nil
+	return provider.OK(p.recordOperation(nr, project, scope, "zones", "delete", name, stringField(disk, "targetLink"), requestID)), nil
 }
 
 // ─── Network operations ───────────────────────────────────────────────────────
 
 func (p *Provider) NetworksInsert(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := accountID(nr)
+	replay, requestID, unlock, err := p.beginMutation(ctx, nr, project, store.GlobalRegion)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if replay != nil {
+		return provider.OK(replay), nil
+	}
 	body := bodyMap(nr)
 	name := stringField(body, "name")
 	if name == "" {
@@ -550,7 +615,7 @@ func (p *Provider) NetworksInsert(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(p.recordOperation(nr, project, store.GlobalRegion, "global", "insert", name, stringField(network, "targetLink"))), nil
+	return provider.OK(p.recordOperation(nr, project, store.GlobalRegion, "global", "insert", name, stringField(network, "targetLink"), requestID)), nil
 }
 
 func (p *Provider) NetworksGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -588,20 +653,37 @@ func (p *Provider) NetworksDelete(ctx context.Context, nr *model.NormalizedReque
 	if name == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing network", 400)
 	}
-	network, err := p.loadMap(ctx, accountID(nr), store.GlobalRegion, rtNetwork, name, "network")
+	project := accountID(nr)
+	replay, requestID, unlock, err := p.beginMutation(ctx, nr, project, store.GlobalRegion)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.resources.Delete(ctx, accountID(nr), store.GlobalRegion, rtNetwork, name); err != nil {
+	defer unlock()
+	if replay != nil {
+		return provider.OK(replay), nil
+	}
+	network, err := p.loadMap(ctx, project, store.GlobalRegion, rtNetwork, name, "network")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.resources.Delete(ctx, project, store.GlobalRegion, rtNetwork, name); err != nil {
 		return nil, storeError(err, "network")
 	}
-	return provider.OK(p.recordOperation(nr, accountID(nr), store.GlobalRegion, "global", "delete", name, stringField(network, "targetLink"))), nil
+	return provider.OK(p.recordOperation(nr, project, store.GlobalRegion, "global", "delete", name, stringField(network, "targetLink"), requestID)), nil
 }
 
 // ─── Firewall operations ──────────────────────────────────────────────────────
 
 func (p *Provider) FirewallsInsert(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := accountID(nr)
+	replay, requestID, unlock, err := p.beginMutation(ctx, nr, project, store.GlobalRegion)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if replay != nil {
+		return provider.OK(replay), nil
+	}
 	body := bodyMap(nr)
 	name := stringField(body, "name")
 	if name == "" {
@@ -655,7 +737,7 @@ func (p *Provider) FirewallsInsert(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(p.recordOperation(nr, project, store.GlobalRegion, "global", "insert", name, stringField(fw, "targetLink"))), nil
+	return provider.OK(p.recordOperation(nr, project, store.GlobalRegion, "global", "insert", name, stringField(fw, "targetLink"), requestID)), nil
 }
 
 func (p *Provider) FirewallsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -693,14 +775,23 @@ func (p *Provider) FirewallsDelete(ctx context.Context, nr *model.NormalizedRequ
 	if name == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing firewall", 400)
 	}
-	fw, err := p.loadMap(ctx, accountID(nr), store.GlobalRegion, rtFirewall, name, "firewall")
+	project := accountID(nr)
+	replay, requestID, unlock, err := p.beginMutation(ctx, nr, project, store.GlobalRegion)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.resources.Delete(ctx, accountID(nr), store.GlobalRegion, rtFirewall, name); err != nil {
+	defer unlock()
+	if replay != nil {
+		return provider.OK(replay), nil
+	}
+	fw, err := p.loadMap(ctx, project, store.GlobalRegion, rtFirewall, name, "firewall")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.resources.Delete(ctx, project, store.GlobalRegion, rtFirewall, name); err != nil {
 		return nil, storeError(err, "firewall")
 	}
-	return provider.OK(p.recordOperation(nr, accountID(nr), store.GlobalRegion, "global", "delete", name, stringField(fw, "targetLink"))), nil
+	return provider.OK(p.recordOperation(nr, project, store.GlobalRegion, "global", "delete", name, stringField(fw, "targetLink"), requestID)), nil
 }
 
 // ─── Subnetwork operations ────────────────────────────────────────────────────
@@ -710,6 +801,14 @@ func (p *Provider) SubnetworksInsert(ctx context.Context, nr *model.NormalizedRe
 	region := scopeOf(nr)
 	if region == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing region", 400)
+	}
+	replay, requestID, unlock, err := p.beginMutation(ctx, nr, project, region)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if replay != nil {
+		return provider.OK(replay), nil
 	}
 	body := bodyMap(nr)
 	name := stringField(body, "name")
@@ -757,7 +856,7 @@ func (p *Provider) SubnetworksInsert(ctx context.Context, nr *model.NormalizedRe
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(p.recordOperation(nr, project, region, "regions", "insert", name, stringField(sub, "targetLink"))), nil
+	return provider.OK(p.recordOperation(nr, project, region, "regions", "insert", name, stringField(sub, "targetLink"), requestID)), nil
 }
 
 func (p *Provider) SubnetworksGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -795,14 +894,23 @@ func (p *Provider) SubnetworksDelete(ctx context.Context, nr *model.NormalizedRe
 	if name == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing subnetwork", 400)
 	}
-	sub, err := p.loadMap(ctx, accountID(nr), scopeOf(nr), rtSubnetwork, name, "subnetwork")
+	project, scope := accountID(nr), scopeOf(nr)
+	replay, requestID, unlock, err := p.beginMutation(ctx, nr, project, scope)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.resources.Delete(ctx, accountID(nr), scopeOf(nr), rtSubnetwork, name); err != nil {
+	defer unlock()
+	if replay != nil {
+		return provider.OK(replay), nil
+	}
+	sub, err := p.loadMap(ctx, project, scope, rtSubnetwork, name, "subnetwork")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.resources.Delete(ctx, project, scope, rtSubnetwork, name); err != nil {
 		return nil, storeError(err, "subnetwork")
 	}
-	return provider.OK(p.recordOperation(nr, accountID(nr), scopeOf(nr), "regions", "delete", name, stringField(sub, "targetLink"))), nil
+	return provider.OK(p.recordOperation(nr, project, scope, "regions", "delete", name, stringField(sub, "targetLink"), requestID)), nil
 }
 
 // ─── Machine type, zone, and region discovery ─────────────────────────────────
@@ -929,8 +1037,11 @@ func (p *Provider) OperationsList(ctx context.Context, nr *model.NormalizedReque
 // recordOperation builds Compute Engine's own Operation envelope
 // (compute#operation) with status DONE and progress 100, persists it at scope
 // so operations.get/list can read it back, and returns it for the caller to
-// embed in the mutation response.
-func (p *Provider) recordOperation(nr *model.NormalizedRequest, project, scope, scopeType, opType, targetID, targetLink string) map[string]any {
+// embed in the mutation response. When requestID is non-empty the operation
+// carries Compute Engine's clientOperationId field (the requestId echoed back
+// on the operation) and is remembered so a retry with the same token replays
+// it.
+func (p *Provider) recordOperation(nr *model.NormalizedRequest, project, scope, scopeType, opType, targetID, targetLink, requestID string) map[string]any {
 	opID := randomHex(16)
 	now := formatTimestamp(clock.Now())
 	op := map[string]any{
@@ -949,6 +1060,9 @@ func (p *Provider) recordOperation(nr *model.NormalizedRequest, project, scope, 
 		"progress":      int64(100),
 		"user":          serviceAccountEmail(project),
 	}
+	if requestID != "" {
+		op["clientOperationId"] = requestID
+	}
 	switch scopeType {
 	case "zones":
 		op["zone"] = absLink(nr, "compute-zone", scope)
@@ -959,7 +1073,127 @@ func (p *Provider) recordOperation(nr *model.NormalizedRequest, project, scope, 
 	if err == nil {
 		_ = p.resources.Upsert(context.Background(), project, scope, store.ResourceEntry{Type: rtOperation, ID: opID, Data: data})
 	}
+	p.rememberOperation(project, scope, requestID, op)
 	return op
+}
+
+// beginMutation validates the requestId query parameter, takes the per-token
+// mutation lock, and replays the operation recorded by an earlier mutation
+// carrying the same token at the same scope. A non-nil op means the retried
+// request is ignored and must be returned unchanged; the caller proceeds only
+// when op is nil, and must `defer unlock()` (a no-op when no token was
+// supplied). Holding the token lock across the mutation is what makes the
+// documented replay guarantee hold even when a retry overlaps an in-flight
+// original: the retry waits, then observes the recorded operation instead of
+// racing the resource write. The returned requestID ("" when absent) is passed
+// back to recordOperation so a fresh mutation is remembered. A malformed token
+// fails loud with 400, matching the Compute Engine contract.
+func (p *Provider) beginMutation(ctx context.Context, nr *model.NormalizedRequest, project, scope string) (map[string]any, string, func(), error) {
+	requestID := strParam(nr, "requestId")
+	if requestID == "" {
+		return nil, "", func() {}, nil
+	}
+	if requestID == zeroRequestID || !requestIDRE.MatchString(requestID) {
+		return nil, "", func() {}, model.NewProviderError("InvalidArgument",
+			fmt.Sprintf("Invalid value for field 'requestId': '%s'. Must be a valid UUID and not the zero UUID", requestID), 400)
+	}
+	unlock := p.mutations.lock(project + "\x00" + scope + "\x00" + requestID)
+	op, ok, err := p.replayOperation(ctx, project, scope, requestID)
+	if err != nil {
+		unlock()
+		return nil, requestID, func() {}, err
+	}
+	if ok {
+		unlock()
+		return op, requestID, func() {}, nil
+	}
+	return nil, requestID, unlock, nil
+}
+
+// replayOperation returns the operation recorded by an earlier mutation that
+// carried the same requestId at the same scope — the documented "ignore the
+// request if it has already been completed" contract. ok is false when nothing
+// was recorded yet. A store failure other than ErrNotFound is returned so a
+// genuine retry is never mistaken for a fresh request.
+func (p *Provider) replayOperation(ctx context.Context, project, scope, requestID string) (map[string]any, bool, error) {
+	if requestID == "" {
+		return nil, false, nil
+	}
+	e, err := p.resources.Get(ctx, project, scope, rtRequestID, requestID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	var op map[string]any
+	if json.Unmarshal(e.Data, &op) != nil || op == nil {
+		return nil, false, nil
+	}
+	return op, true, nil
+}
+
+// rememberOperation records op as the operation for requestID at scope so a
+// retry with the same token replays it. The first writer wins: a token that
+// already has an operation is left untouched, so concurrent retries converge
+// on the original operation rather than clobbering it.
+func (p *Provider) rememberOperation(project, scope, requestID string, op map[string]any) {
+	if requestID == "" {
+		return
+	}
+	data, err := json.Marshal(op)
+	if err != nil {
+		return
+	}
+	_, _ = p.resources.UpsertAtomic(context.Background(), project, scope, rtRequestID, requestID,
+		func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
+			if exists {
+				return current, nil
+			}
+			return store.ResourceEntry{Type: rtRequestID, ID: requestID, Data: data}, nil
+		})
+}
+
+// keyedMutex serializes work on a string key. The compute provider uses it to
+// process same-requestId mutations one at a time, so a retry observes the
+// original operation (and its recorded result) instead of racing the token
+// reservation. Entries are reference-counted and dropped once unlocked.
+type keyedMutex struct {
+	mu    sync.Mutex
+	locks map[string]*keyedLock
+}
+
+type keyedLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func newKeyedMutex() *keyedMutex { return &keyedMutex{locks: map[string]*keyedLock{}} }
+
+// lock acquires the mutex for key and returns the release function.
+func (k *keyedMutex) lock(key string) func() {
+	if k == nil {
+		return func() {}
+	}
+	k.mu.Lock()
+	l, ok := k.locks[key]
+	if !ok {
+		l = &keyedLock{}
+		k.locks[key] = l
+	}
+	l.refs++
+	k.mu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		k.mu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(k.locks, key)
+		}
+		k.mu.Unlock()
+	}
 }
 
 // Unimplemented is the fail-loud handler for deferred Compute Engine surfaces.
