@@ -2,7 +2,8 @@ package datastore
 
 import (
 	"bytes"
-	"strings"
+	"cmp"
+	"math"
 	"time"
 
 	dsstore "jaiscloud/internal/gcp/store/datastore"
@@ -48,6 +49,60 @@ func unsupportedQueryOperator(op string) error {
 	return invalidArgument("unsupported query operator: " + op)
 }
 
+// validateFilter checks a filter's static shape before any entity is scanned.
+// matchesFilter enforces the same rules per entity, but that is reached only
+// when the scan visits a candidate — so without this pass a request real
+// Datastore rejects (an unsupported operator, or IN with a non-array value)
+// would silently return an empty result set on an empty or fully-filtered
+// collection instead of failing loud. RunQuery and RunAggregationQuery call it
+// once up front.
+func validateFilter(f *Filter) error {
+	if f == nil {
+		return nil
+	}
+	if f.Property != nil {
+		return validatePropertyFilter(f.Property)
+	}
+	if f.Composite != nil {
+		if f.Composite.Op != CompositeAnd {
+			return unsupportedQueryOperator(compositeOpName(f.Composite.Op))
+		}
+		for _, sub := range f.Composite.Filters {
+			if err := validateFilter(sub); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return unsupportedQueryOperator("unknown filter")
+}
+
+// validatePropertyFilter validates one property filter's static shape.
+func validatePropertyFilter(pf *PropertyFilter) error {
+	switch pf.Op {
+	case PropertyEqual, PropertyNotEqual,
+		PropertyLessThan, PropertyLessThanOrEqual,
+		PropertyGreaterThan, PropertyGreaterThanOrEqual:
+		return nil
+	case PropertyIn:
+		// Real Datastore requires the IN operand to be an array value.
+		if pf.Value.ArrayValue == nil {
+			return invalidArgument("IN requires an array value")
+		}
+		return nil
+	case PropertyHasAncestor:
+		if pf.Property != keyPropertyName {
+			return invalidArgument("HAS_ANCESTOR requires the " + keyPropertyName + " property")
+		}
+		if pf.Value.KeyValue == nil {
+			return invalidArgument("HAS_ANCESTOR requires a key value")
+		}
+		return nil
+	default:
+		return unsupportedQueryOperator(propertyOpName(pf.Op))
+	}
+}
+
 func matchesPropertyFilter(e dsstore.Entity, pf *PropertyFilter) (bool, error) {
 	if pf == nil {
 		return false, unsupportedQueryOperator("missing property filter")
@@ -74,7 +129,10 @@ func matchesPropertyFilter(e dsstore.Entity, pf *PropertyFilter) (bool, error) {
 	case PropertyNotEqual:
 		return ok && !valueEqual(val, filterVal), nil
 	case PropertyIn:
-		if !ok || filterVal.ArrayValue == nil {
+		if filterVal.ArrayValue == nil {
+			return false, invalidArgument("IN requires an array value")
+		}
+		if !ok {
 			return false, nil
 		}
 		for _, el := range filterVal.ArrayValue.Values {
@@ -133,59 +191,81 @@ func keyHasAncestor(entityKey, ancestorKey string) bool {
 	return true
 }
 
-// numericValue reports the numeric value of v (integer or double) as a float64.
-func numericValue(v dsstore.Value) (float64, bool) {
-	if v.IntegerValue != nil {
-		return float64(*v.IntegerValue), true
+// Datastore value-type ranks. Firestore in Datastore mode orders a property
+// whose values have mixed types by the value's *type* first, then by value
+// within the type (the documented "Value type ordering" table,
+// https://cloud.google.com/datastore/docs/concepts/entities#value_type_ordering):
+//
+//	null < integers < dates/times < booleans < byte strings
+//	     < unicode strings < floats < NaN < geo points < keys
+//
+// Integers and floats are separate types, so every integer sorts before every
+// float (the documented `7 < 3.2`).
+const (
+	rankNull = iota + 1
+	rankInteger
+	rankTimestamp
+	rankBoolean
+	rankBlob
+	rankString
+	rankDouble
+	rankNaN
+	rankGeoPoint
+	rankKey
+)
+
+// valueRank returns v's type rank in the documented cross-type ordering. ok is
+// false for the two value types with no sort order — array values and embedded
+// entities — and for an absent (zero) value; such values are never orderable.
+func valueRank(v dsstore.Value) (int, bool) {
+	switch {
+	case v.NullValue != nil:
+		return rankNull, true
+	case v.IntegerValue != nil:
+		return rankInteger, true
+	case v.TimestampValue != nil:
+		return rankTimestamp, true
+	case v.BooleanValue != nil:
+		return rankBoolean, true
+	case v.BlobValue != nil:
+		return rankBlob, true
+	case v.StringValue != nil:
+		return rankString, true
+	case v.DoubleValue != nil:
+		if math.IsNaN(*v.DoubleValue) {
+			return rankNaN, true
+		}
+		return rankDouble, true
+	case v.GeoPointValue != nil:
+		return rankGeoPoint, true
+	case v.KeyValue != nil:
+		return rankKey, true
+	default:
+		return 0, false
 	}
-	if v.DoubleValue != nil {
-		return *v.DoubleValue, true
-	}
-	return 0, false
 }
 
 // valueCompare compares two values for ordering, returning -1, 0, or 1. ok is
-// false when the two values are not orderable (different types, or an
-// unsupported type such as geo point/entity/array). Integers and doubles
-// compare numerically, matching Datastore semantics.
+// false when either value has no sort order (an array, an embedded entity, or an
+// absent value); every other cross-type pair is orderable via the documented
+// type ordering (valueRank).
 func valueCompare(a, b dsstore.Value) (int, bool) {
-	an, aNum := numericValue(a)
-	bn, bNum := numericValue(b)
-	if aNum || bNum {
-		if !aNum || !bNum {
-			return 0, false
-		}
-		switch {
-		case an < bn:
-			return -1, true
-		case an > bn:
-			return 1, true
-		default:
-			return 0, true
-		}
+	ra, aok := valueRank(a)
+	rb, bok := valueRank(b)
+	if !aok || !bok {
+		return 0, false
 	}
-	switch {
-	case a.StringValue != nil || b.StringValue != nil:
-		if a.StringValue == nil || b.StringValue == nil {
-			return 0, false
-		}
-		return strings.Compare(*a.StringValue, *b.StringValue), true
-	case a.BooleanValue != nil || b.BooleanValue != nil:
-		if a.BooleanValue == nil || b.BooleanValue == nil {
-			return 0, false
-		}
-		switch {
-		case *a.BooleanValue == *b.BooleanValue:
-			return 0, true
-		case !*a.BooleanValue && *b.BooleanValue:
-			return -1, true
-		default:
-			return 1, true
-		}
-	case a.TimestampValue != nil || b.TimestampValue != nil:
-		if a.TimestampValue == nil || b.TimestampValue == nil {
-			return 0, false
-		}
+	if ra != rb {
+		return cmp.Compare(ra, rb), true
+	}
+	switch ra {
+	case rankNull, rankNaN:
+		// A null is the same value as any other null, and a NaN is the same
+		// (NaN) value as any other NaN.
+		return 0, true
+	case rankInteger:
+		return cmp.Compare(*a.IntegerValue, *b.IntegerValue), true
+	case rankTimestamp:
 		at, errA := time.Parse(time.RFC3339Nano, *a.TimestampValue)
 		bt, errB := time.Parse(time.RFC3339Nano, *b.TimestampValue)
 		if errA != nil || errB != nil {
@@ -199,25 +279,49 @@ func valueCompare(a, b dsstore.Value) (int, bool) {
 		default:
 			return 0, true
 		}
-	case a.KeyValue != nil || b.KeyValue != nil:
-		if a.KeyValue == nil || b.KeyValue == nil {
-			return 0, false
+	case rankBoolean:
+		switch {
+		case *a.BooleanValue == *b.BooleanValue:
+			return 0, true
+		case !*a.BooleanValue:
+			return -1, true
+		default:
+			return 1, true
 		}
-		return strings.Compare(*a.KeyValue, *b.KeyValue), true
-	case a.BlobValue != nil || b.BlobValue != nil:
-		if a.BlobValue == nil || b.BlobValue == nil {
-			return 0, false
-		}
+	case rankBlob:
 		return bytes.Compare(a.BlobValue, b.BlobValue), true
+	case rankString:
+		return cmp.Compare(*a.StringValue, *b.StringValue), true
+	case rankDouble:
+		return cmp.Compare(*a.DoubleValue, *b.DoubleValue), true
+	case rankGeoPoint:
+		// By latitude, then longitude (the documented geo-point sort order).
+		if c := cmp.Compare(a.GeoPointValue.Latitude, b.GeoPointValue.Latitude); c != 0 {
+			return c, true
+		}
+		return cmp.Compare(a.GeoPointValue.Longitude, b.GeoPointValue.Longitude), true
+	case rankKey:
+		// KeyValue holds the key's canonical string form; comparing those
+		// lexically orders the path elements (an existing approximation of the
+		// documented "by path elements" key ordering).
+		return cmp.Compare(*a.KeyValue, *b.KeyValue), true
 	}
 	return 0, false
 }
 
 func valueEqual(a, b dsstore.Value) bool {
-	an, aNum := numericValue(a)
-	bn, bNum := numericValue(b)
-	if aNum || bNum {
-		return aNum && bNum && an == bn
+	// Integers and doubles are separate types in Datastore mode (the documented
+	// value-type ordering), so `n = 3` does NOT match a stored `3.0` and vice
+	// versa. A NaN equals another NaN: NaN is a single distinct value type.
+	if a.IntegerValue != nil || b.IntegerValue != nil {
+		return a.IntegerValue != nil && b.IntegerValue != nil && *a.IntegerValue == *b.IntegerValue
+	}
+	if a.DoubleValue != nil || b.DoubleValue != nil {
+		if a.DoubleValue == nil || b.DoubleValue == nil {
+			return false
+		}
+		return *a.DoubleValue == *b.DoubleValue ||
+			(math.IsNaN(*a.DoubleValue) && math.IsNaN(*b.DoubleValue))
 	}
 	switch {
 	case a.NullValue != nil || b.NullValue != nil:

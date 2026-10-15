@@ -736,7 +736,8 @@ operands that no input can distinguish, the single-threaded lock statements) are
 *not* assertion gaps and are deliberately left (recorded as TD19-a). The two
 follow-ups TD13 named — a negative-suite pass on the GQL parser and metadata, and
 a committed `docs/gcp-mutation-floor.yaml` ratchet — are **TD19**; the
-codec/router closure is **TD20**.
+codec/router closure is **TD20**; and the value-type ordering the value tests
+surfaced is **TD21** (all below).
 
 ### 13.1 The negative tables and the committed floor (TD19)
 
@@ -776,7 +777,7 @@ numeric type (`n = 3` matches a stored `3.0`; `7 < 3.2`), whereas Firestore in
 Datastore mode documents them as *separate* types for ordering and equality.
 That is a behaviour question, not a test-depth one, so the spike does not change
 it — it is recorded as TD13-c (and the new tests say so) rather than silently
-blessed.
+blessed. **TD21 (§13.3) closes it.**
 
 The codec/router surface the plan also named — `internal/gcp/adapter/jsoncodec.go`,
 where a wrong resource-type or action derivation silently misroutes a request —
