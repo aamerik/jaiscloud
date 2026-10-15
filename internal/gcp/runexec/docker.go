@@ -56,6 +56,12 @@ type DockerConfig struct {
 	Client *http.Client
 	// Network sets HostConfig.NetworkMode; empty uses the daemon default.
 	Network string
+	// Addressing is how the emulator reaches the revision containers it
+	// launches: host (published loopback port) or container (by container name
+	// on the shared network). The zero value is host mode. The startup wiring
+	// resolves it with docker.ResolveAddressing and gates docker mode on
+	// docker.Probe.
+	Addressing docker.Addressing
 }
 
 // DockerManager implements run.RuntimeManager with one container per revision
@@ -70,6 +76,7 @@ type DockerManager struct {
 	platform     *platform.PlatformConfig
 	instanceID   string
 	network      string
+	addr         docker.Addressing
 	logger       *slog.Logger
 
 	reg *registry
@@ -131,6 +138,7 @@ func NewDocker(cfg DockerConfig) *DockerManager {
 		platform:     cfg.Platform,
 		instanceID:   cfg.InstanceID,
 		network:      cfg.Network,
+		addr:         cfg.Addressing,
 		logger:       logger,
 		reg:          newRegistry(),
 	}
@@ -178,9 +186,9 @@ func (m *DockerManager) EnsureRevision(ctx context.Context, svc runstore.Service
 	m.reg.put(svcName, host, &target{
 		serviceName: svcName,
 		revision:    rev.ID,
-		backend:     fmt.Sprintf("http://127.0.0.1:%d", hostPort),
+		backend:     m.addr.URL(name, int(port), hostPort),
 	})
-	m.logger.Info("cloudrun: revision ready", "service", svcName, "revision", rev.ID, "container", docker.ShortID(id), "port", hostPort)
+	m.logger.Info("cloudrun: revision ready", "service", svcName, "revision", rev.ID, "container", docker.ShortID(id), "address", m.addr.HostPort(name, int(port), hostPort))
 	return nil
 }
 
@@ -278,16 +286,19 @@ func (m *DockerManager) startContainer(ctx context.Context, spec dockerSpec) (st
 	}
 	hostCfg := map[string]any{
 		"AutoRemove": false,
-		// An empty HostPort lets Docker assign an ephemeral port bound to
-		// loopback only, so revisions never race for a fixed port and are not
-		// exposed beyond the host.
-		"PortBindings": map[string]any{portKey: []map[string]any{{"HostIp": "127.0.0.1", "HostPort": ""}}},
+	}
+	// Host mode: an ephemeral host port bound to loopback, so revisions never
+	// race for a fixed port and are not exposed beyond the host. Container mode:
+	// nothing is published — the emulator reaches the revision by container name
+	// on the shared network.
+	if bindings := m.addr.PortBindings(int(spec.port), 0); bindings != nil {
+		hostCfg["PortBindings"] = bindings
 	}
 	if spec.memory > 0 {
 		hostCfg["Memory"] = spec.memory
 	}
-	if m.network != "" {
-		hostCfg["NetworkMode"] = m.network
+	if network := m.addressNetwork(); network != "" {
+		hostCfg["NetworkMode"] = network
 	}
 	binds, platformEnv, pErr := docker.BindsAndEnv(m.platform)
 	if pErr != nil {
@@ -310,6 +321,11 @@ func (m *DockerManager) startContainer(ctx context.Context, spec dockerSpec) (st
 	if len(spec.args) > 0 {
 		createBody["Cmd"] = spec.args
 	}
+	// Container mode registers the (DNS-safe) network alias so a container name
+	// longer than a DNS label is still addressable by name.
+	if nc := m.addr.NetworkingConfig(spec.name); nc != nil {
+		createBody["NetworkingConfig"] = nc
+	}
 	body, err := json.Marshal(createBody)
 	if err != nil {
 		return "", 0, fmt.Errorf("docker create: %w", err)
@@ -331,21 +347,40 @@ func (m *DockerManager) startContainer(ctx context.Context, spec dockerSpec) (st
 		return fail(fmt.Errorf("docker start: HTTP %d", status))
 	}
 
-	hostPort, err := m.waitContainerPort(ctx, id, spec.port)
+	hostPort, err := m.waitContainerPort(ctx, id, spec.name, spec.port)
 	if err != nil {
 		return fail(err)
 	}
 	return id, hostPort, nil
 }
 
-// waitContainerPort polls the container until Docker has assigned its published
-// host port and the port accepts a TCP connection.
-func (m *DockerManager) waitContainerPort(ctx context.Context, id string, containerPort int32) (int, error) {
+// addressNetwork is the NetworkMode a revision joins: the shared network when
+// the emulator is containerized (so the revision is resolvable by name), else
+// the configured network.
+func (m *DockerManager) addressNetwork() string {
+	if m.addr.Network != "" {
+		return m.addr.Network
+	}
+	return m.network
+}
+
+// waitContainerPort polls the container until its listener accepts a request.
+// Host mode waits for the daemon to assign a published host port and probes that
+// on loopback; container mode probes the revision by name on the shared network.
+func (m *DockerManager) waitContainerPort(ctx context.Context, id, name string, containerPort int32) (int, error) {
 	deadline := clock.RealNow().Add(m.readyTimeout)
 	portKey := fmt.Sprintf("%d/tcp", containerPort)
 	for {
-		if hostPort, err := m.inspectHostPort(ctx, id, portKey); err == nil && hostPort > 0 {
-			if m.probe(fmt.Sprintf("127.0.0.1:%d", hostPort)) {
+		hostPort := 0
+		if !m.addr.Containerized() {
+			if p, err := m.inspectHostPort(ctx, id, portKey); err == nil {
+				hostPort = p
+			} else {
+				hostPort = 0
+			}
+		}
+		if m.addr.Containerized() || hostPort > 0 {
+			if m.probe(m.addr.HostPort(name, int(containerPort), hostPort)) {
 				return hostPort, nil
 			}
 		}

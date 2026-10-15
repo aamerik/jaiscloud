@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -359,7 +360,12 @@ func startCmd() *cobra.Command {
 				// the executor reuses it rather than building a second one.
 				var funcK8sClient kubernetes.Interface
 				funcCfg.Mode, funcK8sClient = effectiveFunctionsMode(funcMode, func(ctx context.Context) error {
-					return docker.Ping(ctx, "")
+					addr, err := docker.ResolveAndProbe(ctx, "", funcCfg.Network)
+					if err != nil {
+						return err
+					}
+					funcCfg.Addressing = addr
+					return nil
 				})
 				functionsMode = funcCfg.Mode
 				funcCfg.Region = cfg.Region
@@ -505,12 +511,10 @@ func startCmd() *cobra.Command {
 				} else if v := os.Getenv("JAISCLOUD_GCS_EMULATOR_ENDPOINT"); v != "" {
 					gcpEmulatorCfg.GCSEndpoint = v
 				}
-				if sparkMode == "docker" {
-					// A driver container cannot reach the emulator on the host's
-					// loopback address; rewrite it to the host.docker.internal
-					// alias the container's ExtraHosts maps to the host.
-					gcpEmulatorCfg.GCSEndpoint = dockerReachableEndpoint(gcpEmulatorCfg.GCSEndpoint)
-				}
+				// In docker mode a driver container cannot reach the emulator on
+				// the host's loopback address; the endpoint is rewritten for the
+				// deployment mode in the docker branch below, once the
+				// addressing is resolved.
 				dataprocOpts = append(dataprocOpts, dataproccore.WithGCPEmulator(gcpEmulatorCfg))
 				// Cluster mutations are asynchronous and settle lazily on a read.
 				// The default (zero) settles on the first read; a positive value
@@ -569,13 +573,17 @@ func startCmd() *cobra.Command {
 						// otherwise fail) rather than run blind. A platform load
 						// failure (bad TLS/volume config) is not fatal.
 						pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-						pingErr := dataproccore.DockerPing(pingCtx, "")
+						addr, pingErr := docker.ResolveAndProbe(pingCtx, "", "")
 						cancel()
 						if pingErr != nil {
-							slog.Warn("dataproc: docker daemon unreachable; falling back to mock", "err", pingErr)
+							slog.Warn("dataproc: docker daemon unreachable or containerized addressing unset; falling back to mock", "err", pingErr)
 							effectiveSparkMode = "mock"
 						} else {
-							dockerCfg := dataproccore.DockerConfig{Logger: slog.Default(), InstanceID: instanceID}
+							dockerCfg := dataproccore.DockerConfig{Logger: slog.Default(), InstanceID: instanceID, Addressing: addr}
+							// The driver reaches the emulator by name on the shared
+							// network in container mode, or via host.docker.internal
+							// on the host.
+							gcpEmulatorCfg.GCSEndpoint = dockerWorkloadEndpoint(addr, gcpEmulatorCfg.GCSEndpoint)
 							if platformCfg, err := platform.LoadFromEnv(); err != nil {
 								slog.Warn("dataproc: platform config failed; continuing without it", "err", err)
 							} else {
@@ -735,13 +743,13 @@ func startCmd() *cobra.Command {
 				// load failure (bad TLS/volume config) is not fatal: the manager
 				// runs without the platform layer.
 				pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				pingErr := runexec.Ping(pingCtx, "")
+				addr, pingErr := docker.ResolveAndProbe(pingCtx, "", "")
 				cancel()
 				if pingErr != nil {
-					slog.Warn("cloudrun: docker daemon unreachable; falling back to mock", "err", pingErr)
+					slog.Warn("cloudrun: docker daemon unreachable or containerized addressing unset; falling back to mock", "err", pingErr)
 					break
 				}
-				dockerCfg := runexec.DockerConfig{Logger: slog.Default(), InstanceID: instanceID}
+				dockerCfg := runexec.DockerConfig{Logger: slog.Default(), InstanceID: instanceID, Addressing: addr}
 				if platformCfg, err := platform.LoadFromEnv(); err != nil {
 					slog.Warn("cloudrun: platform config failed; continuing without it", "err", err)
 				} else {
@@ -1850,13 +1858,14 @@ func buildManagedKafkaBroker(cfg *config.Config, instanceID string) kafkabroker.
 		// rather than run blind. A platform load failure (bad TLS/volume
 		// config) is not fatal.
 		pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		pingErr := docker.Ping(pingCtx, "")
+		addr, pingErr := docker.ResolveAndProbe(pingCtx, "", "")
 		cancel()
 		if pingErr != nil {
-			slog.Warn("managedkafka: docker daemon unreachable; broker falls back to mock", "err", pingErr)
+			slog.Warn("managedkafka: docker daemon unreachable or containerized addressing unset; broker falls back to mock", "err", pingErr)
 			bcfg.Mode = string(kafkabroker.ModeMock)
 			break
 		}
+		bcfg.Addressing = addr
 		if platformCfg, err := platform.LoadFromEnv(); err != nil {
 			slog.Warn("managedkafka: platform config failed; continuing without it", "err", err)
 		} else {
@@ -1873,6 +1882,24 @@ func buildManagedKafkaBroker(cfg *config.Config, instanceID string) kafkabroker.
 // bootstrap.
 func buildK8sClient() (kubernetes.Interface, error) {
 	return k8shelpers.NewClient()
+}
+
+// dockerWorkloadEndpoint rewrites the emulator endpoint a docker workload is
+// given. Host mode maps the emulator's loopback to host.docker.internal (the
+// daemon host, which is the emulator's own host). Container mode uses the
+// emulator's address on the shared network (JAISCLOUD_ENDPOINT, which a
+// containerized deployment sets): from a sibling container host.docker.internal
+// is the daemon host, not the emulator's container (CDE1).
+func dockerWorkloadEndpoint(addr docker.Addressing, endpoint string) string {
+	if !addr.Containerized() {
+		return dockerReachableEndpoint(endpoint)
+	}
+	if v := os.Getenv("JAISCLOUD_ENDPOINT"); v != "" {
+		if u, err := url.Parse(v); err == nil && u.Host != "" {
+			return u.Host
+		}
+	}
+	return endpoint
 }
 
 // dockerReachableEndpoint rewrites a loopback endpoint (e.g. a

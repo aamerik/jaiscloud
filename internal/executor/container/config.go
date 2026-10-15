@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+
+	"jaiscloud/internal/docker"
 )
 
 // Config holds executor-wide configuration shared by all functions of a cloud
@@ -16,6 +18,13 @@ type Config struct {
 	DefaultImage string
 	// Network is the Docker network for warm containers (docker mode only).
 	Network string
+	// Addressing is how the emulator reaches the containers it launches: host
+	// (published loopback ports, emulator-local bind sources) or container (by
+	// container name on Network, binds under a shared root). The zero value is
+	// host mode, so an unwired deployment is unchanged. The startup wiring
+	// resolves it with docker.ResolveAddressing and gates docker mode on
+	// docker.Probe.
+	Addressing docker.Addressing
 	// KeepaliveSecs is the idle timeout before a warm container/pod is stopped.
 	KeepaliveSecs int
 	// Namespace is the K8s namespace for warm pods (k8s mode only).
@@ -66,6 +75,11 @@ func DefaultConfig() Config {
 	}
 	if v := os.Getenv("JAISCLOUD_K8S_SA"); v != "" {
 		cfg.ServiceAccount = v
+	}
+	// The shared Docker network the emulator and its workloads join; the
+	// deployment's docker-compose sets it. It was previously read by no one.
+	if v := os.Getenv(docker.EnvNetwork); v != "" {
+		cfg.Network = v
 	}
 	return cfg
 }

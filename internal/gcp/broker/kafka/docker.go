@@ -46,6 +46,7 @@ type dockerBroker struct {
 	instanceID   string
 	image        string
 	readyTimeout time.Duration
+	addr         docker.Addressing
 	logger       *slog.Logger
 
 	mu        sync.Mutex
@@ -87,6 +88,7 @@ func newDockerBroker(cfg Config, logger *slog.Logger) *dockerBroker {
 		docker:       docker.New(docker.Config{Logger: logger, Socket: cfg.Socket, Client: cfg.DockerClient}),
 		platform:     cfg.Platform,
 		instanceID:   cfg.InstanceID,
+		addr:         cfg.Addressing,
 		image:        image,
 		readyTimeout: ready,
 		logger:       logger,
@@ -187,15 +189,24 @@ func (b *dockerBroker) EnsureCluster(ctx context.Context, project, location, clu
 	}
 	b.mu.Unlock()
 
-	// A Kafka broker must advertise a reachable listener, so the host port is
-	// chosen up front (Docker cannot assign it before we bake the advertise
-	// address into the container command) and bound to loopback only.
-	hostPort, err := freePort()
-	if err != nil {
-		return "", fmt.Errorf("managedkafka broker: find free port: %w", err)
-	}
-	addr := fmt.Sprintf("127.0.0.1:%d", hostPort)
+	// A Kafka broker must advertise a reachable listener, so the address is
+	// chosen up front (Docker cannot assign a host port before we bake the
+	// advertise address into the container command). In host mode it is the
+	// published loopback port; in container mode the emulator reaches the broker
+	// by container name on the shared network, so nothing is published.
 	name := dockerBrokerName(b.instanceID, key)
+	var hostPort int
+	var addr string
+	if b.addr.Containerized() {
+		addr = b.addr.HostPort(name, kafkaPort, 0)
+	} else {
+		var err error
+		hostPort, err = freePort()
+		if err != nil {
+			return "", fmt.Errorf("managedkafka broker: find free port: %w", err)
+		}
+		addr = b.addr.HostPort(name, kafkaPort, hostPort)
+	}
 
 	id, err := b.startContainer(ctx, name, key, hostPort, addr)
 	if err != nil {
@@ -219,8 +230,15 @@ func (b *dockerBroker) startContainer(ctx context.Context, name string, key Clus
 	portKey := fmt.Sprintf("%d/tcp", kafkaPort)
 	hostCfg := map[string]any{
 		"AutoRemove": false,
-		// Bind the chosen loopback port so the broker can advertise it.
-		"PortBindings": map[string]any{portKey: []map[string]any{{"HostIp": "127.0.0.1", "HostPort": fmt.Sprintf("%d", hostPort)}}},
+	}
+	// Host mode: bind the chosen loopback port so the broker can advertise it.
+	// Container mode: publish nothing; the broker is advertised by container
+	// name on the shared network instead.
+	if bindings := b.addr.PortBindings(kafkaPort, hostPort); bindings != nil {
+		hostCfg["PortBindings"] = bindings
+	}
+	if b.addr.Network != "" {
+		hostCfg["NetworkMode"] = b.addr.Network
 	}
 	binds, platformEnv, pErr := docker.BindsAndEnv(b.platform)
 	if pErr != nil {
@@ -260,6 +278,11 @@ func (b *dockerBroker) startContainer(ctx context.Context, name string, key Clus
 		"Entrypoint":   []string{"rpk", "redpanda"},
 		"Cmd":          args,
 		"HostConfig":   hostCfg,
+	}
+	// Container mode advertises the broker by its container name; register the
+	// DNS-safe alias so a long name still resolves.
+	if network := b.addr.Network; network != "" && b.addr.Containerized() {
+		createBody["NetworkingConfig"] = b.addr.NetworkingConfig(name)
 	}
 	body, err := json.Marshal(createBody)
 	if err != nil {

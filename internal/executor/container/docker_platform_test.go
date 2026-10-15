@@ -67,7 +67,7 @@ func TestDockerExecutor_AppliesPlatformOverlay(t *testing.T) {
 	)
 	defer e.Close()
 
-	if _, _, _, err := e.startContainer(context.Background(), Request{FunctionName: "fn"}, "img:1", 9100); err != nil {
+	if _, _, _, _, err := e.startContainer(context.Background(), Request{FunctionName: "fn"}, "img:1", 9100); err != nil {
 		t.Fatalf("startContainer: %v", err)
 	}
 	if fake.createBody == nil {

@@ -777,11 +777,17 @@ func buildRegistry(ctx context.Context, cfg *config.Config, s appStores, dek []b
 		lambdaCfg.JaisCloudEndpoint = v
 	}
 	lambdaCfg = lambdaexec.LambdaConfigFrom(lambdaCfg)
-	// A docker mode with no reachable daemon degrades to the mock executor (as
-	// GCP Cloud Run/Dataproc do); otherwise startup would succeed and only the
-	// first invoke would fail inside the container-start path.
+	// A docker mode with no reachable daemon, or a containerized emulator whose
+	// deployment addressing is unusable, degrades to the mock executor (as GCP
+	// Cloud Run/Dataproc do); otherwise startup would succeed and only the first
+	// invoke would fail inside the container-start path.
 	effLambdaMode := effectiveLambdaMode(lambdaMode, func(ctx context.Context) error {
-		return docker.Ping(ctx, "")
+		addr, err := docker.ResolveAndProbe(ctx, "", lambdaCfg.Network)
+		if err != nil {
+			return err
+		}
+		lambdaCfg.Addressing = addr
+		return nil
 	})
 	var lambdaExec lambdaexec.LambdaExecutor
 	switch effLambdaMode {
