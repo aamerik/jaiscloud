@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"jaiscloud/internal/gcp/resource"
@@ -782,6 +783,280 @@ func TestListParamsPageSizeDefaults(t *testing.T) {
 		if got := listParams(newNR(tc.params))["pageSize"]; got != tc.want {
 			t.Errorf("%s: pageSize = %v, want %d", tc.label, got, tc.want)
 		}
+	}
+}
+
+// ─── requestId idempotency (TD18) ─────────────────────────────────────────────
+
+// testRequestID is a well-formed UUID used by the requestId tests.
+const testRequestID = "3b241101-e2bb-4255-8caf-4136c566a962"
+
+// TestInstanceInsertRequestIDIsIdempotent covers the documented contract on
+// instances.insert: a retry carrying the same requestId is ignored once the
+// first attempt finished and replays the original operation, so no duplicate
+// instance is created.
+func TestInstanceInsertRequestIDIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	params := zonal("us-central1-a", map[string]any{"body": instanceBody("vm-idem"), "requestId": testRequestID})
+
+	first, err := p.InstancesInsert(ctx, newNR(params))
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if got := str(first.Data["clientOperationId"]); got != testRequestID {
+		t.Errorf("clientOperationId = %q, want %q", got, testRequestID)
+	}
+
+	// A retry with the same token replays the original operation.
+	second, err := p.InstancesInsert(ctx, newNR(params))
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if second.Data["name"] != first.Data["name"] {
+		t.Errorf("retry replayed operation %v, want %v", second.Data["name"], first.Data["name"])
+	}
+	if second.Data["selfLink"] != first.Data["selfLink"] {
+		t.Errorf("retry selfLink = %v, want %v", second.Data["selfLink"], first.Data["selfLink"])
+	}
+	if second.Data["clientOperationId"] != testRequestID {
+		t.Errorf("retry clientOperationId = %v, want %s", second.Data["clientOperationId"], testRequestID)
+	}
+
+	// The retry must not have created a second instance.
+	list, err := p.InstancesList(ctx, newNR(zonal("us-central1-a", nil)))
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if items, _ := list.Data["items"].([]any); len(items) != 1 {
+		t.Fatalf("expected 1 instance after retry, got %d", len(items))
+	}
+
+	// operations.get resolves the replayed operation, token echoed.
+	opName := str(first.Data["name"])
+	got, err := p.OperationsGet(ctx, newNR(zonal("us-central1-a", map[string]any{"operation": opName})))
+	if err != nil {
+		t.Fatalf("operations.get: %v", err)
+	}
+	if got.Data["clientOperationId"] != testRequestID {
+		t.Errorf("persisted clientOperationId = %v, want %s", got.Data["clientOperationId"], testRequestID)
+	}
+
+	// A fresh token on the same name is a distinct request: the name is taken.
+	if _, err := p.InstancesInsert(ctx, newNR(zonal("us-central1-a", map[string]any{
+		"body": instanceBody("vm-idem"), "requestId": "0f8fad5b-d9cb-469f-a165-70867728950e"}))); !isCode(err, "AlreadyExists") {
+		t.Fatalf("expected AlreadyExists for a new token on an existing name, got %v", err)
+	}
+}
+
+// TestRequestIDReuseAcrossResourcesReplaysOriginal pins the documented
+// "if original operation with the same request ID was received ... ignore the
+// second request": the token, not the body, decides — a different body with
+// the same token replays the original operation and creates nothing.
+func TestRequestIDReuseAcrossResourcesReplaysOriginal(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+
+	first, err := p.InstancesInsert(ctx, newNR(zonal("us-central1-a", map[string]any{
+		"body": instanceBody("vm-first"), "requestId": testRequestID})))
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	second, err := p.InstancesInsert(ctx, newNR(zonal("us-central1-a", map[string]any{
+		"body": instanceBody("vm-second"), "requestId": testRequestID})))
+	if err != nil {
+		t.Fatalf("reuse: %v", err)
+	}
+	if second.Data["name"] != first.Data["name"] {
+		t.Errorf("reused token replayed operation %v, want %v", second.Data["name"], first.Data["name"])
+	}
+	if _, err := p.InstancesGet(ctx, newNR(zonal("us-central1-a", map[string]any{"instance": "vm-second"}))); !isCode(err, "NotFound") {
+		t.Fatalf("vm-second must not have been created, got %v", err)
+	}
+}
+
+// TestDiskInsertRequestIDIsIdempotent covers the same contract on disks.insert.
+func TestDiskInsertRequestIDIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	body := map[string]any{"name": "disk-idem", "sizeGb": 20, "type": "pd-ssd"}
+	params := zonal("us-central1-a", map[string]any{"body": body, "requestId": testRequestID})
+
+	first, err := p.DisksInsert(ctx, newNR(params))
+	if err != nil {
+		t.Fatalf("insert disk: %v", err)
+	}
+	second, err := p.DisksInsert(ctx, newNR(params))
+	if err != nil {
+		t.Fatalf("retry disk: %v", err)
+	}
+	if second.Data["name"] != first.Data["name"] {
+		t.Errorf("retry replayed operation %v, want %v", second.Data["name"], first.Data["name"])
+	}
+	if second.Data["clientOperationId"] != testRequestID {
+		t.Errorf("clientOperationId = %v, want %s", second.Data["clientOperationId"], testRequestID)
+	}
+	list, err := p.DisksList(ctx, newNR(zonal("us-central1-a", nil)))
+	if err != nil {
+		t.Fatalf("list disks: %v", err)
+	}
+	if items, _ := list.Data["items"].([]any); len(items) != 1 {
+		t.Fatalf("expected 1 disk after retry, got %d", len(items))
+	}
+}
+
+// TestDeleteRequestIDIsIdempotent covers the delete side: retrying a completed
+// delete with the same token replays the original operation rather than
+// 404-ing on the already-deleted instance.
+func TestDeleteRequestIDIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	mustCreateInstance(t, p, "us-central1-a", "vm-del")
+	params := zonal("us-central1-a", map[string]any{"instance": "vm-del", "requestId": testRequestID})
+
+	first, err := p.InstancesDelete(ctx, newNR(params))
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	second, err := p.InstancesDelete(ctx, newNR(params))
+	if err != nil {
+		t.Fatalf("retry delete: %v", err)
+	}
+	if second.Data["name"] != first.Data["name"] {
+		t.Errorf("retry replayed operation %v, want %v", second.Data["name"], first.Data["name"])
+	}
+	if second.Data["operationType"] != "delete" {
+		t.Errorf("operationType = %v, want delete", second.Data["operationType"])
+	}
+	// Without a token the resource is gone, so a plain retry is 404.
+	if _, err := p.InstancesDelete(ctx, newNR(zonal("us-central1-a", map[string]any{"instance": "vm-del"}))); !isCode(err, "NotFound") {
+		t.Fatalf("expected NotFound for an untokened retry, got %v", err)
+	}
+}
+
+// TestRequestIDValidation asserts the documented UUID contract: a malformed
+// token or the unsupported zero UUID fails loud with 400, and an absent token
+// leaves clientOperationId unset.
+func TestRequestIDValidation(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	for _, bad := range []string{
+		"not-a-uuid",
+		"3b241101e2bb42558caf4136c566a962",
+		"00000000-0000-0000-0000-000000000000",
+	} {
+		_, err := p.InstancesInsert(ctx, newNR(zonal("us-central1-a", map[string]any{
+			"body": instanceBody("vm-bad"), "requestId": bad})))
+		if !isCode(err, "InvalidArgument") {
+			t.Errorf("requestId %q: expected InvalidArgument, got %v", bad, err)
+		}
+	}
+
+	op := mustCreateInstance(t, p, "us-central1-a", "vm-plain")
+	if _, ok := op["clientOperationId"]; ok {
+		t.Errorf("clientOperationId must be absent without a requestId: %v", op)
+	}
+}
+
+// TestRequestIDSameTokenConcurrentInsertsReplayOneOperation asserts that a
+// burst of same-token inserts (including ones that overlap an in-flight
+// original) all replay the single original operation, so no duplicate resource
+// is created and no retry is answered with a conflict. Run under -race it also
+// exercises the idempotency mapping and its per-token lock.
+func TestRequestIDSameTokenConcurrentInsertsReplayOneOperation(t *testing.T) {
+	const workers = 8
+	ctx := context.Background()
+	p := newProvider()
+	names := make([]string, workers)
+	errs := make([]error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			resp, err := p.InstancesInsert(ctx, newNR(zonal("us-central1-a", map[string]any{
+				"body": instanceBody("vm-race"), "requestId": testRequestID})))
+			errs[i] = err
+			if err == nil {
+				names[i] = str(resp.Data["name"])
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("same-token insert %d failed: %v (a retry must replay, not conflict)", i, err)
+		}
+		if names[i] != names[0] {
+			t.Fatalf("worker %d replayed operation %q, want %q", i, names[i], names[0])
+		}
+	}
+
+	list, err := p.InstancesList(ctx, newNR(zonal("us-central1-a", nil)))
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if items, _ := list.Data["items"].([]any); len(items) != 1 {
+		t.Fatalf("expected exactly 1 instance from concurrent same-token inserts, got %d", len(items))
+	}
+}
+
+// TestRequestIDIdempotentForGlobalScopeAndTransitions covers the global-scope
+// (network) and instance-transition paths: a retried start replays the original
+// operation and leaves the instance RUNNING.
+func TestRequestIDIdempotentForGlobalScopeAndTransitions(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+
+	// Global scope: a network insert retry replays.
+	nparams := map[string]any{"body": map[string]any{"name": "net-idem"}, "requestId": testRequestID}
+	firstNet, err := p.NetworksInsert(ctx, newNR(nparams))
+	if err != nil {
+		t.Fatalf("network insert: %v", err)
+	}
+	secondNet, err := p.NetworksInsert(ctx, newNR(nparams))
+	if err != nil {
+		t.Fatalf("network retry: %v", err)
+	}
+	if secondNet.Data["name"] != firstNet.Data["name"] {
+		t.Errorf("network retry replayed %v, want %v", secondNet.Data["name"], firstNet.Data["name"])
+	}
+	if secondNet.Data["clientOperationId"] != testRequestID {
+		t.Errorf("network clientOperationId = %v, want %s", secondNet.Data["clientOperationId"], testRequestID)
+	}
+	nets, err := p.NetworksList(ctx, newNR(nil))
+	if err != nil {
+		t.Fatalf("list networks: %v", err)
+	}
+	if items, _ := nets.Data["items"].([]any); len(items) != 1 {
+		t.Fatalf("expected 1 network after retry, got %d", len(items))
+	}
+
+	// A state transition: a retried start replays its operation.
+	mustCreateInstance(t, p, "us-central1-a", "vm-start")
+	sparams := zonal("us-central1-a", map[string]any{
+		"instance": "vm-start", "requestId": "0f8fad5b-d9cb-469f-a165-70867728950e"})
+	firstStart, err := p.InstancesStart(ctx, newNR(sparams))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	secondStart, err := p.InstancesStart(ctx, newNR(sparams))
+	if err != nil {
+		t.Fatalf("start retry: %v", err)
+	}
+	if secondStart.Data["name"] != firstStart.Data["name"] {
+		t.Errorf("start retry replayed %v, want %v", secondStart.Data["name"], firstStart.Data["name"])
+	}
+	if secondStart.Data["operationType"] != "start" {
+		t.Errorf("operationType = %v, want start", secondStart.Data["operationType"])
+	}
+	got, err := p.InstancesGet(ctx, newNR(zonal("us-central1-a", map[string]any{"instance": "vm-start"})))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Data["status"] != "RUNNING" {
+		t.Errorf("status = %v, want RUNNING", got.Data["status"])
 	}
 }
 

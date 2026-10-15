@@ -19,6 +19,7 @@ package sdk_compute_test
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -346,6 +347,18 @@ func requireErrorEnvelope(t *testing.T, err error, status string, code int) {
 
 func instanceTemplate(name string) *compute.Instance {
 	return &compute.Instance{Name: name, MachineType: "e2-micro"}
+}
+
+// randomUUID mints a v4 UUID for a requestId token, so repeated runs never
+// replay an earlier run's operation.
+func randomUUID(t *testing.T) string {
+	t.Helper()
+	var b [16]byte
+	_, err := rand.Read(b[:])
+	require.NoError(t, err)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // TestSDKComputeConcurrency is the p2 class: concurrent writers. The test client
@@ -718,4 +731,102 @@ func TestSDKComputeOperationsLifecycle(t *testing.T) {
 		delete(names, it.Name)
 	}
 	require.Empty(t, names, "every created instance must appear in the aggregated listing")
+}
+
+// TestSDKComputeRequestIdIdempotency is the TD18 case: the documented
+// requestId idempotency token on instances.insert/disks.insert. The first
+// insert echoes the token back as the operation's clientOperationId; a retry
+// carrying the same token is ignored and replays the original operation (no
+// duplicate resource, no 409); a malformed or zero-UUID token fails loud 400.
+func TestSDKComputeRequestIdIdempotency(t *testing.T) {
+	ctx := context.Background()
+	svc, err := compute.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	project, zone := projectID(), "us-central1-c"
+
+	// instances.insert: the token is echoed, and a retry replays the operation.
+	token := randomUUID(t)
+	name := unique("vm-idem")
+	first, err := svc.Instances.Insert(project, zone, instanceTemplate(name)).RequestId(token).Do()
+	require.NoError(t, err)
+	require.Equal(t, token, first.ClientOperationId, "operation must echo the requestId")
+
+	retry, err := svc.Instances.Insert(project, zone, instanceTemplate(name)).RequestId(token).Do()
+	require.NoError(t, err, "a retry with the same requestId must be ignored, not 409")
+	require.Equal(t, first.Name, retry.Name, "retry must replay the original operation")
+	require.Equal(t, token, retry.ClientOperationId)
+
+	// The retry created no second instance.
+	list, err := svc.Instances.List(project, zone).Filter("name = " + name).Do()
+	require.NoError(t, err)
+	require.Len(t, list.Items, 1, "a retried insert must not duplicate the instance")
+
+	// operations.get resolves the replayed operation with the token echoed.
+	op, err := svc.ZoneOperations.Get(project, zone, first.Name).Do()
+	require.NoError(t, err)
+	require.Equal(t, token, op.ClientOperationId)
+
+	// disks.insert has the same contract.
+	dtoken := randomUUID(t)
+	dname := unique("disk-idem")
+	dfirst, err := svc.Disks.Insert(project, zone, &compute.Disk{Name: dname, SizeGb: 10}).RequestId(dtoken).Do()
+	require.NoError(t, err)
+	require.Equal(t, dtoken, dfirst.ClientOperationId)
+	dretry, err := svc.Disks.Insert(project, zone, &compute.Disk{Name: dname, SizeGb: 10}).RequestId(dtoken).Do()
+	require.NoError(t, err)
+	require.Equal(t, dfirst.Name, dretry.Name)
+
+	// instances.delete: a token retry replays the delete operation instead of
+	// 404-ing on the already-deleted instance.
+	delToken := randomUUID(t)
+	delOp, err := svc.Instances.Delete(project, zone, name).RequestId(delToken).Do()
+	require.NoError(t, err)
+	require.Equal(t, delToken, delOp.ClientOperationId)
+	delRetry, err := svc.Instances.Delete(project, zone, name).RequestId(delToken).Do()
+	require.NoError(t, err, "a delete retry with the same token must replay, not 404")
+	require.Equal(t, delOp.Name, delRetry.Name)
+
+	// A malformed token and the unsupported zero UUID are rejected 400.
+	_, err = svc.Instances.Insert(project, zone, instanceTemplate(unique("vm-bad"))).RequestId("not-a-uuid").Do()
+	requireErrorEnvelope(t, err, "INVALID_ARGUMENT", 400)
+	_, err = svc.Instances.Insert(project, zone, instanceTemplate(unique("vm-zero"))).RequestId("00000000-0000-0000-0000-000000000000").Do()
+	requireErrorEnvelope(t, err, "INVALID_ARGUMENT", 400)
+}
+
+// TestSDKComputeRequestIdConcurrentRetryReplays is the in-flight case the token
+// exists for: several retries arriving at once must all replay the one original
+// operation — none may be answered with a 409 conflict — and exactly one
+// instance must exist.
+func TestSDKComputeRequestIdConcurrentRetryReplays(t *testing.T) {
+	ctx := context.Background()
+	svc, err := compute.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	project, zone := projectID(), "us-west1-c"
+
+	const workers = 8
+	token := randomUUID(t)
+	name := unique("vm-idem-race")
+	ops := make([]string, workers)
+	errs := make([]error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			op, err := svc.Instances.Insert(project, zone, instanceTemplate(name)).RequestId(token).Do()
+			errs[i] = err
+			if err == nil {
+				ops[i] = op.Name
+			}
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		require.NoError(t, err, "same-token insert %d must replay, not conflict", i)
+		require.Equal(t, ops[0], ops[i], "every retry must return the original operation")
+	}
+
+	list, err := svc.Instances.List(project, zone).Filter("name = " + name).Do()
+	require.NoError(t, err)
+	require.Len(t, list.Items, 1, "concurrent same-token inserts must not duplicate the instance")
 }

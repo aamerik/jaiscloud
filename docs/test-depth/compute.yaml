@@ -13,7 +13,7 @@ classes:
   p3:
     state: present
     suites: [sdk-compute]
-    note: "invalid name/machine-type rejected 400, get-after-delete 404, duplicate insert 409"
+    note: "invalid name/machine-type rejected 400, get-after-delete 404, duplicate insert 409, requestId idempotency (a token retry replays the original operation and echoes clientOperationId; a malformed/zero token is 400)"
   p4:
     state: present
     suites: [sdk-compute]
