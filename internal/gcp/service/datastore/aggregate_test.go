@@ -110,6 +110,15 @@ func TestAggregateSum(t *testing.T) {
 	} else if want := float64(math.MaxInt64) + 1; *v.DoubleValue != want {
 		t.Fatalf("overflow sum = %v, want %v", *v.DoubleValue, want)
 	}
+
+	// Underflow is detected the same way, on the negative side.
+	underflow := []dsstore.Entity{
+		props(map[string]dsstore.Value{"n": valInt(math.MinInt64)}),
+		props(map[string]dsstore.Value{"n": valInt(-1)}),
+	}
+	if v, err = aggregate(Aggregation{Op: AggSum, Property: "n"}, underflow); err != nil || v.DoubleValue == nil {
+		t.Fatalf("underflow sum = %+v, %v; want a double", v, err)
+	}
 }
 
 // TestAggregateAvg covers the documented Avg semantics: numeric-only
@@ -131,9 +140,9 @@ func TestAggregateAvg(t *testing.T) {
 
 	mixed := []dsstore.Entity{
 		props(map[string]dsstore.Value{"n": valInt(1)}),
+		props(map[string]dsstore.Value{"other": valInt(9)}),
 		props(map[string]dsstore.Value{"n": valDbl(2.5)}),
 		props(map[string]dsstore.Value{"n": valStr("skip")}),
-		props(map[string]dsstore.Value{"other": valInt(9)}),
 	}
 	if v, err = aggregate(Aggregation{Op: AggAvg, Property: "n"}, mixed); err != nil || v.DoubleValue == nil || *v.DoubleValue != 1.75 {
 		t.Fatalf("mixed avg = %+v, %v; want double 1.75", v, err)
