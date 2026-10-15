@@ -77,9 +77,9 @@ type mutationMeasurement struct {
 // representation.
 func roundMSI(p float64) float64 { return math.Round(p*100) / 100 }
 
-// normalizeMutationTarget canonicalizes a mutation target (a Go package dir as
-// the Makefile passes it) to the repo-relative form the floor is keyed by: a
-// leading "./" and any trailing "/" are stripped.
+// normalizeMutationTarget canonicalizes a mutation target (a Go package dir or
+// a single file within one, as the Makefile passes it) to the repo-relative form
+// the floor is keyed by: a leading "./" and any trailing "/" are stripped.
 func normalizeMutationTarget(target string) string {
 	t := strings.TrimSpace(target)
 	t = strings.TrimPrefix(t, "./")
@@ -306,15 +306,16 @@ func writeMutationFloor(floorPath string, entries []mutationFloorEntry) error {
 	b.WriteString("# GCP per-target mutation-score floor (TD19) — a ratchet, not a target.\n")
 	b.WriteString("#\n")
 	b.WriteString("# Regenerate a target's floor from a fresh run with\n")
-	b.WriteString("# `make test-gcp-mutation-update PKG=<dir>`; the update RAISES a recorded floor\n")
+	b.WriteString("# `make test-gcp-mutation-update PKG=<target>`; the update RAISES a recorded floor\n")
 	b.WriteString("# but refuses to LOWER one unless ALLOW_LOWER=1 is set, so an assertion-strength\n")
 	b.WriteString("# drop cannot be laundered by re-running it. The gate\n")
-	b.WriteString("# (`make test-gcp-mutation-ratchet PKG=<dir>`) fails when the measured mutation\n")
+	b.WriteString("# (`make test-gcp-mutation-ratchet PKG=<target>`) fails when the measured mutation\n")
 	b.WriteString("# score (MSI) drops more than 0.5pp below its floor, or when the target has no\n")
 	b.WriteString("# entry here. The spike is local only (a full package run is minutes), so this\n")
 	b.WriteString("# gate runs on demand rather than in PR CI.\n")
 	b.WriteString("#\n")
-	b.WriteString("# package: repo-relative Go package directory passed to `make test-gcp-mutation`.\n")
+	b.WriteString("# package: repo-relative mutation target passed to `make test-gcp-mutation`\n")
+	b.WriteString("#   — a Go package directory, or a single file within one.\n")
 	b.WriteString("# min_msi_percent: mutation-score floor (killed / total mutants), two decimals.\n")
 	b.WriteString("targets:\n")
 	for _, e := range entries {

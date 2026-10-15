@@ -782,7 +782,128 @@ The codec/router surface the plan also named — `internal/gcp/adapter/jsoncodec
 where a wrong resource-type or action derivation silently misroutes a request —
 was scored but not fixed in the spike (**64.3%** MSI, 502/781 killed; the
 survivors are `expression/remove`/`branch/case` in the resource-type and action
-derivation); see TD20.
+derivation); TD20 closed it, below.
+
+### 13.2 The codec derivation table and a file-scoped floor (TD20)
+
+TD13's second surface is the codec/router: `internal/gcp/adapter/jsoncodec.go`
+derives the (resource type, action) pair for every `/v1/projects/...` REST
+request the generic codec serves (Pub/Sub, Secret Manager, Cloud KMS, IAM and
+IAM Credentials, Firestore and Firestore Admin, Cloud Functions, Cloud
+Workflows, Eventarc, Memorystore Redis). A wrong derivation does not fail — it
+silently misroutes, which is why the surface needs assertion strength rather
+than coverage. It scored **64.28%** (502/781), and the 279 survivors were
+dominated by the derivation itself:
+
+| class | what the mutant changes | shares | where |
+| --- | --- | --- | --- |
+| `expression/remove` | one operand of a `&&`/`\|\|` dropped (`isCollection`, `custom == ""`, a method test) | 114 | the `switch { case … }` arms of `deriveAction` |
+| `branch/case` | a case body emptied — an action an arm no longer returns | 69 | the custom-verb switches and the resource-type switches |
+| `numbers/*` | a literal ±1 (mostly the 400/404/501/500 statuses, plus index arithmetic) | 55 | `Decode`, `Encode`, `EncodeError`, the location scans |
+| `expression/comparison`, `branch/if`, `arithmetic/base` | `<`↔`<=`, a returned error body emptied, `i+1`↔`i-1` | 30 | `Decode`, `Encode*`, `gcpErrorDetails`, the location scans |
+| `loop/break`, `loop/range_break` | `continue`↔`break` in a scan | 10 | the location scans and `segmentsAfterDocuments` |
+
+**The table.** `internal/gcp/adapter/jsoncodec_derivation_test.go` closes the
+killable classes with a closed-form table rather than per-service assertions:
+
+- **Resource type × method × collection/item.** Every resource family the codec
+  routes is asserted for all five methods at both levels (31 families, ~310
+  cells), and a cell the resource does not serve is asserted **fail-loud** (501
+  `UnsupportedOperation`). The negative cells are what pin the guards: a `case
+  isCollection && method == GET:` arm widened to `isCollection && true` — or to
+  `true && method == GET` — answers for a collection PATCH or a stray item GET
+  the resource does not serve, and the grid's unsupported cell catches it.
+- **Custom (`:verb`) methods**, per service, including the Firestore
+  `documents:*` set, the Eventarc IAM verbs and the Cloud Functions 1st→2nd gen
+  upgrade verbs. The HTTP verb on these rows is documentary: `deriveAction`
+  derives from the verb segment alone, so each row carries the verb the
+  Discovery declares.
+- **The path parser's failure contract.** No `projects` segment → 404, a
+  `projects` marker with no value → 404, an empty resource tail → 501, `projects`
+  outside second position → decoded, the **first** `projects` marker wins (a
+  resource literally named `projects`), and a one-segment `/v1` path → 404 (the
+  mutant panics).
+- **`detectResourceType`**: the precedence rules (cryptoKeyVersions > cryptoKeys
+  > keyRings, documents > keys, executions > workflows) and the positional
+  guards that keep Memorystore's `locations/{l}/backupCollections/{c}/backups`
+  out of the Firestore `backups` bucket.
+- **The response half**: `Encode`'s 200 default, its content type, the raw-JSON
+  passthrough and the marshal-failure envelope; `EncodeError`'s 500 default, its
+  code/status/message triple and the conditional `details` array;
+  `gcpErrorDetails`' skip-untyped and omit-empty-field rules.
+- **The Firestore segment-parity rule** (an even count after `documents` is a
+  document, an odd count a collection, the bare marker the collection list), the
+  first-`locations`-wins rule (including a resource literally named `locations`)
+  and the three path helpers.
+
+| run | killed | escaped | MSI |
+| --- | --- | --- | --- |
+| TD13 (as-shot) | 502 | 279 | **64.28%** |
+| after TD20 | 746 | 35 | **95.52%** |
+
+**The surviving classes** are all equivalent mutants or recorded gaps — no
+untested branch is left. The equivalents:
+
+| class | shares | why it is equivalent |
+| --- | --- | --- |
+| the location-scan guard | 20 | `i-1`, `i+0`, `i+2`, `<=` and the dropped operand are all already true at the first segment — and every path that reaches those blocks starts `locations/` with at least three segments — so the scan matches and breaks there; no later iteration is reached |
+| the constant-operand arms (`pi := -2`, `len(seg) >= 0`, `> -1`) | 4 | the sentinel is either the found index (≥ 0) or any negative value, and `splitEscaped` never returns an empty slice — only the `-0` variants the malformed-path table kills are observable |
+| the `executions` arm of the workflow location guard | 1 | `workflows` and `workflowexecutions` are separate services, so the JSON codec never derives `executions`; the action is unsupported before the param matters |
+| the v2 operations list/get arms | 2 | emptying them falls through to the v1-shaped `operations` arm of the same function, which derives the same list/get action |
+| `len(seg) > 1` on the v2 check, `segs > 1` on the documents parity, `len(segs) >= 2` on the `databasesOperations` guard | 3 | each one's difference is only reachable on a path the earlier guard has already returned from (a one-segment `/v2`, or a two-segment `databases/*`) |
+| the documents `method == GET && !isDoc` arm | 1 | the `GET && isDoc` arm above it matches every document GET first, so widening the arm cannot answer for one |
+
+**Recorded as TD24** — the one family the table deliberately does not bless: an
+unrecognized custom verb on a **collection** path still falls through to the
+resource's plain create verb for most resource types (`POST
+/v1/projects/p/secrets:zzz` → `Create`, `POST …/databases/{db}/documents:zzz` →
+`CreateDocument`, `POST …/serviceAccounts/{sa}/keys:zzz` →
+`ServiceAccountKeyCreate`), and three further mutants (`len(rest) > 1`, a
+leading-colon segment) are only reachable through the same leniency. Real GCP
+has no such method, and the codec's own contract is fail-loud — the
+`cryptoKeyVersions` arms carry an explicit `custom == ""` guard for exactly this,
+and the `databases`/`databasesOperations` arms fail loud rather than dispatching
+as `CreateDatabase`. Closing it is a `default: return ""` on each resource's
+custom-verb switch (keeping the pass-through for `operations` and
+`databasesOperations`, whose verbs the method switch derives); it is an
+error-path contract change across every service, so it is recorded with a fix
+branch rather than fixed in a test-depth session (the TD13-c precedent). The
+same family covers the method arms that are not `isCollection`-guarded, where a
+collection-level `PATCH`/`DELETE` derives the item verb (the provider then
+rejects the bogus name, so the wire result stays compliant).
+
+**Three gap records the table pins rather than hides** were written while
+building it (all verified against the vendored Discovery, all recorded):
+
+- **TD25** — `cryptoKeys.patch` (the real REST key update) is not derived, and
+  no REST route registers it, while gRPC serves `UpdateCryptoKey` and the
+  fidelity matrix records `grpc UpdateCryptoKey = ga` with no REST cell: a
+  REST↔gRPC gap, pinned by the cryptoKeys `PATCH` cells.
+- **TD26** — the Cloud Workflows long-running-operations surface over REST:
+  `operations.delete` is declared by the vendored Discovery but not derived, and
+  the derived `ListOperations` has no handler (the REST workflows provider
+  registers only `Workflow.GetOperation`), so the registry answers
+  `UnknownAction`.
+- **TD27** — the rest of the REST custom-method surface the Discovery declares
+  and the gRPC transport already serves (Pub/Sub `subscriptions.seek` and
+  `modifyPushConfig`, the KMS `importJobs` IAM verbs, `rawEncrypt`/`rawDecrypt`,
+  `locations.generateRandomBytes`, Firestore `documents.partitionQuery`/`listen`/
+  `write`/`executePipeline`, Memorystore `instances.import`/`export`/`failover`/
+  `rescheduleMaintenance`/`authString`, Eventarc `locations.operations:cancel`).
+  Those paths already fail loud with a stray verb, so the gap is
+  feature-completeness rather than silent misrouting.
+
+**A file-scoped floor.** `docs/gcp-mutation-floor.yaml` gains a second target
+keyed by the **file** (`internal/gcp/adapter/jsoncodec.go`) rather than by the
+package. The file is the surface TD13 scored; a whole-package run would sweep
+the other codecs (GCS, BigQuery, Compute, Cloud SQL, Cloud DNS) and multiply the
+run's minutes without adding signal to this target. This is the first
+file-scoped entry, so the floor's tooling comment and the `test-gcp-mutation*`
+help text were widened from "package directory" to "package or file". Like
+TD19's it is a *ratchet*: `make test-gcp-mutation-ratchet
+PKG=./internal/gcp/adapter/jsoncodec.go` fails when the measured score drops more
+than 0.5pp below the recorded floor, and `make test-gcp-mutation-update` raises
+it — never lowers it.
 
 
 

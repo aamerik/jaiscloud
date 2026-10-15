@@ -1,16 +1,19 @@
 # GCP per-target mutation-score floor (TD19) — a ratchet, not a target.
 #
 # Regenerate a target's floor from a fresh run with
-# `make test-gcp-mutation-update PKG=<dir>`; the update RAISES a recorded floor
+# `make test-gcp-mutation-update PKG=<target>`; the update RAISES a recorded floor
 # but refuses to LOWER one unless ALLOW_LOWER=1 is set, so an assertion-strength
 # drop cannot be laundered by re-running it. The gate
-# (`make test-gcp-mutation-ratchet PKG=<dir>`) fails when the measured mutation
+# (`make test-gcp-mutation-ratchet PKG=<target>`) fails when the measured mutation
 # score (MSI) drops more than 0.5pp below its floor, or when the target has no
 # entry here. The spike is local only (a full package run is minutes), so this
 # gate runs on demand rather than in PR CI.
 #
-# package: repo-relative Go package directory passed to `make test-gcp-mutation`.
+# package: repo-relative mutation target passed to `make test-gcp-mutation`
+#   — a Go package directory, or a single file within one.
 # min_msi_percent: mutation-score floor (killed / total mutants), two decimals.
 targets:
+  - package: internal/gcp/adapter/jsoncodec.go
+    min_msi_percent: 95.52
   - package: internal/gcp/service/datastore
     min_msi_percent: 68.7
