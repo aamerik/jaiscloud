@@ -841,7 +841,7 @@ $(MUTESTING_STAMP):
 	@GOBIN=$(CURDIR)/bin go install github.com/avito-tech/go-mutesting/cmd/go-mutesting@$(GOMUTESTING_VERSION)
 	@touch $@
 
-test-gcp-mutation: $(MUTESTING_STAMP) ## GCP mutation-testing spike: score one package's assertion strength (PKG=…; local, not PR CI)
+test-gcp-mutation: $(MUTESTING_STAMP) ## GCP mutation-testing spike: score one target's assertion strength (PKG=… a package or a file; local, not PR CI)
 	@test -n "$(PKG)" || { echo "PKG must name a package or file (e.g. PKG=./internal/gcp/service/datastore)"; exit 2; }
 	@if [ -z "$(MUTATION_FORCE)" ] && [ -n "$$(git status --porcelain -- $(PKG) | grep -v '^??')" ]; then \
 	  echo "refusing: uncommitted tracked changes under $(PKG) — go-mutesting rewrites files in place."; \

@@ -183,7 +183,8 @@ locally and on the weekly/manual [`gcp-load.yml`](../.github/workflows/gcp-load.
 (§12 of [`docs/GCP-TESTABILITY.md`](GCP-TESTABILITY.md#12-load--concurrency-gate--the-hot-path-soak-local--nightly)).
 
 Also outside PR CI, `make test-gcp-mutation PKG=…` is the **assertion-strength** measurement: it
-runs the pinned `go-mutesting` over one package, replays the package's own tests against each
+runs the pinned `go-mutesting` over one target (a package, or a single file within one — `PKG=
+./internal/gcp/adapter/jsoncodec.go`), replays the target package's own tests against each
 mutant, and writes a mutation score + surviving-mutant report to `bin/gcp-mutation-report.json`.
 `make test-gcp-mutation-ratchet PKG=…` runs the same spike and then gates the score against the
 committed per-target floor in `docs/gcp-mutation-floor.yaml` (`make test-gcp-mutation-update`
