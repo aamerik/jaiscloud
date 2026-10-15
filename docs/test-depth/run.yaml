@@ -21,4 +21,4 @@ classes:
   p5:
     state: present
     suites: [sdk-run]
-    note: "long-running operation lifecycle (sync + async), revision lineage/rotation, and the traffic-split boundary"
+    note: "long-running operation lifecycle (sync + async), incl. the typed in-flight metadata snapshot and its settle to the response, revision lineage/rotation, and the traffic-split boundary"
