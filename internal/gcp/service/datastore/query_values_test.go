@@ -74,6 +74,9 @@ func TestValueEqual(t *testing.T) {
 		{"blob==blob", valBlob([]byte{1, 2}), valBlob([]byte{1, 2}), true},
 		{"blob!=blob", valBlob([]byte{1, 2}), valBlob([]byte{1, 3}), false},
 		{"blob!=string", valBlob([]byte("x")), valStr("x"), false},
+		{"double!=string", valDbl(1), valStr("x"), false},
+		{"string!=double", valStr("x"), valDbl(1), false},
+		{"int!=string", valInt(1), valStr("x"), false},
 		{"geo==geo", valGeo(1, 2), valGeo(1, 2), true},
 		{"geo!=geo", valGeo(1, 2), valGeo(1, 3), false},
 		{"geo!=string", valGeo(1, 2), valStr("geo"), false},
@@ -94,6 +97,8 @@ func TestValueEqual(t *testing.T) {
 		{"empty vs ts", dsstore.Value{}, valTS("2020-01-01T00:00:00Z"), false},
 		{"empty vs key", dsstore.Value{}, valKey("a"), false},
 		{"empty vs blob", dsstore.Value{}, valBlob([]byte{1}), false},
+		{"empty vs double", dsstore.Value{}, valDbl(1), false},
+		{"empty vs int", dsstore.Value{}, valInt(1), false},
 		{"empty vs geo", dsstore.Value{}, valGeo(1, 2), false},
 		{"empty vs entity", dsstore.Value{}, valEntity(entityWith("K", "k1", nil)), false},
 		{"empty vs array", dsstore.Value{}, valArray(valInt(1)), false},
@@ -394,9 +399,15 @@ func TestMatchPropertyFilterOperators(t *testing.T) {
 		{"lt equal", &PropertyFilter{Property: "n", Op: PropertyLessThan, Value: valInt(5)}, false},
 		{"lte equal", &PropertyFilter{Property: "n", Op: PropertyLessThanOrEqual, Value: valInt(5)}, true},
 		{"gt", &PropertyFilter{Property: "n", Op: PropertyGreaterThan, Value: valInt(4)}, true},
+		{"gt equal is not greater", &PropertyFilter{Property: "n", Op: PropertyGreaterThan, Value: valInt(5)}, false},
 		{"gte equal", &PropertyFilter{Property: "n", Op: PropertyGreaterThanOrEqual, Value: valInt(5)}, true},
 		{"gte miss", &PropertyFilter{Property: "n", Op: PropertyGreaterThanOrEqual, Value: valInt(6)}, false},
+		{"lte miss", &PropertyFilter{Property: "n", Op: PropertyLessThanOrEqual, Value: valInt(4)}, false},
 		{"comparison absent prop", &PropertyFilter{Property: "missing", Op: PropertyLessThan, Value: valInt(9)}, false},
+		// A value with no sort order (an array) never satisfies a range
+		// comparison, however the operator is spelled. (TD21)
+		{"range over array value", &PropertyFilter{Property: "tags", Op: PropertyGreaterThanOrEqual, Value: valStr("a")}, false},
+		{"range over array value lt", &PropertyFilter{Property: "tags", Op: PropertyLessThan, Value: valStr("a")}, false},
 		// A cross-type comparison order by the documented type ordering: the
 		// integer 5 sorts before ANY string, so `n < "z"` matches. (TD21)
 		{"comparison cross-type", &PropertyFilter{Property: "n", Op: PropertyLessThan, Value: valStr("z")}, true},
@@ -436,5 +447,18 @@ func TestHasAncestorGuards(t *testing.T) {
 	noKey := &PropertyFilter{Property: keyPropertyName, Op: PropertyHasAncestor, Value: valStr("not-a-key")}
 	if _, err := matchesFilter(e, &Filter{Property: noKey}); err == nil {
 		t.Fatal("HAS_ANCESTOR with a non-key value must fail closed")
+	}
+
+	// A key is not its own ancestor, and an ancestor value that is not a
+	// parseable key matches nothing.
+	self := &PropertyFilter{Property: keyPropertyName, Op: PropertyHasAncestor,
+		Value: valKey(CanonicalKey(child))}
+	if ok, err := matchesFilter(e, &Filter{Property: self}); err != nil || ok {
+		t.Fatalf("HAS_ANCESTOR with the entity's own key = %v,%v; want false,nil", ok, err)
+	}
+	garbage := &PropertyFilter{Property: keyPropertyName, Op: PropertyHasAncestor,
+		Value: valKey("not-a-canonical-key")}
+	if ok, err := matchesFilter(e, &Filter{Property: garbage}); err != nil || ok {
+		t.Fatalf("HAS_ANCESTOR with an unparseable key = %v,%v; want false,nil", ok, err)
 	}
 }

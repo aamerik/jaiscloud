@@ -81,6 +81,26 @@ func TestAggregateSum(t *testing.T) {
 		t.Fatalf("sum with skipped = %+v, %v; want 4", v, err)
 	}
 
+	// A hole in the middle must be skipped, not end the reduction: the last
+	// entity still contributes.
+	holed := []dsstore.Entity{
+		props(map[string]dsstore.Value{"n": valInt(1)}),
+		props(map[string]dsstore.Value{"other": valInt(100)}),
+		props(map[string]dsstore.Value{"n": valInt(2)}),
+	}
+	if v, err = aggregate(Aggregation{Op: AggSum, Property: "n"}, holed); err != nil || v.IntegerValue == nil || *v.IntegerValue != 3 {
+		t.Fatalf("sum with a hole = %+v, %v; want 3", v, err)
+	}
+
+	// A negative contribution is not an overflow: the result stays an integer.
+	neg := []dsstore.Entity{
+		props(map[string]dsstore.Value{"n": valInt(-5)}),
+		props(map[string]dsstore.Value{"n": valInt(2)}),
+	}
+	if v, err = aggregate(Aggregation{Op: AggSum, Property: "n"}, neg); err != nil || v.IntegerValue == nil || *v.IntegerValue != -3 {
+		t.Fatalf("negative sum = %+v, %v; want integer -3", v, err)
+	}
+
 	overflow := []dsstore.Entity{
 		props(map[string]dsstore.Value{"n": valInt(math.MaxInt64)}),
 		props(map[string]dsstore.Value{"n": valInt(1)}),
