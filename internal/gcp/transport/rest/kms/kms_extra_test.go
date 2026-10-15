@@ -18,6 +18,24 @@ func errStatus(err error) int {
 	return 0
 }
 
+// stringMap normalizes a labels object rendered either as the store's
+// map[string]string or as a decoded map[string]any.
+func stringMap(v any) map[string]string {
+	switch m := v.(type) {
+	case map[string]string:
+		return m
+	case map[string]any:
+		out := make(map[string]string, len(m))
+		for k, val := range m {
+			if s, ok := val.(string); ok {
+				out[k] = s
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 func TestKMSNegativesAndPagination(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()
@@ -469,5 +487,82 @@ func TestCryptoKeyVersionUpdate(t *testing.T) {
 	// Version-level IAM is not a real KMS resource.
 	if _, err := p.GetIamPolicy(ctx, newNR(map[string]any{"name": verName})); errStatus(err) != 400 {
 		t.Fatalf("version getIamPolicy: status = %d (%v), want 400", errStatus(err), err)
+	}
+}
+
+// TestCryptoKeyUpdate pins cryptoKeys.patch — the real REST key update the
+// official clients send — as the labels + rotation-schedule update (mirroring
+// gRPC UpdateCryptoKey). A masked field is replaced wholesale from the body
+// (labels is not deep-merged), and an unmasked field is left untouched.
+func TestCryptoKeyUpdate(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
+		t.Fatalf("keyring create: %v", err)
+	}
+	keyName := "locations/global/keyRings/kr/cryptoKeys/k"
+	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+		"name": "locations/global/keyRings/kr", "cryptoKeyId": "k",
+		"body": map[string]any{"labels": map[string]any{"env": "dev"}},
+	})); err != nil {
+		t.Fatalf("cryptokey create: %v", err)
+	}
+
+	// Patch only the labels (mask = labels): the rotation schedule is untouched.
+	resp, err := p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": keyName, "updateMask": "labels",
+		"body": map[string]any{"labels": map[string]any{"env": "prod", "team": "sec"}},
+	}))
+	if err != nil {
+		t.Fatalf("patch labels: %v", err)
+	}
+	if got, _ := resp.Data["name"].(string); got != "projects/proj/"+keyName {
+		t.Fatalf("name = %q, want full crypto key resource name", got)
+	}
+	labels := stringMap(resp.Data["labels"])
+	if labels["env"] != "prod" || labels["team"] != "sec" {
+		t.Fatalf("labels = %v, want merged prod/sec", labels)
+	}
+	if _, ok := resp.Data["rotationPeriod"]; ok {
+		t.Fatal("rotationPeriod should be unset: the mask excluded it")
+	}
+
+	// Patch only the rotation schedule (camelCase mask, the Discovery spelling).
+	resp, err = p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": keyName, "updateMask": "rotationPeriod",
+		"body": map[string]any{"rotationPeriod": "86400s"},
+	}))
+	if err != nil {
+		t.Fatalf("patch rotationPeriod: %v", err)
+	}
+	if got, _ := resp.Data["rotationPeriod"].(string); got != "86400s" {
+		t.Fatalf("rotationPeriod = %q, want 86400s", got)
+	}
+	if labels := stringMap(resp.Data["labels"]); labels["env"] != "prod" {
+		t.Fatalf("labels = %v, want preserved across the rotation-only patch", labels)
+	}
+	if _, ok := resp.Data["nextRotationTime"]; !ok {
+		t.Fatal("expected nextRotationTime after setting a rotation period")
+	}
+
+	// An unsupported mask path is rejected (fail-loud). The shared core
+	// classifies it as a request-input rejection with 501 UnsupportedOperation
+	// (the same response gRPC gives); real GCP answers 400 INVALID_ARGUMENT.
+	// Aligning the KMS mask-path classification with the AUD2-7 precedent is
+	// recorded as a follow-up (TD34), not changed here.
+	if _, err := p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": keyName, "updateMask": "purpose",
+		"body": map[string]any{"purpose": "ASYMMETRIC_SIGN"},
+	})); errStatus(err) != 501 {
+		t.Fatalf("unsupported mask: status = %d (%v), want 501", errStatus(err), err)
+	}
+
+	// A missing crypto key is 404.
+	if _, err := p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": "locations/global/keyRings/kr/cryptoKeys/missing", "updateMask": "labels",
+		"body": map[string]any{"labels": map[string]any{"a": "b"}},
+	})); errStatus(err) != 404 {
+		t.Fatalf("missing key: status = %d (%v), want 404", errStatus(err), err)
 	}
 }

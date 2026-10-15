@@ -797,6 +797,12 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "CryptoKeyList"
 		case method == http.MethodGet:
 			return "CryptoKeyGet"
+		case custom == "" && method == http.MethodPatch:
+			// cryptoKeys.patch (updateMask) — the real REST update the official
+			// clients send; mirrors gRPC UpdateCryptoKey. The custom=="" guard
+			// keeps an unrecognized :verb paired with PATCH from falling through
+			// to the plain item verb (the cryptoKeyVersions precedent).
+			return "CryptoKeyUpdate"
 		case custom == "" && method == http.MethodDelete:
 			return "CryptoKeyDelete"
 		}

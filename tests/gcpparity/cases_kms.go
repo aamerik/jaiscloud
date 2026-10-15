@@ -10,6 +10,7 @@ import (
 	kms "cloud.google.com/go/kms/apiv1"
 	"cloud.google.com/go/kms/apiv1/kmspb"
 	"google.golang.org/api/iterator"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // kmsScenario compares the Cloud KMS key-admin surface over REST and gRPC. KMS
@@ -138,6 +139,26 @@ func kmsScenario() Scenario {
 			},
 			REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
 				return e.Rest(ctx, "GET", "/v1/"+keyName(e), "")
+			},
+		},
+		// cryptoKeys.patch (REST) and UpdateCryptoKey (gRPC) are the same masked
+		// update; both sides apply the identical labels patch and the returned
+		// CryptoKey bodies must match (TD25).
+		{
+			Op: "UpdateCryptoKey",
+			GRPC: func(ctx context.Context, e *Env) (protoMessage, error) {
+				c, err := newClient(ctx, e)
+				if err != nil {
+					return nil, err
+				}
+				defer c.Close()
+				return c.UpdateCryptoKey(ctx, &kmspb.UpdateCryptoKeyRequest{
+					CryptoKey:  &kmspb.CryptoKey{Name: keyName(e), Labels: map[string]string{"parity": "true"}},
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+				})
+			},
+			REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+				return e.Rest(ctx, "PATCH", "/v1/"+keyName(e)+"?updateMask=labels", `{"labels":{"parity":"true"}}`)
 			},
 		},
 		// KMS key rings and crypto keys cannot be deleted by the real API, so

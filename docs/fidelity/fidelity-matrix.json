@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 1115,
+    "total": 1116,
     "by_state": {
-      "ga": 968,
+      "ga": 969,
       "limited": 101,
       "preview": 14,
       "unsupported": 32
@@ -15,7 +15,7 @@
         "unsupported": 20
       },
       "rest": {
-        "ga": 526,
+        "ga": 527,
         "limited": 100,
         "preview": 14,
         "unsupported": 12
@@ -72,7 +72,7 @@
         "preview": 14
       },
       "kms": {
-        "ga": 70
+        "ga": 71
       },
       "logging": {
         "ga": 91,
@@ -129,7 +129,7 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 538
+        "rest": 539
       },
       "unverified": {
         "grpc": 21,
@@ -7240,7 +7240,7 @@
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 26 transcript entries)"
+        "verified=true (rest, 27 transcript entries)"
       ]
     },
     {
@@ -7347,6 +7347,20 @@
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.testIamPermissions",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.CryptoKeyUpdate",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.patch",
+      "verified": true,
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.patch",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -7631,7 +7645,7 @@
         "discovery=cloudkms.projects.locations.keyRings.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 35 transcript entries)"
+        "verified=true (rest, 36 transcript entries)"
       ]
     },
     {
