@@ -733,10 +733,42 @@ limit, `maxAggregations` at 5 vs 6, read-set sorting, abort-on-read-conflict).
 
 The **equivalent** survivors (the `valueEqual`/`valueCompare` short-circuit
 operands that no input can distinguish, the single-threaded lock statements) are
-*not* assertion gaps and are deliberately left; the rest are recorded as the
-TD13-a / TD13-b follow-ups (a negative-suite pass on the GQL parser and
-metadata, and a committed `docs/gcp-mutation-floor.yaml` ratchet once the score
-is stable).
+*not* assertion gaps and are deliberately left (recorded as TD19-a). The two
+follow-ups TD13 named — a negative-suite pass on the GQL parser and metadata, and
+a committed `docs/gcp-mutation-floor.yaml` ratchet — are **TD19**; the
+codec/router closure is **TD20**.
+
+### 13.1 The negative tables and the committed floor (TD19)
+
+TD13 left the score unguarded: a later test refactor could weaken an assertion
+and let a mutant survive again with nothing failing. TD19 adds the two things
+TD13 deferred:
+
+- **Negative tables.** `internal/gcp/service/datastore/gql_test.go` names every
+  fail-closed parser arm — the lexer's character classes, the SELECT/projection/
+  FROM grammar, WHERE conditions, the DATETIME/KEY/BLOB literal parsers,
+  IN/HAS/ORDER, LIMIT/OFFSET, and the binding resolver — plus the positive
+  boundary inputs each sits next to, so a guard widened into rejecting a valid
+  query is caught too. `metadata_test.go` pins the value→representation mapping
+  for every `Value` variant and the array flattening, and asserts the
+  `__kind__`/`__property__` synthesizers deduplicate, sort, flatten, and exclude
+  the reserved kind, the empty kind, reserved properties and out-of-partition
+  entities — plus the reserved key/mutation tables and the store-error mapping a
+  failing `ListKind` exercises.
+- **A committed floor.** `docs/gcp-mutation-floor.yaml` records a per-target
+  mutation-score floor; `make test-gcp-mutation-ratchet PKG=…` runs the spike and
+  gates the score against it (`tools/gcpstatus/mutationratchet.go`,
+  `-mutation-ratchet`), and `make test-gcp-mutation-update` ratchets a floor up —
+  refusing to lower one without `ALLOW_LOWER=1`. Like the coverage ratchet (§11)
+  it is a *ratchet*, not a target, and it runs on demand rather than in PR CI (a
+  full package run is minutes, TD13).
+
+The floor is bootstrapped at the last **completed** measurement — TD13's 68.70%
+(856/1246) — which TD19's tests can only raise: they add assertions over
+unchanged production code, so the 1246-mutant set is unchanged and the killed
+count cannot drop. A fresh
+`make test-gcp-mutation-update PKG=./internal/gcp/service/datastore` ratchets it
+to the measured post-TD19 score.
 
 Writing the value-comparison tests surfaced a **real semantic gap** worth more
 than the score: `valueEqual`/`valueCompare` treat INTEGER and DOUBLE as one
@@ -750,7 +782,7 @@ The codec/router surface the plan also named — `internal/gcp/adapter/jsoncodec
 where a wrong resource-type or action derivation silently misroutes a request —
 was scored but not fixed in the spike (**64.3%** MSI, 502/781 killed; the
 survivors are `expression/remove`/`branch/case` in the resource-type and action
-derivation); see TD13-b.
+derivation); see TD20.
 
 
 

@@ -185,7 +185,10 @@ locally and on the weekly/manual [`gcp-load.yml`](../.github/workflows/gcp-load.
 Also outside PR CI, `make test-gcp-mutation PKG=…` is the **assertion-strength** measurement: it
 runs the pinned `go-mutesting` over one package, replays the package's own tests against each
 mutant, and writes a mutation score + surviving-mutant report to `bin/gcp-mutation-report.json`.
-It is a local spike/ratchet seed (a full package run is minutes), not a per-PR gate
+`make test-gcp-mutation-ratchet PKG=…` runs the same spike and then gates the score against the
+committed per-target floor in `docs/gcp-mutation-floor.yaml` (`make test-gcp-mutation-update`
+ratchets a floor up, refusing to lower one without `ALLOW_LOWER=1`). It is a local ratchet, not a
+per-PR gate (a full package run is minutes)
 (§13 of [`docs/GCP-TESTABILITY.md`](GCP-TESTABILITY.md#13-mutation-testing--assertion-strength-the-local-spike)).
 
 ---

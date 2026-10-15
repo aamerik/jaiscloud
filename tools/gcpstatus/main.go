@@ -236,6 +236,11 @@ func main() {
 	coverageFloor := flag.String("coverage-floor", defaultCoverageFloorPath, "per-package statement-coverage floor file")
 	coverageFloorUpdate := flag.Bool("coverage-floor-update", false, "rewrite the coverage floor from -coverage-profile (ratchet up; needs -allow-lower to drop)")
 	coverageAllowLower := flag.Bool("allow-lower", false, "with -coverage-floor-update: permit lowering a recorded floor")
+	mutationRatchet := flag.Bool("mutation-ratchet", false, "gate a go-mutesting report against the per-target mutation floor (needs -mutation-report and -mutation-target)")
+	mutationReport := flag.String("mutation-report", "", "go-mutesting JSON report (bin/gcp-mutation-report.json) for -mutation-ratchet / -mutation-floor-update")
+	mutationFloor := flag.String("mutation-floor", defaultMutationFloorPath, "per-target mutation-score floor file")
+	mutationFloorUpdate := flag.Bool("mutation-floor-update", false, "rewrite the mutation floor from -mutation-report (ratchet up; needs -allow-lower to drop)")
+	mutationTarget := flag.String("mutation-target", "", "the mutation target (Go package dir) the report was produced for")
 	evidence := flag.Bool("evidence", false, "report per-operation conformance evidence from the fidelity matrix (verified vs unverified)")
 	next := flag.Bool("next", false, "print the next actionable items in priority order")
 	nextN := flag.Int("n", 5, "number of items for -next")
@@ -295,6 +300,20 @@ func main() {
 			return
 		}
 		os.Exit(runCoverageRatchet(*coverageProfile, *coverageFloor))
+	}
+	if *mutationRatchet || *mutationFloorUpdate {
+		if strings.TrimSpace(*mutationReport) == "" {
+			fmt.Fprintln(os.Stderr, "gcpstatus: -mutation-ratchet/-mutation-floor-update require -mutation-report")
+			os.Exit(2)
+		}
+		if *mutationFloorUpdate {
+			if err := runMutationRatchetUpdate(*mutationReport, *mutationFloor, *mutationTarget, *coverageAllowLower); err != nil {
+				fmt.Fprintf(os.Stderr, "gcpstatus: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+		os.Exit(runMutationRatchet(*mutationReport, *mutationFloor, *mutationTarget))
 	}
 	if *coverageInventory {
 		rows, err := gatherCoverage(*matrixPath, gcpTestRoot)

@@ -146,7 +146,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         server-ui server-ui-gcp stop-server up-docker down-docker up-k8s down-k8s \
         postgres-up postgres-reset postgres-down \
-        test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp test-gcp-load test-gcp-mutation \
+        test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp test-gcp-load test-gcp-mutation test-gcp-mutation-ratchet test-gcp-mutation-update \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
         test-e2e-lambda-docker test-e2e-lambda-k8s \
@@ -832,6 +832,8 @@ PKG                 ?= ./internal/gcp/service/datastore
 MUTATION_EXTRA      ?=
 MUTATION_TIMEOUT    ?= 60
 MUTATION_FORCE      ?=
+MUTATION_REPORT     ?= bin/gcp-mutation-report.json
+MUTATION_FLOOR      ?= docs/gcp-mutation-floor.yaml
 
 $(MUTESTING_STAMP):
 	@mkdir -p bin
@@ -855,6 +857,14 @@ test-gcp-mutation: $(MUTESTING_STAMP) ## GCP mutation-testing spike: score one p
 	@mkdir -p bin
 	@mv -f report.json bin/gcp-mutation-report.json
 	@echo "Mutation report: bin/gcp-mutation-report.json"
+
+test-gcp-mutation-ratchet: test-gcp-mutation ## Mutation score + committed floor gate for PKG (local; PKG=…, default datastore-core)
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -mutation-ratchet -mutation-report $(MUTATION_REPORT) -mutation-floor $(MUTATION_FLOOR) -mutation-target "$(PKG)"
+
+test-gcp-mutation-update: test-gcp-mutation ## Rewrite the mutation floor for PKG from a fresh run (ratchet up; ALLOW_LOWER=1 to drop)
+	@go build -o bin/gcpstatus ./tools/gcpstatus
+	@bin/gcpstatus -mutation-floor-update -mutation-report $(MUTATION_REPORT) -mutation-floor $(MUTATION_FLOOR) -mutation-target "$(PKG)" $(if $(ALLOW_LOWER),-allow-lower,)
 
 test-gcp-wire-conformance: ## Offline GCP wire-conformance harness (Discovery snapshots + recorder; tag: gcp_conformance)
 	go test -count=1 -tags gcp_conformance ./tests/gcpconformance/
