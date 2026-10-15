@@ -349,7 +349,10 @@ func TestJSONCodecUnsupportedShapes(t *testing.T) {
 		{"POST", p + "/topics:zzz"},
 		{"POST", p + "/subscriptions/s:zzz"},
 		{"POST", p + "/secrets/s:zzz"},
+		{"PUT", p + "/secrets/s/versions"},
+		{"PUT", p + "/secrets/s/versions/1"},
 		{"POST", kms + "/cryptoKeys/k:zzz"},
+		{"DELETE", kms + "/cryptoKeys/k:zzz"},
 		{"POST", kms + "/cryptoKeys/k/cryptoKeyVersions:zzz"},
 		{"PUT", kms + "/cryptoKeys/k/cryptoKeyVersions:zzz"},
 		{"GET", kms + "/cryptoKeys/k/cryptoKeyVersions:zzz"},
@@ -401,6 +404,112 @@ func TestJSONCodecUnsupportedShapes(t *testing.T) {
 		perr, ok := err.(*model.ProviderError)
 		if !ok || perr.HTTPStatus != 400 || perr.Code != "InvalidRequest" {
 			t.Fatalf("POST %s (malformed body): error = %v, want 400 InvalidRequest", path, err)
+		}
+	}
+}
+
+// TestJSONCodecMalformedPaths pins the path parser's failure contract: a path
+// with no project, a marker with no value, or an empty resource tail must fail
+// loud with the documented status and must never panic or pick a later
+// `projects` segment.
+func TestJSONCodecMalformedPaths(t *testing.T) {
+	cases := []struct {
+		path       string
+		wantStatus int
+		wantAction string
+	}{
+		// No `projects` marker at all.
+		{"/v1", 404, ""},
+		{"/v1/organizations/o", 404, ""},
+		// A `projects` marker with no project value.
+		{"/v1/projects", 404, ""},
+		// A project but no resource tail: decoded, then unsupported.
+		{"/v1/projects/p", 501, ""},
+		// `projects` is not required to be the second segment.
+		{"/projects/p/secrets", 0, "List"},
+		// The first `projects` marker wins (a resource literally named
+		// "projects" must not become the project).
+		{"/v1/projects/p/secrets/projects", 0, "Get"},
+	}
+	for _, tc := range cases {
+		nr, err := decodeJSON(t, "GET", tc.path, nil)
+		if tc.wantStatus == 0 {
+			if err != nil {
+				t.Errorf("GET %s: %v", tc.path, err)
+				continue
+			}
+			if nr.Action != tc.wantAction {
+				t.Errorf("GET %s: action = %q, want %q", tc.path, nr.Action, tc.wantAction)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("GET %s: action = %q, want %d", tc.path, nr.Action, tc.wantStatus)
+			continue
+		}
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.HTTPStatus != tc.wantStatus {
+			t.Errorf("GET %s: error = %v, want HTTP %d", tc.path, err, tc.wantStatus)
+		}
+	}
+}
+
+// TestJSONCodecFirestoreDocumentLevels pins the Firestore segment parity rule:
+// an even (positive) number of segments after `documents` is a document, an odd
+// count is a collection, and the bare marker is the collection-level list.
+func TestJSONCodecFirestoreDocumentLevels(t *testing.T) {
+	const fst = "/v1/projects/p/databases/db"
+	cases := []struct {
+		method, path, want string
+	}{
+		{"GET", fst + "/documents", "ListDocuments"},               // 0 segments after the marker
+		{"GET", fst + "/documents/cities", "ListDocuments"},        // 1 → collection
+		{"POST", fst + "/documents/cities", "CreateDocument"},      // 1 → collection
+		{"PATCH", fst + "/documents/cities", ""},                   // no collection-level patch
+		{"DELETE", fst + "/documents/cities", ""},                  // no collection-level delete
+		{"GET", fst + "/documents/cities/SF", "GetDocument"},       // 2 → document
+		{"PATCH", fst + "/documents/cities/SF", "PatchDocument"},   // 2 → document
+		{"DELETE", fst + "/documents/cities/SF", "DeleteDocument"}, // 2 → document
+		{"POST", fst + "/documents/cities/SF", ""},                 // no document-level create
+		{"GET", fst + "/documents/cities/SF/sub", "ListDocuments"}, // 3 → subcollection
+	}
+	for _, tc := range cases {
+		nr, err := decodeJSON(t, tc.method, tc.path, nil)
+		if tc.want == "" {
+			wantUnsupported(t, tc.method+" "+tc.path, nr, err)
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s %s: %v", tc.method, tc.path, err)
+			continue
+		}
+		if nr.Action != tc.want {
+			t.Errorf("%s %s: action = %q, want %q", tc.method, tc.path, nr.Action, tc.want)
+		}
+	}
+}
+
+// TestJSONCodecTopLevelOperationsParams pins the Cloud Functions v1 top-level
+// operations surface: the version is always v1, the persisted name keeps the
+// `operations/...` prefix, and the collection/item pair derives list/get.
+func TestJSONCodecTopLevelOperationsParams(t *testing.T) {
+	cases := []struct{ path, wantName, wantAction string }{
+		{"/v1/operations", "operations", "ListOperations"},
+		{"/v1/operations/op1", "operations/op1", "GetOperation"},
+	}
+	for _, tc := range cases {
+		nr, err := decodeJSON(t, "GET", tc.path, nil)
+		if err != nil {
+			t.Fatalf("GET %s: %v", tc.path, err)
+		}
+		if nr.Params["resourceType"] != "operations" || nr.Params["apiVersion"] != "v1" {
+			t.Errorf("GET %s: resourceType=%v apiVersion=%v, want operations/v1", tc.path, nr.Params["resourceType"], nr.Params["apiVersion"])
+		}
+		if nr.Params["name"] != tc.wantName {
+			t.Errorf("GET %s: name = %v, want %q", tc.path, nr.Params["name"], tc.wantName)
+		}
+		if nr.Action != tc.wantAction {
+			t.Errorf("GET %s: action = %q, want %q", tc.path, nr.Action, tc.wantAction)
 		}
 	}
 }
@@ -720,7 +829,8 @@ func TestJSONCodecPathHelpers(t *testing.T) {
 	}{
 		{"secrets/s/versions", true},
 		{"secrets/versions", false},       // a secret literally named "versions"
-		{"secrets/s/versions/1", false},   // a single version
+		{"secrets/s/1", false},            // a single version
+		{"secrets/s/versions/1", false},   // a single version below the collection
 		{"topics/t/versions", false},      // another service's three-part path
 		{"secrets/s/versions/1/x", false}, // deeper than a versions collection
 	}
