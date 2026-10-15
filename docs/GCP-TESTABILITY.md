@@ -844,6 +844,7 @@ killable classes with a closed-form table rather than per-service assertions:
 | --- | --- | --- | --- |
 | TD13 (as-shot) | 502 | 279 | **64.28%** |
 | after TD20 | 746 | 35 | **95.52%** |
+| after TD24 | 734 | 34 | **95.57%** |
 
 **The surviving classes** are all equivalent mutants or recorded gaps — no
 untested branch is left. The equivalents:
@@ -856,25 +857,27 @@ untested branch is left. The equivalents:
 | the v2 operations list/get arms | 2 | emptying them falls through to the v1-shaped `operations` arm of the same function, which derives the same list/get action |
 | `len(seg) > 1` on the v2 check, `segs > 1` on the documents parity, `len(segs) >= 2` on the `databasesOperations` guard | 3 | each one's difference is only reachable on a path the earlier guard has already returned from (a one-segment `/v2`, or a two-segment `databases/*`) |
 | the documents `method == GET && !isDoc` arm | 1 | the `GET && isDoc` arm above it matches every document GET first, so widening the arm cannot answer for one |
+| the custom-strip detectors (`len(rest) > 0`, the `IndexByte(':') >= 0` colon check) | 3 | with the fail-loud gate (TD24) a stray verb on a single-segment path is refused whether or not the detector strips it, so weakening them cannot change the observable (501) outcome |
 
-**Recorded as TD24** — the one family the table deliberately does not bless: an
-unrecognized custom verb on a **collection** path still falls through to the
-resource's plain create verb for most resource types (`POST
-/v1/projects/p/secrets:zzz` → `Create`, `POST …/databases/{db}/documents:zzz` →
-`CreateDocument`, `POST …/serviceAccounts/{sa}/keys:zzz` →
-`ServiceAccountKeyCreate`), and three further mutants (`len(rest) > 1`, a
-leading-colon segment) are only reachable through the same leniency. Real GCP
-has no such method, and the codec's own contract is fail-loud — the
-`cryptoKeyVersions` arms carry an explicit `custom == ""` guard for exactly this,
-and the `databases`/`databasesOperations` arms fail loud rather than dispatching
-as `CreateDatabase`. Closing it is a `default: return ""` on each resource's
-custom-verb switch (keeping the pass-through for `operations` and
-`databasesOperations`, whose verbs the method switch derives); it is an
-error-path contract change across every service, so it is recorded with a fix
-branch rather than fixed in a test-depth session (the TD13-c precedent). The
-same family covers the method arms that are not `isCollection`-guarded, where a
-collection-level `PATCH`/`DELETE` derives the item verb (the provider then
-rejects the bogus name, so the wire result stays compliant).
+**Closed as TD24** — the one family the table would not bless: an unrecognized
+custom verb on a **collection** path used to fall through to the resource's
+plain create verb for most resource types (`POST /v1/projects/p/secrets:zzz` →
+`Create`, `POST …/databases/{db}/documents:zzz` → `CreateDocument`,
+`POST …/serviceAccounts/{sa}/keys:zzz` → `ServiceAccountKeyCreate`). Real GCP
+has no such method and the codec's contract is fail-loud, so `deriveAction` now
+returns `""` for any custom verb that reaches the end of its custom-verb switch.
+The method-switch arms below it therefore never see a custom verb, so the
+per-arm `custom == ""` guards (cryptoKeys, cryptoKeyVersions) and the `databases`
+fail-loud case they duplicated were removed as dead code — the single
+custom-verb switch is now the one gate. The only remaining pass-through is
+Firestore `databasesOperations`, whose `:cancel` the method switch derives; Cloud
+Functions v2's operations `:cancel`/`:wait` are derived above the block. The
+collection shapes — plus a stray verb on each operations surface and on the
+`getAllowedLocations` Discovery shape — are pinned by new negative rows in
+`jsoncodec_derivation_test.go`. The related method arms that are *not*
+`isCollection`-guarded, where a collection-level `PATCH`/`DELETE` still derives
+the item verb, are left as they are (recorded as TD35): the provider rejects the
+bogus name, so the wire result stays compliant.
 
 **Three gap records the table pins rather than hides** were written while
 building it (all verified against the vendored Discovery, all recorded):

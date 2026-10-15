@@ -603,14 +603,6 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			case "listCollectionIds":
 				return "ListCollectionIds"
 			}
-		case "databases":
-			// Firestore Admin data-plane / disaster-recovery verbs
-			// (databases:restore/clone, {db}:exportDocuments/importDocuments/
-			// bulkDeleteDocuments). The emulator models the control plane only,
-			// so fail loud rather than fall through to the method switch, where
-			// `databases:restore` (POST on the collection) would otherwise
-			// dispatch as CreateDatabase.
-			return ""
 		case "userCreds":
 			// Firestore Admin user-creds verbs (the resource itself is a plain
 			// CRUD resource handled by the method switch below).
@@ -732,6 +724,24 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				}
 			}
 		}
+		// An unrecognized custom (:verb) method is never the resource's plain
+		// verb. Real GCP declares no such method, so letting one fall through to
+		// the method switch below silently misroutes the request — e.g.
+		// POST …/secrets:zzz → Create, POST …/serviceAccounts/{sa}/keys:zzz →
+		// ServiceAccountKeyCreate, POST …/databases/{db}/documents:zzz →
+		// CreateDocument, or POST …/databases:restore → CreateDatabase. This
+		// block is therefore the codec's single fail-loud gate for a stray verb:
+		// the method-switch arms below only ever see a request with no custom
+		// verb (only the databasesOperations pass-through below is exempt), so
+		// they carry no per-arm `custom == ""` guard (TD24).
+		//
+		// The Firestore databasesOperations surface is the exception: its
+		// `:cancel` is derived in the method switch below, so keep its
+		// pass-through. (Cloud Functions v2's operations `:cancel`/`:wait` never
+		// reach here — they return from the v2 block above.)
+		if resourceType != "databasesOperations" {
+			return ""
+		}
 	}
 
 	switch resourceType {
@@ -797,13 +807,11 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "CryptoKeyList"
 		case method == http.MethodGet:
 			return "CryptoKeyGet"
-		case custom == "" && method == http.MethodPatch:
+		case method == http.MethodPatch:
 			// cryptoKeys.patch (updateMask) — the real REST update the official
-			// clients send; mirrors gRPC UpdateCryptoKey. The custom=="" guard
-			// keeps an unrecognized :verb paired with PATCH from falling through
-			// to the plain item verb (the cryptoKeyVersions precedent).
+			// clients send; mirrors gRPC UpdateCryptoKey.
 			return "CryptoKeyUpdate"
-		case custom == "" && method == http.MethodDelete:
+		case method == http.MethodDelete:
 			return "CryptoKeyDelete"
 		}
 	case "importJobs":
@@ -816,21 +824,22 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "ImportJobGet"
 		}
 	case "cryptoKeyVersions":
-		// Only non-custom requests dispatch here; an unrecognized custom verb
-		// (e.g. a removed :disable/:enable or version :getIamPolicy) must not be
-		// treated as the plain resource verb, so every case requires custom=="".
+		// Only non-custom requests dispatch here: an unrecognized custom verb
+		// (e.g. a removed :disable/:enable or version :getIamPolicy) is refused
+		// by the custom-verb block above before the method switch, so these arms
+		// need no per-arm guard.
 		switch {
-		case custom == "" && method == http.MethodGet && strings.HasSuffix(name, "/publicKey"):
+		case method == http.MethodGet && strings.HasSuffix(name, "/publicKey"):
 			return "CryptoKeyVersionGetPublicKey"
-		case custom == "" && isCollection && method == http.MethodPost:
+		case isCollection && method == http.MethodPost:
 			return "CryptoKeyVersionCreate"
-		case custom == "" && isCollection && method == http.MethodGet:
+		case isCollection && method == http.MethodGet:
 			return "CryptoKeyVersionList"
-		case custom == "" && method == http.MethodPatch:
+		case method == http.MethodPatch:
 			return "CryptoKeyVersionUpdate"
-		case custom == "" && method == http.MethodDelete:
+		case method == http.MethodDelete:
 			return "CryptoKeyVersionDelete"
-		case custom == "" && method == http.MethodGet:
+		case method == http.MethodGet:
 			return "CryptoKeyVersionGet"
 		}
 	case "serviceAccounts":

@@ -20,7 +20,7 @@
 # gated by the file-scoped entry, which was measured at 81.82%.
 targets:
   - package: internal/gcp/adapter/jsoncodec.go
-    min_msi_percent: 95.52
+    min_msi_percent: 95.57
   - package: internal/gcp/service/datastore
     min_msi_percent: 68.7
   - package: internal/gcp/service/datastore/query.go
