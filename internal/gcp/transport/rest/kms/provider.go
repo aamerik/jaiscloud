@@ -36,6 +36,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"KMS.CryptoKeyCreate":                   p.CryptoKeyCreate,
 		"KMS.CryptoKeyList":                     p.CryptoKeyList,
 		"KMS.CryptoKeyGet":                      p.CryptoKeyGet,
+		"KMS.CryptoKeyUpdate":                   p.CryptoKeyUpdate,
 		"KMS.CryptoKeyEncrypt":                  p.CryptoKeyEncrypt,
 		"KMS.CryptoKeyDecrypt":                  p.CryptoKeyDecrypt,
 		"KMS.CryptoKeyVersionCreate":            p.CryptoKeyVersionCreate,
@@ -229,6 +230,65 @@ func (p *Provider) CryptoKeyGet(ctx context.Context, nr *model.NormalizedRequest
 		return nil, err
 	}
 	return provider.OK(cryptoKeyMap(nr, k, p.core.PrimaryVersion(ctx, nr.AccountID, k))), nil
+}
+
+// CryptoKeyUpdate serves cryptoKeys.patch (the Discovery's PATCH v1/{+name} with
+// an updateMask query parameter) — the REST update the official clients send,
+// mirroring gRPC UpdateCryptoKey. Only the mutable fields the core models
+// (labels, rotation_period) are accepted; anything else fails loud.
+func (p *Provider) CryptoKeyUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	loc, kr, key := parseCryptoKey(name)
+	in, err := cryptoKeyUpdateFromPatch(nr)
+	if err != nil {
+		return nil, err
+	}
+	ck, err := p.core.UpdateCryptoKey(ctx, nr.AccountID, loc, kr, key, in)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(cryptoKeyMap(nr, ck, p.core.PrimaryVersion(ctx, nr.AccountID, ck))), nil
+}
+
+// cryptoKeyUpdateFromPatch builds the core update from the PATCH body and
+// updateMask query parameter. The Discovery encodes a FieldMask as
+// comma-separated camelCase paths (labels, rotationPeriod); the core keys its
+// mask on the proto snake_case spelling, so normalize here.
+func cryptoKeyUpdateFromPatch(nr *model.NormalizedRequest) (kmscore.CryptoKeyUpdate, error) {
+	var in kmscore.CryptoKeyUpdate
+	if mask, _ := nr.Params["updateMask"].(string); mask != "" {
+		for _, path := range strings.Split(mask, ",") {
+			path = strings.TrimSpace(path)
+			if path == "" {
+				continue
+			}
+			in.UpdateMask = append(in.UpdateMask, normalizeCryptoKeyMaskPath(path))
+		}
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	in.Labels = parseLabels(body["labels"])
+	period, set, err := parseRotationPeriod(body["rotationPeriod"])
+	if err != nil {
+		return kmscore.CryptoKeyUpdate{}, err
+	}
+	if set {
+		in.RotationPeriod = &period
+	}
+	return in, nil
+}
+
+// normalizeCryptoKeyMaskPath maps a Discovery FieldMask path onto the core's
+// snake_case mask spelling.
+func normalizeCryptoKeyMaskPath(path string) string {
+	switch path {
+	case "rotationPeriod":
+		return "rotation_period"
+	default:
+		return path
+	}
 }
 
 func (p *Provider) CryptoKeyEncrypt(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {

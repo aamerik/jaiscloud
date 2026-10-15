@@ -141,6 +141,8 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "kms", Method: "POST", Path: base + "/" + ring + "/cryptoKeys?cryptoKeyId=" + key,
 			Body: `{"purpose":"ENCRYPT_DECRYPT"}`, Save: map[string]string{"cryptoKey": "name"}},
 		Scenario{Service: "kms", Method: "GET", Path: keyPath},
+		Scenario{Service: "kms", Method: "PATCH", Path: keyPath + "?updateMask=labels",
+			Body: `{"labels":{"env":"conf"}}`},
 		Scenario{Service: "kms", Method: "GET", Path: base + "/" + ring + "/cryptoKeys"},
 		Scenario{Service: "kms", Method: "POST", Path: keyPath + ":encrypt",
 			Body: `{"plaintext":"aGVsbG8="}`, Save: map[string]string{"ciphertext": "ciphertext"}},

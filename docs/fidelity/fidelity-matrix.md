@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1115**
+Cells: **1116**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 968 |
+| ga | 969 |
 | limited | 101 |
 | preview | 14 |
 | unsupported | 32 |
@@ -21,7 +21,7 @@ Cells: **1115**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 526 | 100 | 14 | 12 |
+| rest | 527 | 100 | 14 | 12 |
 | grpc | 442 | 1 | 0 | 20 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 538 | 114 |
+| rest | 539 | 114 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -634,7 +634,7 @@ _14 cell(s): ga=0 limited=0 preview=14 unsupported=0_
 
 ## kms
 
-_70 cell(s): ga=70 limited=0 preview=0 unsupported=0_
+_71 cell(s): ga=71 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -669,6 +669,7 @@ _70 cell(s): ga=70 limited=0 preview=0 unsupported=0_
 | KMS.CryptoKeyList | rest | ga | yes | — |
 | KMS.CryptoKeySetIamPolicy | rest | ga | yes | — |
 | KMS.CryptoKeyTestIamPermissions | rest | ga | yes | — |
+| KMS.CryptoKeyUpdate | rest | ga | yes | — |
 | KMS.CryptoKeyUpdatePrimaryVersion | rest | ga | no | — |
 | KMS.CryptoKeyVersionAsymmetricDecrypt | rest | ga | no | — |
 | KMS.CryptoKeyVersionAsymmetricSign | rest | ga | no | — |

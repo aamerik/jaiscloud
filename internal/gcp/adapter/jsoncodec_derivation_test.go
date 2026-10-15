@@ -25,7 +25,7 @@ import (
 // the verb segment alone — so each row carries the verb the Discovery declares
 // rather than one the codec requires. Second, a cell asserting an unsupported
 // shape pins the derivation as it is today; where the shape is one real GCP
-// declares, the comment names the recorded gap (TD25, TD26) instead of reading
+// declares, the comment names the recorded gap (TD26) instead of reading
 // as the intended contract.
 
 // decodeJSON decodes one method+path through a fresh JSONCodec.
@@ -88,12 +88,11 @@ func TestJSONCodecResourceMethodMatrix(t *testing.T) {
 		{res: "keyRings", coll: p + "/locations/us/keyRings", item: kms,
 			collWant: map[string]string{"POST": "KeyRingCreate", "GET": "KeyRingList"},
 			itemWant: map[string]string{"GET": "KeyRingGet"}},
-		// cryptoKeys.patch — the real REST key update — is not derived and no REST
-		// route registers it, while gRPC serves it: the PATCH cells below pin
-		// today's 501 (recorded as TD25).
+		// cryptoKeys.patch is the real REST key update (mirrors gRPC
+		// UpdateCryptoKey).
 		{res: "cryptoKeys", coll: kms + "/cryptoKeys", item: kms + "/cryptoKeys/k",
-			collWant: map[string]string{"POST": "CryptoKeyCreate", "GET": "CryptoKeyList", "DELETE": "CryptoKeyDelete"},
-			itemWant: map[string]string{"GET": "CryptoKeyGet", "DELETE": "CryptoKeyDelete"}},
+			collWant: map[string]string{"POST": "CryptoKeyCreate", "GET": "CryptoKeyList", "PATCH": "CryptoKeyUpdate", "DELETE": "CryptoKeyDelete"},
+			itemWant: map[string]string{"GET": "CryptoKeyGet", "PATCH": "CryptoKeyUpdate", "DELETE": "CryptoKeyDelete"}},
 		{res: "importJobs", coll: kms + "/importJobs", item: kms + "/importJobs/ij",
 			collWant: map[string]string{"POST": "ImportJobCreate", "GET": "ImportJobList"},
 			itemWant: map[string]string{"GET": "ImportJobGet"}},
@@ -390,6 +389,7 @@ func TestJSONCodecUnsupportedShapes(t *testing.T) {
 		{"PUT", p + "/secrets/s/versions"},
 		{"PUT", p + "/secrets/s/versions/1"},
 		{"POST", kms + "/cryptoKeys/k:zzz"},
+		{"PATCH", kms + "/cryptoKeys/k:zzz"},
 		{"DELETE", kms + "/cryptoKeys/k:zzz"},
 		{"POST", kms + "/cryptoKeys/k/cryptoKeyVersions:zzz"},
 		{"PUT", kms + "/cryptoKeys/k/cryptoKeyVersions:zzz"},
