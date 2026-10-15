@@ -260,6 +260,10 @@ func TestOperations(t *testing.T) {
 	if resp["@type"] != serviceTypeURL {
 		t.Errorf("response @type = %v", resp["@type"])
 	}
+	meta, _ := js["metadata"].(map[string]any)
+	if meta["@type"] != serviceTypeURL {
+		t.Errorf("metadata @type = %v", meta["@type"])
+	}
 	if got, err := s.WaitOperation(ctx, "p", "l", op.ID); err != nil || got.ID != op.ID {
 		t.Errorf("WaitOperation = %v, %v", got.ID, err)
 	}
@@ -276,6 +280,91 @@ func TestOperations(t *testing.T) {
 	if _, err := s.GetOperation(ctx, "p", "l", op.ID); !isNotFound(err) {
 		t.Errorf("GetOperation after delete err = %v, want NotFound", err)
 	}
+}
+
+// An in-flight operation carries its typed metadata snapshot from creation,
+// matching real Cloud Run: the mutation's google.longrunning.operation_info
+// metadata_type is Service for the service mutations and Revision for the
+// revision delete. The response stays absent until the operation settles. The
+// workflows and metastore renderers already behaved this way; the run renderer
+// withheld metadata until done, which these assertions lock down (TD23).
+func TestOperationJSONPendingMetadata(t *testing.T) {
+	ctx := context.Background()
+	async := NewService(runstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+		WithLROMode(lro.Mode{Enabled: true, Delay: time.Hour}))
+
+	op, err := async.CreateService(ctx, "p", "us-central1", "svc", createRequest(), false)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if op.Done {
+		t.Fatalf("async create unexpectedly done")
+	}
+	js := OperationJSON(op)
+	if js["done"] != false {
+		t.Errorf("in-flight done = %v, want false", js["done"])
+	}
+	meta := assertTypedAny(t, js, "metadata", serviceTypeURL)
+	if meta["name"] != ServiceName("p", "us-central1", "svc") {
+		t.Errorf("in-flight metadata name = %v", meta["name"])
+	}
+	if _, ok := js["response"]; ok {
+		t.Errorf("in-flight operation must not carry a response: %v", js)
+	}
+
+	// A retired revision's in-flight delete carries Revision metadata, the
+	// second metadata_type the run mutations declare.
+	if _, err := async.UpdateService(ctx, "p", "us-central1", "svc",
+		map[string]any{"template": map[string]any{"containers": []any{map[string]any{"image": "httpd:latest"}}}},
+		"template", false, false); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	del, err := async.DeleteRevision(ctx, "p", "us-central1", "svc", "svc-00001", false, "")
+	if err != nil {
+		t.Fatalf("delete revision: %v", err)
+	}
+	if del.Done {
+		t.Fatalf("async revision delete unexpectedly done")
+	}
+	djs := OperationJSON(del)
+	assertTypedAny(t, djs, "metadata", revisionTypeURL)
+	if _, ok := djs["response"]; ok {
+		t.Errorf("in-flight revision delete must not carry a response: %v", djs)
+	}
+
+	// A settled operation keeps its metadata and gains the response. An async
+	// operation with no delay settles on the first read, so the poll path that
+	// promotes the stored in-flight op is covered too.
+	settling := NewService(runstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+		WithLROMode(lro.Mode{Enabled: true}))
+	created, err := settling.CreateService(ctx, "p", "l", "svc", createRequest(), false)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	done, err := settling.GetOperation(ctx, "p", "l", created.ID)
+	if err != nil {
+		t.Fatalf("GetOperation: %v", err)
+	}
+	if !done.Done {
+		t.Fatalf("zero-delay async operation did not settle on read")
+	}
+	sjs := OperationJSON(done)
+	assertTypedAny(t, sjs, "metadata", serviceTypeURL)
+	assertTypedAny(t, sjs, "response", serviceTypeURL)
+}
+
+// assertTypedAny asserts op[key] is a typed Any with the given @type and returns
+// its body.
+func assertTypedAny(t *testing.T, op map[string]any, key, typeURL string) map[string]any {
+	t.Helper()
+	body, ok := op[key].(map[string]any)
+	if !ok {
+		t.Fatalf("operation %q is not a typed Any: %v", key, op)
+	}
+	if body["@type"] != typeURL {
+		t.Fatalf("%s @type = %v, want %v", key, body["@type"], typeURL)
+	}
+	return body
 }
 
 func TestListAllServicesAcrossLocations(t *testing.T) {

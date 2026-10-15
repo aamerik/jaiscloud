@@ -136,21 +136,26 @@ func RevisionJSON(r runstore.Revision) map[string]any {
 }
 
 // OperationJSON renders a stored operation as the google.longrunning.Operation
-// wire map. An in-flight operation omits the response, matching real GCP. The
-// response/metadata is the service snapshot wrapped as a typed Any (the @type
-// discriminator gax clients require to unpack it).
+// wire map. The metadata snapshot is present from creation — an in-flight
+// operation carries it too, matching real GCP (the mutation's
+// google.longrunning.operation_info metadata_type: Service for service
+// mutations, Revision for revision deletes) — while the response is only
+// present once the operation is done. Both are the service snapshot wrapped as
+// a typed Any (the @type discriminator gax clients require to unpack it).
 func OperationJSON(op runstore.Operation) map[string]any {
 	out := map[string]any{
 		"name": OperationName(op.ProjectID, op.Location, op.ID),
 		"done": op.Done,
 	}
-	if op.Done {
-		switch {
-		case op.Service != nil:
-			out["metadata"] = typedAny(serviceTypeURL, ServiceJSON(*op.Service))
+	switch {
+	case op.Service != nil:
+		out["metadata"] = typedAny(serviceTypeURL, ServiceJSON(*op.Service))
+		if op.Done {
 			out["response"] = typedAny(serviceTypeURL, ServiceJSON(*op.Service))
-		case op.Revision != nil:
-			out["metadata"] = typedAny(revisionTypeURL, RevisionJSON(*op.Revision))
+		}
+	case op.Revision != nil:
+		out["metadata"] = typedAny(revisionTypeURL, RevisionJSON(*op.Revision))
+		if op.Done {
 			out["response"] = typedAny(revisionTypeURL, RevisionJSON(*op.Revision))
 		}
 	}

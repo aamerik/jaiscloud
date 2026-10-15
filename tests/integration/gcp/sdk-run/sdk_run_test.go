@@ -171,11 +171,21 @@ func awaitOperation(t *testing.T, svc *run.Service, op *run.GoogleLongrunningOpe
 	if !lroAsync() {
 		require.True(t, op.Done, "synchronous operation must be done: %+v", op)
 		require.NotEmpty(t, op.Response, "done operation must carry a response: %+v", op)
+		require.NotEmpty(t, op.Metadata, "done operation must carry metadata: %+v", op)
+		require.Equal(t, rawMap(t, op.Metadata)["@type"], rawMap(t, op.Response)["@type"],
+			"metadata and response share the operation_info type")
 		return op, rawMap(t, op.Response)
 	}
 
 	require.False(t, op.Done, "async operation must be in flight: %+v", op)
 	require.Empty(t, op.Response, "in-flight operation must not carry a response: %+v", op)
+	// An in-flight Cloud Run operation carries its typed metadata from creation
+	// (the operation_info metadata_type: Service for service mutations,
+	// Revision for revision deletes) rather than only once done.
+	require.NotEmpty(t, op.Metadata, "in-flight operation must carry metadata: %+v", op)
+	pendingType := rawMap(t, op.Metadata)["@type"]
+	require.Contains(t, []any{serviceTypeAny, revisionTypeAny}, pendingType,
+		"in-flight metadata @type: %+v", op.Metadata)
 
 	deadline := time.Now().Add(30 * time.Second)
 	for {
@@ -183,6 +193,9 @@ func awaitOperation(t *testing.T, svc *run.Service, op *run.GoogleLongrunningOpe
 		require.NoError(t, err, "operations.get(%s)", op.Name)
 		if got.Done {
 			require.NotEmpty(t, got.Response, "settled operation must carry a response: %+v", got)
+			require.NotEmpty(t, got.Metadata, "settled operation must carry metadata: %+v", got)
+			require.Equal(t, pendingType, rawMap(t, got.Metadata)["@type"],
+				"metadata type must not change as the operation settles")
 			return got, rawMap(t, got.Response)
 		}
 		if time.Now().After(deadline) {
@@ -199,6 +212,7 @@ func terminalOperation(t *testing.T, op *run.GoogleLongrunningOperation) map[str
 	t.Helper()
 	require.True(t, op.Done, "operation must be terminal: %+v", op)
 	require.NotEmpty(t, op.Response, "terminal operation must carry a response: %+v", op)
+	require.NotEmpty(t, op.Metadata, "terminal operation must carry metadata: %+v", op)
 	return rawMap(t, op.Response)
 }
 
@@ -460,6 +474,12 @@ func TestSDKRunRevisionsAndPaging(t *testing.T) {
 	// A retired revision can, and the operation response is the revision.
 	delOp, err := svc.Projects.Locations.Services.Revisions.Delete(revisionName(id, id+"-00001")).Do()
 	require.NoError(t, err, "delete retired revision")
+	if lroAsync() {
+		// The revision delete's in-flight metadata is the typed Revision.
+		pending := rawMap(t, delOp.Metadata)
+		require.Equal(t, revisionTypeAny, pending["@type"])
+		require.Equal(t, revisionName(id, id+"-00001"), pending["name"])
+	}
 	_, delBody := awaitOperation(t, svc, delOp)
 	require.Equal(t, revisionTypeAny, delBody["@type"])
 	require.Equal(t, revisionName(id, id+"-00001"), delBody["name"])
@@ -547,6 +567,11 @@ func TestSDKRunOperations(t *testing.T) {
 
 	if lroAsync() {
 		require.False(t, op.Done, "async create must be in flight")
+		// The in-flight metadata is the typed Service under mutation, so a
+		// polling client can read the resource's progress before it settles.
+		pending := rawMap(t, op.Metadata)
+		require.Equal(t, serviceTypeAny, pending["@type"])
+		require.Equal(t, serviceName(id), pending["name"])
 	}
 
 	// operations.get resolves the operation (and, in async, settles it).
