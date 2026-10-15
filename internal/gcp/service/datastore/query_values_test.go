@@ -1,6 +1,7 @@
 package datastore
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 func valStr(s string) dsstore.Value  { return dsstore.Value{StringValue: &s} }
 func valInt(n int64) dsstore.Value   { return dsstore.Value{IntegerValue: ptrInt64(n)} }
 func valDbl(f float64) dsstore.Value { return dsstore.Value{DoubleValue: ptrFloat64(f)} }
+func valNaN() dsstore.Value          { return dsstore.Value{DoubleValue: ptrFloat64(math.NaN())} }
 func valBool(b bool) dsstore.Value   { return dsstore.Value{BooleanValue: ptrBool(b)} }
 func valTS(s string) dsstore.Value   { return dsstore.Value{TimestampValue: &s} }
 func valKey(s string) dsstore.Value  { return dsstore.Value{KeyValue: &s} }
@@ -36,40 +38,26 @@ func entityWith(kind, key string, props map[string]dsstore.Value) dsstore.Entity
 	return dsstore.Entity{Kind: kind, Key: key, Properties: props}
 }
 
-// TestNumericValue covers the integer/double unwrapping numericValue feeds to
-// the comparisons.
-func TestNumericValue(t *testing.T) {
-	if v, ok := numericValue(valInt(7)); !ok || v != 7 {
-		t.Fatalf("numericValue(int 7) = %v,%v; want 7,true", v, ok)
-	}
-	if v, ok := numericValue(valDbl(2.5)); !ok || v != 2.5 {
-		t.Fatalf("numericValue(double 2.5) = %v,%v; want 2.5,true", v, ok)
-	}
-	if _, ok := numericValue(valStr("7")); ok {
-		t.Fatal("numericValue(string) should not be numeric")
-	}
-	if _, ok := numericValue(dsstore.Value{}); ok {
-		t.Fatal("numericValue(empty) should not be numeric")
-	}
-}
-
 // TestValueEqual covers every value variant plus the cross-variant negatives.
-// It pins the emulator's behaviour: an integer and a double with the same
-// numeric value are equal. NOTE — that numeric-equality shortcut is an emulator
-// approximation: Firestore in Datastore mode treats INTEGER and DOUBLE as
-// separate types for ordering and equality (docs: "Entities, Properties, and
-// Keys" → value-type ordering). The divergence is tracked as TD13-c; this test
-// exists to lock the *current* behaviour against mutation, not to bless it.
+// Integers and doubles are separate types in Datastore mode (the documented
+// value-type ordering), so an integer and a double are NOT equal even when they
+// hold the same number; a NaN equals another NaN. (TD21)
 func TestValueEqual(t *testing.T) {
 	cases := []struct {
 		name string
 		a, b dsstore.Value
 		want bool
 	}{
-		{"int==double same", valInt(3), valDbl(3.0), true},
-		{"double==int same", valDbl(3.0), valInt(3), true},
+		{"int!=double same numeric", valInt(3), valDbl(3.0), false},
+		{"double!=int same numeric", valDbl(3.0), valInt(3), false},
+		{"int==int", valInt(3), valInt(3), true},
 		{"int!=int", valInt(3), valInt(5), false},
 		{"int!=double", valInt(3), valDbl(3.5), false},
+		{"double==double", valDbl(3.0), valDbl(3.0), true},
+		{"double!=double", valDbl(3.0), valDbl(3.5), false},
+		{"nan==nan", valNaN(), valNaN(), true},
+		{"nan!=double", valNaN(), valDbl(3.0), false},
+		{"nan!=int", valNaN(), valInt(3), false},
 		{"string==string", valStr("a"), valStr("a"), true},
 		{"string!=string", valStr("a"), valStr("b"), false},
 		{"string!=int", valStr("3"), valInt(3), false},
@@ -86,6 +74,9 @@ func TestValueEqual(t *testing.T) {
 		{"blob==blob", valBlob([]byte{1, 2}), valBlob([]byte{1, 2}), true},
 		{"blob!=blob", valBlob([]byte{1, 2}), valBlob([]byte{1, 3}), false},
 		{"blob!=string", valBlob([]byte("x")), valStr("x"), false},
+		{"double!=string", valDbl(1), valStr("x"), false},
+		{"string!=double", valStr("x"), valDbl(1), false},
+		{"int!=string", valInt(1), valStr("x"), false},
 		{"geo==geo", valGeo(1, 2), valGeo(1, 2), true},
 		{"geo!=geo", valGeo(1, 2), valGeo(1, 3), false},
 		{"geo!=string", valGeo(1, 2), valStr("geo"), false},
@@ -106,6 +97,8 @@ func TestValueEqual(t *testing.T) {
 		{"empty vs ts", dsstore.Value{}, valTS("2020-01-01T00:00:00Z"), false},
 		{"empty vs key", dsstore.Value{}, valKey("a"), false},
 		{"empty vs blob", dsstore.Value{}, valBlob([]byte{1}), false},
+		{"empty vs double", dsstore.Value{}, valDbl(1), false},
+		{"empty vs int", dsstore.Value{}, valInt(1), false},
 		{"empty vs geo", dsstore.Value{}, valGeo(1, 2), false},
 		{"empty vs entity", dsstore.Value{}, valEntity(entityWith("K", "k1", nil)), false},
 		{"empty vs array", dsstore.Value{}, valArray(valInt(1)), false},
@@ -125,10 +118,11 @@ func TestValueEqual(t *testing.T) {
 }
 
 // TestValueCompare covers the ordering result (-1/0/1) and the ok flag for
-// orderable vs incomparable pairs. Equal numerics compare 0 across int/double;
-// as with TestValueEqual, cross-type pairs return ok=false, both of which are
-// emulator approximations tracked as TD13-c (real Datastore has a total
-// cross-type ordering over separate numeric types).
+// orderable vs unorderable pairs. Ordering follows Datastore's documented
+// value-type ordering (null < integer < timestamp < boolean < blob < string <
+// double < NaN < geo point < key) and is total across those types; only the
+// types with no sort order — arrays, embedded entities and absent values —
+// return ok=false. Integers sort before doubles as separate types. (TD21)
 func TestValueCompare(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -139,44 +133,58 @@ func TestValueCompare(t *testing.T) {
 		{"int<int", valInt(3), valInt(5), -1, true},
 		{"int>int", valInt(5), valInt(3), 1, true},
 		{"int==int", valInt(3), valInt(3), 0, true},
+		// Integers are a separate type ordered before floats: 7 < 3.2.
+		{"int<double same numeric", valInt(3), valDbl(3.0), -1, true},
 		{"int<double", valInt(3), valDbl(3.5), -1, true},
 		{"double<int", valDbl(3.5), valInt(3), 1, true},
-		{"int==double", valInt(3), valDbl(3.0), 0, true},
-		{"int vs string", valInt(3), valStr("3"), 0, false},
-		{"string<int", valStr("a"), valInt(3), 0, false},
+		{"double<double", valDbl(2.5), valDbl(3.5), -1, true},
+		{"double==double", valDbl(3.5), valDbl(3.5), 0, true},
+		{"double<nan", valDbl(3.5), valNaN(), -1, true},
+		{"nan>double", valNaN(), valDbl(3.5), 1, true},
+		{"nan==nan", valNaN(), valNaN(), 0, true},
 		{"str<str", valStr("a"), valStr("b"), -1, true},
 		{"str>str", valStr("b"), valStr("a"), 1, true},
 		{"str==str", valStr("a"), valStr("a"), 0, true},
-		{"string vs int", valStr("a"), valInt(1), 0, false},
 		{"bool<", valBool(false), valBool(true), -1, true},
 		{"bool>", valBool(true), valBool(false), 1, true},
 		{"bool==", valBool(true), valBool(true), 0, true},
-		{"bool vs int", valBool(false), valInt(0), 0, false},
 		{"ts<", valTS("2020-01-01T00:00:00Z"), valTS("2021-01-01T00:00:00Z"), -1, true},
 		{"ts>", valTS("2021-01-01T00:00:00Z"), valTS("2020-01-01T00:00:00Z"), 1, true},
 		{"ts==", valTS("2020-01-01T00:00:00Z"), valTS("2020-01-01T00:00:00Z"), 0, true},
 		{"ts invalid", valTS("not-a-time"), valTS("2020-01-01T00:00:00Z"), 0, false},
-		{"ts vs string", valTS("2020-01-01T00:00:00Z"), valStr("2020-01-01T00:00:00Z"), 0, false},
 		{"key<", valKey("a"), valKey("b"), -1, true},
 		{"key>", valKey("b"), valKey("a"), 1, true},
 		{"key==", valKey("a"), valKey("a"), 0, true},
-		{"key vs string", valKey("a"), valStr("a"), 0, false},
 		{"blob<", valBlob([]byte{1}), valBlob([]byte{2}), -1, true},
 		{"blob>", valBlob([]byte{2}), valBlob([]byte{1}), 1, true},
 		{"blob==", valBlob([]byte{1}), valBlob([]byte{1}), 0, true},
-		{"blob vs string", valBlob([]byte("a")), valStr("a"), 0, false},
-		{"geo incomparable", valGeo(1, 2), valGeo(1, 2), 0, false},
+		{"geo<lat", valGeo(1, 2), valGeo(2, 0), -1, true},
+		{"geo>lat", valGeo(2, 0), valGeo(1, 2), 1, true},
+		{"geo<lon", valGeo(1, 2), valGeo(1, 3), -1, true},
+		{"geo>lon", valGeo(1, 3), valGeo(1, 2), 1, true},
+		{"geo==geo", valGeo(1, 2), valGeo(1, 2), 0, true},
+		// The full cross-type ordering, in rank order: every type sorts before
+		// the next. These pin the rank table itself.
+		{"null<int", valNull(), valInt(-100), -1, true},
+		{"int<ts", valInt(999999), valTS("1970-01-01T00:00:00Z"), -1, true},
+		{"ts<bool", valTS("2100-01-01T00:00:00Z"), valBool(false), -1, true},
+		{"bool<blob", valBool(true), valBlob([]byte{0}), -1, true},
+		{"blob<string", valBlob([]byte{0xff}), valStr(""), -1, true},
+		{"string<double", valStr("zzz"), valDbl(-1e300), -1, true},
+		{"double<nan", valDbl(1e300), valNaN(), -1, true},
+		{"nan<geo", valNaN(), valGeo(-90, -180), -1, true},
+		{"geo<key", valGeo(90, 180), valKey(""), -1, true},
+		// Only the types with no sort order are incomparable.
 		{"array incomparable", valArray(valInt(1)), valArray(valInt(1)), 0, false},
 		{"entity incomparable", valEntity(entityWith("K", "k", nil)), valEntity(entityWith("K", "k", nil)), 0, false},
-		{"null incomparable", valNull(), valNull(), 0, false},
 		{"empty incomparable", dsstore.Value{}, dsstore.Value{}, 0, false},
-		// An absent value on the left reaches the later variant arms and their
-		// nil guards (the same-type cases stay within one variant).
 		{"empty vs string", dsstore.Value{}, valStr("a"), 0, false},
+		{"string vs empty", valStr("a"), dsstore.Value{}, 0, false},
 		{"empty vs bool", dsstore.Value{}, valBool(true), 0, false},
 		{"empty vs ts", dsstore.Value{}, valTS("2020-01-01T00:00:00Z"), 0, false},
 		{"empty vs key", dsstore.Value{}, valKey("a"), 0, false},
 		{"empty vs blob", dsstore.Value{}, valBlob([]byte{1}), 0, false},
+		{"empty vs double", dsstore.Value{}, valDbl(1), 0, false},
 	}
 	for _, tc := range cases {
 		c, ok := valueCompare(tc.a, tc.b)
@@ -186,6 +194,10 @@ func TestValueCompare(t *testing.T) {
 		}
 		if ok && c != tc.wantC {
 			t.Errorf("%s: valueCompare = %d, want %d", tc.name, c, tc.wantC)
+		}
+		// Ordering is antisymmetric: swapping swaps the sign.
+		if c2, ok2 := valueCompare(tc.b, tc.a); ok2 != tc.wantOK || (ok2 && c2 != -tc.wantC) {
+			t.Errorf("%s (swapped): valueCompare = %d, %v; want %d, %v", tc.name, c2, ok2, -tc.wantC, tc.wantOK)
 		}
 	}
 }
@@ -258,6 +270,63 @@ func TestUnsupportedQueryOperatorMessage(t *testing.T) {
 	}
 }
 
+// TestValidateFilter covers the up-front static filter validation RunQuery and
+// RunAggregationQuery perform before scanning any candidate, so a request real
+// Datastore rejects fails loud on an empty collection too. (TD21)
+func TestValidateFilter(t *testing.T) {
+	key := "projects/p/…/Child,c"
+	ok := []struct {
+		name string
+		f    *Filter
+	}{
+		{"nil", nil},
+		{"equal", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyEqual, Value: valInt(1)}}},
+		{"not equal", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyNotEqual, Value: valInt(1)}}},
+		{"less than", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyLessThan, Value: valInt(1)}}},
+		{"less or equal", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyLessThanOrEqual, Value: valInt(1)}}},
+		{"greater than", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyGreaterThan, Value: valInt(1)}}},
+		{"greater or equal", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyGreaterThanOrEqual, Value: valInt(1)}}},
+		{"in array", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valArray(valInt(1))}}},
+		{"has ancestor", &Filter{Property: &PropertyFilter{Property: keyPropertyName, Op: PropertyHasAncestor, Value: dsstore.Value{KeyValue: &key}}}},
+		{"and of valid", &Filter{Composite: &CompositeFilter{Op: CompositeAnd, Filters: []*Filter{
+			{Property: &PropertyFilter{Property: "n", Op: PropertyEqual, Value: valInt(1)}},
+			{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valArray(valInt(1))}},
+		}}}},
+	}
+	for _, tc := range ok {
+		if err := validateFilter(tc.f); err != nil {
+			t.Errorf("%s: validateFilter = %v, want nil", tc.name, err)
+		}
+	}
+
+	bad := []struct {
+		name string
+		f    *Filter
+	}{
+		{"in non-array", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valInt(1)}}},
+		{"in empty array", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valArray()}}},
+		{"in absent value", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn}}},
+		{"has ancestor wrong prop", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyHasAncestor, Value: dsstore.Value{KeyValue: &key}}}},
+		{"has ancestor non-key", &Filter{Property: &PropertyFilter{Property: keyPropertyName, Op: PropertyHasAncestor, Value: valStr("x")}}},
+		{"unspecified op", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyUnspecified}}},
+		{"or rejected", &Filter{Composite: &CompositeFilter{Op: CompositeOr, Filters: []*Filter{
+			{Property: &PropertyFilter{Property: "n", Op: PropertyEqual, Value: valInt(1)}},
+		}}}},
+		{"composite unspecified", &Filter{Composite: &CompositeFilter{}}},
+		{"and with no filters", &Filter{Composite: &CompositeFilter{Op: CompositeAnd}}},
+		{"and with a bad clause", &Filter{Composite: &CompositeFilter{Op: CompositeAnd, Filters: []*Filter{
+			{Property: &PropertyFilter{Property: "n", Op: PropertyEqual, Value: valInt(1)}},
+			{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valInt(2)}},
+		}}}},
+		{"empty filter", &Filter{}},
+	}
+	for _, tc := range bad {
+		if err := validateFilter(tc.f); err == nil {
+			t.Errorf("%s: validateFilter = nil, want an error", tc.name)
+		}
+	}
+}
+
 // TestMatchesFilterDispatch covers the filter dispatcher: nil matches, AND
 // composites evaluate every clause, and every unsupported/incomplete shape
 // fails closed with an InvalidArgument error rather than matching everything.
@@ -285,6 +354,7 @@ func TestMatchesFilterDispatch(t *testing.T) {
 		f    *Filter
 	}{
 		{"composite OR", &Filter{Composite: &CompositeFilter{Op: CompositeOr, Filters: []*Filter{eq}}}},
+		{"composite AND with no filters", &Filter{Composite: &CompositeFilter{Op: CompositeAnd}}},
 		{"composite unspecified", &Filter{Composite: &CompositeFilter{}}},
 		{"empty filter", &Filter{}},
 	}
@@ -301,9 +371,10 @@ func TestMatchesFilterDispatch(t *testing.T) {
 	}
 }
 
-// TestMatchesPropertyFilterOperators covers every property operator against a
-// present, absent and incomparable property.
-func TestMatchesPropertyFilterOperators(t *testing.T) {
+// TestMatchPropertyFilterOperators covers every property operator against a
+// present, absent and incomparable property. The filter shapes here are all
+// valid; the invalid-shape contract is TestValidateFilter's.
+func TestMatchPropertyFilterOperators(t *testing.T) {
 	e := entityWith("Kind", "k", map[string]dsstore.Value{
 		"n":    valInt(5),
 		"tags": valArray(valStr("a"), valStr("b")),
@@ -323,38 +394,39 @@ func TestMatchesPropertyFilterOperators(t *testing.T) {
 		{"in match", &PropertyFilter{Property: "n", Op: PropertyIn, Value: valArray(valInt(1), valInt(5))}, true},
 		{"in miss", &PropertyFilter{Property: "n", Op: PropertyIn, Value: valArray(valInt(1), valInt(2))}, false},
 		{"in absent prop", &PropertyFilter{Property: "missing", Op: PropertyIn, Value: valArray(valInt(1))}, false},
-		{"in non-array value", &PropertyFilter{Property: "n", Op: PropertyIn, Value: valInt(5)}, false}, // emulator no-match; real GCP rejects (TD13-c)
+		{"in cross-type no match", &PropertyFilter{Property: "n", Op: PropertyIn, Value: valArray(valDbl(5))}, false},
 		{"lt", &PropertyFilter{Property: "n", Op: PropertyLessThan, Value: valInt(6)}, true},
 		{"lt equal", &PropertyFilter{Property: "n", Op: PropertyLessThan, Value: valInt(5)}, false},
 		{"lte equal", &PropertyFilter{Property: "n", Op: PropertyLessThanOrEqual, Value: valInt(5)}, true},
 		{"gt", &PropertyFilter{Property: "n", Op: PropertyGreaterThan, Value: valInt(4)}, true},
+		{"gt equal is not greater", &PropertyFilter{Property: "n", Op: PropertyGreaterThan, Value: valInt(5)}, false},
 		{"gte equal", &PropertyFilter{Property: "n", Op: PropertyGreaterThanOrEqual, Value: valInt(5)}, true},
 		{"gte miss", &PropertyFilter{Property: "n", Op: PropertyGreaterThanOrEqual, Value: valInt(6)}, false},
+		{"lte miss", &PropertyFilter{Property: "n", Op: PropertyLessThanOrEqual, Value: valInt(4)}, false},
 		{"comparison absent prop", &PropertyFilter{Property: "missing", Op: PropertyLessThan, Value: valInt(9)}, false},
-		{"comparison incomparable", &PropertyFilter{Property: "n", Op: PropertyLessThan, Value: valStr("z")}, false},
+		// A value with no sort order (an array) never satisfies a range
+		// comparison, however the operator is spelled. (TD21)
+		{"range over array value", &PropertyFilter{Property: "tags", Op: PropertyGreaterThanOrEqual, Value: valStr("a")}, false},
+		{"range over array value lt", &PropertyFilter{Property: "tags", Op: PropertyLessThan, Value: valStr("a")}, false},
+		// A cross-type comparison order by the documented type ordering: the
+		// integer 5 sorts before ANY string, so `n < "z"` matches. (TD21)
+		{"comparison cross-type", &PropertyFilter{Property: "n", Op: PropertyLessThan, Value: valStr("z")}, true},
+		{"comparison cross-type reverse", &PropertyFilter{Property: "n", Op: PropertyGreaterThan, Value: valStr("z")}, false},
+		// A float filter does not compare equal to an integer property, but the
+		// integer still sorts before the float.
+		{"equal cross-type misses", &PropertyFilter{Property: "n", Op: PropertyEqual, Value: valDbl(5)}, false},
+		{"lt cross-type int<float", &PropertyFilter{Property: "n", Op: PropertyLessThan, Value: valDbl(5)}, true},
 	}
 	for _, tc := range cases {
-		got, err := matchesPropertyFilter(e, tc.pf)
-		if err != nil {
-			t.Errorf("%s: unexpected error %v", tc.name, err)
-			continue
-		}
-		if got != tc.want {
+		if got := matchPropertyFilter(e, tc.pf); got != tc.want {
 			t.Errorf("%s: = %v, want %v", tc.name, got, tc.want)
 		}
-	}
-
-	if _, err := matchesPropertyFilter(e, nil); err == nil {
-		t.Fatal("a nil property filter must fail closed")
-	}
-	if _, err := matchesPropertyFilter(e, &PropertyFilter{Property: "n", Op: PropertyUnspecified}); err == nil {
-		t.Fatal("an unspecified operator must fail closed")
 	}
 }
 
 // TestHasAncestorGuards verifies HAS_ANCESTOR only accepts the reserved
-// __key__ property and a key value, and that a matching ancestor key is
-// satisfied end to end.
+// __key__ property and a key value (failing closed through matchesFilter), and
+// that a matching ancestor key is satisfied end to end.
 func TestHasAncestorGuards(t *testing.T) {
 	root := idKey("Parent", 1)
 	grand := dsstore.PathElement{Kind: "Parent", ID: 2, HasID: true}
@@ -364,16 +436,29 @@ func TestHasAncestorGuards(t *testing.T) {
 
 	ancestor := CanonicalKey(root)
 	pf := &PropertyFilter{Property: keyPropertyName, Op: PropertyHasAncestor, Value: dsstore.Value{KeyValue: &ancestor}}
-	if ok, err := matchesPropertyFilter(e, pf); err != nil || !ok {
+	if ok, err := matchesFilter(e, &Filter{Property: pf}); err != nil || !ok {
 		t.Fatalf("HAS_ANCESTOR match = %v,%v; want true,nil", ok, err)
 	}
 
 	wrongProp := &PropertyFilter{Property: "n", Op: PropertyHasAncestor, Value: dsstore.Value{KeyValue: &ancestor}}
-	if _, err := matchesPropertyFilter(e, wrongProp); err == nil {
+	if _, err := matchesFilter(e, &Filter{Property: wrongProp}); err == nil {
 		t.Fatal("HAS_ANCESTOR on a non-__key__ property must fail closed")
 	}
 	noKey := &PropertyFilter{Property: keyPropertyName, Op: PropertyHasAncestor, Value: valStr("not-a-key")}
-	if _, err := matchesPropertyFilter(e, noKey); err == nil {
+	if _, err := matchesFilter(e, &Filter{Property: noKey}); err == nil {
 		t.Fatal("HAS_ANCESTOR with a non-key value must fail closed")
+	}
+
+	// A key is not its own ancestor, and an ancestor value that is not a
+	// parseable key matches nothing.
+	self := &PropertyFilter{Property: keyPropertyName, Op: PropertyHasAncestor,
+		Value: valKey(CanonicalKey(child))}
+	if ok, err := matchesFilter(e, &Filter{Property: self}); err != nil || ok {
+		t.Fatalf("HAS_ANCESTOR with the entity's own key = %v,%v; want false,nil", ok, err)
+	}
+	garbage := &PropertyFilter{Property: keyPropertyName, Op: PropertyHasAncestor,
+		Value: valKey("not-a-canonical-key")}
+	if ok, err := matchesFilter(e, &Filter{Property: garbage}); err != nil || ok {
+		t.Fatalf("HAS_ANCESTOR with an unparseable key = %v,%v; want false,nil", ok, err)
 	}
 }

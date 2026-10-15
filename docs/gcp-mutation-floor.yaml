@@ -12,8 +12,16 @@
 # package: repo-relative mutation target passed to `make test-gcp-mutation`
 #   — a Go package directory, or a single file within one.
 # min_msi_percent: mutation-score floor (killed / total mutants), two decimals.
+#
+# `internal/gcp/service/datastore/query.go` is file-scoped (TD21) because the
+# whole-package token above is the TD13/TD19 measurement and a re-run is hours,
+# not minutes: several `gql.go` lexer mutants burn the full 60s exec timeout.
+# TD21's surface — the value comparison and the filter validation — is therefore
+# gated by the file-scoped entry, which was measured at 81.82%.
 targets:
   - package: internal/gcp/adapter/jsoncodec.go
     min_msi_percent: 95.52
   - package: internal/gcp/service/datastore
     min_msi_percent: 68.7
+  - package: internal/gcp/service/datastore/query.go
+    min_msi_percent: 81.82

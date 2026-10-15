@@ -697,8 +697,11 @@ package (default `./internal/gcp/service/datastore`). For each mutant it
 rewrites one target file **in place**, runs `go test <package>`, restores the
 file, and finally writes a JSON report — `bin/gcp-mutation-report.json` — whose
 `stats` carry the mutation score and whose `escaped` array carries the diff of
-every surviving mutant. The target is **local only** (a full package run is
-minutes, not a per-PR budget): TD13 is a spike that seeds a ratchet, not a gate.
+every surviving mutant. The target is **local only** (a full package run is not a
+per-PR budget): TD13 is a spike that seeds a ratchet, not a gate. The package run
+that seeded the datastore floor took minutes at TD13 but now takes **hours** —
+several lexer mutants in `gql.go` burn the full 60s exec timeout per mutant — so
+TD21 measured its surface file-scoped instead (§13.3).
 
 **The spike's result** (`internal/gcp/service/datastore`, the transport-neutral
 Datastore core; 1246 mutants):
@@ -736,7 +739,8 @@ operands that no input can distinguish, the single-threaded lock statements) are
 *not* assertion gaps and are deliberately left (recorded as TD19-a). The two
 follow-ups TD13 named — a negative-suite pass on the GQL parser and metadata, and
 a committed `docs/gcp-mutation-floor.yaml` ratchet — are **TD19**; the
-codec/router closure is **TD20**.
+codec/router closure is **TD20**; and the value-type ordering the value tests
+surfaced is **TD21** (all below).
 
 ### 13.1 The negative tables and the committed floor (TD19)
 
@@ -776,7 +780,7 @@ numeric type (`n = 3` matches a stored `3.0`; `7 < 3.2`), whereas Firestore in
 Datastore mode documents them as *separate* types for ordering and equality.
 That is a behaviour question, not a test-depth one, so the spike does not change
 it — it is recorded as TD13-c (and the new tests say so) rather than silently
-blessed.
+blessed. **TD21 (§13.3) closes it.**
 
 The codec/router surface the plan also named — `internal/gcp/adapter/jsoncodec.go`,
 where a wrong resource-type or action derivation silently misroutes a request —
@@ -904,6 +908,123 @@ TD19's it is a *ratchet*: `make test-gcp-mutation-ratchet
 PKG=./internal/gcp/adapter/jsoncodec.go` fails when the measured score drops more
 than 0.5pp below the recorded floor, and `make test-gcp-mutation-update` raises
 it — never lowers it.
+
+### 13.3 The value-type ordering and the fail-open filter shapes (TD21)
+
+The value-comparison tests TD13 wrote (§13.1) surfaced behaviour the emulator had
+pinned rather than blessed, and the TD13-c note recorded the one that mattered:
+`valueEqual`/`valueCompare` treated INTEGER and DOUBLE as a single numeric type.
+TD21 closes that against real Datastore's authority — the **"Value type
+ordering"** table on [Entities, Properties, and
+Keys](https://cloud.google.com/datastore/docs/concepts/entities#value_type_ordering)
+for equality and ordering, and the vendored Datastore **Discovery** for a
+filter's static shape.
+
+**Ground truth.** A Datastore mode database orders a property whose values have
+mixed types by the value's *type* first, then by value within the type:
+`null < integers < dates/times < booleans < byte strings < unicode strings <
+floats < NaN < geo points < keys` (`Fixed-point numbers` is one entry carrying
+`Integers` then `Dates and times`), with the explicit note that "Integers and
+floating-point numbers are considered separate types in Datastore mode. If an
+entity uses a mix of integers and floats for the same property, all integers will
+be sorted before all floats, for example: `7` < `3.2`". Only arrays and embedded
+entities have **Sort order: None**. On the filter side the Discovery requires
+`PropertyFilter.op = IN` to carry a *non-empty* `ArrayValue` and
+`CompositeFilter.filters` to have *at least one* filter.
+
+**What was wrong.** Three divergences, all on the comparison path:
+
+- `valueEqual`/`valueCompare` folded the numerics: `n = 3` matched a stored
+  `3.0`, ordering mixed them numerically, and *every* cross-type pair returned
+  `ok = false` ("not orderable") instead of comparing by the documented type
+  order — so a range filter silently matched nothing across types.
+- `IN` with a non-array value returned no-match, where real Datastore rejects it.
+- An `AND` composite with **no** sub-filters matched every entity (fail open),
+  contrary to the file's own fail-closed contract, and an empty `IN` array was
+  accepted.
+
+**The fix** (`internal/gcp/service/datastore/query.go`, `core.go`):
+
+- `valueRank` encodes the documented type order and `valueCompare` is total
+  across it — `cmp.Compare` within the ordered type, `bytes.Compare` for blobs,
+  `false < true` for booleans, chronological for timestamps, latitude-then-
+  longitude for geo points. Only arrays, embedded entities and an absent value
+  stay unorderable, matching the docs' "None".
+- `valueEqual` is type-strict: `3 != 3.0` and `3.0 != 3`, while a NaN equals a
+  NaN (NaN is a single distinct value type).
+- `validateFilter`/`validatePropertyFilter` are the **single authority** for a
+  filter's static shape and reject `IN` without a non-empty array and an empty
+  `AND` with InvalidArgument. `RunQuery` and `RunAggregationQuery` call it once
+  before scanning any candidate — so the request fails loud on an empty kind,
+  where the per-entity matcher never fires — and `matchesFilter` calls it too, so
+  no caller can reach a fail-open path; `matchValidFilter`/`matchPropertyFilter`
+  are pure evaluators over an already-validated filter. The shape checks were
+  deliberately *not* left duplicated between the validator and the matcher, which
+  is how the empty-array and empty-AND cases drifted.
+
+**Tests.** `TestValueEqual`/`TestValueCompare` pin the full rank order, its
+antisymmetry, and the type-strict equality; `TestValueEqualNumeric` the separated
+numerics both ways; `TestValidateFilter` the static failure contract (non-array
+and empty `IN`, empty `AND`, `OR`, the `HAS_ANCESTOR` guards); and
+`TestRunQueryValidatesFilterBeforeScan` plus the `RunAggregationQuery` case in
+`TestRunAggregationQuery` the empty-kind end-to-end rejection at both call sites.
+
+| run | killed | escaped | MSI |
+| --- | --- | --- | --- |
+| TD21, as first written | 226 | 71 | **76.09%** |
+| after closing the survivors below | 243 | 54 | **81.82%** |
+
+The file-scoped run (`make test-gcp-mutation
+PKG=./internal/gcp/service/datastore/query.go`, 297 mutants) was used rather than
+the whole package: the package token is TD13/TD19's measurement and a re-run is
+hours, because several `gql.go` lexer mutants burn the full 60s exec timeout. The
+survivors separate cleanly into
+
+- **genuine assertion gaps, now pinned**: the `GREATER_THAN` /
+  `LESS_THAN_OR_EQUAL` arms had no equal/miss value (`c > 0` → `c >= 0`, `c <= 0`
+  → `c <= 1` survived); a range comparison against a value with no sort order
+  (`if !comparable`) was never exercised, so emptying that guard — which then
+  reads `c` as 0 and matches — survived; `valueEqual`'s double nil-guard was never
+  reached from the absent-value side (removing it is a nil deref);
+  `keyHasAncestor`'s "not a proper prefix" guard was never exercised with the
+  entity's own key or an unparseable key; and the sum reducer's mid-list hole,
+  negative contribution and int64 *underflow* arms were untested;
+- **provably equivalent**, deliberately left: the `rankNull = iota + N` constant
+  (only the ranks' relative order matters, so a uniform shift is invisible), the
+  `int` returned alongside `ok = false` (every caller ignores it), the redundant
+  `X != nil ||` operand of each `valueEqual` arm (every arm's body already
+  requires both sides), `true &&` on the EQUAL arm (an absent property never
+  equals any value), `if !ok { return false }` in the matcher (the zero value
+  fails every arm anyway), and `continue`/`break` inside a `switch` (identical to
+  the enclosing loop); plus the overflow detector's `iv > 0`/`iv < 0` variants
+  whose difference needs `iv == 0`.
+
+`docs/gcp-mutation-floor.yaml` gains the file-scoped entry
+(`internal/gcp/service/datastore/query.go` at 81.82), the second file-keyed target
+after TD20's codec.
+
+**Recorded rather than fixed.** Reviewing this change surfaced three
+pre-existing divergences *adjacent* to the comparison path, each now carrying its
+own backlog row rather than being folded into this fix:
+
+- **TD28** — the documented array-valued property semantics ("the entity
+  satisfies the filter if any of the values compares") are not modelled: a filter
+  is compared against the stored array as a whole.
+- **TD29** — the reserved `__key__` property is wired only for `HAS ANCESTOR`,
+  so the documented key filters (`__key__ > KEY(...)`) never match; and the key
+  comparator compares the length-prefixed canonical key *string*, an
+  approximation of the documented by-path-elements ordering.
+- **TD30** — timestamp equality compares the raw RFC 3339 `timestampValue`
+  string while ordering parses and compares instants, so two strings naming the
+  same instant with different offsets are order-equal but not equal.
+
+They are distinct behaviours, not regressions, and each is scheduled with its own
+branch. The one shape the fix deliberately still leaves unmodelled is the
+Discovery's disjunction limits ("subject to disjunction limits") on `IN`/`NOT_IN`
+— the emulator evaluates the array directly, with no limit. It could not be
+closed here: the Discovery names no number, so it is recorded as **TD31** rather
+than guessed at.
+
 
 
 

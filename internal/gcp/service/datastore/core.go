@@ -435,6 +435,9 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 	if q == nil {
 		return nil, invalidArgument("run query request has no query")
 	}
+	if err := validateFilter(q.Filter); err != nil {
+		return nil, err
+	}
 	offset, limit, err := queryWindow(q)
 	if err != nil {
 		return nil, err
@@ -609,6 +612,9 @@ func (s *Service) RunAggregationQuery(ctx context.Context, project string, aq *A
 	}
 	if len(aggs) > maxAggregations {
 		return nil, invalidArgument("aggregation query supports at most five aggregations")
+	}
+	if err := validateFilter(aq.Nested.Filter); err != nil {
+		return nil, err
 	}
 
 	entities, err := s.queryCandidates(ctx, project, aq.Nested.Kind, aq.Nested.Namespace, aq.Nested.Database)

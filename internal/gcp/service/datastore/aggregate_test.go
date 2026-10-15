@@ -81,6 +81,26 @@ func TestAggregateSum(t *testing.T) {
 		t.Fatalf("sum with skipped = %+v, %v; want 4", v, err)
 	}
 
+	// A hole in the middle must be skipped, not end the reduction: the last
+	// entity still contributes.
+	holed := []dsstore.Entity{
+		props(map[string]dsstore.Value{"n": valInt(1)}),
+		props(map[string]dsstore.Value{"other": valInt(100)}),
+		props(map[string]dsstore.Value{"n": valInt(2)}),
+	}
+	if v, err = aggregate(Aggregation{Op: AggSum, Property: "n"}, holed); err != nil || v.IntegerValue == nil || *v.IntegerValue != 3 {
+		t.Fatalf("sum with a hole = %+v, %v; want 3", v, err)
+	}
+
+	// A negative contribution is not an overflow: the result stays an integer.
+	neg := []dsstore.Entity{
+		props(map[string]dsstore.Value{"n": valInt(-5)}),
+		props(map[string]dsstore.Value{"n": valInt(2)}),
+	}
+	if v, err = aggregate(Aggregation{Op: AggSum, Property: "n"}, neg); err != nil || v.IntegerValue == nil || *v.IntegerValue != -3 {
+		t.Fatalf("negative sum = %+v, %v; want integer -3", v, err)
+	}
+
 	overflow := []dsstore.Entity{
 		props(map[string]dsstore.Value{"n": valInt(math.MaxInt64)}),
 		props(map[string]dsstore.Value{"n": valInt(1)}),
@@ -89,6 +109,15 @@ func TestAggregateSum(t *testing.T) {
 		t.Fatalf("overflow sum = %+v, %v; want a double", v, err)
 	} else if want := float64(math.MaxInt64) + 1; *v.DoubleValue != want {
 		t.Fatalf("overflow sum = %v, want %v", *v.DoubleValue, want)
+	}
+
+	// Underflow is detected the same way, on the negative side.
+	underflow := []dsstore.Entity{
+		props(map[string]dsstore.Value{"n": valInt(math.MinInt64)}),
+		props(map[string]dsstore.Value{"n": valInt(-1)}),
+	}
+	if v, err = aggregate(Aggregation{Op: AggSum, Property: "n"}, underflow); err != nil || v.DoubleValue == nil {
+		t.Fatalf("underflow sum = %+v, %v; want a double", v, err)
 	}
 }
 
@@ -111,9 +140,9 @@ func TestAggregateAvg(t *testing.T) {
 
 	mixed := []dsstore.Entity{
 		props(map[string]dsstore.Value{"n": valInt(1)}),
+		props(map[string]dsstore.Value{"other": valInt(9)}),
 		props(map[string]dsstore.Value{"n": valDbl(2.5)}),
 		props(map[string]dsstore.Value{"n": valStr("skip")}),
-		props(map[string]dsstore.Value{"other": valInt(9)}),
 	}
 	if v, err = aggregate(Aggregation{Op: AggAvg, Property: "n"}, mixed); err != nil || v.DoubleValue == nil || *v.DoubleValue != 1.75 {
 		t.Fatalf("mixed avg = %+v, %v; want double 1.75", v, err)
@@ -143,6 +172,16 @@ func TestRunAggregationQuery(t *testing.T) {
 	}
 	if _, err := s.RunAggregationQuery(ctx, "p", &AggregationQuery{Nested: nested, Aggregations: six}, nil); err == nil {
 		t.Fatal("more than five aggregations must be rejected")
+	}
+	// A malformed nested filter is rejected up front, before the reduction
+	// runs (the RunAggregationQuery half of the up-front validation). (TD21)
+	if _, err := s.RunAggregationQuery(ctx, "p", &AggregationQuery{
+		Nested: Query{Kind: "Task", Filter: &Filter{Property: &PropertyFilter{
+			Property: "n", Op: PropertyIn, Value: valInt(1),
+		}}},
+		Aggregations: []Aggregation{countAgg(nil)},
+	}, nil); err == nil {
+		t.Fatal("an IN filter without an array value must be rejected")
 	}
 
 	// Exactly five is allowed, and unnamed aggregations get property_1..N.
