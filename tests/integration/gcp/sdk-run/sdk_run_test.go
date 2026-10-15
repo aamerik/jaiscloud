@@ -117,6 +117,13 @@ func unique(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }
 
+// tagQualifiedURI rewrites a Cloud Run service uri into the tag-qualified form
+// real Cloud Run returns for a tagged traffic target: the tag becomes the
+// leading host label, https://{tag}---{service-host}.
+func tagQualifiedURI(uri, tag string) string {
+	return strings.Replace(uri, "://", "://"+tag+"---", 1)
+}
+
 // requireAPIErrorStatus asserts err is a googleapi.Error with the given status
 // and that its JSON envelope carries the given google.rpc status string (e.g.
 // ABORTED for an OCC failure).
@@ -370,10 +377,13 @@ func TestSDKRunTrafficSplit(t *testing.T) {
 	require.Len(t, got.TrafficStatuses, 2)
 	require.Equal(t, int64(30), got.TrafficStatuses[0].Percent)
 	require.Equal(t, rev1, got.TrafficStatuses[0].Revision)
-	// The status uri is asserted non-empty only: real Cloud Run returns a
-	// tag-qualified URL for a tagged target, while the emulator renders the
-	// service uri (recorded as TD14-a in the test-depth wave plan).
-	require.NotEmpty(t, got.TrafficStatuses[0].Uri)
+	// Real Cloud Run returns a tag-qualified URL for a tagged target — the tag
+	// as the leading host label, the string the Discovery calls "used in the
+	// URI to exclusively reference this target" — while an untagged target
+	// keeps the plain service uri.
+	require.Equal(t, "stable", got.TrafficStatuses[0].Tag)
+	require.Equal(t, tagQualifiedURI(got.Uri, "stable"), got.TrafficStatuses[0].Uri)
+	require.Equal(t, got.Uri, got.TrafficStatuses[1].Uri)
 
 	// Reset to latest-at-100% through the same mask; the derived status
 	// reflects the single latest target.
