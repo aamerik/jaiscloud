@@ -19,6 +19,14 @@ import (
 // rather than per-service assertions so a widened `switch` arm, a dropped
 // `isCollection`/`custom == ""` guard or an emptied case body is caught by a
 // failing row instead of surviving unnoticed (TD20).
+//
+// Two conventions a reader should keep in mind. First, the HTTP verb on a
+// custom (`:verb`) row is documentary — `deriveAction` derives the action from
+// the verb segment alone — so each row carries the verb the Discovery declares
+// rather than one the codec requires. Second, a cell asserting an unsupported
+// shape pins the derivation as it is today; where the shape is one real GCP
+// declares, the comment names the recorded gap (TD25, TD26) instead of reading
+// as the intended contract.
 
 // decodeJSON decodes one method+path through a fresh JSONCodec.
 func decodeJSON(t *testing.T, method, path string, body []byte) (*model.NormalizedRequest, error) {
@@ -80,6 +88,9 @@ func TestJSONCodecResourceMethodMatrix(t *testing.T) {
 		{res: "keyRings", coll: p + "/locations/us/keyRings", item: kms,
 			collWant: map[string]string{"POST": "KeyRingCreate", "GET": "KeyRingList"},
 			itemWant: map[string]string{"GET": "KeyRingGet"}},
+		// cryptoKeys.patch — the real REST key update — is not derived and no REST
+		// route registers it, while gRPC serves it: the PATCH cells below pin
+		// today's 501 (recorded as TD25).
 		{res: "cryptoKeys", coll: kms + "/cryptoKeys", item: kms + "/cryptoKeys/k",
 			collWant: map[string]string{"POST": "CryptoKeyCreate", "GET": "CryptoKeyList", "DELETE": "CryptoKeyDelete"},
 			itemWant: map[string]string{"GET": "CryptoKeyGet", "DELETE": "CryptoKeyDelete"}},
@@ -208,15 +219,30 @@ func TestJSONCodecResourceMethodMatrix(t *testing.T) {
 // method switch.
 func TestJSONCodecCustomVerbMatrix(t *testing.T) {
 	const (
-		p   = "/v1/projects/p"
-		kms = p + "/locations/us/keyRings/kr"
-		loc = p + "/locations/us-central1"
-		fst = p + "/databases/db"
+		p     = "/v1/projects/p"
+		kms   = p + "/locations/us/keyRings/kr"
+		loc   = p + "/locations/us-central1"
+		fst   = p + "/databases/db"
+		v2loc = "/v2/projects/p/locations/us-central1"
 	)
 	cases := []struct{ method, path, want string }{
+		// Pub/Sub. The verb is documentary for a custom method — the codec
+		// derives the action from the `:verb` alone — but it is the verb the
+		// Discovery declares, so a future reader is not misled.
+		{"POST", p + "/topics/t:publish", "TopicPublish"},
+		{"GET", p + "/topics/t:getIamPolicy", "TopicGetIamPolicy"},
+		{"POST", p + "/topics/t:setIamPolicy", "TopicSetIamPolicy"},
+		{"POST", p + "/topics/t:testIamPermissions", "TopicTestIamPermissions"},
+		{"POST", p + "/subscriptions/s:pull", "SubscriptionPull"},
+		{"POST", p + "/subscriptions/s:acknowledge", "SubscriptionAcknowledge"},
+		{"POST", p + "/subscriptions/s:modifyAckDeadline", "SubscriptionModifyAckDeadline"},
+		{"POST", p + "/subscriptions/s:detach", "SubscriptionDetach"},
+		{"GET", p + "/subscriptions/s:getIamPolicy", "SubscriptionGetIamPolicy"},
+		{"POST", p + "/subscriptions/s:setIamPolicy", "SubscriptionSetIamPolicy"},
+		{"POST", p + "/subscriptions/s:testIamPermissions", "SubscriptionTestIamPermissions"},
 		// Secret Manager (version lifecycle + IAM).
 		{"POST", p + "/secrets/s:addVersion", "AddVersion"},
-		{"POST", p + "/secrets/s/versions/1:access", "Access"},
+		{"GET", p + "/secrets/s/versions/1:access", "Access"},
 		{"POST", p + "/secrets/s/versions/1:destroy", "DestroyVersion"},
 		{"POST", p + "/secrets/s/versions/1:disable", "DisableVersion"},
 		{"POST", p + "/secrets/s/versions/1:enable", "EnableVersion"},
@@ -243,10 +269,11 @@ func TestJSONCodecCustomVerbMatrix(t *testing.T) {
 		{"POST", kms + "/cryptoKeys/k/cryptoKeyVersions/3:macVerify", "CryptoKeyVersionMacVerify"},
 		{"POST", kms + "/cryptoKeys/k/cryptoKeyVersions:import", "CryptoKeyVersionImport"},
 		{"POST", kms + "/cryptoKeys/k/cryptoKeyVersions:importTrustedKeyWrappedCryptoKeyVersion", "CryptoKeyVersionImportTrusted"},
-		{"POST", kms + "/cryptoKeys/k/cryptoKeyVersions/3:exportTrustedKeyWrappedCryptoKeyVersion", "CryptoKeyVersionExportTrusted"},
+		{"GET", kms + "/cryptoKeys/k/cryptoKeyVersions/3:exportTrustedKeyWrappedCryptoKeyVersion", "CryptoKeyVersionExportTrusted"},
 		{"POST", kms + "/cryptoKeys/k/cryptoKeyVersions/3:decapsulate", "CryptoKeyVersionDecapsulate"},
+		{"GET", kms + "/cryptoKeys/k/cryptoKeyVersions/3/publicKey", "CryptoKeyVersionGetPublicKey"},
 		// IAM service accounts + keys.
-		{"GET", p + "/serviceAccounts/sa@x.com:getIamPolicy", "ServiceAccountGetIamPolicy"},
+		{"POST", p + "/serviceAccounts/sa@x.com:getIamPolicy", "ServiceAccountGetIamPolicy"},
 		{"POST", p + "/serviceAccounts/sa@x.com:setIamPolicy", "ServiceAccountSetIamPolicy"},
 		{"POST", p + "/serviceAccounts/sa@x.com:testIamPermissions", "ServiceAccountTestIamPermissions"},
 		{"POST", p + "/serviceAccounts/sa@x.com:signBlob", "ServiceAccountSignBlob"},
@@ -254,7 +281,10 @@ func TestJSONCodecCustomVerbMatrix(t *testing.T) {
 		{"POST", p + "/serviceAccounts/sa@x.com:disable", "ServiceAccountDisable"},
 		{"POST", p + "/serviceAccounts/sa@x.com:enable", "ServiceAccountEnable"},
 		{"POST", p + "/serviceAccounts/sa@x.com:undelete", "ServiceAccountUndelete"},
-		// IAM Credentials (iamcredentials) custom verbs.
+		// IAM Credentials (iamcredentials) custom verbs. The `:getAllowedLocations`
+		// form below is not a Discovery method (the real shape is the trailing
+		// `allowedLocations` segment, pinned next); the codec accepts it for older
+		// clients.
 		{"POST", p + "/serviceAccounts/sa@x.com:generateAccessToken", "GenerateAccessToken"},
 		{"POST", p + "/serviceAccounts/sa@x.com:generateIdToken", "GenerateIdToken"},
 		{"POST", p + "/serviceAccounts/sa@x.com:getAllowedLocations", "GetAllowedLocations"},
@@ -284,6 +314,14 @@ func TestJSONCodecCustomVerbMatrix(t *testing.T) {
 		{"GET", loc + "/functions/f:getIamPolicy", "FunctionGetIamPolicy"},
 		{"POST", loc + "/functions/f:setIamPolicy", "FunctionSetIamPolicy"},
 		{"POST", loc + "/functions/f:testIamPermissions", "FunctionTestIamPermissions"},
+		// Cloud Functions v1→v2 upgrade / traffic control plane.
+		{"POST", v2loc + "/functions/f:setupFunctionUpgradeConfig", "SetupFunctionUpgradeConfig"},
+		{"POST", v2loc + "/functions/f:redirectFunctionUpgradeTraffic", "RedirectFunctionUpgradeTraffic"},
+		{"POST", v2loc + "/functions/f:rollbackFunctionUpgradeTraffic", "RollbackFunctionUpgradeTraffic"},
+		{"POST", v2loc + "/functions/f:commitFunctionUpgrade", "CommitFunctionUpgrade"},
+		{"POST", v2loc + "/functions/f:commitFunctionUpgradeAsGen2", "CommitFunctionUpgradeAsGen2"},
+		{"POST", v2loc + "/functions/f:abortFunctionUpgrade", "AbortFunctionUpgrade"},
+		{"POST", v2loc + "/functions/f:detachFunction", "DetachFunction"},
 		// Eventarc: IAM on every resource, plus the message-bus enrolment list.
 		{"GET", loc + "/triggers/t:getIamPolicy", "TriggerGetIamPolicy"},
 		{"POST", loc + "/triggers/t:setIamPolicy", "TriggerSetIamPolicy"},
@@ -361,17 +399,25 @@ func TestJSONCodecUnsupportedShapes(t *testing.T) {
 		{"PATCH", kms + "/cryptoKeys/k/cryptoKeyVersions/3:zzz"},
 		{"DELETE", kms + "/cryptoKeys/k/cryptoKeyVersions/3:zzz"},
 		{"GET", kms + "/cryptoKeys/k/cryptoKeyVersions/3/publicKey:zzz"},
+		{"PUT", kms + "/cryptoKeys/k/cryptoKeyVersions/3/publicKey"},
 		{"POST", p + "/serviceAccounts/sa@x.com:zzz"},
 		{"POST", loc + "/triggers/t:zzz"},
 		{"POST", loc + "/functions/f:zzz"},
-		{"POST", p + "/databases/db:zzz"}, // Firestore Admin data-plane verbs fail loud
+		// This is an item path, so it exercises the unknown-verb fall-through
+		// rather than the `databases` custom arm that fails loud; the
+		// collection-level data-plane verbs (databases:restore/clone) are
+		// asserted in TestFirestoreAdminDecode.
+		{"POST", p + "/databases/db:zzz"},
 		// Version-gated and unmodelled surfaces.
-		{"GET", p + "/locations/us/runtimes"},                      // runtimes only exist in /v2
-		{"POST", loc + "/runtimes"},                                // v2 runtimes has list only
-		{"GET", loc + "/runtimes/rt"},                              // v2 runtimes has no get
-		{"DELETE", loc + "/operations/op1"},                        // /v1 operations has no delete
-		{"POST", loc + "/operations"},                              // /v1 operations has list/get only
-		{"POST", p + "/locations/us/backupCollections/bc/backups"}, // memorystore backups are not modelled
+		{"GET", p + "/locations/us/runtimes"},                       // runtimes only exist in /v2
+		{"POST", loc + "/runtimes"},                                 // v2 runtimes has list only
+		{"GET", loc + "/runtimes/rt"},                               // v2 runtimes has no get
+		{"POST", "/v2/projects/p/locations/us-central1/runtimes"},   // v2 runtimes has list only
+		{"GET", "/v2/projects/p/locations/us-central1/runtimes/rt"}, // v2 runtimes has no get
+		{"POST", "/v2/projects/p/locations/us-central1/operations"}, // v2 operations has list/get/delete only
+		{"DELETE", loc + "/operations/op1"},                         // recorded gap TD26: declared but not derived
+		{"POST", loc + "/operations"},                               // /v1 operations has list/get only
+		{"POST", p + "/locations/us/backupCollections/bc/backups"},  // memorystore backups are not modelled
 	}
 	for _, tc := range cases {
 		nr, err := decodeJSON(t, tc.method, tc.path, nil)
@@ -399,11 +445,12 @@ func TestJSONCodecUnsupportedShapes(t *testing.T) {
 	for _, path := range []string{p + "/secrets", "/v1/operations"} {
 		nr, err := decodeJSON(t, "POST", path, []byte("{"))
 		if err == nil {
-			t.Fatalf("POST %s (malformed body): action %q, want 400", path, nr.Action)
+			t.Errorf("POST %s (malformed body): action %q, want 400", path, nr.Action)
+			continue
 		}
 		perr, ok := err.(*model.ProviderError)
 		if !ok || perr.HTTPStatus != 400 || perr.Code != "InvalidRequest" {
-			t.Fatalf("POST %s (malformed body): error = %v, want 400 InvalidRequest", path, err)
+			t.Errorf("POST %s (malformed body): error = %v, want 400 InvalidRequest", path, err)
 		}
 	}
 }
