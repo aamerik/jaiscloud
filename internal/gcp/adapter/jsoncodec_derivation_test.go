@@ -366,13 +366,20 @@ func TestJSONCodecCustomVerbMatrix(t *testing.T) {
 // modelled surface, and a version-gated resource must all fail loud rather than
 // fall through to the plain resource verb of the same path.
 //
-// The negative rows below stay inside the surfaces that already fail loud: the
-// method switch of a resource whose custom verbs live in the custom block
-// rejects a stray verb, and the `cryptoKeyVersions` arms carry an explicit
-// `custom == ""` guard. A stray verb on the *collection* path of a resource
-// whose plain create is `POST` (e.g. `POST /v1/projects/p/secrets:zzz`) still
-// falls through to the create verb for most resource types — a real fail-open
-// this table does not bless, recorded as TD24 rather than asserted here.
+// A stray custom verb is refused on both the *item* and the *collection* path,
+// whatever the resource's plain create verb is: TD24 closed the fail-open where
+// an unknown `:verb` on a collection path fell through to the resource's plain
+// create verb (`POST /v1/projects/p/secrets:zzz` → `Create`,
+// `POST …/serviceAccounts/{sa}/keys:zzz` → `ServiceAccountKeyCreate`,
+// `POST …/databases/{db}/documents:zzz` → `CreateDocument`). The collection
+// rows below pin that, and the `custom == ""` guards on the cryptoKeys /
+// cryptoKeyVersions arms pin the same for the PATCH/DELETE item verbs.
+//
+// The Firestore `databasesOperations` surface keeps its pass-through: a
+// `databasesOperations :cancel` still derives `CancelOperation` (asserted in
+// TestFirestoreAdminDecode). Cloud Functions v2's operations `:cancel`/`:wait`
+// are derived above the custom-verb block and are asserted in TestFunctionsV2Decode;
+// an *unknown* verb on either operations surface is refused like any other.
 func TestJSONCodecUnsupportedShapes(t *testing.T) {
 	const (
 		p   = "/v1/projects/p"
@@ -403,6 +410,48 @@ func TestJSONCodecUnsupportedShapes(t *testing.T) {
 		{"POST", p + "/serviceAccounts/sa@x.com:zzz"},
 		{"POST", loc + "/triggers/t:zzz"},
 		{"POST", loc + "/functions/f:zzz"},
+		// A stray verb on the getAllowedLocations Discovery shape must not be
+		// waved through by the trailing-segment check.
+		{"GET", p + "/serviceAccounts/sa@x.com/allowedLocations:zzz"},
+		{"GET", loc + "/workloadIdentityPools/pool/allowedLocations:zzz"},
+		// A stray custom verb on a *collection* path must never dispatch as the
+		// resource's plain create verb (TD24). Every modelled family rejects it
+		// now, not just the topic/subscription/keyRing ones.
+		{"POST", p + "/secrets:zzz"},
+		{"POST", p + "/serviceAccounts:zzz"},
+		{"POST", p + "/serviceAccounts/sa@x.com/keys:zzz"},
+		{"POST", kms + "/keyRings:zzz"},
+		{"POST", kms + "/cryptoKeys:zzz"},
+		{"POST", kms + "/importJobs:zzz"},
+		{"POST", fst + "/documents:zzz"},
+		{"POST", fst + "/documents/cities:zzz"},
+		{"POST", fst + "/indexes:zzz"},
+		{"POST", fst + "/collectionGroups/cg/indexes:zzz"},
+		{"POST", fst + "/backupSchedules:zzz"},
+		{"POST", fst + "/userCreds:zzz"},
+		{"POST", loc + "/functions:zzz"},
+		{"POST", loc + "/workflows:zzz"},
+		{"POST", loc + "/triggers:zzz"},
+		{"POST", loc + "/channels:zzz"},
+		{"POST", loc + "/messageBuses:zzz"},
+		{"POST", loc + "/enrollments:zzz"},
+		{"POST", loc + "/pipelines:zzz"},
+		{"POST", loc + "/googleApiSources:zzz"},
+		{"POST", loc + "/channelConnections:zzz"},
+		{"POST", loc + "/instances:zzz"},
+		// A stray verb paired with a mutating method is refused too, rather
+		// than deriving the item PATCH/DELETE verb for a collection path.
+		{"PATCH", p + "/secrets:zzz"},
+		{"DELETE", p + "/secrets:zzz"},
+		{"PATCH", loc + "/instances:zzz"},
+		// An unknown verb on the shared operations surfaces is refused too: v1
+		// operations has list/get only, and Firestore databasesOperations only
+		// `:cancel`.
+		{"GET", loc + "/operations/op1:zzz"},
+		{"POST", loc + "/operations/op1:zzz"},
+		{"POST", loc + "/operations:zzz"},
+		{"POST", fst + "/operations/op1:zzz"},
+		{"POST", "/v2/projects/p/locations/us-central1/operations/op1:zzz"},
 		// This is an item path, so it exercises the unknown-verb fall-through
 		// rather than the `databases` custom arm that fails loud; the
 		// collection-level data-plane verbs (databases:restore/clone) are
