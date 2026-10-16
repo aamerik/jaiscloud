@@ -142,7 +142,7 @@ func TestJSONCodecResourceMethodMatrix(t *testing.T) {
 			itemWant: map[string]string{"GET": "GetWorkflow", "PATCH": "UpdateWorkflow", "DELETE": "DeleteWorkflow"}},
 		{res: "operations", coll: loc + "/operations", item: loc + "/operations/op1",
 			collWant: map[string]string{"GET": "ListOperations"},
-			itemWant: map[string]string{"GET": "GetOperation"}},
+			itemWant: map[string]string{"GET": "GetOperation", "DELETE": "DeleteOperation"}},
 		// ── Eventarc ───────────────────────────────────────────────────────
 		{res: "triggers", coll: loc + "/triggers", item: loc + "/triggers/t",
 			collWant: map[string]string{"POST": "CreateTrigger", "GET": "ListTriggers", "PATCH": "UpdateTrigger", "DELETE": "DeleteTrigger"},
@@ -445,8 +445,8 @@ func TestJSONCodecUnsupportedShapes(t *testing.T) {
 		{"DELETE", p + "/secrets:zzz"},
 		{"PATCH", loc + "/instances:zzz"},
 		// An unknown verb on the shared operations surfaces is refused too: v1
-		// operations has list/get only, and Firestore databasesOperations only
-		// `:cancel`.
+		// operations has list/get/delete only, and Firestore databasesOperations
+		// only `:cancel`.
 		{"GET", loc + "/operations/op1:zzz"},
 		{"POST", loc + "/operations/op1:zzz"},
 		{"POST", loc + "/operations:zzz"},
@@ -464,8 +464,8 @@ func TestJSONCodecUnsupportedShapes(t *testing.T) {
 		{"POST", "/v2/projects/p/locations/us-central1/runtimes"},   // v2 runtimes has list only
 		{"GET", "/v2/projects/p/locations/us-central1/runtimes/rt"}, // v2 runtimes has no get
 		{"POST", "/v2/projects/p/locations/us-central1/operations"}, // v2 operations has list/get/delete only
-		{"DELETE", loc + "/operations/op1"},                         // recorded gap TD26: declared but not derived
-		{"POST", loc + "/operations"},                               // /v1 operations has list/get only
+		{"POST", loc + "/operations"},                               // /v1 operations has list/get/delete only (delete is item-only)
+		{"DELETE", loc + "/operations"},                             // no collection-level delete is declared
 		{"POST", p + "/locations/us/backupCollections/bc/backups"},  // memorystore backups are not modelled
 	}
 	for _, tc := range cases {

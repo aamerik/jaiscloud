@@ -163,6 +163,38 @@ func TestMemoryStoreOperations(t *testing.T) {
 	if _, err := s.GetOperation(ctx, "proj", "us-central1", "missing"); err != ErrNoSuchOperation {
 		t.Fatalf("expected ErrNoSuchOperation, got %v", err)
 	}
+
+	// ListOperations returns the location's operations in ID order and never
+	// leaks another location's.
+	for _, id := range []string{"op3", "op2"} {
+		if err := s.CreateOperation(ctx, "proj", "us-central1", Operation{ID: id}); err != nil {
+			t.Fatalf("create op %s: %v", id, err)
+		}
+	}
+	if err := s.CreateOperation(ctx, "proj", "europe-west1", Operation{ID: "other"}); err != nil {
+		t.Fatalf("create other-location op: %v", err)
+	}
+	ops, err := s.ListOperations(ctx, "proj", "us-central1")
+	if err != nil {
+		t.Fatalf("list ops: %v", err)
+	}
+	if len(ops) != 3 || ops[0].ID != "op1" || ops[1].ID != "op2" || ops[2].ID != "op3" {
+		t.Fatalf("list ops = %+v, want op1,op2,op3", ops)
+	}
+
+	// Delete removes it, and a second delete is ErrNoSuchOperation.
+	if err := s.DeleteOperation(ctx, "proj", "us-central1", "op2"); err != nil {
+		t.Fatalf("delete op: %v", err)
+	}
+	if _, err := s.GetOperation(ctx, "proj", "us-central1", "op2"); err != ErrNoSuchOperation {
+		t.Fatalf("get deleted op = %v, want ErrNoSuchOperation", err)
+	}
+	if err := s.DeleteOperation(ctx, "proj", "us-central1", "op2"); err != ErrNoSuchOperation {
+		t.Fatalf("re-delete = %v, want ErrNoSuchOperation", err)
+	}
+	if err := s.DeleteOperation(ctx, "proj", "us-central1", "absent"); err != ErrNoSuchOperation {
+		t.Fatalf("delete absent = %v, want ErrNoSuchOperation", err)
+	}
 }
 
 func TestMemoryStoreRevisions(t *testing.T) {

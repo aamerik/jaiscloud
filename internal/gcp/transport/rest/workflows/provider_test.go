@@ -202,6 +202,84 @@ func TestProviderUsesDefaultProjectWhenAbsent(t *testing.T) {
 	}
 }
 
+// TestProviderListAndDeleteOperations exercises the location-scoped operations
+// surface: list returns the persisted operations in the ListOperationsResponse
+// shape, delete removes one (Empty), and an unknown id is NotFound.
+func TestProviderListAndDeleteOperations(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+
+	create := nr(map[string]any{
+		"project": "proj", "location": "us-central1", "workflowId": "wf1",
+		"body": map[string]any{"sourceContents": source},
+	})
+	cresp, err := p.CreateWorkflow(ctx, create)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	opName, _ := cresp.Data["name"].(string)
+
+	list := nr(map[string]any{"project": "proj", "location": "us-central1",
+		"name": "locations/us-central1/operations"})
+	lresp, err := p.ListOperations(ctx, list)
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+	items, _ := lresp.Data["operations"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("operations = %d, want 1", len(items))
+	}
+	first, _ := items[0].(map[string]any)
+	if first["name"] != opName || first["done"] != true {
+		t.Fatalf("listed operation = %v, want %q done", first, opName)
+	}
+
+	// An unknown location lists nothing (empty page, no error).
+	empty := nr(map[string]any{"project": "proj", "location": "europe-west1"})
+	eresp, err := p.ListOperations(ctx, empty)
+	if err != nil {
+		t.Fatalf("list empty location: %v", err)
+	}
+	if got, _ := eresp.Data["operations"].([]any); len(got) != 0 {
+		t.Fatalf("empty location operations = %d, want 0", len(got))
+	}
+
+	// A non-empty filter fails loud rather than silently returning unfiltered.
+	flt := nr(map[string]any{"project": "proj", "location": "us-central1",
+		"name": "locations/us-central1/operations", "filter": "done=true"})
+	if _, err := p.ListOperations(ctx, flt); err == nil {
+		t.Fatalf("expected InvalidArgument for a non-empty operations filter")
+	}
+
+	// returnPartialSuccess is not supported (the Discovery's documented
+	// UNIMPLEMENTED) rather than silently ignored.
+	rps := nr(map[string]any{"project": "proj", "location": "us-central1",
+		"name": "locations/us-central1/operations", "returnPartialSuccess": "true"})
+	if _, err := p.ListOperations(ctx, rps); err == nil {
+		t.Fatalf("expected Unimplemented for returnPartialSuccess")
+	}
+
+	del := nr(map[string]any{"project": "proj", "location": "us-central1",
+		"name": opName})
+	dresp, err := p.DeleteOperation(ctx, del)
+	if err != nil {
+		t.Fatalf("delete operation: %v", err)
+	}
+	if len(dresp.Data) != 0 {
+		t.Fatalf("delete operation body = %v, want empty", dresp.Data)
+	}
+
+	// The deleted operation is gone: get → NotFound, list → empty.
+	if _, err := p.GetOperation(ctx, nr(map[string]any{"project": "proj", "name": opName})); err == nil || !core.IsNotFound(err) {
+		t.Fatalf("expected NotFound after delete, got %v", err)
+	}
+
+	// Deleting again is NotFound.
+	if _, err := p.DeleteOperation(ctx, del); err == nil || !core.IsNotFound(err) {
+		t.Fatalf("expected NotFound deleting an absent operation, got %v", err)
+	}
+}
+
 // stubOperationResolver reports handled when opID matches want, returning body.
 type stubOperationResolver struct {
 	want    string

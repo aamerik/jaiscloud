@@ -347,6 +347,14 @@
     {
       "operation": "Workflow.GetOperation",
       "reason": "Cloud Workflows operations are LROs with server-assigned names."
+    },
+    {
+      "operation": "Workflow.ListOperations",
+      "reason": "Cloud Workflows operations are LROs with server-assigned names: the probe cannot stage a create operation and list it from the Discovery path model alone."
+    },
+    {
+      "operation": "Workflow.DeleteOperation",
+      "reason": "Cloud Workflows operations are LROs with server-assigned names, so the delete target cannot be staged from the Discovery path model alone."
     }
   ]
 }

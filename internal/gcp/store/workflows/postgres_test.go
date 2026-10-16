@@ -81,6 +81,26 @@ func TestPostgresStoreSnapshotVerbatim(t *testing.T) {
 	if _, err := s.GetOperation(ctx, "proj", "us-central1", "op1"); err != nil {
 		t.Fatalf("get operation: %v", err)
 	}
+
+	// ListOperations is ID-ordered and location-scoped; DeleteOperation removes
+	// a persisted operation and reports an unknown id.
+	_ = s.CreateOperation(ctx, "proj", "us-central1", Operation{ID: "op2", Done: true, Response: `{}`})
+	ops, err := s.ListOperations(ctx, "proj", "us-central1")
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+	if len(ops) != 2 || ops[0].ID != "op1" || ops[1].ID != "op2" {
+		t.Fatalf("list operations = %+v, want op1,op2", ops)
+	}
+	if err := s.DeleteOperation(ctx, "proj", "us-central1", "op1"); err != nil {
+		t.Fatalf("delete operation: %v", err)
+	}
+	if _, err := s.GetOperation(ctx, "proj", "us-central1", "op1"); err != ErrNoSuchOperation {
+		t.Fatalf("get deleted operation = %v, want ErrNoSuchOperation", err)
+	}
+	if err := s.DeleteOperation(ctx, "proj", "us-central1", "op1"); err != ErrNoSuchOperation {
+		t.Fatalf("re-delete = %v, want ErrNoSuchOperation", err)
+	}
 }
 
 // TestPostgresStoreRevisions verifies revision history persists, is ordered

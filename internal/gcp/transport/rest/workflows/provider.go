@@ -4,7 +4,8 @@
 // Real GCP serves the proto-defined v1 management API over both gRPC and REST
 // (grpc-gateway transcoding), and the REST surface here follows the vendored
 // Discovery document. The implemented methods are the REST mirrors of the
-// cloud.google.com/go/workflows/apiv1 Workflows RPCs plus GetOperation:
+// cloud.google.com/go/workflows/apiv1 Workflows RPCs plus the location-scoped
+// operations list/get/delete surface:
 //
 //	GET    /v1/projects/{p}/locations/{l}/workflows                     workflows.list
 //	POST   /v1/projects/{p}/locations/{l}/workflows?workflowId=…        workflows.create
@@ -12,7 +13,9 @@
 //	GET    /v1/projects/{p}/locations/{l}/workflows/{w}:listRevisions   workflows.listRevisions
 //	PATCH  /v1/projects/{p}/locations/{l}/workflows/{w}?updateMask=…    workflows.update
 //	DELETE /v1/projects/{p}/locations/{l}/workflows/{w}                 workflows.delete
+//	GET    /v1/projects/{p}/locations/{l}/operations                    operations.list
 //	GET    /v1/projects/{p}/locations/{l}/operations/{id}               operations.get
+//	DELETE /v1/projects/{p}/locations/{l}/operations/{id}               operations.delete
 //
 // It keeps the generic JSONCodec{Service: "workflows"} descriptor (the codec
 // owns path/action decoding); this package only adapts the NormalizedRequest
@@ -76,7 +79,9 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Workflow.CreateWorkflow":        p.CreateWorkflow,
 		"Workflow.UpdateWorkflow":        p.UpdateWorkflow,
 		"Workflow.DeleteWorkflow":        p.DeleteWorkflow,
+		"Workflow.ListOperations":        p.ListOperations,
 		"Workflow.GetOperation":          p.GetOperation,
+		"Workflow.DeleteOperation":       p.DeleteOperation,
 	}
 }
 
@@ -212,6 +217,39 @@ func (p *Provider) DeleteWorkflow(ctx context.Context, nr *model.NormalizedReque
 	return provider.OK(core.OperationJSON(op, project)), nil
 }
 
+// ListOperations serves GET …/locations/{l}/operations (operations.list): the
+// long-running operations persisted for the location, in the standard
+// ListOperationsResponse shape. It is the surface `gcloud workflows operations
+// list` and a long-running Operations client's list call use.
+func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	location := strParam(nr, "location")
+	if location == "" {
+		location = core.LocationFromName(strParam(nr, "name"))
+	}
+	// returnPartialSuccess is not supported: the Discovery states the field
+	// "will result in an UNIMPLEMENTED error if set unless explicitly documented
+	// otherwise", and Cloud Workflows documents no support. Fail loud rather
+	// than silently returning a full page.
+	if boolParam(nr, "returnPartialSuccess") {
+		return nil, model.NewProviderError("Unimplemented", "ListOperations returnPartialSuccess is not supported", 501)
+	}
+	page, next, err := p.core.ListOperations(ctx, project, location,
+		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"), strParam(nr, "filter"))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]any, 0, len(page))
+	for _, op := range page {
+		items = append(items, core.OperationJSON(op, project))
+	}
+	out := map[string]any{"operations": items}
+	if next != "" {
+		out["nextPageToken"] = next
+	}
+	return provider.OK(out), nil
+}
+
 func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
 	name := strParam(nr, "name")
@@ -239,4 +277,20 @@ func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest
 		return nil, err
 	}
 	return provider.OK(core.OperationJSON(op, project)), nil
+}
+
+// DeleteOperation serves DELETE …/locations/{l}/operations/{id}
+// (operations.delete). Real GCP answers google.protobuf.Empty, and an unknown
+// id is NotFound.
+func (p *Provider) DeleteOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project := p.project(nr)
+	name := strParam(nr, "name")
+	location := strParam(nr, "location")
+	if location == "" {
+		location = core.LocationFromName(name)
+	}
+	if err := p.core.DeleteOperation(ctx, project, location, core.OperationIDFromName(name)); err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{}), nil
 }

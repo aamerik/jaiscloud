@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 1116,
+    "total": 1118,
     "by_state": {
-      "ga": 969,
+      "ga": 971,
       "limited": 101,
       "preview": 14,
       "unsupported": 32
@@ -15,7 +15,7 @@
         "unsupported": 20
       },
       "rest": {
-        "ga": 527,
+        "ga": 529,
         "limited": 100,
         "preview": 14,
         "unsupported": 12
@@ -123,7 +123,7 @@
         "ga": 8
       },
       "workflows": {
-        "ga": 13
+        "ga": 15
       }
     },
     "evidence": {
@@ -133,7 +133,7 @@
       },
       "unverified": {
         "grpc": 21,
-        "rest": 114
+        "rest": 116
       }
     },
     "grpc_only_services": [
@@ -15187,6 +15187,20 @@
     },
     {
       "service": "workflows",
+      "operation": "Workflow.DeleteOperation",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "workflows.projects.locations.operations.delete",
+      "verified": false,
+      "evidence": [
+        "discovery=workflows.projects.locations.operations.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "workflows",
       "operation": "Workflow.DeleteWorkflow",
       "transport": "rest",
       "state": "ga",
@@ -15223,6 +15237,19 @@
         "discovery=workflows.projects.locations.workflows.get",
         "postgres=yes",
         "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "workflows",
+      "operation": "Workflow.ListOperations",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "workflows.projects.locations.operations.list",
+      "verified": false,
+      "evidence": [
+        "discovery=workflows.projects.locations.operations.list",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
       ]
     },
     {

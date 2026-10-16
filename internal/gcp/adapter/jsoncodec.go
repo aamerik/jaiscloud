@@ -1004,11 +1004,17 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "GetWorkflow"
 		}
 	case "operations":
+		// Cloud Workflows' location-scoped operations surface. The Discovery
+		// declares list, get and delete (no cancel), so a collection GET lists
+		// and an item GET/DELETE gets/deletes. A collection-level DELETE is not
+		// a declared method and stays fail-loud.
 		switch {
 		case isCollection && method == http.MethodGet:
 			return "ListOperations"
 		case method == http.MethodGet:
 			return "GetOperation"
+		case method == http.MethodDelete && !isCollection:
+			return "DeleteOperation"
 		}
 	case "triggers":
 		switch {

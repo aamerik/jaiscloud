@@ -196,6 +196,12 @@ type Store interface {
 
 	CreateOperation(ctx context.Context, projectID, location string, op Operation) error
 	GetOperation(ctx context.Context, projectID, location, id string) (Operation, error)
+	// ListOperations returns a location's persisted operations, ordered by ID
+	// (the deterministic cursor order ListOperations pages over).
+	ListOperations(ctx context.Context, projectID, location string) ([]Operation, error)
+	// DeleteOperation removes an operation, or ErrNoSuchOperation when the id
+	// is unknown.
+	DeleteOperation(ctx context.Context, projectID, location, id string) error
 
 	Reset(ctx context.Context)
 }
