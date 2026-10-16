@@ -175,6 +175,8 @@ packages:
     min_percent: 100
   - package: internal/gcp/throttle
     min_percent: 90.72
+  - package: internal/gcp/timestamp
+    min_percent: 100
   - package: internal/gcp/transport/grpc/container
     min_percent: 24.83
   - package: internal/gcp/transport/grpc/dataproc
