@@ -260,6 +260,57 @@ func TestDatastore(t *testing.T) {
 		require.Len(t, got, 1)
 		assert.Equal(t, []string{"alpha", "beta"}, got[0].Tags)
 	})
+
+	// KeyFilters exercises the documented key filters through the official
+	// client (TD29): an entity has no stored "__key__" property, so equality
+	// and range filters on it must resolve to the entity's own key.
+	t.Run("KeyFilters", func(t *testing.T) {
+		kind := "KeyFilterTask-" + suffix
+		names := []string{"ka-" + suffix, "kb-" + suffix, "kc-" + suffix}
+		numDesc := "kid-" + suffix
+		keys := make([]*datastore.Key, 0, len(names)+1)
+		for i, name := range names {
+			k := datastore.NameKey(kind, name, nil)
+			keys = append(keys, k)
+			_, err := client.Put(ctx, k, &Task{Description: name, Priority: i})
+			require.NoError(t, err)
+		}
+		// A numeric-ID key of the same kind: numeric IDs order before key names.
+		numKey := datastore.IDKey(kind, 5, nil)
+		keys = append(keys, numKey)
+		_, err := client.Put(ctx, numKey, &Task{Description: numDesc})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			for _, k := range keys {
+				client.Delete(ctx, k)
+			}
+		})
+
+		descriptions := func(op string, v any) []string {
+			t.Helper()
+			var got []Task
+			_, err := client.GetAll(ctx, datastore.NewQuery(kind).FilterField("__key__", op, v), &got)
+			require.NoError(t, err)
+			out := make([]string, len(got))
+			for i, g := range got {
+				out[i] = g.Description
+			}
+			return out
+		}
+
+		// The names sort by byte value, so keys[1] splits the name-keyed set;
+		// the numeric-ID entity is the lowest key and so is below it too.
+		assert.Equal(t, []string{names[1]}, descriptions("=", keys[1]))
+		assert.Equal(t, []string{names[2]}, descriptions(">", keys[1]))
+		assert.ElementsMatch(t, []string{names[0], numDesc}, descriptions("<", keys[1]))
+		assert.ElementsMatch(t, []string{names[0], names[2], numDesc}, descriptions("!=", keys[1]))
+
+		// Every numeric ID precedes every key name, so the id-5 entity is the
+		// lowest key in the kind and every name key is greater.
+		assert.Equal(t, []string{numDesc}, descriptions("=", numKey))
+		assert.Empty(t, descriptions("<", numKey))
+		assert.ElementsMatch(t, names, descriptions(">", numKey))
+	})
 }
 
 // TagTask is a kind whose property is array-valued, used by ArrayFilters.

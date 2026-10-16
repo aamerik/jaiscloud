@@ -11,13 +11,15 @@ import (
 
 // matchesFilter evaluates a query filter against an entity. It supports
 // PropertyFilter EQUAL, NOT_EQUAL, IN, the four comparison operators
-// (LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL), and the
-// special "__key__ HAS ANCESTOR", plus CompositeFilter AND over those property
-// filters. Its static shape is enforced by validateFilter — the same authority
-// RunQuery and RunAggregationQuery call once up front — so an unsupported
-// operator (NOT_IN, OR, unspecified/unknown), IN without a non-empty array, or
-// an empty AND fails closed with InvalidArgument rather than matching
-// everything, whether or not the scan reaches a candidate.
+// (LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL) — on an
+// ordinary property, on a key-valued property, or on the reserved "__key__"
+// property (documented "Key filters") — plus __key__ HAS ANCESTOR, plus
+// CompositeFilter AND over those property filters. Its static shape is enforced
+// by validateFilter — the same authority RunQuery and RunAggregationQuery call
+// once up front — so an unsupported operator (NOT_IN, OR, unspecified/unknown),
+// IN without a non-empty array, or an empty AND fails closed with
+// InvalidArgument rather than matching everything, whether or not the scan
+// reaches a candidate.
 func matchesFilter(e dsstore.Entity, f *Filter) (bool, error) {
 	if err := validateFilter(f); err != nil {
 		return false, err
@@ -122,14 +124,16 @@ func validatePropertyFilter(pf *PropertyFilter) error {
 // here therefore goes through propertyElements/propertyEqual/propertyNotEqual
 // rather than valueEqual/valueCompare on the stored value as a whole.
 func matchPropertyFilter(e dsstore.Entity, pf *PropertyFilter) bool {
+	if pf.Property == keyPropertyName {
+		return matchKeyPropertyFilter(e, pf)
+	}
 	val, ok := e.Properties[pf.Property]
 	switch pf.Op {
 	case PropertyHasAncestor:
-		// HAS_ANCESTOR is not a property comparison: it only applies to the
-		// implicit "__key__" property and its value is a key. It matches an
-		// entity whose key path has that key as a proper prefix (the query's
-		// partition already scopes the result set).
-		return keyHasAncestor(e.Key, *pf.Value.KeyValue)
+		// validatePropertyFilter restricts HAS_ANCESTOR to the reserved
+		// "__key__" property, so this arm is unreachable; kept so an
+		// out-of-band PropertyFilter cannot fall through to a comparison.
+		return false
 	case PropertyEqual:
 		return ok && propertyEqual(val, pf.Value)
 	case PropertyNotEqual:
@@ -188,8 +192,61 @@ func matchPropertyFilter(e dsstore.Entity, pf *PropertyFilter) bool {
 }
 
 // keyPropertyName is the reserved Datastore property that exposes an entity's
-// own key; the only legal operand of HAS_ANCESTOR.
+// own key; it is the operand property of every key filter (EQUAL, NOT_EQUAL,
+// IN, the four ordering operators) and the only legal operand of HAS_ANCESTOR.
 const keyPropertyName = "__key__"
+
+// matchKeyPropertyFilter applies an already-validated filter on the reserved
+// "__key__" property. No entity stores such an entry — validateReservedMutations
+// rejects a user property matching `__.*__` — so the property value is the
+// entity's own key, taken from e.Key.
+//
+// HAS_ANCESTOR is a path-prefix test. Every other supported operator compares
+// the entity's key with the operand key using the documented key ordering
+// (keyCompare), which — exactly like keyHasAncestor — compares only the paths:
+// a query's partition already scopes the result set, and a KEY(...) literal or
+// SDK key carries no partition of its own. Key *values* (a key-typed property or
+// an embedded entity's key) keep the partition-sensitive comparison instead
+// (fullKeyCompare), because there the partition is part of the value.
+// https://cloud.google.com/datastore/docs/concepts/queries#key_filters
+func matchKeyPropertyFilter(e dsstore.Entity, pf *PropertyFilter) bool {
+	if pf.Op == PropertyHasAncestor {
+		// validatePropertyFilter guarantees a key operand here.
+		return keyHasAncestor(e.Key, *pf.Value.KeyValue)
+	}
+	if pf.Op == PropertyIn {
+		// validatePropertyFilter guarantees a non-empty array; an element that
+		// is not a key simply never matches.
+		for _, el := range pf.Value.ArrayValue.Values {
+			if el.KeyValue != nil && keyCompare(e.Key, *el.KeyValue) == 0 {
+				return true
+			}
+		}
+		return false
+	}
+	if pf.Value.KeyValue == nil {
+		// A non-key operand cannot match a key (fail closed, as any other
+		// property-type mismatch does).
+		return false
+	}
+	c := keyCompare(e.Key, *pf.Value.KeyValue)
+	switch pf.Op {
+	case PropertyEqual:
+		return c == 0
+	case PropertyNotEqual:
+		return c != 0
+	case PropertyLessThan:
+		return c < 0
+	case PropertyLessThanOrEqual:
+		return c <= 0
+	case PropertyGreaterThan:
+		return c > 0
+	default:
+		// validatePropertyFilter admits only GREATER_THAN_OR_EQUAL besides the
+		// operators above.
+		return c >= 0
+	}
+}
 
 // propertyElements returns the values a property filter's comparison operators
 // see. An array-valued property is expanded into its elements (real Datastore's
@@ -256,6 +313,94 @@ func keyHasAncestor(entityKey, ancestorKey string) bool {
 		}
 	}
 	return true
+}
+
+// keyCompare orders two canonical store keys by the documented key ordering
+// over their *paths*, ignoring the partition. Real Datastore: "When comparing
+// for inequality, keys are ordered by the following criteria, in order:
+// 1. Ancestor path 2. Entity kind 3. Identifier (key name or numeric ID). ...
+// Kinds and key names are strings and are ordered by byte value; numeric IDs are
+// integers and are ordered numerically. If entities with the same parent and
+// kind use a mix of key name strings and numeric IDs, those with numeric IDs
+// precede those with key names."
+// (https://cloud.google.com/datastore/docs/concepts/queries#key_filters)
+//
+// Comparing the canonical strings directly would not give that order: the
+// encoding length-prefixes every field, so kinds would sort by length before
+// byte value ("b" after "aa") and numeric IDs by digit count. This parses both
+// keys and compares path element by element instead.
+//
+// Only the paths are compared: the partition (database, namespace) is not one
+// of the documented criteria — a query's partition already scopes the result
+// set — and a KEY(...) literal or SDK key carries no partition of its own (the
+// same rationale keyHasAncestor documents). This is the comparison the reserved
+// "__key__" property uses; key *values* use fullKeyCompare. A value that is not
+// a canonical key is reachable only from a hand-built internal Value, never from
+// a transport, and falls back to raw byte order; keys are always orderable, so
+// unlike valueCompare this has no incomparable case.
+func keyCompare(a, b string) int {
+	_, _, apath, aok := dsstore.ParseKey(a)
+	_, _, bpath, bok := dsstore.ParseKey(b)
+	if !aok || !bok {
+		return cmp.Compare(a, b)
+	}
+	return comparePaths(apath, bpath)
+}
+
+// fullKeyCompare orders two canonical store keys as key *values* (a key-typed
+// property or an embedded entity's key): by partition (database, then
+// namespace) and then by the documented key ordering (comparePaths). The
+// partition is part of such a value, so unlike the reserved "__key__" property
+// (keyCompare) it takes part in the comparison.
+func fullKeyCompare(a, b string) int {
+	adb, ans, apath, aok := dsstore.ParseKey(a)
+	bdb, bns, bpath, bok := dsstore.ParseKey(b)
+	if !aok || !bok {
+		return cmp.Compare(a, b)
+	}
+	if c := cmp.Compare(adb, bdb); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(ans, bns); c != 0 {
+		return c
+	}
+	return comparePaths(apath, bpath)
+}
+
+// comparePaths compares two parsed key paths by the documented key ordering:
+// element by element (kind, then identifier), and a proper-prefix path before a
+// longer one.
+func comparePaths(apath, bpath []dsstore.PathElement) int {
+	for i := 0; i < len(apath) && i < len(bpath); i++ {
+		if c := cmp.Compare(apath[i].Kind, bpath[i].Kind); c != 0 {
+			return c
+		}
+		if c := comparePathIdentifier(apath[i], bpath[i]); c != 0 {
+			return c
+		}
+	}
+	// One path is a proper prefix of the other: the shorter (ancestor) path
+	// sorts first.
+	return cmp.Compare(len(apath), len(bpath))
+}
+
+// comparePathIdentifier orders two key path elements' identifiers: numeric IDs
+// numerically, key names by byte value, and every numeric ID before every key
+// name (the documented mixed-id rule). An incomplete element — neither ID nor
+// name, legal only on the final element of an insert/upsert key and never on a
+// stored key — is treated as an empty name, so it sorts after every numeric ID
+// and before every non-empty name.
+func comparePathIdentifier(a, b dsstore.PathElement) int {
+	switch {
+	case a.HasID && b.HasID:
+		return cmp.Compare(a.ID, b.ID)
+	case a.HasID:
+		return -1
+	case b.HasID:
+		return 1
+	default:
+		return cmp.Compare(a.Name, b.Name)
+	}
 }
 
 // Datastore value-type ranks. Firestore in Datastore mode orders a property
@@ -368,13 +513,11 @@ func valueCompare(a, b dsstore.Value) (int, bool) {
 		}
 		return cmp.Compare(a.GeoPointValue.Longitude, b.GeoPointValue.Longitude), true
 	case rankKey:
-		// KeyValue holds the key's canonical string form. Comparing those
-		// lexically is an approximation of the documented "by path elements
-		// (kind, identifier)" key ordering: the canonical encoding
-		// length-prefixes each field, so kinds sort by length before byte value
-		// ("1:b" < "2:aa" where the documented order is byte value, "aa" < "b")
-		// and numeric IDs sort by digit count. Recorded as TD29.
-		return cmp.Compare(*a.KeyValue, *b.KeyValue), true
+		// KeyValue holds the key's canonical string form; order it as a key
+		// value (fullKeyCompare: partition, then the documented path ordering),
+		// not by that encoding — which would sort kinds by length and numeric
+		// IDs by digit count.
+		return fullKeyCompare(*a.KeyValue, *b.KeyValue), true
 	}
 	return 0, false
 }
@@ -403,6 +546,10 @@ func valueEqual(a, b dsstore.Value) bool {
 	case a.TimestampValue != nil || b.TimestampValue != nil:
 		return a.TimestampValue != nil && b.TimestampValue != nil && *a.TimestampValue == *b.TimestampValue
 	case a.KeyValue != nil || b.KeyValue != nil:
+		// A key *value* is compared exactly, partition included (canonical keys
+		// of the same key are byte-identical). The reserved "__key__" property
+		// is the exception: it is partition-agnostic and path-ordered, handled by
+		// matchKeyPropertyFilter/keyCompare.
 		return a.KeyValue != nil && b.KeyValue != nil && *a.KeyValue == *b.KeyValue
 	case a.BlobValue != nil || b.BlobValue != nil:
 		return a.BlobValue != nil && b.BlobValue != nil && bytes.Equal(a.BlobValue, b.BlobValue)
