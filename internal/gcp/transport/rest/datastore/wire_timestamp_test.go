@@ -122,6 +122,12 @@ func TestRESTTimestampValueRejectsMalformed(t *testing.T) {
 		{"unparseable string", map[string]any{"timestampValue": "not-a-time"}},
 		{"date only", map[string]any{"timestampValue": "2020-01-01"}},
 		{"non-string", map[string]any{"timestampValue": 12345}},
+		// Go's parser silently truncates a fraction longer than nine digits and
+		// accepts a year outside the proto Timestamp range; protojson rejects
+		// both, so the decode boundary must too. (TD46)
+		{"fraction longer than nine digits", map[string]any{"timestampValue": "2020-01-01T00:00:00.1234567890Z"}},
+		{"year below the proto range", map[string]any{"timestampValue": "0000-01-01T00:00:00Z"}},
+		{"offset past the proto range", map[string]any{"timestampValue": "9999-12-31T23:59:59-01:00"}},
 		{"nested unparseable", map[string]any{"arrayValue": map[string]any{"values": []any{
 			map[string]any{"timestampValue": "nope"},
 		}}}},
