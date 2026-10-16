@@ -7,9 +7,9 @@
 service: scheduler
 classes:
   p2:
-    state: exempt
-    reason: "no concurrent create/delete contention suite"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-scheduler]
+    note: "concurrent job create/delete and dispatch under -race"
   p3:
     state: present
     suites: [sdk-scheduler]
@@ -19,6 +19,6 @@ classes:
     suites: [sdk-scheduler]
     note: "NextPageToken paging over jobs"
   p5:
-    state: exempt
-    reason: "no scale/boundary suite"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-scheduler]
+    note: "many-jobs page walk plus retry/attempt-deadline dispatch caps"

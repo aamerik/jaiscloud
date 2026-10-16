@@ -7,18 +7,18 @@
 service: monitoring
 classes:
   p2:
-    state: exempt
-    reason: "no concurrent-write contention suite"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-monitoring]
+    note: "concurrent metric-descriptor and time-series writes under -race"
   p3:
-    state: exempt
-    reason: "no error-envelope assertion in the monitoring suite"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-monitoring]
+    note: "typed gRPC status for not-found and invalid-input negatives"
   p4:
     state: present
     suites: [sdk-monitoring]
     note: "ListTimeSeries with Interval + iterator"
   p5:
-    state: exempt
-    reason: "no scale/boundary suite"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-monitoring]
+    note: "100-series CreateTimeSeries batch fully retained"
