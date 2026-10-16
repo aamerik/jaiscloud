@@ -458,6 +458,7 @@ func TestRoutes_AllHandlersRegistered(t *testing.T) {
 		"Eventarc.CreateChannel", "Eventarc.GetChannel", "Eventarc.ListChannels",
 		"Eventarc.UpdateChannel", "Eventarc.DeleteChannel",
 		"Eventarc.ListProviders", "Eventarc.GetProvider",
+		"Eventarc.ListOperations", "Eventarc.GetOperation", "Eventarc.DeleteOperation", "Eventarc.CancelOperation",
 		"Eventarc.TriggerGetIamPolicy", "Eventarc.TriggerSetIamPolicy", "Eventarc.TriggerTestIamPermissions",
 		"Eventarc.ChannelGetIamPolicy", "Eventarc.ChannelSetIamPolicy", "Eventarc.ChannelTestIamPermissions",
 		"Eventarc.ListMessageBusEnrollments",

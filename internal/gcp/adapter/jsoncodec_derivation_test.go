@@ -236,6 +236,8 @@ func TestJSONCodecCustomVerbMatrix(t *testing.T) {
 		{"POST", p + "/subscriptions/s:acknowledge", "SubscriptionAcknowledge"},
 		{"POST", p + "/subscriptions/s:modifyAckDeadline", "SubscriptionModifyAckDeadline"},
 		{"POST", p + "/subscriptions/s:detach", "SubscriptionDetach"},
+		{"POST", p + "/subscriptions/s:seek", "SubscriptionSeek"},
+		{"POST", p + "/subscriptions/s:modifyPushConfig", "SubscriptionModifyPushConfig"},
 		{"GET", p + "/subscriptions/s:getIamPolicy", "SubscriptionGetIamPolicy"},
 		{"POST", p + "/subscriptions/s:setIamPolicy", "SubscriptionSetIamPolicy"},
 		{"POST", p + "/subscriptions/s:testIamPermissions", "SubscriptionTestIamPermissions"},
@@ -266,6 +268,12 @@ func TestJSONCodecCustomVerbMatrix(t *testing.T) {
 		{"POST", kms + "/cryptoKeys/k/cryptoKeyVersions/3:asymmetricDecrypt", "CryptoKeyVersionAsymmetricDecrypt"},
 		{"POST", kms + "/cryptoKeys/k/cryptoKeyVersions/3:macSign", "CryptoKeyVersionMacSign"},
 		{"POST", kms + "/cryptoKeys/k/cryptoKeyVersions/3:macVerify", "CryptoKeyVersionMacVerify"},
+		{"POST", kms + "/cryptoKeys/k/cryptoKeyVersions/3:rawEncrypt", "CryptoKeyVersionRawEncrypt"},
+		{"POST", kms + "/cryptoKeys/k/cryptoKeyVersions/3:rawDecrypt", "CryptoKeyVersionRawDecrypt"},
+		{"GET", kms + "/importJobs/j:getIamPolicy", "ImportJobGetIamPolicy"},
+		{"POST", kms + "/importJobs/j:setIamPolicy", "ImportJobSetIamPolicy"},
+		{"POST", kms + "/importJobs/j:testIamPermissions", "ImportJobTestIamPermissions"},
+		{"POST", loc + ":generateRandomBytes", "GenerateRandomBytes"},
 		{"POST", kms + "/cryptoKeys/k/cryptoKeyVersions:import", "CryptoKeyVersionImport"},
 		{"POST", kms + "/cryptoKeys/k/cryptoKeyVersions:importTrustedKeyWrappedCryptoKeyVersion", "CryptoKeyVersionImportTrusted"},
 		{"GET", kms + "/cryptoKeys/k/cryptoKeyVersions/3:exportTrustedKeyWrappedCryptoKeyVersion", "CryptoKeyVersionExportTrusted"},
@@ -295,6 +303,7 @@ func TestJSONCodecCustomVerbMatrix(t *testing.T) {
 		{"POST", p + "/serviceAccounts/sa@x.com/keys/kid1:enable", "ServiceAccountKeyEnable"},
 		// Firestore data-plane custom methods on the `documents` marker.
 		{"POST", fst + "/documents:commit", "Commit"},
+		{"POST", fst + "/documents:partitionQuery", "PartitionQuery"},
 		{"POST", fst + "/documents:runQuery", "RunQuery"},
 		{"POST", fst + "/documents:runAggregationQuery", "RunAggregationQuery"},
 		{"POST", fst + "/documents:batchWrite", "BatchWrite"},
@@ -346,6 +355,14 @@ func TestJSONCodecCustomVerbMatrix(t *testing.T) {
 		{"POST", loc + "/channelConnections/cc:testIamPermissions", "ChannelConnectionTestIamPermissions"},
 		// Memorystore Redis upgrade.
 		{"POST", loc + "/instances/i:upgrade", "UpgradeInstance"},
+		{"POST", loc + "/instances/i:import", "ImportInstance"},
+		{"POST", loc + "/instances/i:export", "ExportInstance"},
+		{"POST", loc + "/instances/i:failover", "FailoverInstance"},
+		{"POST", loc + "/instances/i:rescheduleMaintenance", "RescheduleMaintenance"},
+		{"GET", loc + "/instances/i/authString", "GetAuthString"},
+		// The shared operations surface's Eventarc `:cancel` (the only owner of
+		// the shared path that declares one).
+		{"POST", loc + "/operations/op1:cancel", "CancelOperation"},
 		// Workflow revision history.
 		{"GET", loc + "/workflows/w:listRevisions", "ListWorkflowRevisions"},
 	}

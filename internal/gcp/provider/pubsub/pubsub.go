@@ -19,6 +19,7 @@ import (
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/pubsubfilter"
 	"jaiscloud/internal/gcp/resource"
+	pubsubcore "jaiscloud/internal/gcp/service/pubsub"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	"jaiscloud/internal/model"
@@ -49,10 +50,16 @@ type Provider struct {
 	messages   pubsubstore.Messages // published messages (data plane)
 	encryptor  crypto.EnvelopeEncryptor
 	dispatcher eventing.Dispatcher // event-trigger delivery; nil = disabled
+	core       *pubsubcore.Service // seek + push-config (shared with the gRPC transport)
 }
 
 func New(resources store.ResourceStore, messages pubsubstore.Messages, encryptor crypto.EnvelopeEncryptor) *Provider {
-	return &Provider{resources: resources, messages: messages, encryptor: encryptor}
+	return &Provider{
+		resources: resources,
+		messages:  messages,
+		encryptor: encryptor,
+		core:      pubsubcore.NewService(resources, messages),
+	}
 }
 
 // SetFunctionDispatcher wires the Cloud Functions event-delivery engine, so a
@@ -78,6 +85,8 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"PubSub.SubscriptionPull":               p.SubscriptionPull,
 		"PubSub.SubscriptionAcknowledge":        p.SubscriptionAcknowledge,
 		"PubSub.SubscriptionModifyAckDeadline":  p.SubscriptionModifyAckDeadline,
+		"PubSub.SubscriptionSeek":               p.SubscriptionSeek,
+		"PubSub.SubscriptionModifyPushConfig":   p.SubscriptionModifyPushConfig,
 		"PubSub.TopicGetIamPolicy":              p.TopicGetIamPolicy,
 		"PubSub.TopicSetIamPolicy":              p.TopicSetIamPolicy,
 		"PubSub.TopicTestIamPermissions":        p.TopicTestIamPermissions,
@@ -976,6 +985,68 @@ func (p *Provider) SubscriptionModifyAckDeadline(ctx context.Context, nr *model.
 
 // subscriptionEOD reports whether a subscription resource has exactly-once
 // delivery enabled.
+// SubscriptionSeek implements subscriptions.seek over REST. Exactly one of the
+// request's `time` / `snapshot` fields selects the target; both are handed to
+// the shared core, which owns the ack-version (EOD2) invariants.
+func (p *Provider) SubscriptionSeek(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	s := strings.TrimPrefix(name, "subscriptions/")
+	body, _ := nr.Params["body"].(map[string]any)
+	var at *time.Time
+	if ts, _ := body["time"].(string); ts != "" {
+		t, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			return nil, model.NewProviderError("InvalidArgument", "time must be an RFC 3339 timestamp", 400)
+		}
+		at = &t
+	}
+	snapshot, _ := body["snapshot"].(string)
+	if err := p.core.Seek(ctx, nr.AccountID, s, at, snapshot); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+// SubscriptionModifyPushConfig implements subscriptions.modifyPushConfig over
+// REST. An absent or empty pushConfig clears the stored configuration.
+func (p *Provider) SubscriptionModifyPushConfig(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	s := strings.TrimPrefix(name, "subscriptions/")
+	body, _ := nr.Params["body"].(map[string]any)
+	var pc *pubsubcore.PushConfig
+	if raw, ok := body["pushConfig"].(map[string]any); ok {
+		if endpoint, _ := raw["pushEndpoint"].(string); endpoint != "" {
+			pc = &pubsubcore.PushConfig{Endpoint: endpoint}
+			if a, ok := raw["attributes"].(map[string]any); ok {
+				attrs := make(map[string]string, len(a))
+				for k, v := range a {
+					if sv, ok := v.(string); ok {
+						attrs[k] = sv
+					}
+				}
+				if len(attrs) > 0 {
+					pc.Attributes = attrs
+				}
+			}
+			if ot, ok := raw["oidcToken"].(map[string]any); ok {
+				aud, _ := ot["audience"].(string)
+				sa, _ := ot["serviceAccountEmail"].(string)
+				pc.OIDCToken = &pubsubcore.OIDCToken{Audience: aud, ServiceAccountEmail: sa}
+			}
+		}
+	}
+	if err := p.core.ModifyPushConfig(ctx, nr.AccountID, s, pc); err != nil {
+		return nil, err
+	}
+	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
 func subscriptionEOD(e store.ResourceEntry) bool {
 	var meta map[string]any
 	if err := json.Unmarshal(e.Data, &meta); err != nil {

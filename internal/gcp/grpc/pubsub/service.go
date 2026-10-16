@@ -28,6 +28,7 @@ import (
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/pubsubfilter"
 	"jaiscloud/internal/gcp/resource"
+	pubsubcore "jaiscloud/internal/gcp/service/pubsub"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
 	"jaiscloud/internal/model"
@@ -75,6 +76,11 @@ type Service struct {
 	encryptor   crypto.EnvelopeEncryptor
 	defaultProj string
 
+	// core is the transport-neutral implementation of the operations that are
+	// shared with the REST provider (seek, push-config). It reads/writes the
+	// same resources/messages stores.
+	core *pubsubcore.Service
+
 	// regs holds one shared ack registry per subscription so ack state is
 	// authoritative across every StreamingPull stream on that subscription.
 	regMu sync.Mutex
@@ -89,6 +95,7 @@ func NewService(resources store.ResourceStore, messages pubsubstore.Messages, en
 		messages:    messages,
 		encryptor:   encryptor,
 		defaultProj: defaultProj,
+		core:        pubsubcore.NewService(resources, messages),
 		regs:        map[string]*ackRegistry{},
 	}
 }
@@ -1435,39 +1442,14 @@ func (s *Service) ModifyPushConfig(ctx context.Context, req *pubsubpb.ModifyPush
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid subscription name", 400))
 	}
-	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtSubscription, id)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, mapError(model.NewProviderError("NotFound", "subscription not found", 404))
+	var pc *pubsubcore.PushConfig
+	if p := req.GetPushConfig(); p != nil && p.GetPushEndpoint() != "" {
+		pc = &pubsubcore.PushConfig{Endpoint: p.GetPushEndpoint(), Attributes: p.GetAttributes()}
+		if ot := p.GetOidcToken(); ot != nil {
+			pc.OIDCToken = &pubsubcore.OIDCToken{Audience: ot.GetAudience(), ServiceAccountEmail: ot.GetServiceAccountEmail()}
 		}
-		return nil, mapError(err)
 	}
-	var meta map[string]any
-	json.Unmarshal(e.Data, &meta)
-
-	pc := req.GetPushConfig()
-	if pc == nil || pc.GetPushEndpoint() == "" {
-		delete(meta, "pushConfig")
-	} else {
-		// Exactly-once delivery cannot be enabled on a push subscription.
-		if eod, _ := meta["enableExactlyOnceDelivery"].(bool); eod {
-			return nil, mapError(model.NewProviderError("InvalidArgument",
-				"exactly-once delivery is not supported for push subscriptions", 400))
-		}
-		pm := map[string]any{"pushEndpoint": pc.GetPushEndpoint()}
-		if len(pc.GetAttributes()) > 0 {
-			pm["attributes"] = pc.GetAttributes()
-		}
-		if ot := pc.GetOidcToken(); ot != nil {
-			pm["oidcToken"] = map[string]any{
-				"audience":            ot.GetAudience(),
-				"serviceAccountEmail": ot.GetServiceAccountEmail(),
-			}
-		}
-		meta["pushConfig"] = pm
-	}
-	data, _ := json.Marshal(meta)
-	if err := s.resources.Update(ctx, project, store.GlobalRegion, store.ResourceEntry{Type: rtSubscription, ID: id, Data: data}); err != nil {
+	if err := s.core.ModifyPushConfig(ctx, project, id, pc); err != nil {
 		return nil, mapError(err)
 	}
 	return &emptypb.Empty{}, nil
@@ -1484,15 +1466,10 @@ const snapshotLifetime = 7 * 24 * time.Hour
 // snapshot can faithfully restore the ack state (including messages acked
 // afterwards) — without it, snapshot-based Seek would silently diverge from
 // real Pub/Sub, which redelivers the snapshot backlog.
-type snapshotMeta struct {
-	Name         string                `json:"name"`
-	Topic        string                `json:"topic"`
-	Subscription string                `json:"subscription"`
-	CreatedAt    time.Time             `json:"createdAt"`
-	ExpireTime   time.Time             `json:"expireTime"`
-	Labels       map[string]string     `json:"labels,omitempty"`
-	Backlog      []pubsubstore.Message `json:"backlog,omitempty"`
-}
+//
+// It is an alias of the shared core's type so the gRPC and REST transports
+// persist and decode one snapshot format.
+type snapshotMeta = pubsubcore.SnapshotMeta
 
 // CreateSnapshot captures a subscription's backlog (unacked messages) into a
 // snapshot resource. Messages published to the topic after creation are also
@@ -1663,140 +1640,24 @@ func (s *Service) Seek(ctx context.Context, req *pubsubpb.SeekRequest) (*pubsubp
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid subscription name", 400))
 	}
-	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtSubscription, sub)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, mapError(model.NewProviderError("NotFound", "subscription not found", 404))
-		}
-		return nil, mapError(err)
+	var at *time.Time
+	if req.GetTime() != nil {
+		t := req.GetTime().AsTime()
+		at = &t
 	}
-	var meta map[string]any
-	json.Unmarshal(e.Data, &meta)
-
-	switch {
-	case req.GetTime() != nil:
-		if err := s.seekToTime(ctx, sub, req.GetTime().AsTime()); err != nil {
-			return nil, mapError(err)
-		}
-	case req.GetSnapshot() != "":
-		snapProject, snapID, ok := splitSnapshotName(req.GetSnapshot())
-		if !ok || snapProject != project {
-			return nil, mapError(model.NewProviderError("InvalidArgument", "invalid snapshot name", 400))
-		}
-		snap, err := s.getSnapshotMeta(ctx, project, snapID)
-		if err != nil {
-			return nil, err
-		}
-		subTopic, _ := meta["topic"].(string)
-		if snap.Topic != subTopic {
-			return nil, mapError(&model.ProviderError{
-				Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
-				Message: "snapshot topic " + snap.Topic + " does not match subscription topic " + subTopic,
-			})
-		}
-		if err := s.restoreSnapshot(ctx, sub, snap); err != nil {
-			return nil, mapError(err)
-		}
-	default:
-		return nil, mapError(model.NewProviderError("InvalidArgument", "seek target (time or snapshot) is required", 400))
+	if err := s.core.Seek(ctx, project, sub, at, req.GetSnapshot()); err != nil {
+		return nil, mapError(err)
 	}
 	return &pubsubpb.SeekResponse{}, nil
 }
 
-// seekToTime marks the subscription's retained messages published before t as
-// acknowledged (deleted) and makes those published at/after t visible again.
-// Already-acked messages are gone, so they are not restored (proto-documented).
-// Making a message visible again invalidates outstanding ack IDs, so every
-// retained message's delivery version is advanced (EOD2). The versions are
-// advanced *before* the messages are made visible, so a concurrent Pull cannot
-// claim a message and be handed an ID that the bump immediately invalidates.
-func (s *Service) seekToTime(ctx context.Context, queue string, t time.Time) error {
-	msgs, err := s.messages.List(ctx, queue)
-	if err != nil {
-		return err
-	}
-	var retained []string
-	for _, m := range msgs {
-		if m.PublishTime.Before(t) {
-			_ = s.messages.Delete(ctx, queue, m.MessageID)
-			continue
-		}
-		retained = append(retained, m.MessageID)
-	}
-	if err := s.messages.BumpDeliveryVersions(ctx, queue, retained); err != nil {
-		return err
-	}
-	for _, id := range retained {
-		_ = s.messages.ModifyAckDeadline(ctx, queue, []string{id}, 0, clock.Now())
-	}
-	return nil
-}
-
-// restoreSnapshot resets the subscription to the state captured by snap: the
-// snapshot backlog is restored as unacknowledged, plus every message still
-// retained in the subscription that was published at/after the snapshot was
-// created. Messages acked before the snapshot are not restored.
-//
-// A Seek invalidates outstanding ack IDs: each restored message gets a delivery
-// version greater than both its snapshot version and its version in the store at
-// Seek time, so an ack ID issued before the Seek no longer names the current
-// delivery (EOD2). This covers a message still present at Seek; a message
-// superseded after the snapshot and acked before the Seek is restored from the
-// snapshot version (see the EOD6 deferral in the EOD wave plan).
-func (s *Service) restoreSnapshot(ctx context.Context, queue string, snap snapshotMeta) error {
-	current, err := s.messages.List(ctx, queue)
-	if err != nil {
-		return err
-	}
-	currentVersions := make(map[string]int, len(current))
-	for _, m := range current {
-		currentVersions[m.MessageID] = m.DeliveryVersion
-	}
-	for _, m := range current {
-		_ = s.messages.Delete(ctx, queue, m.MessageID)
-	}
-	restore := func(m pubsubstore.Message) error {
-		m.Subscription = queue
-		m.VisibleAt = time.Time{}
-		// A seek restores the backlog as unacknowledged, so clear any retained
-		// ordered ack state on the message.
-		m.Acked = false
-		m.AckPending = false
-		if v, ok := currentVersions[m.MessageID]; ok && v > m.DeliveryVersion {
-			m.DeliveryVersion = v
-		}
-		m.DeliveryVersion++
-		return s.messages.Put(ctx, m)
-	}
-	for _, m := range snap.Backlog {
-		if err := restore(m); err != nil {
-			return err
-		}
-	}
-	for _, m := range current {
-		if m.PublishTime.Before(snap.CreatedAt) {
-			continue
-		}
-		if err := restore(m); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // getSnapshotMeta loads and decodes a snapshot resource, mapping ErrNotFound to
-// a gRPC NOT_FOUND.
+// a gRPC NOT_FOUND. The load/decode lives in the shared core so both transports
+// read one snapshot format.
 func (s *Service) getSnapshotMeta(ctx context.Context, project, snap string) (snapshotMeta, error) {
-	var meta snapshotMeta
-	e, err := s.resources.Get(ctx, project, store.GlobalRegion, rtSnapshot, snap)
+	meta, err := s.core.GetSnapshotMeta(ctx, project, snap)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return meta, mapError(model.NewProviderError("NotFound", "snapshot not found", 404))
-		}
 		return meta, mapError(err)
-	}
-	if err := json.Unmarshal(e.Data, &meta); err != nil {
-		return meta, mapError(model.NewProviderError("Internal", "corrupt snapshot metadata", 500))
 	}
 	return meta, nil
 }

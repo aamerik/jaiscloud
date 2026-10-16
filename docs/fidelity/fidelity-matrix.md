@@ -6,14 +6,14 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1118**
+Cells: **1136**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 971 |
-| limited | 101 |
+| ga | 984 |
+| limited | 106 |
 | preview | 14 |
 | unsupported | 32 |
 
@@ -21,7 +21,7 @@ Cells: **1118**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 529 | 100 | 14 | 12 |
+| rest | 542 | 105 | 14 | 12 |
 | grpc | 442 | 1 | 0 | 20 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 540 | 115 |
+| rest | 554 | 119 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -311,7 +311,7 @@ _16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
 
 ## eventarc
 
-_99 cell(s): ga=99 limited=0 preview=0 unsupported=0_
+_103 cell(s): ga=103 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -329,6 +329,7 @@ _99 cell(s): ga=99 limited=0 preview=0 unsupported=0_
 | DeleteMessageBus | grpc | ga | yes | — |
 | DeletePipeline | grpc | ga | yes | — |
 | DeleteTrigger | grpc | ga | yes | — |
+| Eventarc.CancelOperation | rest | ga | yes | — |
 | Eventarc.ChannelConnectionGetIamPolicy | rest | ga | yes | — |
 | Eventarc.ChannelConnectionSetIamPolicy | rest | ga | yes | — |
 | Eventarc.ChannelConnectionTestIamPermissions | rest | ga | yes | — |
@@ -347,6 +348,7 @@ _99 cell(s): ga=99 limited=0 preview=0 unsupported=0_
 | Eventarc.DeleteEnrollment | rest | ga | yes | — |
 | Eventarc.DeleteGoogleApiSource | rest | ga | yes | — |
 | Eventarc.DeleteMessageBus | rest | ga | yes | — |
+| Eventarc.DeleteOperation | rest | ga | no | — |
 | Eventarc.DeletePipeline | rest | ga | yes | — |
 | Eventarc.DeleteTrigger | rest | ga | yes | — |
 | Eventarc.EnrollmentGetIamPolicy | rest | ga | yes | — |
@@ -358,6 +360,7 @@ _99 cell(s): ga=99 limited=0 preview=0 unsupported=0_
 | Eventarc.GetGoogleApiSource | rest | ga | yes | — |
 | Eventarc.GetGoogleChannelConfig | rest | ga | yes | — |
 | Eventarc.GetMessageBus | rest | ga | yes | — |
+| Eventarc.GetOperation | rest | ga | no | — |
 | Eventarc.GetPipeline | rest | ga | yes | — |
 | Eventarc.GetProvider | rest | ga | yes | — |
 | Eventarc.GetTrigger | rest | ga | yes | — |
@@ -370,6 +373,7 @@ _99 cell(s): ga=99 limited=0 preview=0 unsupported=0_
 | Eventarc.ListGoogleApiSources | rest | ga | yes | — |
 | Eventarc.ListMessageBusEnrollments | rest | ga | yes | — |
 | Eventarc.ListMessageBuses | rest | ga | yes | — |
+| Eventarc.ListOperations | rest | ga | yes | — |
 | Eventarc.ListPipelines | rest | ga | yes | — |
 | Eventarc.ListProviders | rest | ga | yes | — |
 | Eventarc.ListTriggers | rest | ga | yes | — |
@@ -417,7 +421,7 @@ _99 cell(s): ga=99 limited=0 preview=0 unsupported=0_
 
 ## firestore
 
-_60 cell(s): ga=60 limited=0 preview=0 unsupported=0_
+_61 cell(s): ga=61 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -464,6 +468,7 @@ _60 cell(s): ga=60 limited=0 preview=0 unsupported=0_
 | Firestore.ListIndexes | rest | ga | yes | — |
 | Firestore.ListOperations | rest | ga | yes | — |
 | Firestore.ListUserCreds | rest | ga | yes | — |
+| Firestore.PartitionQuery | rest | ga | yes | — |
 | Firestore.PatchDocument | rest | ga | yes | — |
 | Firestore.ResetUserPassword | rest | ga | yes | — |
 | Firestore.Rollback | rest | ga | yes | — |
@@ -634,7 +639,7 @@ _14 cell(s): ga=0 limited=0 preview=14 unsupported=0_
 
 ## kms
 
-_71 cell(s): ga=71 limited=0 preview=0 unsupported=0_
+_77 cell(s): ga=77 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -685,11 +690,17 @@ _71 cell(s): ga=71 limited=0 preview=0 unsupported=0_
 | KMS.CryptoKeyVersionList | rest | ga | yes | — |
 | KMS.CryptoKeyVersionMacSign | rest | ga | no | — |
 | KMS.CryptoKeyVersionMacVerify | rest | ga | no | — |
+| KMS.CryptoKeyVersionRawDecrypt | rest | ga | no | — |
+| KMS.CryptoKeyVersionRawEncrypt | rest | ga | no | — |
 | KMS.CryptoKeyVersionRestore | rest | ga | no | — |
 | KMS.CryptoKeyVersionUpdate | rest | ga | no | — |
+| KMS.GenerateRandomBytes | rest | ga | yes | — |
 | KMS.ImportJobCreate | rest | ga | yes | — |
 | KMS.ImportJobGet | rest | ga | no | — |
+| KMS.ImportJobGetIamPolicy | rest | ga | yes | — |
 | KMS.ImportJobList | rest | ga | yes | — |
+| KMS.ImportJobSetIamPolicy | rest | ga | yes | — |
+| KMS.ImportJobTestIamPermissions | rest | ga | yes | — |
 | KMS.KeyRingCreate | rest | ga | yes | — |
 | KMS.KeyRingGet | rest | ga | yes | — |
 | KMS.KeyRingGetIamPolicy | rest | ga | yes | — |
@@ -863,16 +874,21 @@ _44 cell(s): ga=44 limited=0 preview=0 unsupported=0_
 
 ## memorystore
 
-_8 cell(s): ga=0 limited=8 preview=0 unsupported=0_
+_13 cell(s): ga=0 limited=13 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
 | Memorystore.CreateInstance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
 | Memorystore.DeleteInstance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
+| Memorystore.ExportInstance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
+| Memorystore.FailoverInstance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
+| Memorystore.GetAuthString | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
 | Memorystore.GetInstance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
 | Memorystore.GetLocation | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
+| Memorystore.ImportInstance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
 | Memorystore.ListInstances | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
 | Memorystore.ListLocations | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
+| Memorystore.RescheduleMaintenance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
 | Memorystore.UpdateInstance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
 | Memorystore.UpgradeInstance | rest | limited | yes | metadata-only over ResourceStore (no data plane) |
 
@@ -1032,7 +1048,7 @@ _5 cell(s): ga=5 limited=0 preview=0 unsupported=0_
 
 ## pubsub
 
-_46 cell(s): ga=46 limited=0 preview=0 unsupported=0_
+_48 cell(s): ga=48 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -1062,7 +1078,9 @@ _46 cell(s): ga=46 limited=0 preview=0 unsupported=0_
 | PubSub.SubscriptionGetIamPolicy | rest | ga | yes | — |
 | PubSub.SubscriptionList | rest | ga | yes | — |
 | PubSub.SubscriptionModifyAckDeadline | rest | ga | yes | — |
+| PubSub.SubscriptionModifyPushConfig | rest | ga | yes | — |
 | PubSub.SubscriptionPull | rest | ga | yes | — |
+| PubSub.SubscriptionSeek | rest | ga | yes | — |
 | PubSub.SubscriptionSetIamPolicy | rest | ga | yes | — |
 | PubSub.SubscriptionTestIamPermissions | rest | ga | yes | — |
 | PubSub.SubscriptionUpdate | rest | ga | yes | — |

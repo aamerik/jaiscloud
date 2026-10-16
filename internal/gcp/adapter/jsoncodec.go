@@ -457,6 +457,10 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "SubscriptionAcknowledge"
 			case "modifyAckDeadline":
 				return "SubscriptionModifyAckDeadline"
+			case "seek":
+				return "SubscriptionSeek"
+			case "modifyPushConfig":
+				return "SubscriptionModifyPushConfig"
 			case "getIamPolicy":
 				return "SubscriptionGetIamPolicy"
 			case "setIamPolicy":
@@ -506,8 +510,9 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			// Real KMS has no version-level :disable/:enable or IAM custom
 			// methods: a version's state is changed through
 			// cryptoKeyVersions.patch (handled by the method-based switch
-			// below) and IAM is scoped to key rings and crypto keys. Any other
-			// custom verb is therefore unrecognized and returns "" (fail loud).
+			// below) and IAM is scoped to key rings, crypto keys and import
+			// jobs. Any other custom verb is therefore unrecognized and returns
+			// "" (fail loud).
 			switch custom {
 			case "destroy":
 				return "CryptoKeyVersionDestroy"
@@ -521,6 +526,10 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "CryptoKeyVersionMacSign"
 			case "macVerify":
 				return "CryptoKeyVersionMacVerify"
+			case "rawEncrypt":
+				return "CryptoKeyVersionRawEncrypt"
+			case "rawDecrypt":
+				return "CryptoKeyVersionRawDecrypt"
 			case "import":
 				return "CryptoKeyVersionImport"
 			case "importTrustedKeyWrappedCryptoKeyVersion":
@@ -529,6 +538,24 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "CryptoKeyVersionExportTrusted"
 			case "decapsulate":
 				return "CryptoKeyVersionDecapsulate"
+			}
+		case "importJobs":
+			// Cloud KMS import jobs carry their own IAM policy
+			// (…/keyRings/{kr}/importJobs/{id}:getIamPolicy and friends).
+			switch custom {
+			case "getIamPolicy":
+				return "ImportJobGetIamPolicy"
+			case "setIamPolicy":
+				return "ImportJobSetIamPolicy"
+			case "testIamPermissions":
+				return "ImportJobTestIamPermissions"
+			}
+		case "locations":
+			// Cloud KMS locations.generateRandomBytes (the only custom method
+			// declared on a location resource).
+			switch custom {
+			case "generateRandomBytes":
+				return "GenerateRandomBytes"
 			}
 		case "keyRings":
 			switch custom {
@@ -592,6 +619,8 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "RunQuery"
 			case "runAggregationQuery":
 				return "RunAggregationQuery"
+			case "partitionQuery":
+				return "PartitionQuery"
 			case "batchWrite":
 				return "BatchWrite"
 			case "batchGet":
@@ -714,6 +743,14 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			switch custom {
 			case "upgrade":
 				return "UpgradeInstance"
+			case "import":
+				return "ImportInstance"
+			case "export":
+				return "ExportInstance"
+			case "failover":
+				return "FailoverInstance"
+			case "rescheduleMaintenance":
+				return "RescheduleMaintenance"
 			}
 		case "workflows":
 			// Workflow revision history: GET …/workflows/{w}:listRevisions.
@@ -722,6 +759,18 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				if method == http.MethodGet {
 					return "ListWorkflowRevisions"
 				}
+			}
+		case "operations":
+			// The shared google.longrunning operations surface. Only Eventarc
+			// declares a `:cancel` on it among the emulator's services
+			// (metastore/managedkafka/run/dataproc own their operations through
+			// service-specific codecs; Firestore's databasesOperations is
+			// separate). A cancel on any other owner's host reaches that
+			// owner's provider, which does not register CancelOperation, so it
+			// still fails loud.
+			switch custom {
+			case "cancel":
+				return "CancelOperation"
 			}
 		}
 		// An unrecognized custom (:verb) method is never the resource's plain
@@ -1121,6 +1170,12 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 		}
 	case "instances":
 		switch {
+		case method == http.MethodGet && strings.HasSuffix(name, "/authString"):
+			// Memorystore instances.getAuthString (GET …/instances/{i}/authString).
+			// It is a sub-resource path, not a custom verb, so without this
+			// guard the plain item GET would derive GetInstance and answer the
+			// instance object.
+			return "GetAuthString"
 		case isCollection && method == http.MethodPost:
 			return "CreateInstance"
 		case isCollection && method == http.MethodGet:

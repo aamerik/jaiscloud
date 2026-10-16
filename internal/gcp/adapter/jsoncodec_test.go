@@ -300,6 +300,9 @@ func TestDetectV1Service(t *testing.T) {
 		"/v1/projects/p/databases/db/operations/op1":               "firestore",
 		"/v1/projects/p/databases/db/operations/op1:cancel":        "firestore", "/v1/projects/p/locations/us/backups": "firestore",
 		"/v1/projects/p/locations/us/backups/b": "firestore",
+		// Cloud KMS locations.generateRandomBytes shares the bare locations path
+		// with Memorystore's location discovery; the verb discriminates.
+		"/v1/projects/p/locations/us-central1:generateRandomBytes": "kms",
 		// Cloud Resource Manager v1 project surface (project segment is last),
 		// including the collection route.
 		"/v1/projects":                      "resourcemanager",

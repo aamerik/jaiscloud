@@ -65,6 +65,8 @@ var synthServices = map[string]synthService{
 	// path with Cloud Workflows; their canonical hosts disambiguate it.
 	"managedkafka": {host: "managedkafka.localhost:4588"},
 	"metastore":    {host: "metastore.localhost:4588"},
+	// Eventarc likewise owns its operations under its canonical host.
+	"eventarc": {host: "eventarc.localhost:4588"},
 }
 
 func synthConfigFor(svc string) synthService {
@@ -231,6 +233,36 @@ var bodyOverrides = map[string]map[string]any{
 	"cloudkms.projects.locations.keyRings.importJobs.create": {
 		"importMethod":    "RSA_OAEP_3072_SHA1_AES_256",
 		"protectionLevel": "SOFTWARE",
+	},
+
+	// KMS locations.generateRandomBytes: lengthBytes is documented 8..1024 with
+	// no Discovery `required`, so the generic probe would send 0 and be rejected.
+	"cloudkms.projects.locations.generateRandomBytes": {"lengthBytes": 8},
+
+	// Memorystore instance custom methods. failover requires a STANDARD_HA tier
+	// instance (the create override below makes every synthesized instance HA);
+	// import/export require their GCS config; rescheduleMaintenance requires a
+	// rescheduleType.
+	"redis.projects.locations.instances.create": {"tier": "STANDARD_HA"},
+	"redis.projects.locations.instances.import": {
+		"inputConfig": map[string]any{"gcsSource": map[string]any{"uri": "gs://conf-probe/import.rdb"}},
+	},
+	"redis.projects.locations.instances.export": {
+		"outputConfig": map[string]any{"gcsDestination": map[string]any{"uri": "gs://conf-probe/export.rdb"}},
+	},
+	"redis.projects.locations.instances.rescheduleMaintenance": {"rescheduleType": "IMMEDIATE"},
+
+	// Pub/Sub: subscriptions.seek needs exactly one of time/snapshot;
+	// modifyPushConfig accepts an empty pushConfig (which clears it).
+	"pubsub.projects.subscriptions.seek":             {"time": "2020-01-01T00:00:00Z"},
+	"pubsub.projects.subscriptions.modifyPushConfig": {"pushConfig": map[string]any{}},
+
+	// Firestore documents.partitionQuery needs a structured query and a positive
+	// partition count. A single partition is a valid request (the emulator, like
+	// the SDK contract, answers the single full-range partition with no split).
+	"firestore.projects.databases.documents.partitionQuery": {
+		"partitionCount":  "1",
+		"structuredQuery": map[string]any{"from": []any{map[string]any{"collectionId": "conf-probe"}}},
 	},
 }
 

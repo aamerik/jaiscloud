@@ -7,7 +7,6 @@ package kms
 import (
 	"context"
 	"crypto"
-	"crypto/rand"
 	"hash/crc32"
 	"strings"
 
@@ -529,13 +528,9 @@ func (s *Service) MacVerify(ctx context.Context, req *kmspb.MacVerifyRequest) (*
 }
 
 func (s *Service) GenerateRandomBytes(ctx context.Context, req *kmspb.GenerateRandomBytesRequest) (*kmspb.GenerateRandomBytesResponse, error) {
-	length := int(req.GetLengthBytes())
-	if length <= 0 {
-		return nil, mapError(model.NewProviderError("InvalidArgument", "length_bytes must be positive", 400))
-	}
-	data := make([]byte, length)
-	if _, err := rand.Read(data); err != nil {
-		return nil, mapError(model.NewProviderError("Internal", "random generation failed", 500))
+	data, err := s.core.GenerateRandomBytes(ctx, req.GetLocation(), int(req.GetLengthBytes()), protectionLevelFromProto(req.GetProtectionLevel()))
+	if err != nil {
+		return nil, mapError(err)
 	}
 	return &kmspb.GenerateRandomBytesResponse{
 		Data:       data,
