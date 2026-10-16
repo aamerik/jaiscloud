@@ -480,6 +480,41 @@ func (s *PostgresStore) GetOperation(ctx context.Context, projectID, location, i
 	return op, err
 }
 
+func (s *PostgresStore) ListOperations(ctx context.Context, projectID, location string) ([]Operation, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT operation_id, project_id, location, done, response, verb, target, create_time, end_time
+		FROM jc_workflow_operations WHERE project_id=$1 AND location=$2
+		ORDER BY operation_id
+	`, projectID, location)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Operation
+	for rows.Next() {
+		var op Operation
+		if err := rows.Scan(&op.ID, &op.ProjectID, &op.Location, &op.Done, &op.Response,
+			&op.Verb, &op.Target, &op.CreateTime, &op.EndTime); err != nil {
+			return nil, err
+		}
+		result = append(result, op)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresStore) DeleteOperation(ctx context.Context, projectID, location, id string) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_workflow_operations WHERE project_id=$1 AND location=$2 AND operation_id=$3
+	`, projectID, location, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchOperation
+	}
+	return nil
+}
+
 func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_workflows`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_workflow_executions`)

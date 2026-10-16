@@ -19,6 +19,25 @@ func strParam(nr *model.NormalizedRequest, key string) string {
 	return s
 }
 
+// boolParam reports whether a boolean query param is truthy. It accepts the
+// string form a query string always yields ("true"/"1") and the decoded Go
+// bool/number forms a test NormalizedRequest may carry.
+func boolParam(nr *model.NormalizedRequest, key string) bool {
+	switch v := nr.Params[key].(type) {
+	case bool:
+		return v
+	case string:
+		b, _ := strconv.ParseBool(v)
+		return b
+	case float64:
+		return v != 0
+	case int:
+		return v != 0
+	default:
+		return false
+	}
+}
+
 func strFrom(v any) string {
 	s, _ := v.(string)
 	return s

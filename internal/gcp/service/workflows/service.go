@@ -442,6 +442,52 @@ func (s *Service) GetOperation(ctx context.Context, project, location, opID stri
 	return s.settle(op), nil
 }
 
+// ListOperations returns a cursor page of the long-running operations persisted
+// for a location, in the deterministic order of the shared pagination cursor
+// (operation ID). Each returned operation is settled against the configured
+// timing mode, so a client polling the page sees the same state GetOperation
+// reports. It backs both the REST projects.locations.operations.list surface
+// (gcloud workflows operations list / the Go SDK) and the shared gRPC
+// google.longrunning.Operations.List.
+//
+// The documented `filter` parameter is not evaluated: a non-empty filter is
+// InvalidArgument rather than a silently unfiltered page (the shared
+// Operations.List contract, matching the gRPC ListRegistry surface).
+func (s *Service) ListOperations(ctx context.Context, project, location string, pageSize int, pageToken, filter string) ([]workflowsstore.Operation, string, error) {
+	if location == "" {
+		return nil, "", invalidArgument("missing location")
+	}
+	if filter != "" {
+		return nil, "", invalidArgument("operations filter is not supported")
+	}
+	ops, err := s.workflows.ListOperations(ctx, project, location)
+	if err != nil {
+		return nil, "", mapStoreError(err)
+	}
+	params := map[string]any{"pageSize": pageSize}
+	if pageToken != "" {
+		params["pageToken"] = pageToken
+	}
+	page, next := paging.Page(ops, func(op workflowsstore.Operation) string { return op.ID }, params)
+	for i := range page {
+		page[i] = s.settle(page[i])
+	}
+	return page, next, nil
+}
+
+// DeleteOperation removes a persisted long-running operation, or NotFound when
+// the id is unknown. Per the Discovery, deleting an operation only records that
+// the client is no longer interested in the result; it does not cancel it.
+func (s *Service) DeleteOperation(ctx context.Context, project, location, id string) error {
+	if location == "" || id == "" {
+		return invalidArgument("missing operation name")
+	}
+	if err := s.workflows.DeleteOperation(ctx, project, location, id); err != nil {
+		return mapStoreError(err)
+	}
+	return nil
+}
+
 // IsNotFound reports whether err is the canonical NotFound provider error (as
 // returned by GetOperation for an absent operation), so a transport's
 // ResolveOperation can decline an unknown name instead of surfacing an error.
