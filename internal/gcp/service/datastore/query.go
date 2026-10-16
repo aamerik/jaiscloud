@@ -54,17 +54,29 @@ func unsupportedQueryOperator(op string) error {
 // validateFilter checks a filter's static shape before any entity is scanned.
 // It is the single authority for the contract matchesFilter relies on: without
 // the up-front pass a request real Datastore rejects (an unsupported operator,
-// IN with a non-array or empty array value, an empty AND) would be reached only
-// when the scan visits a candidate, so it would silently return an empty result
-// set on an empty or fully-filtered collection instead of failing loud. RunQuery
-// and RunAggregationQuery call it once up front; matchesFilter calls it too, so
-// no caller can reach a fail-open path.
+// IN with a non-array or empty array value, an empty AND, or a query whose
+// disjunctive normal form exceeds the per-query disjunction budget) would be
+// reached only when the scan visits a candidate, so it would silently return an
+// empty result set on an empty or fully-filtered collection instead of failing
+// loud. RunQuery and RunAggregationQuery call it once up front; matchesFilter
+// calls it too, so no caller can reach a fail-open path.
 func validateFilter(f *Filter) error {
+	disjunctions := 1
+	return validateFilterDisjunctions(f, &disjunctions)
+}
+
+// validateFilterDisjunctions walks the filter tree enforcing each property
+// filter's static shape and the per-query disjunction budget (TD43). The
+// emulator is deliberately AND-only (OR fails closed in the composite arm
+// below), so the only way a query multiplies its disjunctions is several
+// disjunctive IN filters in one AND: each IN contributes its operand count and
+// the running product is the DNF size real GCP evaluates.
+func validateFilterDisjunctions(f *Filter, disjunctions *int) error {
 	if f == nil {
 		return nil
 	}
 	if f.Property != nil {
-		return validatePropertyFilter(f.Property)
+		return validatePropertyFilter(f.Property, disjunctions)
 	}
 	if f.Composite != nil {
 		if f.Composite.Op != CompositeAnd {
@@ -76,7 +88,7 @@ func validateFilter(f *Filter) error {
 			return invalidArgument("AND requires at least one filter")
 		}
 		for _, sub := range f.Composite.Filters {
-			if err := validateFilter(sub); err != nil {
+			if err := validateFilterDisjunctions(sub, disjunctions); err != nil {
 				return err
 			}
 		}
@@ -93,8 +105,24 @@ func validateFilter(f *Filter) error {
 // (https://cloud.google.com/datastore/docs/concepts/queries#in).
 const maxInValues = 30
 
+// maxDisjunctions is the documented cap on the *total* number of disjunctions a
+// query's disjunctive normal form may contain, across every filter — not just
+// within one IN operand (maxInValues). Datastore mode runs on the shared
+// Firestore backend, whose limits section pins the aggregate: "Cloud Firestore
+// limits a query to a maximum of 30 disjunctions based on the query's
+// disjunctive normal form. This limit is fixed and cannot be adjusted."
+// (https://firebase.google.com/docs/firestore/query-data/queries#in_not-in_and_array-contains-any)
+// The Datastore-mode Discovery itself names no number — its IN operator is only
+// "subject to disjunction limits" — but the shared backend enforces the same
+// DNF cap, and the repo's Firestore provider already models it
+// (internal/gcp/provider/firestore/query.go maxDisjunctions). Because the
+// emulator is AND-only, each IN filter multiplies the running count, so
+// AND(IN[20], IN[20]) — 400 disjunctions — is rejected here as real GCP rejects
+// it, while a single IN at maxInValues (30) is exactly at the limit.
+const maxDisjunctions = 30
+
 // validatePropertyFilter validates one property filter's static shape.
-func validatePropertyFilter(pf *PropertyFilter) error {
+func validatePropertyFilter(pf *PropertyFilter, disjunctions *int) error {
 	switch pf.Op {
 	case PropertyEqual, PropertyNotEqual,
 		PropertyLessThan, PropertyLessThanOrEqual,
@@ -104,18 +132,24 @@ func validatePropertyFilter(pf *PropertyFilter) error {
 		// Real Datastore requires the IN operand to be a non-empty ArrayValue
 		// (Discovery: "That `value` is a non-empty `ArrayValue`, subject to
 		// disjunction limits"). The Discovery names no number; the query docs
-		// pin the disjunction cap at 30 values ("Use the IN operator to combine
-		// up to 30 equality (==) clauses on the same property with a logical
-		// OR"), so an over-cap array fails closed here rather than being
+		// pin the per-IN disjunction cap at 30 values ("Use the IN operator to
+		// combine up to 30 equality (==) clauses on the same property with a
+		// logical OR"), so an over-cap array fails closed here rather than being
 		// evaluated. NOT_IN — whose operand is capped at 10 — is unsupported
 		// here and never reaches this arm (the default arm fails it closed; the
-		// TD16 precedent). The per-query aggregate budget across several
-		// disjunctive filters (TD43) is not modelled.
+		// TD16 precedent).
 		if pf.Value.ArrayValue == nil || len(pf.Value.ArrayValue.Values) == 0 {
 			return invalidArgument("IN requires a non-empty array value")
 		}
-		if n := len(pf.Value.ArrayValue.Values); n > maxInValues {
+		n := len(pf.Value.ArrayValue.Values)
+		if n > maxInValues {
 			return invalidArgument(fmt.Sprintf("IN supports at most %d values, got %d", maxInValues, n))
+		}
+		// Each IN contributes its operand count to the query's DNF; several in
+		// one AND multiply. Enforce the per-query aggregate budget (TD43).
+		*disjunctions *= n
+		if *disjunctions > maxDisjunctions {
+			return invalidArgument(fmt.Sprintf("query exceeds the maximum of %d disjunctions", maxDisjunctions))
 		}
 		return nil
 	case PropertyHasAncestor:

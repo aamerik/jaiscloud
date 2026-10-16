@@ -424,6 +424,62 @@ func TestValidateINDisjunctionLimit(t *testing.T) {
 	}
 }
 
+// TestValidateQueryDisjunctionBudget pins the per-query disjunction cap (TD43):
+// real GCP limits a query to 30 disjunctions based on its disjunctive normal
+// form, so several IN filters in one AND multiply and an oversized combined
+// query fails loud with InvalidArgument/400 naming the limit — even though each
+// IN operand is individually within maxInValues. The emulator is AND-only, so
+// the running product of the IN operand counts is the DNF size.
+func TestValidateQueryDisjunctionBudget(t *testing.T) {
+	in := func(prop string, n int) *Filter {
+		return &Filter{Property: &PropertyFilter{Property: prop, Op: PropertyIn, Value: valArray(inValues(n)...)}}
+	}
+	and := func(fs ...*Filter) *Filter {
+		return &Filter{Composite: &CompositeFilter{Op: CompositeAnd, Filters: fs}}
+	}
+
+	ok := []struct {
+		name string
+		f    *Filter
+	}{
+		{"single IN at limit", in("a", maxInValues)},
+		{"two INs at product limit", and(in("a", 6), in("b", 5))},
+		{"non-disjunctive clause does not multiply", and(in("a", maxInValues), &Filter{
+			Property: &PropertyFilter{Property: "b", Op: PropertyEqual, Value: valInt(1)}})},
+		{"nested AND at product limit", and(in("a", 5), and(in("b", 6), in("c", 1)))},
+	}
+	for _, tc := range ok {
+		if err := validateFilter(tc.f); err != nil {
+			t.Errorf("%s: validateFilter = %v, want nil", tc.name, err)
+		}
+	}
+
+	bad := []struct {
+		name string
+		f    *Filter
+	}{
+		// 20*20 = 400 disjunctions, each operand individually legal: the exact
+		// shape the TD31 review identified as accepted-but-rejected-by-real-GCP.
+		{"two INs over product limit", and(in("a", 20), in("b", 20))},
+		{"product just over limit", and(in("a", 10), in("b", 4))},
+		{"nested AND over product limit", and(in("a", 5), and(in("b", 7), in("c", 1)))},
+	}
+	for _, tc := range bad {
+		err := validateFilter(tc.f)
+		if err == nil {
+			t.Errorf("%s: validateFilter = nil, want an error", tc.name)
+			continue
+		}
+		pe := asProviderError(t, err)
+		if pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+			t.Errorf("%s: = {%q,%d}, want InvalidArgument/400", tc.name, pe.Code, pe.HTTPStatus)
+		}
+		if !strings.Contains(pe.Message, strconv.Itoa(maxDisjunctions)) {
+			t.Errorf("%s: message %q should name the %d-disjunction limit", tc.name, pe.Message, maxDisjunctions)
+		}
+	}
+}
+
 // TestMatchesFilterDispatch covers the filter dispatcher: nil matches, AND
 // composites evaluate every clause, and every unsupported/incomplete shape
 // fails closed with an InvalidArgument error rather than matching everything.
