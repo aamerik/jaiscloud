@@ -100,7 +100,7 @@ packages:
   - package: internal/gcp/service/iamcredentials
     min_percent: 78.13
   - package: internal/gcp/service/kms
-    min_percent: 21.92
+    min_percent: 32.4
   - package: internal/gcp/service/logging
     min_percent: 79.42
   - package: internal/gcp/service/managedkafka
@@ -109,6 +109,8 @@ packages:
     min_percent: 86.08
   - package: internal/gcp/service/monitoring
     min_percent: 60.82
+  - package: internal/gcp/service/pubsub
+    min_percent: 88.35
   - package: internal/gcp/service/resourcemanager
     min_percent: 90.41
   - package: internal/gcp/service/run

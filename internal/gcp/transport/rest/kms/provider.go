@@ -52,6 +52,8 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"KMS.CryptoKeyVersionAsymmetricDecrypt": p.CryptoKeyVersionAsymmetricDecrypt,
 		"KMS.CryptoKeyVersionMacSign":           p.CryptoKeyVersionMacSign,
 		"KMS.CryptoKeyVersionMacVerify":         p.CryptoKeyVersionMacVerify,
+		"KMS.CryptoKeyVersionRawEncrypt":        p.CryptoKeyVersionRawEncrypt,
+		"KMS.CryptoKeyVersionRawDecrypt":        p.CryptoKeyVersionRawDecrypt,
 		"KMS.CryptoKeyVersionGetPublicKey":      p.CryptoKeyVersionGetPublicKey,
 		"KMS.CryptoKeyVersionImport":            p.CryptoKeyVersionImport,
 		"KMS.CryptoKeyVersionImportTrusted":     p.CryptoKeyVersionImportTrusted,
@@ -60,12 +62,16 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"KMS.ImportJobCreate":                   p.ImportJobCreate,
 		"KMS.ImportJobGet":                      p.ImportJobGet,
 		"KMS.ImportJobList":                     p.ImportJobList,
+		"KMS.GenerateRandomBytes":               p.GenerateRandomBytes,
 		"KMS.KeyRingGetIamPolicy":               p.GetIamPolicy,
 		"KMS.KeyRingSetIamPolicy":               p.SetIamPolicy,
 		"KMS.KeyRingTestIamPermissions":         p.TestIamPermissions,
 		"KMS.CryptoKeyGetIamPolicy":             p.GetIamPolicy,
 		"KMS.CryptoKeySetIamPolicy":             p.SetIamPolicy,
 		"KMS.CryptoKeyTestIamPermissions":       p.TestIamPermissions,
+		"KMS.ImportJobGetIamPolicy":             p.GetIamPolicy,
+		"KMS.ImportJobSetIamPolicy":             p.SetIamPolicy,
+		"KMS.ImportJobTestIamPermissions":       p.TestIamPermissions,
 	}
 }
 
@@ -344,6 +350,93 @@ func (p *Provider) CryptoKeyDecrypt(ctx context.Context, nr *model.NormalizedReq
 }
 
 // ─── CryptoKeyVersions ────────────────────────────────────────────────────────
+
+func (p *Provider) CryptoKeyVersionRawEncrypt(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	loc, kr, key, version := parseVersion(name)
+	body, _ := nr.Params["body"].(map[string]any)
+	pt := decodeBase64Field(body, "plaintext")
+	if err := verifyCRCField(body, "plaintextCrc32c", pt); err != nil {
+		return nil, err
+	}
+	aad := decodeBase64Field(body, "additionalAuthenticatedData")
+	if err := verifyCRCField(body, "additionalAuthenticatedDataCrc32c", aad); err != nil {
+		return nil, err
+	}
+	iv := decodeBase64Field(body, "initializationVector")
+	if err := verifyCRCField(body, "initializationVectorCrc32c", iv); err != nil {
+		return nil, err
+	}
+	res, err := p.core.RawEncrypt(ctx, nr.AccountID, loc, kr, key, version, pt, aad, iv)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{
+		"name":                       kmscore.VersionName(nr.AccountID, loc, kr, key, version),
+		"ciphertext":                 base64.StdEncoding.EncodeToString(res.Ciphertext),
+		"initializationVector":       base64.StdEncoding.EncodeToString(res.IV),
+		"tagLength":                  16,
+		"ciphertextCrc32c":           crc32cString(res.Ciphertext),
+		"initializationVectorCrc32c": crc32cString(res.IV),
+		"protectionLevel":            "SOFTWARE",
+		"verifiedPlaintextCrc32c":    strField(body, "plaintextCrc32c") != "",
+		"verifiedAdditionalAuthenticatedDataCrc32c": strField(body, "additionalAuthenticatedDataCrc32c") != "",
+		"verifiedInitializationVectorCrc32c":        strField(body, "initializationVectorCrc32c") != "",
+	}), nil
+}
+
+func (p *Provider) CryptoKeyVersionRawDecrypt(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	loc, kr, key, version := parseVersion(name)
+	body, _ := nr.Params["body"].(map[string]any)
+	ct := decodeBase64Field(body, "ciphertext")
+	if err := verifyCRCField(body, "ciphertextCrc32c", ct); err != nil {
+		return nil, err
+	}
+	aad := decodeBase64Field(body, "additionalAuthenticatedData")
+	if err := verifyCRCField(body, "additionalAuthenticatedDataCrc32c", aad); err != nil {
+		return nil, err
+	}
+	iv := decodeBase64Field(body, "initializationVector")
+	if err := verifyCRCField(body, "initializationVectorCrc32c", iv); err != nil {
+		return nil, err
+	}
+	pt, err := p.core.RawDecrypt(ctx, nr.AccountID, loc, kr, key, version, ct, aad, iv, intField(body, "tagLength"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{
+		"plaintext":                base64.StdEncoding.EncodeToString(pt),
+		"plaintextCrc32c":          crc32cString(pt),
+		"protectionLevel":          "SOFTWARE",
+		"verifiedCiphertextCrc32c": strField(body, "ciphertextCrc32c") != "",
+		"verifiedAdditionalAuthenticatedDataCrc32c": strField(body, "additionalAuthenticatedDataCrc32c") != "",
+		"verifiedInitializationVectorCrc32c":        strField(body, "initializationVectorCrc32c") != "",
+	}), nil
+}
+
+// GenerateRandomBytes implements locations.generateRandomBytes.
+func (p *Provider) GenerateRandomBytes(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	body, _ := nr.Params["body"].(map[string]any)
+	data, err := p.core.GenerateRandomBytes(ctx, name, intField(body, "lengthBytes"), strField(body, "protectionLevel"))
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(map[string]any{
+		"data":       base64.StdEncoding.EncodeToString(data),
+		"dataCrc32c": crc32cString(data),
+	}), nil
+}
 
 func (p *Provider) CryptoKeyVersionCreate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
@@ -868,6 +961,42 @@ func (p *Provider) TestIamPermissions(ctx context.Context, nr *model.NormalizedR
 
 func crc32cString(b []byte) string {
 	return strconv.FormatUint(uint64(crc32.Checksum(b, crc32.MakeTable(crc32.Castagnoli))), 10)
+}
+
+// verifyCRCField enforces a request's optional CRC32C integrity field: an
+// absent/empty field is ignored, a present one must parse as the int64 CRC of
+// data or the request is rejected (mirrors the gRPC transport's verifyCRC).
+func verifyCRCField(body map[string]any, field string, data []byte) error {
+	s := strField(body, field)
+	if s == "" {
+		return nil
+	}
+	want, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return model.NewProviderError("InvalidRequest", field+" must be an int64 checksum", 400)
+	}
+	got := crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli))
+	if uint64(want) != uint64(got) {
+		return model.NewProviderError("InvalidRequest", field+" mismatch", 400)
+	}
+	return nil
+}
+
+// intField reads an integer body field, tolerating the JSON number forms
+// encoding/json produces for an int32/int64.
+func intField(body map[string]any, field string) int {
+	switch v := body[field].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case string:
+		n, _ := strconv.Atoi(v)
+		return n
+	}
+	return 0
 }
 
 func decodeAAD(v any) []byte {

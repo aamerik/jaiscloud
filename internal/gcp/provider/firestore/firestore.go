@@ -80,6 +80,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Firestore.ListDocuments":     p.ListDocuments,
 		"Firestore.ListCollectionIds": p.ListCollectionIds,
 		"Firestore.RunQuery":          p.RunQuery,
+		"Firestore.PartitionQuery":    p.PartitionQuery,
 		"Firestore.Commit":            p.Commit,
 		"Firestore.BatchWrite":        p.BatchWrite,
 		"Firestore.BatchGet":          p.BatchGet,
@@ -831,6 +832,47 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 	}
 	lines = append(lines, string(b))
 	return provider.OK(map[string]any{wire.RawJSONKey: json.RawMessage(strings.Join(lines, "\n"))}), nil
+}
+
+// PartitionQuery implements documents.partitionQuery: cursor partition points
+// over a structured query's ordered result set. As in the gRPC transport, an
+// empty partition list is returned when the query yields too few documents to
+// partition or a single partition is requested (the SDK treats that as one
+// full-range partition).
+func (p *Provider) PartitionQuery(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	var req partitionQueryRequestWire
+	if err := decodeBody(nr, &req); err != nil {
+		return nil, err
+	}
+	database, path, err := relativeName(nr)
+	if err != nil {
+		return nil, err
+	}
+	if req.StructuredQuery == nil {
+		return nil, model.NewProviderError("InvalidArgument", "partitionQuery requires a structuredQuery", 400)
+	}
+	count := int(req.PartitionCount)
+	if count <= 1 {
+		return provider.OK(map[string]any{"partitions": []any{}}), nil
+	}
+	docs, err := p.Service.RunQuery(ctx, nr.AccountID, database, path, req.StructuredQuery, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) < count {
+		return provider.OK(map[string]any{"partitions": []any{}}), nil
+	}
+	partitions := make([]any, 0, count-1)
+	for i := 1; i < count; i++ {
+		idx := len(docs) * i / count
+		if idx >= len(docs) {
+			break
+		}
+		partitions = append(partitions, map[string]any{
+			"values": []any{map[string]any{"referenceValue": docs[idx].Name}},
+		})
+	}
+	return provider.OK(map[string]any{"partitions": partitions}), nil
 }
 
 // Commit implements documents.commit: an atomic batch of writes with optimistic

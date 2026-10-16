@@ -21,6 +21,7 @@ package kms
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"strings"
 	"time"
@@ -38,6 +39,7 @@ import (
 const (
 	rtKeyRingPolicy   = "gcp_keyring_policy"
 	rtCryptoKeyPolicy = "gcp_cryptokey_policy"
+	rtImportJobPolicy = "gcp_kms_importjob_policy"
 	rtRetiredResource = "gcp_kms_retiredresource"
 	rtImportJob       = "gcp_kms_importjob"
 )
@@ -264,11 +266,15 @@ func (s *Service) authorizeCryptoKey(ctx context.Context, project, location, kr,
 // ─── IAM ──────────────────────────────────────────────────────────────────────
 
 // parseIamResource splits a KMS resource name into its policy resource type and
-// location-qualified id. IAM is scoped to key rings and crypto keys; versions
-// have no IAM.
+// location-qualified id. IAM is scoped to key rings, crypto keys and import
+// jobs; versions have no IAM. A name may be the full "projects/{p}/..." form or
+// the relative form the REST codec hands the core.
 func parseIamResource(name string) (policyType, id string, ok bool) {
 	if _, _, _, _, version, ok := SplitVersionName(name); ok && version != "" {
 		return "", "", false
+	}
+	if loc, kr, job, ok := importJobRel(name); ok {
+		return rtImportJobPolicy, loc + "/" + kr + "/" + job, true
 	}
 	if loc, kr, key, ok := parseCryptoKeyRel(name); ok {
 		return rtCryptoKeyPolicy, loc + "/" + kr + "/" + key, true
@@ -277,6 +283,20 @@ func parseIamResource(name string) (policyType, id string, ok bool) {
 		return rtKeyRingPolicy, loc + "/" + kr, true
 	}
 	return "", "", false
+}
+
+// importJobRel splits an import-job name that may or may not carry a
+// projects/{p} prefix into location/keyRing/job.
+func importJobRel(name string) (location, kr, job string, ok bool) {
+	if _, loc, kr, job, ok := SplitImportJobName(name); ok {
+		return loc, kr, job, true
+	}
+	name = strings.TrimPrefix(strings.TrimPrefix(name, "/"), "locations/")
+	parts := strings.Split(name, "/")
+	if len(parts) == 5 && parts[1] == "keyRings" && parts[3] == "importJobs" {
+		return parts[0], parts[2], parts[4], true
+	}
+	return "", "", "", false
 }
 
 // parseCryptoKeyRel splits a name that may or may not carry a projects/{p}
@@ -308,11 +328,15 @@ func parseKeyRingRel(name string) (location, kr string, ok bool) {
 	return "", "", false
 }
 
-// IamResourceExists verifies the key ring or crypto key backing an IAM request
-// exists.
+// IamResourceExists verifies the key ring, crypto key or import job backing an
+// IAM request exists.
 func (s *Service) IamResourceExists(ctx context.Context, project, name string) error {
 	if _, _, _, _, version, ok := SplitVersionName(name); ok && version != "" {
 		return invalidArgument("invalid resource name")
+	}
+	if loc, kr, job, ok := importJobRel(name); ok {
+		_, err := s.GetImportJob(ctx, project, loc, kr, job)
+		return err
 	}
 	if loc, kr, key, ok := parseCryptoKeyRel(name); ok {
 		_, err := s.keys.GetCryptoKey(ctx, project, loc, kr, key)
@@ -367,6 +391,44 @@ func (s *Service) TestIamPermissions(ctx context.Context, project, name string, 
 }
 
 // ─── Randomness ───────────────────────────────────────────────────────────────
+
+// RandomBytesMin and RandomBytesMax are the documented bounds of
+// locations.generateRandomBytes: "Minimum 8 bytes, maximum 1024 bytes".
+const (
+	RandomBytesMin = 8
+	RandomBytesMax = 1024
+)
+
+// GenerateRandomBytes implements locations.generateRandomBytes: it returns
+// length cryptographically random bytes. The location name is validated for
+// shape only — the emulator models no KMS location registry, so (as with the
+// other KMS calls) a well-formed location under any project is served. The
+// request's protectionLevel is accepted and ignored: the emulator's key
+// material is software-only, so it always behaves as a SOFTWARE RNG.
+func (s *Service) GenerateRandomBytes(ctx context.Context, location string, length int, protectionLevel string) ([]byte, error) {
+	if !validLocationName(location) {
+		return nil, invalidArgument("invalid location name")
+	}
+	if length < RandomBytesMin || length > RandomBytesMax {
+		return nil, invalidArgument("length_bytes must be between 8 and 1024")
+	}
+	data := make([]byte, length)
+	if _, err := rand.Read(data); err != nil {
+		return nil, internal("random generation failed")
+	}
+	return data, nil
+}
+
+// validLocationName accepts a location resource name in either the full
+// "projects/{p}/locations/{l}" form (gRPC) or the relative "locations/{l}" form
+// the REST codec hands the core.
+func validLocationName(name string) bool {
+	if _, _, ok := SplitLocationName(name); ok {
+		return true
+	}
+	parts := strings.Split(strings.TrimPrefix(name, "/"), "/")
+	return len(parts) == 2 && parts[0] == "locations" && parts[1] != ""
+}
 
 // timeNow exposes clock.Now for the core's time-stamped writes.
 func timeNow() time.Time { return clock.Now() }

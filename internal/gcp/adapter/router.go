@@ -258,6 +258,13 @@ func detectV1Service(path string) string {
 	if custom == "generateAccessToken" || custom == "generateIdToken" || custom == "getAllowedLocations" {
 		return "iamcredentials"
 	}
+	// Cloud KMS locations.generateRandomBytes shares the bare
+	// locations[/{location}] path with Memorystore's location discovery, which
+	// is otherwise claimed below. The verb is declared only by Cloud KMS, so it
+	// discriminates before the Memorystore guard.
+	if custom == "generateRandomBytes" {
+		return "kms"
+	}
 	// Service Usage v1: /v1/projects/{project}/services[/{service}][:verb]. The
 	// bare "services" resource segment is claimed here before the generic
 	// resource-type switch — and, crucially, before the GCS raw-media fallback,
@@ -598,14 +605,15 @@ func detectMetastoreResourceType(seg []string) string {
 
 // operationsHostService maps a request host token plus path to the service that
 // owns the shared /v1/projects/{project}/locations/{location}/operations[/{id}]
-// LRO family. Managed Kafka and Dataproc Metastore each address their operations
-// under their own canonical host (managedkafka.googleapis.com /
-// metastore.googleapis.com, first DNS label managedkafka/metastore). Any other
-// host, or a non-operations path, returns "" so detection falls through to the
-// path-based resolver, which keeps the bare operations path on Cloud Workflows.
+// LRO family. Managed Kafka, Dataproc Metastore and Eventarc each address their
+// operations under their own canonical host (managedkafka.googleapis.com /
+// metastore.googleapis.com / eventarc.googleapis.com, first DNS label
+// managedkafka/metastore/eventarc). Any other host, or a non-operations path,
+// returns "" so detection falls through to the path-based resolver, which keeps
+// the bare operations path on Cloud Workflows.
 func operationsHostService(hostLabel, path string) string {
 	switch hostLabel {
-	case "managedkafka", "metastore":
+	case "managedkafka", "metastore", "eventarc":
 	default:
 		return ""
 	}

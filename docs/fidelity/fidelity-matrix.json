@@ -1,10 +1,10 @@
 {
   "version": 1,
   "summary": {
-    "total": 1118,
+    "total": 1136,
     "by_state": {
-      "ga": 971,
-      "limited": 101,
+      "ga": 984,
+      "limited": 106,
       "preview": 14,
       "unsupported": 32
     },
@@ -15,8 +15,8 @@
         "unsupported": 20
       },
       "rest": {
-        "ga": 529,
-        "limited": 100,
+        "ga": 542,
+        "limited": 105,
         "preview": 14,
         "unsupported": 12
       }
@@ -50,10 +50,10 @@
         "ga": 16
       },
       "eventarc": {
-        "ga": 99
+        "ga": 103
       },
       "firestore": {
-        "ga": 60
+        "ga": 61
       },
       "firestoreadmin": {
         "ga": 27,
@@ -72,7 +72,7 @@
         "preview": 14
       },
       "kms": {
-        "ga": 71
+        "ga": 77
       },
       "logging": {
         "ga": 91,
@@ -83,7 +83,7 @@
         "ga": 44
       },
       "memorystore": {
-        "limited": 8
+        "limited": 13
       },
       "metastore": {
         "ga": 50,
@@ -96,7 +96,7 @@
         "ga": 5
       },
       "pubsub": {
-        "ga": 46
+        "ga": 48
       },
       "resourcemanager": {
         "ga": 20
@@ -129,11 +129,11 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 540
+        "rest": 554
       },
       "unverified": {
         "grpc": 21,
-        "rest": 115
+        "rest": 119
       }
     },
     "grpc_only_services": [
@@ -3468,6 +3468,20 @@
     },
     {
       "service": "eventarc",
+      "operation": "Eventarc.CancelOperation",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "eventarc.projects.locations.operations.cancel",
+      "verified": true,
+      "evidence": [
+        "discovery=eventarc.projects.locations.operations.cancel",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "eventarc",
       "operation": "Eventarc.ChannelConnectionGetIamPolicy",
       "transport": "rest",
       "state": "ga",
@@ -3716,6 +3730,20 @@
     },
     {
       "service": "eventarc",
+      "operation": "Eventarc.DeleteOperation",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "eventarc.projects.locations.operations.delete",
+      "verified": false,
+      "evidence": [
+        "discovery=eventarc.projects.locations.operations.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "eventarc",
       "operation": "Eventarc.DeletePipeline",
       "transport": "rest",
       "state": "ga",
@@ -3858,6 +3886,19 @@
         "discovery=eventarc.projects.locations.messageBuses.get",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.GetOperation",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "eventarc.projects.locations.operations.get",
+      "verified": false,
+      "evidence": [
+        "discovery=eventarc.projects.locations.operations.get",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
       ]
     },
     {
@@ -4013,6 +4054,19 @@
       "verified": true,
       "evidence": [
         "discovery=eventarc.projects.locations.messageBuses.list",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "eventarc",
+      "operation": "Eventarc.ListOperations",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "eventarc.projects.locations.operations.list",
+      "verified": true,
+      "evidence": [
+        "discovery=eventarc.projects.locations.operations.list",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]
@@ -4792,7 +4846,7 @@
         "discovery=firestore.projects.databases.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 39 transcript entries)"
+        "verified=true (rest, 40 transcript entries)"
       ]
     },
     {
@@ -4806,7 +4860,7 @@
         "discovery=firestore.projects.databases.documents.createDocument",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 7 transcript entries)"
+        "verified=true (rest, 8 transcript entries)"
       ]
     },
     {
@@ -5180,6 +5234,19 @@
       "verified": true,
       "evidence": [
         "discovery=firestore.projects.databases.userCreds.list",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.PartitionQuery",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.documents.partitionQuery",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.documents.partitionQuery",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]
@@ -7240,7 +7307,7 @@
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 27 transcript entries)"
+        "verified=true (rest, 29 transcript entries)"
       ]
     },
     {
@@ -7414,7 +7481,7 @@
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 13 transcript entries)"
+        "verified=true (rest, 15 transcript entries)"
       ]
     },
     {
@@ -7566,6 +7633,32 @@
     },
     {
       "service": "kms",
+      "operation": "KMS.CryptoKeyVersionRawDecrypt",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.rawDecrypt",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.rawDecrypt",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.CryptoKeyVersionRawEncrypt",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.rawEncrypt",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.rawEncrypt",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "kms",
       "operation": "KMS.CryptoKeyVersionRestore",
       "transport": "rest",
       "state": "ga",
@@ -7594,6 +7687,19 @@
     },
     {
       "service": "kms",
+      "operation": "KMS.GenerateRandomBytes",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudkms.projects.locations.generateRandomBytes",
+      "verified": true,
+      "evidence": [
+        "discovery=cloudkms.projects.locations.generateRandomBytes",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "kms",
       "operation": "KMS.ImportJobCreate",
       "transport": "rest",
       "state": "ga",
@@ -7603,7 +7709,7 @@
         "discovery=cloudkms.projects.locations.keyRings.importJobs.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 2 transcript entries)"
+        "verified=true (rest, 5 transcript entries)"
       ]
     },
     {
@@ -7622,6 +7728,20 @@
     },
     {
       "service": "kms",
+      "operation": "KMS.ImportJobGetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudkms.projects.locations.keyRings.importJobs.getIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.importJobs.getIamPolicy",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "kms",
       "operation": "KMS.ImportJobList",
       "transport": "rest",
       "state": "ga",
@@ -7629,6 +7749,34 @@
       "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.importJobs.list",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.ImportJobSetIamPolicy",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudkms.projects.locations.keyRings.importJobs.setIamPolicy",
+      "verified": true,
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.importJobs.setIamPolicy",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.ImportJobTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudkms.projects.locations.keyRings.importJobs.testIamPermissions",
+      "verified": true,
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.importJobs.testIamPermissions",
         "mutating",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
@@ -7645,7 +7793,7 @@
         "discovery=cloudkms.projects.locations.keyRings.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 36 transcript entries)"
+        "verified=true (rest, 41 transcript entries)"
       ]
     },
     {
@@ -9756,7 +9904,7 @@
         "discovery=redis.projects.locations.instances.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 5 transcript entries)"
+        "verified=true (rest, 10 transcript entries)"
       ]
     },
     {
@@ -9770,6 +9918,49 @@
       "evidence": [
         "discovery=redis.projects.locations.instances.delete",
         "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "memorystore",
+      "operation": "Memorystore.ExportInstance",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no data plane)",
+      "discovery": "redis.projects.locations.instances.export",
+      "verified": true,
+      "evidence": [
+        "discovery=redis.projects.locations.instances.export",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "memorystore",
+      "operation": "Memorystore.FailoverInstance",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no data plane)",
+      "discovery": "redis.projects.locations.instances.failover",
+      "verified": true,
+      "evidence": [
+        "discovery=redis.projects.locations.instances.failover",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "memorystore",
+      "operation": "Memorystore.GetAuthString",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no data plane)",
+      "discovery": "redis.projects.locations.instances.getAuthString",
+      "verified": true,
+      "evidence": [
+        "discovery=redis.projects.locations.instances.getAuthString",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]
@@ -9804,6 +9995,21 @@
     },
     {
       "service": "memorystore",
+      "operation": "Memorystore.ImportInstance",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no data plane)",
+      "discovery": "redis.projects.locations.instances.import",
+      "verified": true,
+      "evidence": [
+        "discovery=redis.projects.locations.instances.import",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "memorystore",
       "operation": "Memorystore.ListInstances",
       "transport": "rest",
       "state": "limited",
@@ -9826,6 +10032,20 @@
       "verified": true,
       "evidence": [
         "discovery=redis.projects.locations.list",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "memorystore",
+      "operation": "Memorystore.RescheduleMaintenance",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "metadata-only over ResourceStore (no data plane)",
+      "discovery": "redis.projects.locations.instances.rescheduleMaintenance",
+      "verified": true,
+      "evidence": [
+        "discovery=redis.projects.locations.instances.rescheduleMaintenance",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]
@@ -11925,7 +12145,7 @@
         "discovery=pubsub.projects.subscriptions.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 12 transcript entries)"
+        "verified=true (rest, 14 transcript entries)"
       ]
     },
     {
@@ -12010,6 +12230,19 @@
     },
     {
       "service": "pubsub",
+      "operation": "PubSub.SubscriptionModifyPushConfig",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "pubsub.projects.subscriptions.modifyPushConfig",
+      "verified": true,
+      "evidence": [
+        "discovery=pubsub.projects.subscriptions.modifyPushConfig",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "pubsub",
       "operation": "PubSub.SubscriptionPull",
       "transport": "rest",
       "state": "ga",
@@ -12019,6 +12252,19 @@
         "discovery=pubsub.projects.subscriptions.pull",
         "postgres=yes",
         "verified=true (rest, 2 transcript entries)"
+      ]
+    },
+    {
+      "service": "pubsub",
+      "operation": "PubSub.SubscriptionSeek",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "pubsub.projects.subscriptions.seek",
+      "verified": true,
+      "evidence": [
+        "discovery=pubsub.projects.subscriptions.seek",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
