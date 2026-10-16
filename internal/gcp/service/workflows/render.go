@@ -12,6 +12,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // operationMetadataType is the @type of the Cloud Workflows v1 OperationMetadata.
@@ -25,9 +26,9 @@ func WorkflowJSON(w workflowsstore.Workflow, project string) map[string]any {
 		"name":               WorkflowName(project, w.Location, w.ID),
 		"state":              w.State,
 		"revisionId":         w.RevisionID,
-		"revisionCreateTime": liveRevisionCreateTime(w).Format(time.RFC3339Nano),
-		"createTime":         w.CreateTime.Format(time.RFC3339Nano),
-		"updateTime":         w.UpdateTime.Format(time.RFC3339Nano),
+		"revisionCreateTime": timestamp.Canonical(liveRevisionCreateTime(w)),
+		"createTime":         timestamp.Canonical(w.CreateTime),
+		"updateTime":         timestamp.Canonical(w.UpdateTime),
 	}
 	if w.Description != "" {
 		out["description"] = w.Description
@@ -77,7 +78,7 @@ func RevisionJSON(r Revision, project string) map[string]any {
 	out := WorkflowJSON(r.Workflow, project)
 	out["state"] = r.State
 	out["revisionId"] = r.RevisionID
-	out["revisionCreateTime"] = r.RevisionCreateTime.Format(time.RFC3339Nano)
+	out["revisionCreateTime"] = timestamp.Canonical(r.RevisionCreateTime)
 	if r.SourceContents != "" {
 		out["sourceContents"] = r.SourceContents
 	} else {
@@ -109,7 +110,7 @@ func OperationJSON(op workflowsstore.Operation, project string) map[string]any {
 	name := OperationName(project, op.Location, op.ID)
 	metadata := map[string]any{
 		"@type":      operationMetadataType,
-		"createTime": op.CreateTime.Format(time.RFC3339Nano),
+		"createTime": timestamp.Canonical(op.CreateTime),
 		"target":     op.Target,
 		"verb":       op.Verb,
 		"apiVersion": "v1",
@@ -120,7 +121,7 @@ func OperationJSON(op workflowsstore.Operation, project string) map[string]any {
 		"done":     op.Done,
 	}
 	if op.Done {
-		metadata["endTime"] = op.EndTime.Format(time.RFC3339Nano)
+		metadata["endTime"] = timestamp.Canonical(op.EndTime)
 		var response any = map[string]any{}
 		if op.Response != "" {
 			_ = json.Unmarshal([]byte(op.Response), &response)

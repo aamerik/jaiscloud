@@ -10,6 +10,7 @@ import (
 
 	core "jaiscloud/internal/gcp/service/monitoring"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // Provider handles the Cloud Monitoring v3 REST data plane. It is a thin
@@ -430,7 +431,7 @@ func (p *Provider) GetNotificationChannelVerificationCode(ctx context.Context, n
 	}
 	return provider.OK(map[string]any{
 		"code":       code,
-		"expireTime": expireTime.UTC().Format(time.RFC3339Nano),
+		"expireTime": timestamp.Canonical(expireTime),
 	}), nil
 }
 

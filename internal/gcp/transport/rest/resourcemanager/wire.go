@@ -7,9 +7,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	core "jaiscloud/internal/gcp/service/resourcemanager"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 )
 
@@ -115,7 +115,7 @@ func projectToV1JSON(p core.Project) map[string]any {
 		out["parent"] = parentToV1Resource(p.Parent)
 	}
 	if !p.CreateTime.IsZero() {
-		out["createTime"] = p.CreateTime.UTC().Format(time.RFC3339Nano)
+		out["createTime"] = timestamp.Canonical(p.CreateTime)
 	}
 	return out
 }
@@ -159,7 +159,7 @@ func operationMetadata(op core.Operation) map[string]any {
 	if op.Verb == "create" {
 		return map[string]any{
 			"@type":      v1CreationStatusType,
-			"createTime": op.CreateTime.UTC().Format(time.RFC3339Nano),
+			"createTime": timestamp.Canonical(op.CreateTime),
 			"gettable":   op.Done,
 			"ready":      op.Done,
 		}

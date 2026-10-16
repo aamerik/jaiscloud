@@ -11,6 +11,7 @@ import (
 
 	"jaiscloud/internal/gcp/resource"
 	schedstore "jaiscloud/internal/gcp/store/scheduler"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 )
 
@@ -257,13 +258,13 @@ func jobToJSON(j schedstore.Job) map[string]any {
 		out["attemptDeadline"] = formatDuration(j.AttemptDeadline)
 	}
 	if !j.ScheduleTime.IsZero() {
-		out["scheduleTime"] = j.ScheduleTime.UTC().Format(time.RFC3339Nano)
+		out["scheduleTime"] = timestamp.Canonical(j.ScheduleTime)
 	}
 	if !j.LastAttemptTime.IsZero() {
-		out["lastAttemptTime"] = j.LastAttemptTime.UTC().Format(time.RFC3339Nano)
+		out["lastAttemptTime"] = timestamp.Canonical(j.LastAttemptTime)
 	}
 	if !j.UserUpdateTime.IsZero() {
-		out["userUpdateTime"] = j.UserUpdateTime.UTC().Format(time.RFC3339Nano)
+		out["userUpdateTime"] = timestamp.Canonical(j.UserUpdateTime)
 	}
 	if j.Status != nil {
 		out["status"] = map[string]any{"code": j.Status.Code, "message": j.Status.Message}

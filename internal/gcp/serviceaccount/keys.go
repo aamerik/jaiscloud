@@ -15,10 +15,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"time"
 
 	"jaiscloud/internal/clock"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/store"
 )
 
@@ -97,7 +97,7 @@ func CreateKey(ctx context.Context, resources store.ResourceStore, account, emai
 		KeyID:      GenerateKeyID(),
 		Algorithm:  "KEY_ALG_RSA_2048",
 		PrivateDER: base64.StdEncoding.EncodeToString(priv),
-		ValidAfter: clock.Now().UTC().Format(time.RFC3339Nano),
+		ValidAfter: timestamp.Canonical(clock.Now()),
 	}
 	data, _ := json.Marshal(k)
 	if err := resources.Create(ctx, account, store.GlobalRegion, store.ResourceEntry{Type: ResourceType, ID: k.KeyID, Data: data}); err != nil {

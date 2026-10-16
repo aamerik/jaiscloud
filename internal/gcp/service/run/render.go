@@ -7,6 +7,7 @@ import (
 	"time"
 
 	runstore "jaiscloud/internal/gcp/store/run"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // google.protobuf.Any type URLs used on Cloud Run operation responses.
@@ -25,7 +26,7 @@ func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.UTC().Format(time.RFC3339Nano)
+	return timestamp.Canonical(t)
 }
 
 // readyCondition is the terminal Ready condition the mock reports.

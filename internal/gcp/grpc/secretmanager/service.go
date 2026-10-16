@@ -25,6 +25,7 @@ import (
 	"jaiscloud/internal/gcp/resource"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 
@@ -588,7 +589,7 @@ func (s *Service) maybeRotate(ctx context.Context, account, id string, sec secre
 	}
 	if sec.Rotation.RotationPeriod != "" {
 		if d, err := time.ParseDuration(sec.Rotation.RotationPeriod); err == nil {
-			sec.Rotation.NextRotationTime = clock.Now().Add(d).UTC().Format(time.RFC3339Nano)
+			sec.Rotation.NextRotationTime = timestamp.Canonical(clock.Now().Add(d))
 		}
 	}
 	ver, err := s.secrets.NextVersion(ctx, account, id)
@@ -656,7 +657,7 @@ func secretToProto(project string, s secretmanagerstore.Secret) *secretmanagerpb
 		Name: secretName(project, s.ID),
 		// etag is a stable hash of name+createTime (matches GCP's
 		// immutable-etag semantics and the REST provider's computation).
-		Etag: policy.Etag(secretName(project, s.ID) + s.CreateTime.Format(time.RFC3339Nano)),
+		Etag: policy.Etag(secretName(project, s.ID) + timestamp.Canonical(s.CreateTime)),
 		Replication: &secretmanagerpb.Replication{
 			Replication: &secretmanagerpb.Replication_Automatic_{
 				Automatic: &secretmanagerpb.Replication_Automatic{},
@@ -716,7 +717,7 @@ func stateToProto(state string) secretmanagerpb.SecretVersion_State {
 func rotationFromProto(r *secretmanagerpb.Rotation) *secretmanagerstore.Rotation {
 	out := &secretmanagerstore.Rotation{}
 	if r.GetNextRotationTime() != nil {
-		out.NextRotationTime = r.GetNextRotationTime().AsTime().UTC().Format(time.RFC3339Nano)
+		out.NextRotationTime = timestamp.Canonical(r.GetNextRotationTime().AsTime())
 	}
 	if r.GetRotationPeriod() != nil {
 		out.RotationPeriod = r.GetRotationPeriod().AsDuration().String()

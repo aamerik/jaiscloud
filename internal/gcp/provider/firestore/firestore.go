@@ -22,6 +22,7 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -254,10 +255,10 @@ func documentMap(d firestorestore.Document) map[string]any {
 		m["fields"] = fields
 	}
 	if !d.CreateTime.IsZero() {
-		m["createTime"] = d.CreateTime.UTC().Format(time.RFC3339Nano)
+		m["createTime"] = timestamp.Canonical(d.CreateTime)
 	}
 	if !d.UpdateTime.IsZero() {
-		m["updateTime"] = d.UpdateTime.UTC().Format(time.RFC3339Nano)
+		m["updateTime"] = timestamp.Canonical(d.UpdateTime)
 	}
 	return m
 }
@@ -839,7 +840,7 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 	for _, d := range results {
 		item := map[string]any{
 			"document": documentMap(d),
-			"readTime": readTime.Format(time.RFC3339Nano),
+			"readTime": timestamp.Canonical(readTime),
 		}
 		b, err := json.Marshal(item)
 		if err != nil {
@@ -847,7 +848,7 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 		}
 		lines = append(lines, string(b))
 	}
-	final := map[string]any{"done": true, "readTime": readTime.Format(time.RFC3339Nano)}
+	final := map[string]any{"done": true, "readTime": timestamp.Canonical(readTime)}
 	if req.StructuredQuery.Offset > 0 {
 		final["skippedResults"] = req.StructuredQuery.Offset
 	}
@@ -928,7 +929,7 @@ func (p *Provider) ExecutePipeline(ctx context.Context, nr *model.NormalizedRequ
 		results = append(results, documentMap(d))
 	}
 	out := map[string]any{
-		"executionTime": res.ExecutionTime.UTC().Format(time.RFC3339Nano),
+		"executionTime": timestamp.Canonical(res.ExecutionTime),
 		"results":       results,
 	}
 	if len(res.Transaction) > 0 {
@@ -957,7 +958,7 @@ func (p *Provider) Commit(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		wr = append(wr, r)
 	}
 	return provider.OK(map[string]any{
-		"commitTime":   commitTime.Format(time.RFC3339Nano),
+		"commitTime":   timestamp.Canonical(commitTime),
 		"writeResults": wr,
 	}), nil
 }

@@ -17,6 +17,7 @@ import (
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/store/kms"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -124,7 +125,7 @@ func toStoreSecret(m secretMeta) secretmanagerstore.Secret {
 func fromStoreSecret(nr *model.NormalizedRequest, s secretmanagerstore.Secret) secretMeta {
 	m := secretMeta{Name: nr.ResourceID("secret", s.ID), Labels: s.Labels, Annotations: s.Annotations, NextVer: s.NextVer, Rotation: s.Rotation, VersionAliases: s.VersionAliases, KmsKeyName: s.KmsKeyName}
 	if !s.CreateTime.IsZero() {
-		m.CreateTime = s.CreateTime.Format(time.RFC3339Nano)
+		m.CreateTime = timestamp.Canonical(s.CreateTime)
 	}
 	return m
 }
@@ -223,10 +224,10 @@ func fromStoreVersion(nr *model.NormalizedRequest, v secretmanagerstore.Version)
 		Data:  v.Data,
 	}
 	if !v.CreateTime.IsZero() {
-		m.CreateTime = v.CreateTime.Format(time.RFC3339Nano)
+		m.CreateTime = timestamp.Canonical(v.CreateTime)
 	}
 	if !v.DestroyTime.IsZero() {
-		m.DestroyTime = v.DestroyTime.Format(time.RFC3339Nano)
+		m.DestroyTime = timestamp.Canonical(v.DestroyTime)
 	}
 	return m
 }
@@ -246,7 +247,7 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	body, _ := nr.Params["body"].(map[string]any)
 	m := secretMeta{
 		Name:       nr.ResourceID("secret", id),
-		CreateTime: clock.Now().UTC().Format(time.RFC3339Nano),
+		CreateTime: timestamp.Canonical(clock.Now()),
 		NextVer:    1,
 	}
 	if labels, ok := body["labels"].(map[string]any); ok {
@@ -399,7 +400,7 @@ func (p *Provider) maybeRotate(ctx context.Context, account, id string, s secret
 		if current.Rotation.RotationPeriod != "" {
 			if d, err := time.ParseDuration(current.Rotation.RotationPeriod); err == nil {
 				rotation := *current.Rotation
-				rotation.NextRotationTime = clock.Now().Add(d).UTC().Format(time.RFC3339Nano)
+				rotation.NextRotationTime = timestamp.Canonical(clock.Now().Add(d))
 				current.Rotation = &rotation
 			}
 		}
@@ -475,7 +476,7 @@ func (p *Provider) AddVersion(ctx context.Context, nr *model.NormalizedRequest) 
 	v := versionMeta{
 		Name:       nr.ResourceID("secret", id) + "/versions/" + version,
 		State:      "ENABLED",
-		CreateTime: clock.Now().UTC().Format(time.RFC3339Nano),
+		CreateTime: timestamp.Canonical(clock.Now()),
 		Data:       encryptedPayloadBase64,
 	}
 	stv := secretmanagerstore.Version{
@@ -624,7 +625,7 @@ func (p *Provider) appendManagedVersion(ctx context.Context, nr *model.Normalize
 	v := versionMeta{
 		Name:       nr.ResourceID("secret", id) + "/versions/" + strconv.Itoa(ver),
 		State:      "ENABLED",
-		CreateTime: clock.Now().UTC().Format(time.RFC3339Nano),
+		CreateTime: timestamp.Canonical(clock.Now()),
 		Data:       base64.StdEncoding.EncodeToString(encrypted),
 	}
 	if err := p.secrets.CreateVersion(ctx, nr.AccountID, secretmanagerstore.Version{

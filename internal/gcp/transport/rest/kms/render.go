@@ -2,11 +2,11 @@ package kms
 
 import (
 	"encoding/base64"
-	"time"
 
 	"jaiscloud/internal/gcp/policy"
 	kmscore "jaiscloud/internal/gcp/service/kms"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 )
 
@@ -28,20 +28,20 @@ func cryptoKeyMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey, primaryVers
 		"protectionLevel": protectionLevel(k.ProtectionLevel),
 	}
 	if !primaryCreateTime.IsZero() {
-		ts := primaryCreateTime.UTC().Format(time.RFC3339Nano)
+		ts := timestamp.Canonical(primaryCreateTime)
 		primary["createTime"] = ts
 		primary["generateTime"] = ts
 	}
 	if primaryVersion.State == "DESTROY_SCHEDULED" && !primaryVersion.DestroyTime.IsZero() {
-		primary["destroyTime"] = primaryVersion.DestroyTime.UTC().Format(time.RFC3339Nano)
+		primary["destroyTime"] = timestamp.Canonical(primaryVersion.DestroyTime)
 	}
 	if primaryVersion.State == "DESTROYED" && !primaryVersion.DestroyEventTime.IsZero() {
-		primary["destroyEventTime"] = primaryVersion.DestroyEventTime.UTC().Format(time.RFC3339Nano)
+		primary["destroyEventTime"] = timestamp.Canonical(primaryVersion.DestroyEventTime)
 	}
 	out := map[string]any{
 		"name":       kmscore.CryptoKeyName(nr.AccountID, k.Location, k.KeyRingID, k.ID),
 		"purpose":    k.Purpose,
-		"createTime": k.CreateTime.UTC().Format(time.RFC3339Nano),
+		"createTime": timestamp.Canonical(k.CreateTime),
 		"primary":    primary,
 		"versionTemplate": map[string]any{
 			"algorithm":       k.Algorithm,
@@ -58,7 +58,7 @@ func cryptoKeyMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey, primaryVers
 		out["rotationPeriod"] = durationString(k.RotationPeriod)
 	}
 	if !k.NextRotationTime.IsZero() {
-		out["nextRotationTime"] = k.NextRotationTime.UTC().Format(time.RFC3339Nano)
+		out["nextRotationTime"] = timestamp.Canonical(k.NextRotationTime)
 	}
 	return out
 }
@@ -70,11 +70,11 @@ func versionMap(nr *model.NormalizedRequest, loc, kr, key string, v kmsstore.Ver
 		"state":           v.State,
 		"algorithm":       v.Algorithm,
 		"protectionLevel": protectionLevel(v.ProtectionLevel),
-		"createTime":      v.CreateTime.UTC().Format(time.RFC3339Nano),
-		"generateTime":    v.CreateTime.UTC().Format(time.RFC3339Nano),
+		"createTime":      timestamp.Canonical(v.CreateTime),
+		"generateTime":    timestamp.Canonical(v.CreateTime),
 	}
 	if !v.ImportTime.IsZero() {
-		out["importTime"] = v.ImportTime.UTC().Format(time.RFC3339Nano)
+		out["importTime"] = timestamp.Canonical(v.ImportTime)
 	}
 	if v.TrustedWrappingEnabled {
 		out["trustedWrappingEnabled"] = true
@@ -83,10 +83,10 @@ func versionMap(nr *model.NormalizedRequest, loc, kr, key string, v kmsstore.Ver
 		out["hsmTrusted"] = true
 	}
 	if v.State == "DESTROY_SCHEDULED" && !v.DestroyTime.IsZero() {
-		out["destroyTime"] = v.DestroyTime.UTC().Format(time.RFC3339Nano)
+		out["destroyTime"] = timestamp.Canonical(v.DestroyTime)
 	}
 	if v.State == "DESTROYED" && !v.DestroyEventTime.IsZero() {
-		out["destroyEventTime"] = v.DestroyEventTime.UTC().Format(time.RFC3339Nano)
+		out["destroyEventTime"] = timestamp.Canonical(v.DestroyEventTime)
 	}
 	return out
 }
@@ -98,9 +98,9 @@ func importJobMap(ij kmscore.ImportJob) map[string]any {
 		"importMethod":    ij.ImportMethod,
 		"protectionLevel": protectionLevel(ij.ProtectionLevel),
 		"state":           ij.State,
-		"createTime":      ij.CreateTime.UTC().Format(time.RFC3339Nano),
-		"generateTime":    ij.GenerateTime.UTC().Format(time.RFC3339Nano),
-		"expireTime":      ij.ExpireTime.UTC().Format(time.RFC3339Nano),
+		"createTime":      timestamp.Canonical(ij.CreateTime),
+		"generateTime":    timestamp.Canonical(ij.GenerateTime),
+		"expireTime":      timestamp.Canonical(ij.ExpireTime),
 	}
 	switch {
 	case len(ij.PublicKeyRaw) > 0:

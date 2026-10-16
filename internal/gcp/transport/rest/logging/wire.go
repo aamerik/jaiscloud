@@ -9,6 +9,7 @@ import (
 
 	core "jaiscloud/internal/gcp/service/logging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 )
 
@@ -185,10 +186,10 @@ func entryToWire(e loggingstore.LogEntry) map[string]any {
 		out["resource"] = res
 	}
 	if !e.Timestamp.IsZero() {
-		out["timestamp"] = e.Timestamp.UTC().Format(time.RFC3339Nano)
+		out["timestamp"] = timestamp.Canonical(e.Timestamp)
 	}
 	if !e.ReceiveTimestamp.IsZero() {
-		out["receiveTimestamp"] = e.ReceiveTimestamp.UTC().Format(time.RFC3339Nano)
+		out["receiveTimestamp"] = timestamp.Canonical(e.ReceiveTimestamp)
 	}
 	if e.Severity != 0 {
 		out["severity"] = core.SeverityName(e.Severity)
@@ -376,10 +377,10 @@ func sinkToWire(s loggingstore.LogSink, fullName string) map[string]any {
 		out["bigqueryOptions"] = bo
 	}
 	if !s.CreateTime.IsZero() {
-		out["createTime"] = s.CreateTime.UTC().Format(time.RFC3339Nano)
+		out["createTime"] = timestamp.Canonical(s.CreateTime)
 	}
 	if !s.UpdateTime.IsZero() {
-		out["updateTime"] = s.UpdateTime.UTC().Format(time.RFC3339Nano)
+		out["updateTime"] = timestamp.Canonical(s.UpdateTime)
 	}
 	return out
 }
@@ -413,10 +414,10 @@ func exclusionToWire(e loggingstore.LogExclusion) map[string]any {
 		out["disabled"] = true
 	}
 	if !e.CreateTime.IsZero() {
-		out["createTime"] = e.CreateTime.UTC().Format(time.RFC3339Nano)
+		out["createTime"] = timestamp.Canonical(e.CreateTime)
 	}
 	if !e.UpdateTime.IsZero() {
-		out["updateTime"] = e.UpdateTime.UTC().Format(time.RFC3339Nano)
+		out["updateTime"] = timestamp.Canonical(e.UpdateTime)
 	}
 	return out
 }
@@ -506,10 +507,10 @@ func metricToWire(scopeParent string, m loggingstore.LogMetric) map[string]any {
 	}
 	out["metricDescriptor"] = metricDescriptorToWire(m.Descriptor)
 	if !m.CreateTime.IsZero() {
-		out["createTime"] = m.CreateTime.UTC().Format(time.RFC3339Nano)
+		out["createTime"] = timestamp.Canonical(m.CreateTime)
 	}
 	if !m.UpdateTime.IsZero() {
-		out["updateTime"] = m.UpdateTime.UTC().Format(time.RFC3339Nano)
+		out["updateTime"] = timestamp.Canonical(m.UpdateTime)
 	}
 	return out
 }

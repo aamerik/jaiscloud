@@ -35,6 +35,7 @@ import (
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/resource"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 
@@ -482,10 +483,10 @@ func timeoutSeconds(s string) int {
 	return int(d.Seconds())
 }
 
-// formatTimestamp renders a business timestamp as the RFC3339Nano string the
-// Discovery JSON shape uses.
+// formatTimestamp renders a business timestamp as the protojson spelling of a
+// google-datetime field, the shape the Discovery JSON of this service uses.
 func formatTimestamp(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
+	return timestamp.Canonical(t)
 }
 
 // pageParams builds the shared cursor-pagination parameter map accepted by

@@ -15,6 +15,7 @@ import (
 	"jaiscloud/internal/gcp/paging"
 	kmscore "jaiscloud/internal/gcp/service/kms"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -105,7 +106,7 @@ func (p *Provider) KeyRingCreate(ctx context.Context, nr *model.NormalizedReques
 	}
 	return provider.OK(map[string]any{
 		"name":       kmscore.KeyRingName(nr.AccountID, loc, meta.ID),
-		"createTime": meta.CreateTime.UTC().Format(time.RFC3339Nano),
+		"createTime": timestamp.Canonical(meta.CreateTime),
 	}), nil
 }
 
@@ -120,7 +121,7 @@ func (p *Provider) KeyRingList(ctx context.Context, nr *model.NormalizedRequest)
 	for _, kr := range page {
 		items = append(items, map[string]any{
 			"name":       kmscore.KeyRingName(nr.AccountID, kr.Location, kr.ID),
-			"createTime": kr.CreateTime.UTC().Format(time.RFC3339Nano),
+			"createTime": timestamp.Canonical(kr.CreateTime),
 		})
 	}
 	resp := map[string]any{"keyRings": items, "totalSize": len(krs)}
@@ -142,7 +143,7 @@ func (p *Provider) KeyRingGet(ctx context.Context, nr *model.NormalizedRequest) 
 	}
 	return provider.OK(map[string]any{
 		"name":       kmscore.KeyRingName(nr.AccountID, loc, meta.ID),
-		"createTime": meta.CreateTime.UTC().Format(time.RFC3339Nano),
+		"createTime": timestamp.Canonical(meta.CreateTime),
 	}), nil
 }
 

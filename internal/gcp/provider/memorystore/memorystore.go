@@ -36,6 +36,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -657,8 +658,10 @@ func toMap(v any) map[string]any {
 	return m
 }
 
+// formatTimestamp renders a business timestamp as the protojson spelling of a
+// google-datetime field, the shape the Discovery JSON of this service uses.
 func formatTimestamp(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
+	return timestamp.Canonical(t)
 }
 
 // numericID derives a stable decimal id from a string.
