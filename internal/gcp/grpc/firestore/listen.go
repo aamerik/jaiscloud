@@ -12,11 +12,11 @@ import (
 	"jaiscloud/internal/clock"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // EncodeResumeToken encodes a monotonic sequence number into an 8-byte resume
@@ -268,7 +268,7 @@ func (ls *listenSession) handleAddTarget(t *firestorepb.Target) error {
 			TargetChangeType: firestorepb.TargetChange_CURRENT,
 			TargetIds:        []int32{id},
 			ResumeToken:      EncodeResumeToken(lt.seq),
-			ReadTime:         timestamppb.New(ls.nextReadTime()),
+			ReadTime:         timestamp.Proto(ls.nextReadTime()),
 		},
 	}}); err != nil {
 		return err
@@ -289,7 +289,7 @@ func (ls *listenSession) sendNoChange() error {
 	return ls.send(&firestorepb.ListenResponse{ResponseType: &firestorepb.ListenResponse_TargetChange{
 		TargetChange: &firestorepb.TargetChange{
 			TargetChangeType: firestorepb.TargetChange_NO_CHANGE,
-			ReadTime:         timestamppb.New(ls.nextReadTime()),
+			ReadTime:         timestamp.Proto(ls.nextReadTime()),
 			ResumeToken:      EncodeResumeToken(ls.allTargetsSeq()),
 		},
 	}})

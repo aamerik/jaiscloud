@@ -16,7 +16,6 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
@@ -24,6 +23,7 @@ import (
 	"jaiscloud/internal/gcp/policy"
 	kmscore "jaiscloud/internal/gcp/service/kms"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 )
 
@@ -822,7 +822,7 @@ func (s *Service) TestIamPermissions(ctx context.Context, req *iampb.TestIamPerm
 func keyRingToProto(project, location string, kr kmsstore.KeyRing) *kmspb.KeyRing {
 	out := &kmspb.KeyRing{Name: kmscore.KeyRingName(project, location, kr.ID)}
 	if !kr.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(kr.CreateTime)
+		out.CreateTime = timestamp.Proto(kr.CreateTime)
 	}
 	return out
 }
@@ -849,14 +849,14 @@ func cryptoKeyToProto(project string, k kmsstore.CryptoKey, primaryVersion kmsst
 		primaryCreateTime = k.CreateTime
 	}
 	if !primaryCreateTime.IsZero() {
-		primary.CreateTime = timestamppb.New(primaryCreateTime)
-		primary.GenerateTime = timestamppb.New(primaryCreateTime)
+		primary.CreateTime = timestamp.Proto(primaryCreateTime)
+		primary.GenerateTime = timestamp.Proto(primaryCreateTime)
 	}
 	if primaryVersion.State == "DESTROY_SCHEDULED" && !primaryVersion.DestroyTime.IsZero() {
-		primary.DestroyTime = timestamppb.New(primaryVersion.DestroyTime)
+		primary.DestroyTime = timestamp.Proto(primaryVersion.DestroyTime)
 	}
 	if primaryVersion.State == "DESTROYED" && !primaryVersion.DestroyEventTime.IsZero() {
-		primary.DestroyEventTime = timestamppb.New(primaryVersion.DestroyEventTime)
+		primary.DestroyEventTime = timestamp.Proto(primaryVersion.DestroyEventTime)
 	}
 	out := &kmspb.CryptoKey{
 		Name:       kmscore.CryptoKeyName(project, k.Location, k.KeyRingID, k.ID),
@@ -869,7 +869,7 @@ func cryptoKeyToProto(project string, k kmsstore.CryptoKey, primaryVersion kmsst
 		},
 	}
 	if !k.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(k.CreateTime)
+		out.CreateTime = timestamp.Proto(k.CreateTime)
 	}
 	if len(k.Labels) > 0 {
 		out.Labels = k.Labels
@@ -878,7 +878,7 @@ func cryptoKeyToProto(project string, k kmsstore.CryptoKey, primaryVersion kmsst
 		out.RotationSchedule = &kmspb.CryptoKey_RotationPeriod{RotationPeriod: durationpb.New(k.RotationPeriod)}
 	}
 	if !k.NextRotationTime.IsZero() {
-		out.NextRotationTime = timestamppb.New(k.NextRotationTime)
+		out.NextRotationTime = timestamp.Proto(k.NextRotationTime)
 	}
 	return out
 }
@@ -893,16 +893,16 @@ func versionToProto(project, location, kr, key string, v kmsstore.Version) *kmsp
 		HsmTrusted:             v.HsmTrusted,
 	}
 	if !v.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(v.CreateTime)
+		out.CreateTime = timestamp.Proto(v.CreateTime)
 	}
 	if !v.ImportTime.IsZero() {
-		out.ImportTime = timestamppb.New(v.ImportTime)
+		out.ImportTime = timestamp.Proto(v.ImportTime)
 	}
 	if v.State == "DESTROY_SCHEDULED" && !v.DestroyTime.IsZero() {
-		out.DestroyTime = timestamppb.New(v.DestroyTime)
+		out.DestroyTime = timestamp.Proto(v.DestroyTime)
 	}
 	if v.State == "DESTROYED" && !v.DestroyEventTime.IsZero() {
-		out.DestroyEventTime = timestamppb.New(v.DestroyEventTime)
+		out.DestroyEventTime = timestamp.Proto(v.DestroyEventTime)
 	}
 	return out
 }
@@ -916,13 +916,13 @@ func importJobToProto(ij kmscore.ImportJob) *kmspb.ImportJob {
 		PublicKeyFormat: kmspb.PublicKey_PEM,
 	}
 	if !ij.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(ij.CreateTime)
+		out.CreateTime = timestamp.Proto(ij.CreateTime)
 	}
 	if !ij.GenerateTime.IsZero() {
-		out.GenerateTime = timestamppb.New(ij.GenerateTime)
+		out.GenerateTime = timestamp.Proto(ij.GenerateTime)
 	}
 	if !ij.ExpireTime.IsZero() {
-		out.ExpireTime = timestamppb.New(ij.ExpireTime)
+		out.ExpireTime = timestamp.Proto(ij.ExpireTime)
 	}
 	switch {
 	case len(ij.PublicKeyRaw) > 0:
@@ -944,7 +944,7 @@ func retiredResourceToProto(rr kmscore.RetiredResource) *kmspb.RetiredResource {
 		ResourceType:     rr.ResourceType,
 	}
 	if !rr.DeleteTime.IsZero() {
-		out.DeleteTime = timestamppb.New(rr.DeleteTime)
+		out.DeleteTime = timestamp.Proto(rr.DeleteTime)
 	}
 	return out
 }

@@ -10,11 +10,11 @@ import (
 	resourcemanagerpb "cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	"jaiscloud/internal/gcp/policy"
 	core "jaiscloud/internal/gcp/service/resourcemanager"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 )
 
@@ -41,13 +41,13 @@ func projectToProto(p core.Project) *resourcemanagerpb.Project {
 		Labels:      p.Labels,
 	}
 	if !p.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(p.CreateTime)
+		out.CreateTime = timestamp.Proto(p.CreateTime)
 	}
 	if !p.UpdateTime.IsZero() {
-		out.UpdateTime = timestamppb.New(p.UpdateTime)
+		out.UpdateTime = timestamp.Proto(p.UpdateTime)
 	}
 	if !p.DeleteTime.IsZero() {
-		out.DeleteTime = timestamppb.New(p.DeleteTime)
+		out.DeleteTime = timestamp.Proto(p.DeleteTime)
 	}
 	return out
 }
@@ -140,7 +140,7 @@ func operationMetadataProto(op core.Operation) (*anypb.Any, error) {
 	case "create":
 		md := &resourcemanagerpb.CreateProjectMetadata{Gettable: op.Done, Ready: op.Done}
 		if !op.CreateTime.IsZero() {
-			md.CreateTime = timestamppb.New(op.CreateTime)
+			md.CreateTime = timestamp.Proto(op.CreateTime)
 		}
 		return anypb.New(md)
 	case "update":

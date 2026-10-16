@@ -5,6 +5,25 @@ import (
 	"time"
 )
 
+// TestProto pins the proto-typed counterpart of Canonical: a server instant
+// carries no sub-microsecond digit, so a gRPC adapter and the REST renderer of
+// the same google-datetime field hand a client the same value. (TD48)
+func TestProto(t *testing.T) {
+	in := time.Date(2024, 3, 1, 12, 0, 0, 123_456_789, time.UTC)
+	got := Proto(in)
+	if got.GetNanos() != 123_456_000 {
+		t.Fatalf("Proto nanos = %d, want 123456000", got.GetNanos())
+	}
+	if want := time.Date(2024, 3, 1, 12, 0, 0, 123_456_000, time.UTC); !got.AsTime().Equal(want) {
+		t.Fatalf("Proto instant = %v, want %v", got.AsTime(), want)
+	}
+	// A zero time is unchanged (timestamppb.New semantics are preserved): the
+	// seconds/nanos must match, not merely be "not non-zero nanos".
+	if z := Proto(time.Time{}); z.GetSeconds() != -62135596800 || z.GetNanos() != 0 {
+		t.Fatalf("Proto(zero) = %ds/%dns, want -62135596800s/0ns", z.GetSeconds(), z.GetNanos())
+	}
+}
+
 // TestCanonical pins the protojson spelling: 0/3/6-digit fraction groups, never
 // trimmed below a group boundary, always UTC, truncated to microseconds.
 func TestCanonical(t *testing.T) {

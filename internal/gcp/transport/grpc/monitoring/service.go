@@ -15,11 +15,11 @@ import (
 	metricpb "google.golang.org/genproto/googleapis/api/metric"
 	monitoredrespb "google.golang.org/genproto/googleapis/api/monitoredres"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	core "jaiscloud/internal/gcp/service/monitoring"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 )
 
@@ -399,7 +399,7 @@ func (s *Service) GetNotificationChannelVerificationCode(ctx context.Context, re
 	}
 	return &monitoringpb.GetNotificationChannelVerificationCodeResponse{
 		Code:       code,
-		ExpireTime: timestamppb.New(expireTime),
+		ExpireTime: timestamp.Proto(expireTime),
 	}, nil
 }
 

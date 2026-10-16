@@ -10,6 +10,7 @@ import (
 	"jaiscloud/internal/gcp/resource"
 	core "jaiscloud/internal/gcp/service/logging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
@@ -327,10 +328,10 @@ func bucketToProto(parent string, b loggingstore.LogBucket) *loggingpb.LogBucket
 		out.CmekSettings = cmekToProto(core.BucketResourceName(parent, b.Name), *b.Cmek)
 	}
 	if b.CreateTime != 0 {
-		out.CreateTime = timestamppb.New(nanosToTime(b.CreateTime))
+		out.CreateTime = timestamp.Proto(nanosToTime(b.CreateTime))
 	}
 	if b.UpdateTime != 0 {
-		out.UpdateTime = timestamppb.New(nanosToTime(b.UpdateTime))
+		out.UpdateTime = timestamp.Proto(nanosToTime(b.UpdateTime))
 	}
 	return out
 }
@@ -353,10 +354,10 @@ func viewToProto(parent string, v loggingstore.LogView) *loggingpb.LogView {
 		Filter:      v.Filter,
 	}
 	if v.CreateTime != 0 {
-		out.CreateTime = timestamppb.New(nanosToTime(v.CreateTime))
+		out.CreateTime = timestamp.Proto(nanosToTime(v.CreateTime))
 	}
 	if v.UpdateTime != 0 {
-		out.UpdateTime = timestamppb.New(nanosToTime(v.UpdateTime))
+		out.UpdateTime = timestamp.Proto(nanosToTime(v.UpdateTime))
 	}
 	return out
 }
@@ -383,7 +384,7 @@ func linkToProto(parent string, l loggingstore.LogLink) *loggingpb.Link {
 		BigqueryDataset: &loggingpb.BigQueryDataset{DatasetId: l.BigQueryDatasetID},
 	}
 	if l.CreateTime != 0 {
-		out.CreateTime = timestamppb.New(nanosToTime(l.CreateTime))
+		out.CreateTime = timestamp.Proto(nanosToTime(l.CreateTime))
 	}
 	return out
 }
@@ -477,5 +478,5 @@ func nanosToTimestamp(nanos int64) *timestamppb.Timestamp {
 	if nanos == 0 {
 		return nil
 	}
-	return timestamppb.New(nanosToTime(nanos))
+	return timestamp.Proto(nanosToTime(nanos))
 }

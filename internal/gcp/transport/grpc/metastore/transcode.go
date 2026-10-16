@@ -10,11 +10,11 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	core "jaiscloud/internal/gcp/service/metastore"
 	metastorestore "jaiscloud/internal/gcp/store/metastore"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // protojsonOpts tolerates unknown fields so a REST-created resource body (which
@@ -72,13 +72,13 @@ func federationToProto(f metastorestore.Federation, project string) *metastorepb
 // keeps the original output exactly.
 func operationToProto(op metastorestore.Operation, project string, response proto.Message) (*longrunningpb.Operation, error) {
 	meta := &metastorepb.OperationMetadata{
-		CreateTime: timestamppb.New(op.CreateTime),
+		CreateTime: timestamp.Proto(op.CreateTime),
 		Target:     op.Target,
 		Verb:       op.Verb,
 		ApiVersion: "v1",
 	}
 	if op.Done {
-		meta.EndTime = timestamppb.New(op.EndTime)
+		meta.EndTime = timestamp.Proto(op.EndTime)
 	}
 	metadata, err := anypb.New(meta)
 	if err != nil {

@@ -38,7 +38,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Resource-type strings mirror the REST provider's persisted types so both
@@ -689,7 +688,7 @@ func (s *Service) buildReceivedMessages(ctx context.Context, project, queue, dlq
 		pm := &pubsubpb.PubsubMessage{
 			MessageId:   m.MessageID,
 			Data:        plain,
-			PublishTime: timestamppb.New(m.PublishTime),
+			PublishTime: timestamp.Proto(m.PublishTime),
 		}
 		if len(m.Attributes) > 0 {
 			pm.Attributes = m.Attributes
@@ -1920,7 +1919,7 @@ func subToProto(meta map[string]any) *pubsubpb.Subscription {
 func snapshotToProto(meta snapshotMeta) *pubsubpb.Snapshot {
 	snap := &pubsubpb.Snapshot{Name: meta.Name, Topic: meta.Topic}
 	if !meta.ExpireTime.IsZero() {
-		snap.ExpireTime = timestamppb.New(meta.ExpireTime)
+		snap.ExpireTime = timestamp.Proto(meta.ExpireTime)
 	}
 	if len(meta.Labels) > 0 {
 		snap.Labels = meta.Labels
