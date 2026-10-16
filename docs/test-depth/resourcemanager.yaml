@@ -7,18 +7,18 @@
 service: resourcemanager
 classes:
   p2:
-    state: exempt
-    reason: "no concurrent-mutation contention suite"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-rest]
+    note: "concurrent same-id projects.create race (the store's atomic upsert picks one winner, every loser is AlreadyExists) and idempotent concurrent delete (all succeed, the project settles DELETE_REQUESTED), under -race"
   p3:
     state: present
     suites: [sdk-rest]
     note: "invalid project create rejected"
   p4:
-    state: exempt
-    reason: "no pageToken paging over projects"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-rest]
+    note: "pageSize/pageToken walk over projects.list composed with a labels filter, so the cursor walks the filtered set and never leaks an unlabelled project; order is compared as a set because the Discovery document states projects.list returns an unspecified order (and is only eventually consistent in real GCP, while the emulator is strongly consistent)"
   p5:
-    state: exempt
-    reason: "no scale/boundary suite"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-rest]
+    note: "a 25-project boundary walked with a small page size, asserting the cursor chain spans the whole collection"

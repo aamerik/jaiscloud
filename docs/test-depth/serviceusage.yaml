@@ -7,9 +7,9 @@
 service: serviceusage
 classes:
   p2:
-    state: exempt
-    reason: "no concurrent enable/disable contention suite"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-rest]
+    note: "concurrent enables under -race: enabling one service from eight writers is idempotent (one enforced resource, final state ENABLED) and concurrent enables of distinct services each land"
   p3:
     state: present
     suites: [sdk-rest]
@@ -17,8 +17,9 @@ classes:
   p4:
     state: present
     suites: [sdk-rest]
-    note: "list filtered by state"
+    note: "pageSize/pageToken walk over services.list composed with state:ENABLED / state:DISABLED, so the cursor walks the filtered set and never leaks a service of the other state; the Discovery document specifies no order, so it is compared as a set"
   p5:
     state: exempt
-    reason: "no scale/boundary suite"
-    date: "2026-10-13"
+    reason: "no scale/boundary surface: services.list is a flat, bounded enablement set with no streamed, large-payload or lineage dimension to stress; the documented caps (pageSize 200, batchEnable 20, batchGet 30) are request-validation negatives, already asserted as p3"
+    date: "2026-10-16"
+    owner: DC3
