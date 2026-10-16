@@ -304,6 +304,7 @@ func TestJSONCodecCustomVerbMatrix(t *testing.T) {
 		// Firestore data-plane custom methods on the `documents` marker.
 		{"POST", fst + "/documents:commit", "Commit"},
 		{"POST", fst + "/documents:partitionQuery", "PartitionQuery"},
+		{"POST", fst + "/documents:executePipeline", "ExecutePipeline"},
 		{"POST", fst + "/documents:runQuery", "RunQuery"},
 		{"POST", fst + "/documents:runAggregationQuery", "RunAggregationQuery"},
 		{"POST", fst + "/documents:batchWrite", "BatchWrite"},

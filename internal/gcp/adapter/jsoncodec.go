@@ -621,6 +621,8 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 				return "RunAggregationQuery"
 			case "partitionQuery":
 				return "PartitionQuery"
+			case "executePipeline":
+				return "ExecutePipeline"
 			case "batchWrite":
 				return "BatchWrite"
 			case "batchGet":

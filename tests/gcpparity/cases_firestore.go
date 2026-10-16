@@ -67,6 +67,19 @@ func firestoreScenario() Scenario {
 			From: []*firestorepb.StructuredQuery_CollectionSelector{{CollectionId: collection(e)}},
 		}
 	}
+	// pipeline is an ExecutePipeline request that reads the same collection
+	// through the pipeline DSL (a collection source stage), so the two
+	// transports execute the same logical pipeline.
+	pipeline := func(e *Env) *firestorepb.StructuredPipeline {
+		return &firestorepb.StructuredPipeline{
+			Pipeline: &firestorepb.Pipeline{Stages: []*firestorepb.Pipeline_Stage{{
+				Name: "collection",
+				Args: []*firestorepb.Value{{
+					ValueType: &firestorepb.Value_ReferenceValue{ReferenceValue: "/" + collection(e)},
+				}},
+			}}},
+		}
+	}
 	// batchDocs exercises all three batchGet result shapes: a found top-level
 	// document, a found subcollection document (the recursive path) and a
 	// missing document.
@@ -283,6 +296,50 @@ func firestoreScenario() Scenario {
 						return nil, err
 					}
 					return e.Rest(ctx, "POST", fsVerb(e, "", "batchGet"), body)
+				},
+			},
+		},
+		{
+			Op: "ExecutePipeline",
+			Stream: &StreamParity{
+				GRPC: func(ctx context.Context, e *Env) ([]protoMessage, error) {
+					var frames []protoMessage
+					err := fsDial(ctx, e, func(c firestorepb.FirestoreClient) error {
+						stream, cerr := c.ExecutePipeline(ctx, &firestorepb.ExecutePipelineRequest{
+							Database: "projects/" + project(e) + "/databases/" + database,
+							PipelineType: &firestorepb.ExecutePipelineRequest_StructuredPipeline{
+								StructuredPipeline: pipeline(e),
+							},
+						})
+						if cerr != nil {
+							return cerr
+						}
+						for {
+							msg, rerr := stream.Recv()
+							if rerr == io.EOF {
+								return nil
+							}
+							if rerr != nil {
+								return rerr
+							}
+							frames = append(frames, msg)
+						}
+					})
+					if err != nil {
+						return nil, err
+					}
+					return frames, nil
+				},
+				REST: func(ctx context.Context, e *Env) (json.RawMessage, error) {
+					body, err := fsMarshal(&firestorepb.ExecutePipelineRequest{
+						PipelineType: &firestorepb.ExecutePipelineRequest_StructuredPipeline{
+							StructuredPipeline: pipeline(e),
+						},
+					})
+					if err != nil {
+						return nil, err
+					}
+					return e.Rest(ctx, "POST", fsVerb(e, "", "executePipeline"), body)
 				},
 			},
 		},
