@@ -63,6 +63,10 @@ func TestRunQueryValidatesFilterBeforeScan(t *testing.T) {
 		"IN over disjunction limit": {Kind: "Task", Filter: &Filter{Property: &PropertyFilter{
 			Property: "n", Op: PropertyIn, Value: valArray(inValues(maxInValues + 1)...),
 		}}},
+		"IN product over disjunction budget": {Kind: "Task", Filter: &Filter{Composite: &CompositeFilter{Op: CompositeAnd, Filters: []*Filter{
+			{Property: &PropertyFilter{Property: "a", Op: PropertyIn, Value: valArray(inValues(20)...)}},
+			{Property: &PropertyFilter{Property: "b", Op: PropertyIn, Value: valArray(inValues(20)...)}},
+		}}}},
 	}
 	for name, q := range bad {
 		_, err := s.RunQuery(ctx, "p", q, nil)
@@ -83,6 +87,10 @@ func TestRunQueryValidatesFilterBeforeScan(t *testing.T) {
 		"IN at disjunction limit": {Kind: "Task", Filter: &Filter{Property: &PropertyFilter{
 			Property: "n", Op: PropertyIn, Value: valArray(inValues(maxInValues)...),
 		}}},
+		"IN product at disjunction budget": {Kind: "Task", Filter: &Filter{Composite: &CompositeFilter{Op: CompositeAnd, Filters: []*Filter{
+			{Property: &PropertyFilter{Property: "a", Op: PropertyIn, Value: valArray(inValues(6)...)}},
+			{Property: &PropertyFilter{Property: "b", Op: PropertyIn, Value: valArray(inValues(5)...)}},
+		}}}},
 	}
 	for name, q := range good {
 		res, err := s.RunQuery(ctx, "p", q, nil)
