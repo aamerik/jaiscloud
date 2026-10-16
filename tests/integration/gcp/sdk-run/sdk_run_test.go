@@ -398,6 +398,10 @@ func TestSDKRunTrafficSplit(t *testing.T) {
 	require.Equal(t, "stable", got.TrafficStatuses[0].Tag)
 	require.Equal(t, tagQualifiedURI(got.Uri, "stable"), got.TrafficStatuses[0].Uri)
 	require.Equal(t, got.Uri, got.TrafficStatuses[1].Uri)
+	// A traffic tag does NOT extend the service-level urls ("All URLs serving
+	// traffic for this Service"): verified against real GCP, urls is unchanged by
+	// a tag (the tag-qualified URL lives only on the target's status uri).
+	require.Equal(t, []string{got.Uri}, got.Urls)
 
 	// Reset to latest-at-100% through the same mask; the derived status
 	// reflects the single latest target.
@@ -415,6 +419,55 @@ func TestSDKRunTrafficSplit(t *testing.T) {
 	require.Equal(t, int64(100), got2.TrafficStatuses[0].Percent)
 	require.Equal(t, "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", got2.TrafficStatuses[0].Type)
 	require.Equal(t, got2.LatestReadyRevision, got2.TrafficStatuses[0].Revision)
+	require.Equal(t, []string{got2.Uri}, got2.Urls, "an untagged target serves only the plain uri")
+}
+
+// TestSDKRunTrafficTagValidation pins the traffic-tag rules through the official
+// client: a tag that violates the RFC 1035 grammar, the 3–47 length window or
+// the combined tag+service-id cap (and a duplicated tag) is InvalidArgument
+// (400), the contract real Cloud Run enforces because the tag becomes the
+// leading host label of the tag-qualified URL; a valid tag through the same call
+// succeeds and surfaces on the status uri (not in the service urls).
+func TestSDKRunTrafficTagValidation(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+	id := unique("sdk-run-tag")
+	createService(t, svc, id)
+
+	patch := func(tag string) error {
+		_, err := svc.Projects.Locations.Services.Patch(serviceName(id), &run.GoogleCloudRunV2Service{
+			Traffic: []*run.GoogleCloudRunV2TrafficTarget{
+				{Type: "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", Percent: 100, Tag: tag},
+			},
+		}).UpdateMask("traffic").Do()
+		return err
+	}
+	// Grammar violation (uppercase + underscore), too-short, and too-long tags.
+	for _, bad := range []string{"Bad_Tag", "aa", strings.Repeat("a", 48)} {
+		requireAPIError(t, patch(bad), http.StatusBadRequest, "invalid tag %q", bad)
+	}
+	// A duplicate tag across two targets is rejected.
+	_, err := svc.Projects.Locations.Services.Patch(serviceName(id), &run.GoogleCloudRunV2Service{
+		Traffic: []*run.GoogleCloudRunV2TrafficTarget{
+			{Type: "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", Percent: 50, Tag: "stable"},
+			{Type: "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", Percent: 50, Tag: "stable"},
+		},
+	}).UpdateMask("traffic").Do()
+	requireAPIError(t, err, http.StatusBadRequest, "duplicate traffic tags must be rejected")
+
+	op, err := svc.Projects.Locations.Services.Patch(serviceName(id), &run.GoogleCloudRunV2Service{
+		Traffic: []*run.GoogleCloudRunV2TrafficTarget{
+			{Type: "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", Percent: 100, Tag: "stable"},
+		},
+	}).UpdateMask("traffic").Do()
+	require.NoError(t, err, "patch a valid traffic tag")
+	awaitOperation(t, svc, op)
+
+	got, err := svc.Projects.Locations.Services.Get(serviceName(id)).Do()
+	require.NoError(t, err)
+	require.Len(t, got.TrafficStatuses, 1)
+	require.Equal(t, tagQualifiedURI(got.Uri, "stable"), got.TrafficStatuses[0].Uri)
+	require.Equal(t, []string{got.Uri}, got.Urls)
 }
 
 // TestSDKRunRevisionsAndPaging covers revision listing, cursor pagination, and

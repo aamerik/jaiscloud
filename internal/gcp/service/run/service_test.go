@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -748,6 +749,140 @@ func TestTaggedURIShapes(t *testing.T) {
 		if got := taggedURI(c.uri, c.tag); got != c.want {
 			t.Errorf("taggedURI(%q, %q) = %q, want %q", c.uri, c.tag, got, c.want)
 		}
+	}
+}
+
+// tagTrafficRequest is a one-target traffic split carrying the given tag (an
+// empty tag means an untagged target).
+func tagTrafficRequest(tag string) map[string]any {
+	target := map[string]any{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": float64(100)}
+	if tag != "" {
+		target["tag"] = tag
+	}
+	return map[string]any{"traffic": []any{target}}
+}
+
+// requireTrafficTagRejected asserts err is the InvalidArgument/400 the real
+// Cloud Run API returns for a traffic target whose tag is not a valid DNS label.
+func requireTrafficTagRejected(t *testing.T, err error) {
+	t.Helper()
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) || perr.HTTPStatus != 400 || perr.Code != "InvalidArgument" {
+		t.Fatalf("err = %v, want InvalidArgument/400", err)
+	}
+}
+
+// TestTrafficTagValidation pins the traffic-tag rules verified against real
+// Cloud Run (each violation is 400 INVALID_ARGUMENT, never an echoed tag): a tag
+// is an RFC 1035 label (lowercase letters/digits/hyphens, beginning with a
+// letter and not ending with a hyphen) of 3 to 47 characters, the tag plus the
+// service id may not exceed 46 characters, and tags must be unique. The accepted
+// set includes the grammar and combined-length boundaries.
+func TestTrafficTagValidation(t *testing.T) {
+	ctx := context.Background()
+	// Service id "s0".."s5" (2 chars) leaves 44 for the tag under the 46 combined cap.
+	for i, tag := range []string{"stable", "canary-1", "abc", "a1b", "a-b", strings.Repeat("a", 43)} {
+		s := newTestService()
+		id := fmt.Sprintf("s%d", i)
+		if _, err := s.CreateService(ctx, "p", "l", id, tagTrafficRequest(tag), false); err != nil {
+			t.Fatalf("create with valid tag %q: %v", tag, err)
+		}
+	}
+	invalid := []struct {
+		name, tag string
+	}{
+		{"uppercase", "Stable"},
+		{"leading digit", "1stable"},
+		{"leading hyphen", "-stable"},
+		{"trailing hyphen", "stable-"},
+		{"underscore", "has_underscore"},
+		{"dot", "has.dot"},
+		{"space", "bad tag"},
+		{"too short", "aa"},
+		{"too long", strings.Repeat("a", 48)},
+		{"combined over 46", strings.Repeat("a", 44)},
+	}
+	for _, c := range invalid {
+		s := newTestService()
+		_, err := s.CreateService(ctx, "p", "l", "svc", tagTrafficRequest(c.tag), false)
+		requireTrafficTagRejected(t, err)
+		if _, err := s.GetService(ctx, "p", "l", "svc"); !isNotFound(err) {
+			t.Fatalf("%s: service persisted despite rejection: %v", c.name, err)
+		}
+	}
+	// Duplicate tags are rejected (real GCP: "spec.traffic: may not contain a
+	// duplicate tag").
+	s := newTestService()
+	dup := map[string]any{"traffic": []any{
+		map[string]any{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": float64(50), "tag": "stable"},
+		map[string]any{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": float64(50), "tag": "stable"},
+	}}
+	_, err := s.CreateService(ctx, "p", "l", "svc", dup, false)
+	requireTrafficTagRejected(t, err)
+}
+
+// TestUpdateTrafficTagValidation pins the update path: an invalid tag applied
+// through the traffic mask is rejected (400) without persisting, while the same
+// invalid tag excluded by the mask is ignored exactly as real Cloud Run ignores
+// unmasked fields.
+func TestUpdateTrafficTagValidation(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateService(ctx, "proj", "us-central1", "svc", createRequest(), false); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Masked-in invalid tag: rejected and not persisted.
+	_, err := s.UpdateService(ctx, "proj", "us-central1", "svc", tagTrafficRequest("Bad_Tag"), "traffic", false, false)
+	requireTrafficTagRejected(t, err)
+	svc, err := s.GetService(ctx, "proj", "us-central1", "svc")
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if _, ok := svc.Data["traffic"]; ok {
+		t.Errorf("rejected update persisted traffic: %v", svc.Data["traffic"])
+	}
+	// Masked-out invalid tag: the field is not applied, so the request succeeds.
+	if _, err := s.UpdateService(ctx, "proj", "us-central1", "svc", tagTrafficRequest("Bad_Tag"), "labels", false, false); err != nil {
+		t.Fatalf("update with unmasked invalid tag: %v", err)
+	}
+	// A valid tag through the same mask is accepted.
+	if _, err := s.UpdateService(ctx, "proj", "us-central1", "svc", tagTrafficRequest("stable"), "traffic", false, false); err != nil {
+		t.Fatalf("update with valid tag: %v", err)
+	}
+}
+
+// TestServiceURLsAreNotTagExtended pins the verified real-GCP `urls` behavior: a
+// traffic tag does NOT add a tag-qualified entry to the service-level `urls`
+// ("All URLs serving traffic for this Service") — the tag-qualified URL appears
+// only on the tagged target's trafficStatuses[].uri (TD22). A live `services.get`
+// with a tagged target returns the same two default host-form URLs as an
+// untagged one; the emulator synthesizes a single form, so `urls` stays [uri].
+func TestServiceURLsAreNotTagExtended(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateService(ctx, "proj", "us-central1", "svc", createRequest(), false); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := s.UpdateService(ctx, "proj", "us-central1", "svc", tagTrafficRequest("stable"), "traffic", false, false); err != nil {
+		t.Fatalf("update traffic: %v", err)
+	}
+	svc, err := s.GetService(ctx, "proj", "us-central1", "svc")
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	js := ServiceJSON(svc)
+	uri, _ := js["uri"].(string)
+	urls, _ := js["urls"].([]any)
+	if len(urls) != 1 || urls[0] != uri {
+		t.Errorf("urls = %v, want [%s] (a tag must not extend the service-level urls)", urls, uri)
+	}
+	// The tag-qualified URL lives on the target status instead.
+	statuses, _ := js["trafficStatuses"].([]any)
+	if len(statuses) != 1 {
+		t.Fatalf("trafficStatuses = %v", statuses)
+	}
+	if got := statuses[0].(map[string]any)["uri"]; got != taggedURI(uri, "stable") {
+		t.Errorf("tagged status uri = %v, want %v", got, taggedURI(uri, "stable"))
 	}
 }
 
