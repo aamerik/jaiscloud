@@ -7,9 +7,9 @@
 service: logging
 classes:
   p2:
-    state: exempt
-    reason: "no concurrent-write contention suite"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-logging]
+    note: "concurrent writes to one log under -race (distinct insert_ids)"
   p3:
     state: present
     suites: [sdk-logging]
