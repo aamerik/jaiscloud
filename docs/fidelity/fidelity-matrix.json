@@ -11641,9 +11641,9 @@
       "state": "ga",
       "verified": true,
       "evidence": [
-        "grpc-checks=ListOperations,ListOperations (cloudfunctions endpoint),ListOperations (managedkafka endpoint),ListOperations (metastore endpoint),ListOperations (run endpoint)",
+        "grpc-checks=ListOperations,ListOperations (cloudfunctions endpoint),ListOperations (managedkafka endpoint),ListOperations (metastore endpoint),ListOperations (run endpoint),ListOperations (workflows endpoint)",
         "postgres=yes",
-        "transport=grpc (conformance=5/5 pass)",
+        "transport=grpc (conformance=6/6 pass)",
         "verified=true (grpc)"
       ]
     },
