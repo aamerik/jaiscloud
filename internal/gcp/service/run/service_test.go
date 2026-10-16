@@ -694,11 +694,11 @@ func TestUpdateDoesNotAliasStoredData(t *testing.T) {
 	}
 }
 
-// TestTrafficStatusesTagQualifiedURI pins that a tagged traffic target's status
-// uri is the tag-qualified URL real Cloud Run returns
-// (https://{tag}---{service-host}), while an untagged target keeps the plain
-// service uri. The Discovery's TrafficTargetStatus.tag is "the string used in
-// the URI to exclusively reference this target".
+// TestTrafficStatusesTagQualifiedURI pins the verified real-GCP `trafficStatuses`
+// shape (a live `services.get`): a tagged target's status `uri` is the
+// tag-qualified URL (https://{tag}---{service-host}), and an untagged target has
+// **no** `uri` key at all. The Discovery's TrafficTargetStatus.tag is "the string
+// used in the URI to exclusively reference this target".
 func TestTrafficStatusesTagQualifiedURI(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService()
@@ -728,8 +728,34 @@ func TestTrafficStatusesTagQualifiedURI(t *testing.T) {
 	if tagged["uri"] != wantTagged {
 		t.Errorf("tagged status uri = %v, want %v", tagged["uri"], wantTagged)
 	}
-	if untagged["uri"] != uri {
-		t.Errorf("untagged status uri = %v, want service uri %v", untagged["uri"], uri)
+	if v, ok := untagged["uri"]; ok {
+		t.Errorf("untagged status must not carry a uri, got %v", v)
+	}
+}
+
+// TestDefaultTrafficStatusHasNoURI pins that the synthesized default status (no
+// traffic supplied) omits `uri` too: real Cloud Run emits a target's `uri` only
+// when the target carries a tag, so the untagged default has none.
+func TestDefaultTrafficStatusHasNoURI(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateService(ctx, "proj", "us-central1", "svc", createRequest(), false); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	svc, err := s.GetService(ctx, "proj", "us-central1", "svc")
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	statuses, _ := ServiceJSON(svc)["trafficStatuses"].([]any)
+	if len(statuses) != 1 {
+		t.Fatalf("trafficStatuses = %v", statuses)
+	}
+	status := statuses[0].(map[string]any)
+	if v, ok := status["uri"]; ok {
+		t.Errorf("default status must not carry a uri, got %v", v)
+	}
+	if status["percent"] != 100 || status["type"] != "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST" {
+		t.Errorf("default status = %v", status)
 	}
 }
 

@@ -393,11 +393,11 @@ func TestSDKRunTrafficSplit(t *testing.T) {
 	require.Equal(t, rev1, got.TrafficStatuses[0].Revision)
 	// Real Cloud Run returns a tag-qualified URL for a tagged target — the tag
 	// as the leading host label, the string the Discovery calls "used in the
-	// URI to exclusively reference this target" — while an untagged target
-	// keeps the plain service uri.
+	// URI to exclusively reference this target" — and sets a target's status
+	// uri only when the target carries a tag, so an untagged target has none.
 	require.Equal(t, "stable", got.TrafficStatuses[0].Tag)
 	require.Equal(t, tagQualifiedURI(got.Uri, "stable"), got.TrafficStatuses[0].Uri)
-	require.Equal(t, got.Uri, got.TrafficStatuses[1].Uri)
+	require.Empty(t, got.TrafficStatuses[1].Uri, "an untagged target must not carry a status uri")
 	// A traffic tag does NOT extend the service-level urls ("All URLs serving
 	// traffic for this Service"): verified against real GCP, urls is unchanged by
 	// a tag (the tag-qualified URL lives only on the target's status uri).
@@ -419,6 +419,7 @@ func TestSDKRunTrafficSplit(t *testing.T) {
 	require.Equal(t, int64(100), got2.TrafficStatuses[0].Percent)
 	require.Equal(t, "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", got2.TrafficStatuses[0].Type)
 	require.Equal(t, got2.LatestReadyRevision, got2.TrafficStatuses[0].Revision)
+	require.Empty(t, got2.TrafficStatuses[0].Uri, "an untagged target must not carry a status uri")
 	require.Equal(t, []string{got2.Uri}, got2.Urls, "an untagged target serves only the plain uri")
 }
 
