@@ -4,21 +4,26 @@
 # `present` (asserted by the official-client suite(s) listed) or `exempt`
 # (reasoned + dated). `make gcp-status-depth-gate` fails when a `ga` service
 # has no record here or leaves a class unaccounted for.
+#
+# The suite (tests/integration/gcp/sdk-firestoreadmin) is the service's first
+# official-client suite: it drives the google.firestore.admin.v1.FirestoreAdmin
+# gRPC client through the admin control plane (databases, composite indexes,
+# collection-group fields, backup schedules, user creds, read-only backups).
 service: firestoreadmin
 classes:
   p2:
-    state: exempt
-    reason: "admin control plane - no dedicated contention suite"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-firestoreadmin]
+    note: "concurrent control-plane mutations under -race: a same-name database create and a same-id user-creds create each have exactly one winner (losers ALREADY_EXISTS), distinct creates all land, and a user-creds delete is not idempotent (one winner, losers NOT_FOUND)"
   p3:
-    state: exempt
-    reason: "admin control plane - error envelopes asserted via firestore suite + gRPC conformance"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-firestoreadmin]
+    note: "the official client's typed envelope on the documented negatives: an invalid database id and a single-field composite index are INVALID_ARGUMENT, creating the implicit (default) database or a duplicate database/user-creds is ALREADY_EXISTS, and a missing database/index/user-creds/backup is NOT_FOUND on get/delete"
   p4:
-    state: exempt
-    reason: "admin control plane - no listing/paging suite"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-firestoreadmin]
+    note: "pageSize/pageToken paging over projects.databases.collectionGroups.indexes.list — among the admin resources this suite drives, the composite-index list is the one the Discovery document paginates (databases.list and backups.list declare no cursor and are asserted as complete responses); the document specifies no order, so the walk is compared as a set"
   p5:
-    state: exempt
-    reason: "admin control plane - no scale/boundary suite"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-firestoreadmin]
+    note: "the scale/boundary class: a twenty-five-index collection group walked at page size 4 (the whole cursor chain), and a twenty-five-user-creds database returned whole by the unpaged ListUserCreds"

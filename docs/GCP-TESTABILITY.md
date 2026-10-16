@@ -441,8 +441,7 @@ answers like real GCP), while this proves an official client can drive a
   [`docs/gcpstatus-coverage-exemptions.yaml`](gcpstatus-coverage-exemptions.yaml)
   naming the service and *why* no `tests/integration/gcp` module is warranted —
   a stateless surface already covered by the IAM + conformance suites
-  (`iamcredentials`) or a gRPC-only wire service whose core a sibling suite drives
-  (`firestoreadmin`). The gate accepts a service with either a suite **or** an
+  (`iamcredentials`). The gate accepts a service with either a suite **or** an
   exemption; a typo'd/unknown exempt service fails loud, as does a stale
   exemption for a service that now has a suite.
 
@@ -477,7 +476,7 @@ or carries a reasoned exemption.
 | `kms` | grpc, rest | `.` (root-suite client), `sdk-rest` | suite |
 | `secretmanager` | grpc, rest | `sdk-rest` | suite |
 | `firestore` | grpc, rest | `sdk-firestore`, `sdk-rest` | suite |
-| `firestoreadmin` | grpc | — | exempt (core driven by `sdk-firestore` + gRPC conformance) |
+| `firestoreadmin` | grpc | `sdk-firestoreadmin` | suite |
 | `datastore` | grpc, rest | `sdk-datastore` | suite |
 | `monitoring` | grpc, rest | `sdk-monitoring` | suite |
 | `logging` | grpc, rest | `sdk-logging` | suite |

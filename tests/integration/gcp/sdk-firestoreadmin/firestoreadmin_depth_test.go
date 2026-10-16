@@ -1,0 +1,657 @@
+// firestoreadmin_depth_test.go is the Firestore Admin service's first
+// official-client behavioural suite, and closes DC8
+// (plan_docs/gcp-depth-closure-wave-plan.md W2.6): the service had no
+// official-client suite at all, so its p1 lifecycle was unproven and every
+// p2-p5 depth cell was a day-one exemption.
+//
+// The suite drives the official Firestore Admin gRPC client
+// (cloud.google.com/go/firestore/apiv1/admin, the google.firestore.admin.v1
+// wire service) through the admin control plane this service *is* — databases,
+// composite indexes, collection-group fields, backup schedules, user
+// credentials and the read-only backups surface — and asserts the four depth
+// classes with the shared depth-test kit (tests/integration/gcp/testdepth,
+// DC2).
+//
+//	TestSDKFirestoreAdminLifecycle    p1  create -> get -> list -> update -> delete
+//	TestSDKFirestoreAdminConcurrency  p2  same-name create races + non-idempotent delete
+//	TestSDKFirestoreAdminErrors       p3  the typed envelope on the documented negatives
+//	TestSDKFirestoreAdminListing      p4  pageSize/pageToken over indexes.list
+//	TestSDKFirestoreAdminScale        p5  the many-indexes / many-user-creds boundary
+//
+// Two Discovery-document constraints shape the suite rather than being faked:
+//
+//   - Among the admin resources this suite drives, only
+//     `projects.databases.collectionGroups.indexes.list` (and `.fields.list`)
+//     carries pageSize/pageToken; `projects.databases.list` and
+//     `projects.locations.backups.list` declare no cursor at all, so they are
+//     asserted as complete single responses, never forced into a page walk.
+//   - Backups are read-only in the Admin API: the Discovery document declares
+//     only get/list/delete (a backup is produced by a schedule, not by a client),
+//     so the suite asserts the read-only contract — an empty list and
+//     NOT_FOUND on get/delete — rather than inventing a create path.
+//
+// One real-GCP divergence found while closing the cells is recorded as DC19 in
+// the wave plan rather than pinned here: the terminal DeleteDatabase operation
+// carries no response body, while the proto's operation_info declares
+// response_type "Database" and the official client's DeleteDatabaseOperation.Wait
+// therefore errors on the empty result. The delete lifecycle is asserted through
+// the operation's terminal state and the resource's absence instead. A second
+// divergence is recorded as DC20 (a maskless UpdateDatabase is rejected with
+// INVALID_ARGUMENT though AIP-134 requires an omitted mask to mean "all fields")
+// and is likewise not asserted here.
+//
+// The concurrency cases run under -race (the module's integration step adds it);
+// asserting a contention property in a binary without the race detector is a
+// failure, not a silent downgrade (testdepth.AssertRaceEnabled).
+package firestoreadmin_test
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	admin "cloud.google.com/go/firestore/apiv1/admin"
+	adminpb "cloud.google.com/go/firestore/apiv1/admin/adminpb"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/api/iterator"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	testdepth "jaiscloud-gcp-testdepth"
+)
+
+// TestSDKFirestoreAdminLifecycle is the p1 baseline lifecycle the §9 contract
+// requires and the suite's reason to exist: each Admin resource is created,
+// read back, listed, updated and deleted through the official client.
+func TestSDKFirestoreAdminLifecycle(t *testing.T) {
+	ctx := context.Background()
+	c := newAdmin(t)
+
+	t.Run("Databases", func(t *testing.T) {
+		id := unique("depthdb")
+		created := createDatabase(t, c, id)
+		require.Equal(t, adminpb.Database_FIRESTORE_NATIVE, created.GetType())
+		require.NotEmpty(t, created.GetUid())
+		require.NotEmpty(t, created.GetEtag())
+
+		got, err := c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: databaseName(id)})
+		require.NoError(t, err)
+		require.Equal(t, created.GetUid(), got.GetUid())
+
+		list, err := c.ListDatabases(ctx, &adminpb.ListDatabasesRequest{Parent: projectName()})
+		require.NoError(t, err)
+		names := make([]string, 0, len(list.GetDatabases()))
+		for _, d := range list.GetDatabases() {
+			names = append(names, d.GetName())
+		}
+		require.Contains(t, names, databaseName(id))
+		require.Contains(t, names, databaseName("(default)"), "the implicit default database is always listed")
+
+		updOp, err := c.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+			Database:   &adminpb.Database{Name: databaseName(id), ConcurrencyMode: adminpb.Database_PESSIMISTIC},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"concurrency_mode"}},
+		})
+		require.NoError(t, err)
+		updated, err := updOp.Wait(ctx)
+		require.NoError(t, err)
+		require.Equal(t, adminpb.Database_PESSIMISTIC, updated.GetConcurrencyMode())
+
+		// Delete returns a terminal operation. It is not waited on: the emulator
+		// does not populate the operation's typed response (DC19), so the
+		// lifecycle is asserted from the terminal state plus the absence.
+		delOp, err := c.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: databaseName(id)})
+		require.NoError(t, err)
+		require.True(t, delOp.Done(), "the control plane is synchronous: the operation is already terminal")
+		require.NotEmpty(t, delOp.Name())
+		testdepth.AssertError(t, getDatabaseErr(ctx, c, id), testdepth.SpecNotFound())
+	})
+
+	t.Run("DefaultDatabaseIsSynthesized", func(t *testing.T) {
+		def, err := c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: databaseName("(default)")})
+		require.NoError(t, err)
+		require.Equal(t, adminpb.Database_FIRESTORE_NATIVE, def.GetType())
+	})
+
+	t.Run("CompositeIndexes", func(t *testing.T) {
+		cg := unique("cg")
+		parent := collectionGroupParent("(default)", cg)
+		created := createIndex(t, c, parent, "a", "b")
+		require.Equal(t, adminpb.Index_READY, created.GetState())
+		require.Len(t, created.GetFields(), 2)
+
+		got, err := c.GetIndex(ctx, &adminpb.GetIndexRequest{Name: created.GetName()})
+		require.NoError(t, err)
+		require.Equal(t, created.GetName(), got.GetName())
+
+		list, err := listAllIndexes(ctx, c, parent)
+		require.NoError(t, err)
+		require.Len(t, list, 1, "a fresh collection group carries exactly its created index")
+		require.Equal(t, created.GetName(), list[0].GetName())
+
+		err = c.DeleteIndex(ctx, &adminpb.DeleteIndexRequest{Name: created.GetName()})
+		require.NoError(t, err)
+		_, err = c.GetIndex(ctx, &adminpb.GetIndexRequest{Name: created.GetName()})
+		testdepth.AssertError(t, err, testdepth.SpecNotFound())
+	})
+
+	t.Run("CollectionGroupFields", func(t *testing.T) {
+		cg := unique("cg")
+		parent := collectionGroupParent("(default)", cg)
+		name := fieldName("(default)", cg, "weight")
+
+		op, err := c.UpdateField(ctx, &adminpb.UpdateFieldRequest{
+			Field: &adminpb.Field{
+				Name:      name,
+				TtlConfig: &adminpb.Field_TtlConfig{State: adminpb.Field_TtlConfig_ACTIVE},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"ttl_config"}},
+		})
+		require.NoError(t, err)
+		field, err := op.Wait(ctx)
+		require.NoError(t, err)
+		require.Equal(t, adminpb.Field_TtlConfig_ACTIVE, field.GetTtlConfig().GetState())
+
+		got, err := c.GetField(ctx, &adminpb.GetFieldRequest{Name: name})
+		require.NoError(t, err)
+		require.Equal(t, adminpb.Field_TtlConfig_ACTIVE, got.GetTtlConfig().GetState())
+
+		fields, err := listAllFields(ctx, c, parent)
+		require.NoError(t, err)
+		require.Len(t, fields, 1)
+		require.Equal(t, name, fields[0].GetName())
+	})
+
+	t.Run("BackupSchedules", func(t *testing.T) {
+		dbID := unique("depthbs")
+		createDatabase(t, c, dbID)
+
+		created, err := c.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{
+			Parent: databaseName(dbID),
+			BackupSchedule: &adminpb.BackupSchedule{
+				Retention:  durationpb.New(7 * 24 * time.Hour),
+				Recurrence: &adminpb.BackupSchedule_DailyRecurrence{DailyRecurrence: &adminpb.DailyRecurrence{}},
+			},
+		})
+		require.NoError(t, err)
+		// The backup-schedule id is server-assigned (the proto marks name
+		// OUTPUT_ONLY and CreateBackupScheduleRequest carries no id), so only the
+		// parent and a non-empty child id are asserted — never the emulator's
+		// chosen value.
+		require.NotEmpty(t, strings.TrimPrefix(created.GetName(), databaseName(dbID)+"/backupSchedules/"))
+		require.True(t, strings.HasPrefix(created.GetName(), databaseName(dbID)+"/backupSchedules/"), "name %q must be a backup schedule of the database", created.GetName())
+		require.Equal(t, 7*24*time.Hour, created.GetRetention().AsDuration())
+
+		got, err := c.GetBackupSchedule(ctx, &adminpb.GetBackupScheduleRequest{Name: created.GetName()})
+		require.NoError(t, err)
+		require.Equal(t, created.GetName(), got.GetName())
+
+		list, err := c.ListBackupSchedules(ctx, &adminpb.ListBackupSchedulesRequest{Parent: databaseName(dbID)})
+		require.NoError(t, err)
+		require.Len(t, list.GetBackupSchedules(), 1)
+
+		updated, err := c.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
+			BackupSchedule: &adminpb.BackupSchedule{
+				Name:      created.GetName(),
+				Retention: durationpb.New(14 * 24 * time.Hour),
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"retention"}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 14*24*time.Hour, updated.GetRetention().AsDuration())
+
+		err = c.DeleteBackupSchedule(ctx, &adminpb.DeleteBackupScheduleRequest{Name: created.GetName()})
+		require.NoError(t, err)
+		_, err = c.GetBackupSchedule(ctx, &adminpb.GetBackupScheduleRequest{Name: created.GetName()})
+		testdepth.AssertError(t, err, testdepth.SpecNotFound())
+	})
+
+	t.Run("UserCreds", func(t *testing.T) {
+		dbID := unique("depthuc")
+		createDatabase(t, c, dbID)
+
+		created, err := c.CreateUserCreds(ctx, &adminpb.CreateUserCredsRequest{
+			Parent:      databaseName(dbID),
+			UserCredsId: unique("uc"),
+			UserCreds:   &adminpb.UserCreds{},
+		})
+		require.NoError(t, err)
+		require.Equal(t, adminpb.UserCreds_ENABLED, created.GetState())
+		require.NotEmpty(t, created.GetSecurePassword(), "the secret is surfaced once, on create")
+		identity, ok := created.GetUserCredsIdentity().(*adminpb.UserCreds_ResourceIdentity_)
+		require.True(t, ok, "the creds carry a resource identity")
+		require.NotEmpty(t, identity.ResourceIdentity.GetPrincipal())
+
+		got, err := c.GetUserCreds(ctx, &adminpb.GetUserCredsRequest{Name: created.GetName()})
+		require.NoError(t, err)
+		require.Empty(t, got.GetSecurePassword(), "get never returns the secret")
+
+		list, err := c.ListUserCreds(ctx, &adminpb.ListUserCredsRequest{Parent: databaseName(dbID)})
+		require.NoError(t, err)
+		require.Len(t, list.GetUserCreds(), 1)
+		require.Empty(t, list.GetUserCreds()[0].GetSecurePassword(), "list never returns the secret")
+
+		disabled, err := c.DisableUserCreds(ctx, &adminpb.DisableUserCredsRequest{Name: created.GetName()})
+		require.NoError(t, err)
+		require.Equal(t, adminpb.UserCreds_DISABLED, disabled.GetState())
+
+		enabled, err := c.EnableUserCreds(ctx, &adminpb.EnableUserCredsRequest{Name: created.GetName()})
+		require.NoError(t, err)
+		require.Equal(t, adminpb.UserCreds_ENABLED, enabled.GetState())
+
+		reset, err := c.ResetUserPassword(ctx, &adminpb.ResetUserPasswordRequest{Name: created.GetName()})
+		require.NoError(t, err)
+		require.NotEmpty(t, reset.GetSecurePassword(), "reset rotates and returns the secret once")
+		require.NotEqual(t, created.GetSecurePassword(), reset.GetSecurePassword())
+
+		err = c.DeleteUserCreds(ctx, &adminpb.DeleteUserCredsRequest{Name: created.GetName()})
+		require.NoError(t, err)
+		_, err = c.GetUserCreds(ctx, &adminpb.GetUserCredsRequest{Name: created.GetName()})
+		testdepth.AssertError(t, err, testdepth.SpecNotFound())
+	})
+
+	t.Run("BackupsAreReadOnly", func(t *testing.T) {
+		list, err := c.ListBackups(ctx, &adminpb.ListBackupsRequest{Parent: backupParent("us-central1")})
+		require.NoError(t, err)
+		require.Empty(t, list.GetBackups(), "the Discovery document declares no client create path, so a location has no backups")
+	})
+}
+
+// getDatabaseErr issues the GetDatabase call the lifecycle's delete check
+// asserts (a helper keeps the subtest readable).
+func getDatabaseErr(ctx context.Context, c *admin.FirestoreAdminClient, id string) error {
+	_, err := c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: databaseName(id)})
+	return err
+}
+
+// listAllIndexes drains the ListIndexes iterator (the gapic client pages it
+// internally, unlike the databases/user-creds lists which return one response).
+func listAllIndexes(ctx context.Context, c *admin.FirestoreAdminClient, parent string) ([]*adminpb.Index, error) {
+	it := c.ListIndexes(ctx, &adminpb.ListIndexesRequest{Parent: parent})
+	var out []*adminpb.Index
+	for {
+		item, err := it.Next()
+		if err == iterator.Done {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+}
+
+// listAllFields drains the ListFields iterator.
+func listAllFields(ctx context.Context, c *admin.FirestoreAdminClient, parent string) ([]*adminpb.Field, error) {
+	it := c.ListFields(ctx, &adminpb.ListFieldsRequest{Parent: parent})
+	var out []*adminpb.Field
+	for {
+		item, err := it.Next()
+		if err == iterator.Done {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+}
+
+// TestSDKFirestoreAdminConcurrency is p2: concurrent control-plane mutations
+// under -race. A same-name create is arbitered by the store's atomic create
+// (exactly one winner, every loser AlreadyExists), distinct creates each land,
+// and a delete is not idempotent (one winner, every loser NotFound) — matching
+// real Firestore, whose delete of an already-gone resource is NOT_FOUND.
+func TestSDKFirestoreAdminConcurrency(t *testing.T) {
+	ctx := context.Background()
+	c := newAdmin(t)
+	testdepth.AssertRaceEnabled(t)
+
+	t.Run("SameNameDatabaseCreateRace", func(t *testing.T) {
+		id := unique("racedb")
+		deleteDatabaseOnCleanup(t, c, id)
+		errs := testdepth.Race(6, func(int) error {
+			op, err := c.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+				Parent:     projectName(),
+				DatabaseId: id,
+				Database:   &adminpb.Database{LocationId: "us-central1", Type: adminpb.Database_FIRESTORE_NATIVE},
+			})
+			if err != nil {
+				return err
+			}
+			_, err = op.Wait(ctx)
+			return err
+		})
+		testdepth.AssertOneWinner(t, errs, conflictStatus)
+
+		got, err := c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: databaseName(id)})
+		require.NoError(t, err)
+		require.Equal(t, databaseName(id), got.GetName())
+	})
+
+	t.Run("DistinctDatabasesAllLand", func(t *testing.T) {
+		const creators = 6
+		ids := make([]string, creators)
+		for i := range ids {
+			ids[i] = unique(fmt.Sprintf("distdb%d", i))
+			deleteDatabaseOnCleanup(t, c, ids[i])
+		}
+		errs := testdepth.Race(creators, func(i int) error {
+			op, err := c.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+				Parent:     projectName(),
+				DatabaseId: ids[i],
+				Database:   &adminpb.Database{LocationId: "us-central1", Type: adminpb.Database_FIRESTORE_NATIVE},
+			})
+			if err != nil {
+				return err
+			}
+			_, err = op.Wait(ctx)
+			return err
+		})
+		for i, err := range errs {
+			require.NoError(t, err, "create %d", i)
+		}
+		for i, id := range ids {
+			got, err := c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: databaseName(id)})
+			require.NoError(t, err, "get %d", i)
+			require.Equal(t, databaseName(id), got.GetName())
+		}
+	})
+
+	t.Run("SameIdUserCredsCreateRace", func(t *testing.T) {
+		dbID := unique("raceuc")
+		createDatabase(t, c, dbID)
+		ucID := unique("uc")
+		deleteUserCredsOnCleanup(t, c, databaseName(dbID)+"/userCreds/"+ucID)
+
+		errs := testdepth.Race(6, func(int) error {
+			_, err := c.CreateUserCreds(ctx, &adminpb.CreateUserCredsRequest{
+				Parent:      databaseName(dbID),
+				UserCredsId: ucID,
+				UserCreds:   &adminpb.UserCreds{},
+			})
+			return err
+		})
+		testdepth.AssertOneWinner(t, errs, conflictStatus)
+
+		got, err := c.GetUserCreds(ctx, &adminpb.GetUserCredsRequest{Name: databaseName(dbID) + "/userCreds/" + ucID})
+		require.NoError(t, err)
+		require.Equal(t, databaseName(dbID)+"/userCreds/"+ucID, got.GetName())
+	})
+
+	t.Run("ConcurrentUserCredsDeleteIsNotIdempotent", func(t *testing.T) {
+		dbID := unique("deluc")
+		createDatabase(t, c, dbID)
+		created, err := c.CreateUserCreds(ctx, &adminpb.CreateUserCredsRequest{
+			Parent:      databaseName(dbID),
+			UserCredsId: unique("uc"),
+			UserCreds:   &adminpb.UserCreds{},
+		})
+		require.NoError(t, err)
+
+		errs := testdepth.Race(6, func(int) error {
+			return c.DeleteUserCreds(ctx, &adminpb.DeleteUserCredsRequest{Name: created.GetName()})
+		})
+		// Exactly one delete wins; every loser sees the creds are already gone.
+		testdepth.AssertOneWinner(t, errs, goneStatus)
+
+		_, err = c.GetUserCreds(ctx, &adminpb.GetUserCredsRequest{Name: created.GetName()})
+		testdepth.AssertError(t, err, testdepth.SpecNotFound())
+	})
+}
+
+// TestSDKFirestoreAdminErrors is p3: the official client's typed error envelope
+// on the documented negatives, asserted through the kit's catalogue.
+//
+// A maskless UpdateDatabase is deliberately not asserted: the proto does not
+// mark UpdateDatabaseRequest.update_mask REQUIRED and AIP-134 mandates treating
+// an omitted mask as "all populated fields", but the emulator rejects it with
+// INVALID_ARGUMENT — so that divergence is recorded as DC20 rather than pinned.
+func TestSDKFirestoreAdminErrors(t *testing.T) {
+	ctx := context.Background()
+	c := newAdmin(t)
+
+	dupDB := unique("dupdb")
+	createDatabase(t, c, dupDB)
+
+	ucDB := unique("dupuc")
+	createDatabase(t, c, ucDB)
+	createdCreds, err := c.CreateUserCreds(ctx, &adminpb.CreateUserCredsRequest{
+		Parent:      databaseName(ucDB),
+		UserCredsId: unique("uc"),
+		UserCreds:   &adminpb.UserCreds{},
+	})
+	require.NoError(t, err)
+
+	singleFieldIndex := &adminpb.Index{
+		QueryScope: adminpb.Index_COLLECTION,
+		Fields: []*adminpb.Index_IndexField{
+			{FieldPath: "only", ValueMode: &adminpb.Index_IndexField_Order_{Order: adminpb.Index_IndexField_ASCENDING}},
+		},
+	}
+
+	testdepth.RunNegatives(t, []testdepth.NegativeCase{
+		{
+			Name: "InvalidDatabaseIdIsInvalidArgument",
+			Want: testdepth.SpecInvalidArgument(),
+			Run: func() error {
+				_, err := c.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+					Parent:     projectName(),
+					DatabaseId: "X",
+					Database:   &adminpb.Database{LocationId: "us-central1"},
+				})
+				return err
+			},
+		},
+		{
+			Name: "CreateDefaultDatabaseIsAlreadyExists",
+			Want: testdepth.SpecAlreadyExists(),
+			Run: func() error {
+				_, err := c.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+					Parent:     projectName(),
+					DatabaseId: "(default)",
+					Database:   &adminpb.Database{LocationId: "us-central1"},
+				})
+				return err
+			},
+		},
+		{
+			Name: "DuplicateDatabaseIsAlreadyExists",
+			Want: testdepth.SpecAlreadyExists(),
+			Run: func() error {
+				_, err := c.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+					Parent:     projectName(),
+					DatabaseId: dupDB,
+					Database:   &adminpb.Database{LocationId: "us-central1"},
+				})
+				return err
+			},
+		},
+		{
+			Name: "GetMissingDatabaseIsNotFound",
+			Want: testdepth.SpecNotFound(),
+			Run: func() error {
+				_, err := c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: databaseName(unique("nope"))})
+				return err
+			},
+		},
+		{
+			Name: "SingleFieldCompositeIndexIsInvalidArgument",
+			Want: testdepth.SpecInvalidArgument(),
+			Run: func() error {
+				_, err := c.CreateIndex(ctx, &adminpb.CreateIndexRequest{
+					Parent: collectionGroupParent("(default)", unique("cgerr")),
+					Index:  singleFieldIndex,
+				})
+				return err
+			},
+		},
+		{
+			Name: "GetMissingIndexIsNotFound",
+			Want: testdepth.SpecNotFound(),
+			Run: func() error {
+				_, err := c.GetIndex(ctx, &adminpb.GetIndexRequest{
+					Name: collectionGroupParent("(default)", unique("cgerr")) + "/indexes/" + unique("idx"),
+				})
+				return err
+			},
+		},
+		{
+			Name: "DeleteMissingIndexIsNotFound",
+			Want: testdepth.SpecNotFound(),
+			Run: func() error {
+				err := c.DeleteIndex(ctx, &adminpb.DeleteIndexRequest{
+					Name: collectionGroupParent("(default)", unique("cgerr")) + "/indexes/" + unique("idx"),
+				})
+				return err
+			},
+		},
+		{
+			Name: "DuplicateUserCredsIsAlreadyExists",
+			Want: testdepth.SpecAlreadyExists(),
+			Run: func() error {
+				_, err := c.CreateUserCreds(ctx, &adminpb.CreateUserCredsRequest{
+					Parent:      databaseName(ucDB),
+					UserCredsId: leafID(createdCreds.GetName()),
+					UserCreds:   &adminpb.UserCreds{},
+				})
+				return err
+			},
+		},
+		{
+			Name: "GetMissingUserCredsIsNotFound",
+			Want: testdepth.SpecNotFound(),
+			Run: func() error {
+				_, err := c.GetUserCreds(ctx, &adminpb.GetUserCredsRequest{
+					Name: databaseName(ucDB) + "/userCreds/" + unique("nope"),
+				})
+				return err
+			},
+		},
+		{
+			Name: "GetMissingBackupIsNotFound",
+			Want: testdepth.SpecNotFound(),
+			Run: func() error {
+				_, err := c.GetBackup(ctx, &adminpb.GetBackupRequest{Name: backupName("us-central1", unique("bk"))})
+				return err
+			},
+		},
+		{
+			Name: "DeleteMissingBackupIsNotFound",
+			Want: testdepth.SpecNotFound(),
+			Run: func() error {
+				return c.DeleteBackup(ctx, &adminpb.DeleteBackupRequest{Name: backupName("us-central1", unique("bk"))})
+			},
+		},
+	})
+}
+
+// leafID returns the final segment of a resource name (the userCreds id).
+func leafID(name string) string {
+	for i := len(name) - 1; i >= 0; i-- {
+		if name[i] == '/' {
+			return name[i+1:]
+		}
+	}
+	return name
+}
+
+// TestSDKFirestoreAdminListing is p4: projects.databases.collectionGroups.
+// indexes.list pages through pageSize/pageToken without dropping, duplicating
+// or reordering an index across a page boundary. Among the admin lists this
+// suite drives, only the composite-index list carries a cursor in the Discovery
+// document; the databases and backups lists declare none, so they are asserted
+// as complete single responses elsewhere, never faked into a page walk. The
+// Discovery document specifies no order, so the walk is compared as a set.
+func TestSDKFirestoreAdminListing(t *testing.T) {
+	c := newAdmin(t)
+
+	cg := unique("depthpage")
+	parent := collectionGroupParent("(default)", cg)
+	want := make([]string, 0, 3)
+	for i := 0; i < 3; i++ {
+		idx := createIndex(t, c, parent, fmt.Sprintf("f%d", i), "name")
+		deleteIndexOnCleanup(t, c, idx.GetName())
+		want = append(want, idx.GetName())
+	}
+
+	got := walkIndexNames(t, c, parent, testdepth.Paging[*adminpb.Index]{
+		Name:                 func(i *adminpb.Index) string { return i.GetName() },
+		PageSize:             2,
+		Order:                testdepth.OrderUnspecified,
+		RequireNonEmptyPages: true, // the emulator fills every non-terminal page; AIP-158 permits a zero-result mid-collection page, hence the explicit opt-in
+		Expect:               want,
+	})
+	require.Subset(t, got, want, "the paged walk must return every created index")
+}
+
+// walkIndexNames walks ListIndexes through the kit, one page per RPC via the
+// generated iterator's InternalFetch seam, and returns the index names in walk
+// order.
+func walkIndexNames(t *testing.T, c *admin.FirestoreAdminClient, parent string, cfg testdepth.Paging[*adminpb.Index]) []string {
+	t.Helper()
+	idx := testdepth.AssertPaging(t, func() testdepth.Lister[*adminpb.Index] {
+		it := c.ListIndexes(context.Background(), &adminpb.ListIndexesRequest{Parent: parent})
+		return func(req testdepth.ListRequest) (testdepth.Page[*adminpb.Index], error) {
+			items, next, err := it.InternalFetch(int(req.PageSize), req.PageToken)
+			return testdepth.Page[*adminpb.Index]{Items: items, NextPageToken: next}, err
+		}
+	}, cfg)
+	return testdepth.Names(idx, cfg)
+}
+
+// TestSDKFirestoreAdminScale is p5: the scale/boundary class. A twenty-five-index
+// collection group is walked at a small page size, so the boundary is the whole
+// cursor chain over a large collection rather than a single response; and a
+// twenty-five-user-creds database is returned whole by the unpaged
+// ListUserCreds, proving the unpaged list is not truncated.
+func TestSDKFirestoreAdminScale(t *testing.T) {
+	ctx := context.Background()
+	c := newAdmin(t)
+
+	const many = 25
+
+	t.Run("ManyIndexesPageWalk", func(t *testing.T) {
+		cg := unique("depthscale")
+		parent := collectionGroupParent("(default)", cg)
+		want := make([]string, 0, many)
+		for i := 0; i < many; i++ {
+			idx := createIndex(t, c, parent, fmt.Sprintf("pf%d", i), "name")
+			deleteIndexOnCleanup(t, c, idx.GetName())
+			want = append(want, idx.GetName())
+		}
+
+		got := walkIndexNames(t, c, parent, testdepth.Paging[*adminpb.Index]{
+			Name:                 func(i *adminpb.Index) string { return i.GetName() },
+			PageSize:             4,
+			Order:                testdepth.OrderUnspecified,
+			RequireNonEmptyPages: true, // the emulator fills every non-terminal page; AIP-158 permits a zero-result mid-collection page, hence the explicit opt-in
+			Expect:               want,
+		})
+		require.Subset(t, got, want, "every one of the %d indexes must survive the page walk", many)
+	})
+
+	t.Run("ManyUserCredsOneResponse", func(t *testing.T) {
+		dbID := unique("scaleuc")
+		createDatabase(t, c, dbID)
+		want := make([]string, 0, many)
+		for i := 0; i < many; i++ {
+			uc, err := c.CreateUserCreds(ctx, &adminpb.CreateUserCredsRequest{
+				Parent:      databaseName(dbID),
+				UserCredsId: fmt.Sprintf("scaleuc-%d-%d", i, time.Now().UnixNano()),
+				UserCreds:   &adminpb.UserCreds{},
+			})
+			require.NoError(t, err)
+			deleteUserCredsOnCleanup(t, c, uc.GetName())
+			want = append(want, uc.GetName())
+		}
+
+		list, err := c.ListUserCreds(ctx, &adminpb.ListUserCredsRequest{Parent: databaseName(dbID)})
+		require.NoError(t, err)
+		got := make([]string, 0, len(list.GetUserCreds()))
+		for _, uc := range list.GetUserCreds() {
+			got = append(got, uc.GetName())
+		}
+		require.Subset(t, got, want, "the unpaged user-creds list must return every creds")
+	})
+}

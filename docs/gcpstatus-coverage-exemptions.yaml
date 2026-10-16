@@ -16,17 +16,6 @@
 # uncovered.
 
 exemptions:
-  - service: firestoreadmin
-    reason: >-
-      gRPC-only wire service (google.firestore.admin.v1.FirestoreAdmin) whose
-      control plane — databases, composite indexes, fields, backup schedules,
-      backups, user credentials — is the same transport-neutral core served over
-      REST under the `firestore` descriptor. The `firestore` behavioral suite
-      (tests/integration/gcp/sdk-firestore + sdk-rest) drives that core, and the
-      Firestore Admin client is fully exercised by the gRPC message-level
-      conformance suite (27/27 checks). A dedicated sdk-firestoreadmin module
-      would duplicate the same core with no added behavioral depth.
-
   - service: iamcredentials
     reason: >-
       The iamcredentials surface (generateAccessToken, generateIdToken, signBlob,
