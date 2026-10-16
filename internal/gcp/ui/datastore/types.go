@@ -16,7 +16,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"strconv"
-	"time"
 
 	core "jaiscloud/internal/gcp/service/datastore"
 	dsstore "jaiscloud/internal/gcp/store/datastore"
@@ -132,7 +131,7 @@ func entityFromCore(e dsstore.Entity) Entity {
 		out.Version = strconv.FormatInt(e.Version, 10)
 	}
 	if !e.UpdateTime.IsZero() {
-		out.UpdateTime = e.UpdateTime.UTC().Format(time.RFC3339Nano)
+		out.UpdateTime = core.CanonicalTimestamp(e.UpdateTime)
 	}
 	return out
 }

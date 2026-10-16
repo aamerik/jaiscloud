@@ -13,6 +13,16 @@ import (
 // so a value carrying sub-microsecond digits is held and echoed without them.
 const microsecond = time.Microsecond
 
+// truncateTimestamp returns t at Datastore's timestamp resolution (microsecond),
+// so a response-level timestamp — read_time, commit_time — carries no
+// sub-microsecond digit real GCP would not send. Real Datastore holds every
+// timestamp at microseconds, exactly as CanonicalTimestamp renders a stored
+// value and as the store already truncates an entity's create/update stamps, so
+// both transports hand a client the same instant.
+func truncateTimestamp(t time.Time) time.Time {
+	return t.Truncate(microsecond)
+}
+
 // ParseTimestamp parses the store's timestamp form: an RFC 3339 string. A
 // Datastore timestamp is an instant (the wire proto Timestamp is seconds+nanos
 // since the epoch), so the string's UTC offset and fractional-second spelling
@@ -31,7 +41,7 @@ func ParseTimestamp(s string) (time.Time, error) {
 // REST read echoes exactly what real GCP would (a value that differs only below
 // the microsecond is the same stored value).
 func CanonicalTimestamp(t time.Time) string {
-	t = t.UTC().Truncate(microsecond)
+	t = truncateTimestamp(t).UTC()
 	// protojson formats nine fractional digits and then trims a group of three
 	// at a time, so a fractional part is spelled with 3, 6, or 9 digits and is
 	// never trimmed below a group boundary (".500", not time.RFC3339Nano's
