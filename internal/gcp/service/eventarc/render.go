@@ -13,6 +13,7 @@ import (
 	"jaiscloud/internal/gcp/eventing"
 	"jaiscloud/internal/gcp/resource"
 	eventarcstore "jaiscloud/internal/gcp/store/eventarc"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // OperationMetadataType is the @type of the Eventarc v1 OperationMetadata.
@@ -89,10 +90,10 @@ func operationMetadata(op Operation) map[string]any {
 	}
 }
 
-// formatTimestamp renders a business timestamp as the RFC3339Nano string the
-// Discovery JSON shape (and protojson) uses.
+// formatTimestamp renders a business timestamp as the protojson spelling of a
+// google-datetime field, the shape the Discovery JSON of this service uses.
 func formatTimestamp(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
+	return timestamp.Canonical(t)
 }
 
 // randomHex returns n hex characters of crypto/rand randomness. It is used only

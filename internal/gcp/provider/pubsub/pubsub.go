@@ -22,6 +22,7 @@ import (
 	pubsubcore "jaiscloud/internal/gcp/service/pubsub"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
@@ -530,7 +531,7 @@ func (p *Provider) deliverPush(ctx context.Context, accountID, topicFull string,
 			"message": map[string]any{
 				"messageId":   msg.MessageID,
 				"data":        data,
-				"publishTime": msg.PublishTime.UTC().Format("2006-01-02T15:04:05.000000Z"),
+				"publishTime": timestamp.Canonical(msg.PublishTime),
 			},
 			"subscription": sub["name"],
 		}
@@ -849,7 +850,7 @@ func (p *Provider) SubscriptionPull(ctx context.Context, nr *model.NormalizedReq
 		msg := map[string]any{
 			"messageId":   m.MessageID,
 			"data":        data,
-			"publishTime": m.PublishTime.UTC().Format("2006-01-02T15:04:05.000000Z"),
+			"publishTime": timestamp.Canonical(m.PublishTime),
 		}
 		if len(m.Attributes) > 0 {
 			msg["attributes"] = m.Attributes

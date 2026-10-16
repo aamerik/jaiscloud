@@ -12,6 +12,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	metastorestore "jaiscloud/internal/gcp/store/metastore"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // operationMetadataType is the @type of the Dataproc Metastore v1
@@ -68,10 +69,10 @@ func operationResponse(typeURL string, body map[string]any) map[string]any {
 	return out
 }
 
-// formatTimestamp renders a business timestamp as the RFC3339Nano string the
-// Discovery JSON shape (and protojson) uses.
+// formatTimestamp renders a business timestamp as the protojson spelling of a
+// google-datetime field, the shape the Discovery JSON of this service uses.
 func formatTimestamp(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
+	return timestamp.Canonical(t)
 }
 
 // endpointURI synthesizes the output-only thrift endpoint (no real per-service

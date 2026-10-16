@@ -18,6 +18,8 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // Canonical event types emitted by the emulator's producers. Cloud Functions
@@ -129,7 +131,7 @@ func StorageObjectSubject(attributes map[string]string) string {
 func PubSubMessagePublished(messageID string, publishTime time.Time, data []byte, attributes map[string]string, subscription string) []byte {
 	message := map[string]any{
 		"messageId":   messageID,
-		"publishTime": publishTime.UTC().Format(time.RFC3339Nano),
+		"publishTime": timestamp.Canonical(publishTime),
 	}
 	if len(data) > 0 {
 		message["data"] = base64.StdEncoding.EncodeToString(data)

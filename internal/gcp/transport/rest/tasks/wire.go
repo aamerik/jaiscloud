@@ -15,6 +15,7 @@ import (
 	"jaiscloud/internal/gcp/resource"
 	core "jaiscloud/internal/gcp/service/tasks"
 	tasksstore "jaiscloud/internal/gcp/store/tasks"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 )
 
@@ -37,7 +38,7 @@ const (
 // operation name; metadataType is the operation's metadata type URL; response
 // is the already-typed result envelope.
 func batchOperationJSON(project, location, metadataType string, response map[string]any) map[string]any {
-	now := clock.Now().UTC().Format(time.RFC3339Nano)
+	now := timestamp.Canonical(clock.Now())
 	return map[string]any{
 		"name": core.OperationName(project, location, randomHex(12)),
 		"done": true,
@@ -367,7 +368,7 @@ func queueToJSON(q tasksstore.Queue) map[string]any {
 		out["stackdriverLoggingConfig"] = map[string]any{"samplingRatio": q.StackdriverLoggingConfig.SamplingRatio}
 	}
 	if !q.PurgeTime.IsZero() {
-		out["purgeTime"] = q.PurgeTime.UTC().Format(time.RFC3339Nano)
+		out["purgeTime"] = timestamp.Canonical(q.PurgeTime)
 	}
 	return out
 }
@@ -389,10 +390,10 @@ func taskToJSON(t tasksstore.Task) map[string]any {
 		}
 	}
 	if !t.ScheduleTime.IsZero() {
-		out["scheduleTime"] = t.ScheduleTime.UTC().Format(time.RFC3339Nano)
+		out["scheduleTime"] = timestamp.Canonical(t.ScheduleTime)
 	}
 	if !t.CreateTime.IsZero() {
-		out["createTime"] = t.CreateTime.UTC().Format(time.RFC3339Nano)
+		out["createTime"] = timestamp.Canonical(t.CreateTime)
 	}
 	if t.DispatchDeadline > 0 {
 		out["dispatchDeadline"] = formatDuration(t.DispatchDeadline)
@@ -482,13 +483,13 @@ func appEngineRoutingToJSON(r *tasksstore.AppEngineRouting) map[string]any {
 func attemptToJSON(a *tasksstore.Attempt) map[string]any {
 	out := map[string]any{}
 	if !a.ScheduleTime.IsZero() {
-		out["scheduleTime"] = a.ScheduleTime.UTC().Format(time.RFC3339Nano)
+		out["scheduleTime"] = timestamp.Canonical(a.ScheduleTime)
 	}
 	if !a.DispatchTime.IsZero() {
-		out["dispatchTime"] = a.DispatchTime.UTC().Format(time.RFC3339Nano)
+		out["dispatchTime"] = timestamp.Canonical(a.DispatchTime)
 	}
 	if !a.ResponseTime.IsZero() {
-		out["responseTime"] = a.ResponseTime.UTC().Format(time.RFC3339Nano)
+		out["responseTime"] = timestamp.Canonical(a.ResponseTime)
 	}
 	if a.ResponseStatus != nil {
 		out["responseStatus"] = map[string]any{"code": a.ResponseStatus.Code, "message": a.ResponseStatus.Message}

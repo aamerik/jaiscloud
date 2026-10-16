@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // microsecond is Datastore's timestamp resolution. Real Datastore stores a
@@ -20,7 +22,7 @@ const microsecond = time.Microsecond
 // value and as the store already truncates an entity's create/update stamps, so
 // both transports hand a client the same instant.
 func truncateTimestamp(t time.Time) time.Time {
-	return t.Truncate(microsecond)
+	return timestamp.Truncate(t)
 }
 
 // ParseTimestamp parses the store's timestamp form: an RFC 3339 string. A
@@ -41,19 +43,10 @@ func ParseTimestamp(s string) (time.Time, error) {
 // REST read echoes exactly what real GCP would (a value that differs only below
 // the microsecond is the same stored value).
 func CanonicalTimestamp(t time.Time) string {
-	t = truncateTimestamp(t).UTC()
-	// protojson formats nine fractional digits and then trims a group of three
-	// at a time, so a fractional part is spelled with 3, 6, or 9 digits and is
-	// never trimmed below a group boundary (".500", not time.RFC3339Nano's
-	// ".5"); it is omitted entirely when there are none. Truncating to
-	// microseconds first means the final group is always zeros, leaving 0, 3, or
-	// 6 digits.
-	// https://github.com/protocolbuffers/protobuf-go — protojson marshalTimestamp.
-	s := t.Format("2006-01-02T15:04:05.000000000")
-	s = strings.TrimSuffix(s, "000")
-	s = strings.TrimSuffix(s, "000")
-	s = strings.TrimSuffix(s, ".000")
-	return s + "Z"
+	// The one protojson speller shared by every service that renders a
+	// google-datetime field; Datastore's metadata timestamps use it verbatim
+	// (RFC 3339 in UTC, 0/3/6-digit fraction, microsecond resolution).
+	return timestamp.Canonical(t)
 }
 
 // NormalizeTimestamp parses an RFC 3339 timestamp and returns its canonical UTC

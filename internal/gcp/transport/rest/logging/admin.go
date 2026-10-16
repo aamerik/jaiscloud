@@ -10,6 +10,7 @@ import (
 	"jaiscloud/internal/gcp/policy"
 	core "jaiscloud/internal/gcp/service/logging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -825,7 +826,8 @@ func operationToWire(name, typeURL string, response map[string]any) map[string]a
 	return map[string]any{"name": name, "done": true, "response": resp}
 }
 
-// unixNanosRFC3339 renders a UnixNano timestamp as an RFC3339 string.
+// unixNanosRFC3339 renders a UnixNano timestamp as the protojson spelling of a
+// google-datetime field.
 func unixNanosRFC3339(nanos int64) string {
-	return time.Unix(0, nanos).UTC().Format(time.RFC3339Nano)
+	return timestamp.Canonical(time.Unix(0, nanos))
 }

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 )
@@ -218,8 +219,9 @@ func parseRestDuration(s string) time.Duration {
 	return d
 }
 
-// restRFC3339 renders a timestamp in the wire form (RFC3339Nano, UTC).
-func restRFC3339(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+// restRFC3339 renders a timestamp in the protojson spelling of a
+// google-datetime field (UTC, 0/3/6-digit fraction groups, microseconds).
+func restRFC3339(t time.Time) string { return timestamp.Canonical(t) }
 
 // lroResponse renders a terminal google.longrunning.Operation carrying a typed
 // response, matching the grpc-gateway transcode (an Any with @type).

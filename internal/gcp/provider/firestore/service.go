@@ -15,6 +15,7 @@ import (
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/resource"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
@@ -657,13 +658,13 @@ func (s *Service) BatchGet(ctx context.Context, documents []string, transaction 
 		if err != nil {
 			if errors.Is(err, firestorestore.ErrDocumentNotFound) {
 				s.recordRead(transaction, name, firestorestore.Document{}, false)
-				item = map[string]any{"missing": name, "readTime": readTime.Format(time.RFC3339Nano)}
+				item = map[string]any{"missing": name, "readTime": timestamp.Canonical(readTime)}
 			} else {
 				return nil, err
 			}
 		} else {
 			s.recordRead(transaction, name, doc, true)
-			item = map[string]any{"found": documentMap(doc), "readTime": readTime.Format(time.RFC3339Nano)}
+			item = map[string]any{"found": documentMap(doc), "readTime": timestamp.Canonical(readTime)}
 		}
 		items = append(items, item)
 	}
@@ -798,7 +799,7 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 		updateTime = nextUpdateTime(existing.UpdateTime, now)
 	}
 	doc := firestorestore.Document{Name: dw.Name, Fields: merged, CreateTime: createTime, UpdateTime: updateTime}
-	res := map[string]any{"updateTime": updateTime.Format(time.RFC3339Nano)}
+	res := map[string]any{"updateTime": timestamp.Canonical(updateTime)}
 	if len(transformResults) > 0 {
 		tr := make([]any, 0, len(transformResults))
 		for _, r := range transformResults {
@@ -849,7 +850,7 @@ func (s *Service) buildTransform(ctx context.Context, tw *documentTransformWire,
 	for _, r := range transformResults {
 		tr = append(tr, valueWire(r))
 	}
-	return doc, map[string]any{"updateTime": updateTime.Format(time.RFC3339Nano), "transformResults": tr}, readRef, nil
+	return doc, map[string]any{"updateTime": timestamp.Canonical(updateTime), "transformResults": tr}, readRef, nil
 }
 
 // ─── index management ────────────────────────────────────────────────────────

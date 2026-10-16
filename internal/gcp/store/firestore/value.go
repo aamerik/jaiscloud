@@ -7,6 +7,8 @@ import (
 	"math"
 	"strconv"
 	"time"
+
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // NullEnumValue is the wire value of the Firestore nullValue enum.
@@ -69,7 +71,7 @@ func (v *Value) MarshalJSON() ([]byte, error) {
 	case v.DoubleValue != nil:
 		m["doubleValue"] = encodeDouble(*v.DoubleValue)
 	case v.TimestampValue != nil:
-		m["timestampValue"] = v.TimestampValue.Format(time.RFC3339Nano)
+		m["timestampValue"] = timestamp.ProtoJSON(*v.TimestampValue)
 	case v.StringValue != nil:
 		m["stringValue"] = *v.StringValue
 	case v.BytesValue != nil:
