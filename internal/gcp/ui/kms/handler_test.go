@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
@@ -160,6 +161,10 @@ func TestCreateKeyRing_SetsLocationAndID(t *testing.T) {
 }
 
 func TestCreateCryptoKey_BuildsBody(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
 	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
 		"name":    "projects/p/locations/global/keyRings/kr1/cryptoKeys/ck1",
 		"purpose": "ENCRYPT_DECRYPT",
@@ -176,8 +181,24 @@ func TestCreateCryptoKey_BuildsBody(t *testing.T) {
 	if body["rotationPeriod"] != "86400s" {
 		t.Fatalf("body = %+v", body)
 	}
+	// A rotation_schedule requires next_rotation_time; the console derives it one
+	// period out when the caller did not supply one.
+	if got, _ := body["nextRotationTime"].(string); got != t0.Add(24*time.Hour).Format(time.RFC3339Nano) {
+		t.Fatalf("nextRotationTime = %q, want %q", got, t0.Add(24*time.Hour).Format(time.RFC3339Nano))
+	}
 	if vt, ok := body["versionTemplate"].(map[string]any); !ok || vt["algorithm"] != "GOOGLE_SYMMETRIC_ENCRYPTION" {
 		t.Fatalf("versionTemplate = %+v", body["versionTemplate"])
+	}
+
+	// An explicit nextRotationTime is passed through untouched.
+	w = do(t, mock, http.MethodPost, "/locations/global/keyRings/kr1/cryptoKeys",
+		`{"cryptoKeyId":"ck2","rotationPeriod":"86400s","nextRotationTime":"2026-08-01T00:00:00Z"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	body = mock.lastNR.Params["body"].(map[string]any)
+	if got, _ := body["nextRotationTime"].(string); got != "2026-08-01T00:00:00Z" {
+		t.Fatalf("explicit nextRotationTime = %q, want 2026-08-01T00:00:00Z", got)
 	}
 }
 

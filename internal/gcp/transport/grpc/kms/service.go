@@ -160,6 +160,10 @@ func (s *Service) CreateCryptoKey(ctx context.Context, req *kmspb.CreateCryptoKe
 			}
 			in.RotationPeriod = d
 		}
+		if nrt := ck.GetNextRotationTime(); nrt != nil {
+			t := nrt.AsTime()
+			in.NextRotationTime = &t
+		}
 		in.ImportOnly = ck.GetImportOnly()
 	}
 	in.Purpose = purpose
@@ -192,10 +196,23 @@ func (s *Service) UpdateCryptoKey(ctx context.Context, req *kmspb.UpdateCryptoKe
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
-	in := kmscore.CryptoKeyUpdate{UpdateMask: req.GetUpdateMask().GetPaths(), Labels: ck.GetLabels()}
+	// UpdateCryptoKeyRequest.update_mask is REQUIRED; distinguish an omitted mask
+	// (nil, rejected by the core) from an explicitly empty one (a no-op).
+	var maskPaths []string
+	if req.GetUpdateMask() != nil {
+		maskPaths = req.GetUpdateMask().GetPaths()
+		if maskPaths == nil {
+			maskPaths = []string{}
+		}
+	}
+	in := kmscore.CryptoKeyUpdate{UpdateMask: maskPaths, Labels: ck.GetLabels()}
 	if rp := ck.GetRotationPeriod(); rp != nil {
 		d := rp.AsDuration()
 		in.RotationPeriod = &d
+	}
+	if nrt := ck.GetNextRotationTime(); nrt != nil {
+		t := nrt.AsTime()
+		in.NextRotationTime = &t
 	}
 	k, err := s.core.UpdateCryptoKey(ctx, project, loc, kr, key, in)
 	if err != nil {

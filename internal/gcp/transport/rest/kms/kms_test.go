@@ -229,22 +229,28 @@ func TestCryptoKeyPrimaryAlgorithm(t *testing.T) {
 	}
 }
 
-// TestCryptoKeyLabelsRotationREST verifies the REST surface persists labels and
-// a rotationPeriod on create and surfaces them (plus the derived
-// nextRotationTime) on get.
+// TestCryptoKeyLabelsRotationREST verifies the REST surface persists labels, a
+// rotationPeriod and its required nextRotationTime on create and surfaces them
+// on get.
 func TestCryptoKeyLabelsRotationREST(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
 	ctx := context.Background()
 	p := newTestProvider()
 
 	if _, err := p.KeyRingCreate(ctx, newNR(map[string]any{"location": "global", "keyRingId": "kr"})); err != nil {
 		t.Fatalf("keyring create: %v", err)
 	}
+	nrt := t0.Add(24 * time.Hour)
 	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
 		"name":        "locations/global/keyRings/kr",
 		"cryptoKeyId": "rot",
 		"body": map[string]any{
-			"labels":         map[string]any{"env": "test"},
-			"rotationPeriod": "86400s",
+			"labels":           map[string]any{"env": "test"},
+			"rotationPeriod":   "86400s",
+			"nextRotationTime": nrt.Format(time.RFC3339Nano),
 		},
 	})); err != nil {
 		t.Fatalf("cryptokey create: %v", err)
@@ -261,17 +267,37 @@ func TestCryptoKeyLabelsRotationREST(t *testing.T) {
 	if period, _ := resp.Data["rotationPeriod"].(string); period != "86400s" {
 		t.Errorf("rotationPeriod = %q, want 86400s", period)
 	}
-	if next, _ := resp.Data["nextRotationTime"].(string); next == "" {
-		t.Error("nextRotationTime is empty, want a derived timestamp")
+	if next, _ := resp.Data["nextRotationTime"].(string); next != nrt.Format(time.RFC3339Nano) {
+		t.Errorf("nextRotationTime = %q, want %q", next, nrt.Format(time.RFC3339Nano))
 	}
 
-	// A non-positive rotationPeriod is rejected.
+	// The Discovery requires next_rotation_time whenever rotation_period is set.
 	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
 		"name":        "locations/global/keyRings/kr",
-		"cryptoKeyId": "bad",
-		"body":        map[string]any{"rotationPeriod": "-1h"},
+		"cryptoKeyId": "orphan",
+		"body":        map[string]any{"rotationPeriod": "86400s"},
 	})); err == nil || errStatus(err) != 400 {
-		t.Fatalf("negative rotationPeriod err = %v, want 400", err)
+		t.Fatalf("rotationPeriod without nextRotationTime err = %v, want 400", err)
+	}
+
+	// rotation_period must be within [24h, 876000h].
+	for _, bad := range []string{"-1h", "82800s", "3153600001s"} {
+		if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+			"name":        "locations/global/keyRings/kr",
+			"cryptoKeyId": "bad",
+			"body":        map[string]any{"rotationPeriod": bad, "nextRotationTime": nrt.Format(time.RFC3339Nano)},
+		})); err == nil || errStatus(err) != 400 {
+			t.Fatalf("rotationPeriod %q err = %v, want 400", bad, err)
+		}
+	}
+
+	// next_rotation_time must be in the future.
+	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+		"name":        "locations/global/keyRings/kr",
+		"cryptoKeyId": "past",
+		"body":        map[string]any{"rotationPeriod": "86400s", "nextRotationTime": t0.Add(-time.Hour).Format(time.RFC3339Nano)},
+	})); err == nil || errStatus(err) != 400 {
+		t.Fatalf("past nextRotationTime err = %v, want 400", err)
 	}
 }
 
@@ -293,14 +319,14 @@ func TestCryptoKeyRotationExecutesOnReadREST(t *testing.T) {
 	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
 		"name":        "locations/global/keyRings/kr",
 		"cryptoKeyId": "rot",
-		"body":        map[string]any{"rotationPeriod": "3600s"},
+		"body":        map[string]any{"rotationPeriod": "86400s", "nextRotationTime": t0.Add(24 * time.Hour).Format(time.RFC3339Nano)},
 	})); err != nil {
 		t.Fatalf("cryptokey create: %v", err)
 	}
 
 	getName := "locations/global/keyRings/kr/cryptoKeys/rot"
 
-	// Before the due time (nextRotationTime = t0+1h) nothing rotates.
+	// Before the due time (nextRotationTime = t0+24h) nothing rotates.
 	resp, err := p.CryptoKeyGet(ctx, newNR(map[string]any{"name": getName}))
 	if err != nil {
 		t.Fatalf("cryptokey get (not due): %v", err)
@@ -310,7 +336,7 @@ func TestCryptoKeyRotationExecutesOnReadREST(t *testing.T) {
 	}
 
 	// Advance the clock past nextRotationTime and read again: rotation runs.
-	due := t0.Add(2 * time.Hour)
+	due := t0.Add(25 * time.Hour)
 	clock.SetGlobalClock(clock.FixedClock{T: due})
 	resp, err = p.CryptoKeyGet(ctx, newNR(map[string]any{"name": getName}))
 	if err != nil {
@@ -319,8 +345,8 @@ func TestCryptoKeyRotationExecutesOnReadREST(t *testing.T) {
 	if n := primaryName(t, resp); n != "projects/proj/locations/global/keyRings/kr/cryptoKeys/rot/cryptoKeyVersions/2" {
 		t.Fatalf("primary after rotation = %q, want version 2", n)
 	}
-	if next, _ := resp.Data["nextRotationTime"].(string); next != due.Add(time.Hour).UTC().Format(time.RFC3339Nano) {
-		t.Fatalf("nextRotationTime = %q, want %q", next, due.Add(time.Hour).UTC().Format(time.RFC3339Nano))
+	if next, _ := resp.Data["nextRotationTime"].(string); next != due.Add(24*time.Hour).UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("nextRotationTime = %q, want %q", next, due.Add(24*time.Hour).UTC().Format(time.RFC3339Nano))
 	}
 
 	// The rotation produced a second, ENABLED version.
@@ -359,7 +385,7 @@ func TestCryptoKeyRotationOnEncrypt(t *testing.T) {
 	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
 		"name":        "locations/global/keyRings/kr",
 		"cryptoKeyId": "rot",
-		"body":        map[string]any{"rotationPeriod": "3600s"},
+		"body":        map[string]any{"rotationPeriod": "86400s", "nextRotationTime": t0.Add(24 * time.Hour).Format(time.RFC3339Nano)},
 	})); err != nil {
 		t.Fatalf("cryptokey create: %v", err)
 	}
@@ -384,7 +410,7 @@ func TestCryptoKeyRotationOnEncrypt(t *testing.T) {
 	firstCT, _ := first.Data["ciphertext"].(string)
 
 	// Advance past nextRotationTime: Encrypt rotates and uses version 2.
-	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(2 * time.Hour)})
+	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(25 * time.Hour)})
 	second := encrypt()
 	if name, _ := second.Data["name"].(string); !strings.HasSuffix(name, "/cryptoKeyVersions/2") {
 		t.Fatalf("second encrypt name = %q, want version 2", name)

@@ -491,10 +491,16 @@ func TestCryptoKeyVersionUpdate(t *testing.T) {
 }
 
 // TestCryptoKeyUpdate pins cryptoKeys.patch — the real REST key update the
-// official clients send — as the labels + rotation-schedule update (mirroring
-// gRPC UpdateCryptoKey). A masked field is replaced wholesale from the body
-// (labels is not deep-merged), and an unmasked field is left untouched.
+// official clients send (mirroring gRPC UpdateCryptoKey). A masked field is
+// replaced wholesale from the body (labels is not deep-merged), an unmasked
+// field is left untouched, the mask is required, and a path outside the
+// resource's writable field set is 400 INVALID_ARGUMENT (AIP-134/AIP-161, the
+// AUD2-7 precedent).
 func TestCryptoKeyUpdate(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
 	ctx := context.Background()
 	p := newTestProvider()
 
@@ -528,34 +534,119 @@ func TestCryptoKeyUpdate(t *testing.T) {
 		t.Fatal("rotationPeriod should be unset: the mask excluded it")
 	}
 
-	// Patch only the rotation schedule (camelCase mask, the Discovery spelling).
-	resp, err = p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+	// Setting a rotation_period requires next_rotation_time in the same request
+	// when the key has no schedule yet (Discovery: next_rotation_time is required
+	// if rotation_schedule is set).
+	if _, err := p.CryptoKeyUpdate(ctx, newNR(map[string]any{
 		"name": keyName, "updateMask": "rotationPeriod",
 		"body": map[string]any{"rotationPeriod": "86400s"},
+	})); errStatus(err) != 400 {
+		t.Fatalf("rotationPeriod without nextRotationTime: status = %d (%v), want 400", errStatus(err), err)
+	}
+
+	// Patch both rotation fields (camelCase masks, the Discovery spelling).
+	nrt := t0.Add(24 * time.Hour)
+	resp, err = p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": keyName, "updateMask": "rotationPeriod,nextRotationTime",
+		"body": map[string]any{"rotationPeriod": "86400s", "nextRotationTime": nrt.Format(time.RFC3339Nano)},
 	}))
 	if err != nil {
-		t.Fatalf("patch rotationPeriod: %v", err)
+		t.Fatalf("patch rotation schedule: %v", err)
 	}
 	if got, _ := resp.Data["rotationPeriod"].(string); got != "86400s" {
 		t.Fatalf("rotationPeriod = %q, want 86400s", got)
 	}
+	if got, _ := resp.Data["nextRotationTime"].(string); got != nrt.Format(time.RFC3339Nano) {
+		t.Fatalf("nextRotationTime = %q, want %q", got, nrt.Format(time.RFC3339Nano))
+	}
 	if labels := stringMap(resp.Data["labels"]); labels["env"] != "prod" {
 		t.Fatalf("labels = %v, want preserved across the rotation-only patch", labels)
 	}
-	if _, ok := resp.Data["nextRotationTime"]; !ok {
-		t.Fatal("expected nextRotationTime after setting a rotation period")
+
+	// nextRotationTime is independently writable; rotating the period alone then
+	// keeps the existing next rotation time.
+	later := t0.Add(48 * time.Hour)
+	resp, err = p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": keyName, "updateMask": "nextRotationTime",
+		"body": map[string]any{"nextRotationTime": later.Format(time.RFC3339Nano)},
+	}))
+	if err != nil {
+		t.Fatalf("patch nextRotationTime: %v", err)
+	}
+	if got, _ := resp.Data["nextRotationTime"].(string); got != later.Format(time.RFC3339Nano) {
+		t.Fatalf("nextRotationTime = %q, want %q", got, later.Format(time.RFC3339Nano))
+	}
+	if _, err := p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": keyName, "updateMask": "rotationPeriod",
+		"body": map[string]any{"rotationPeriod": "172800s"},
+	})); err != nil {
+		t.Fatalf("patch rotationPeriod with an existing schedule: %v", err)
 	}
 
-	// An unsupported mask path is rejected (fail-loud). The shared core
-	// classifies it as a request-input rejection with 501 UnsupportedOperation
-	// (the same response gRPC gives); real GCP answers 400 INVALID_ARGUMENT.
-	// Aligning the KMS mask-path classification with the AUD2-7 precedent is
-	// recorded as a follow-up (TD34), not changed here.
+	// An omitted updateMask is rejected: the Discovery marks it Required, while an
+	// explicitly empty mask is the no-op real GCP accepts.
 	if _, err := p.CryptoKeyUpdate(ctx, newNR(map[string]any{
-		"name": keyName, "updateMask": "purpose",
-		"body": map[string]any{"purpose": "ASYMMETRIC_SIGN"},
-	})); errStatus(err) != 501 {
-		t.Fatalf("unsupported mask: status = %d (%v), want 501", errStatus(err), err)
+		"name": keyName,
+		"body": map[string]any{"labels": map[string]any{"a": "b"}},
+	})); errStatus(err) != 400 {
+		t.Fatalf("omitted mask: status = %d (%v), want 400", errStatus(err), err)
+	}
+	if _, err := p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": keyName, "updateMask": "",
+		"body": map[string]any{"labels": map[string]any{"should": "not-apply"}},
+	})); err != nil {
+		t.Fatalf("empty mask (no-op): %v", err)
+	}
+	resp, err = p.CryptoKeyGet(ctx, newNR(map[string]any{"name": keyName}))
+	if err != nil {
+		t.Fatalf("get after empty mask: %v", err)
+	}
+	if labels := stringMap(resp.Data["labels"]); labels["should"] != "" {
+		t.Fatalf("empty mask applied an unmasked label: %v", labels)
+	}
+
+	// Unmasked body fields are ignored, not validated (AIP-134): a stale rotation
+	// value alongside a labels patch is not an error.
+	if _, err := p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": keyName, "updateMask": "labels",
+		"body": map[string]any{
+			"labels":           map[string]any{"unmasked": "true"},
+			"rotationPeriod":   "1s",
+			"nextRotationTime": "2020-01-01T00:00:00Z",
+		},
+	})); err != nil {
+		t.Fatalf("unmasked invalid rotation fields: %v", err)
+	}
+
+	// Clearing nextRotationTime while a rotation_period is set is rejected.
+	if _, err := p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": keyName, "updateMask": "nextRotationTime", "body": map[string]any{},
+	})); errStatus(err) != 400 {
+		t.Fatalf("clear nextRotationTime with a period: status = %d (%v), want 400", errStatus(err), err)
+	}
+
+	// Clearing rotation_period keeps nextRotationTime (the fields are independent).
+	resp, err = p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+		"name": keyName, "updateMask": "rotationPeriod", "body": map[string]any{},
+	}))
+	if err != nil {
+		t.Fatalf("clear rotationPeriod: %v", err)
+	}
+	if _, ok := resp.Data["rotationPeriod"]; ok {
+		t.Fatal("rotationPeriod = set, want cleared")
+	}
+	if got, _ := resp.Data["nextRotationTime"].(string); got != later.Format(time.RFC3339Nano) {
+		t.Fatalf("nextRotationTime = %q, want %q preserved", got, later.Format(time.RFC3339Nano))
+	}
+
+	// A path outside the writable field set is 400 INVALID_ARGUMENT — purpose is
+	// immutable, and an unknown name is not a field at all.
+	for _, mask := range []string{"purpose", "createTime", "name", "versionTemplate", "bogusField"} {
+		if _, err := p.CryptoKeyUpdate(ctx, newNR(map[string]any{
+			"name": keyName, "updateMask": mask, "body": map[string]any{},
+		})); errStatus(err) != 400 {
+			t.Fatalf("mask %q: status = %d (%v), want 400", mask, errStatus(err), err)
+		}
 	}
 
 	// A missing crypto key is 404.

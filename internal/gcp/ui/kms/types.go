@@ -49,13 +49,17 @@ type ListCryptoKeysResponse struct {
 }
 
 // CreateCryptoKeyRequest is the body for POST .../cryptoKeys. Only cryptoKeyId
-// is required.
+// is required. When RotationPeriod is set the console supplies the paired
+// nextRotationTime (real GCP requires next_rotation_time with a
+// rotation_schedule); a caller may pass NextRotationTime explicitly, otherwise
+// the handler derives it as now + RotationPeriod.
 type CreateCryptoKeyRequest struct {
-	CryptoKeyID    string            `json:"cryptoKeyId"`
-	Purpose        string            `json:"purpose,omitempty"`
-	Algorithm      string            `json:"algorithm,omitempty"`
-	RotationPeriod string            `json:"rotationPeriod,omitempty"`
-	Labels         map[string]string `json:"labels,omitempty"`
+	CryptoKeyID      string            `json:"cryptoKeyId"`
+	Purpose          string            `json:"purpose,omitempty"`
+	Algorithm        string            `json:"algorithm,omitempty"`
+	RotationPeriod   string            `json:"rotationPeriod,omitempty"`
+	NextRotationTime string            `json:"nextRotationTime,omitempty"`
+	Labels           map[string]string `json:"labels,omitempty"`
 }
 
 // CryptoKeyVersion is the UI summary of a crypto-key version.

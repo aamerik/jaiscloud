@@ -177,10 +177,6 @@ func failedPrecondition(msg string) error {
 	return model.NewProviderError("FailedPrecondition", msg, 400)
 }
 
-func unsupported(msg string) error {
-	return model.NewProviderError("UnsupportedOperation", msg, 501)
-}
-
 func internal(msg string) error {
 	return model.NewProviderError("Internal", msg, 500)
 }
