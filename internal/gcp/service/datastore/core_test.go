@@ -60,6 +60,9 @@ func TestRunQueryValidatesFilterBeforeScan(t *testing.T) {
 		}}},
 		"OR composite":            {Kind: "Task", Filter: &Filter{Composite: &CompositeFilter{Op: CompositeOr}}},
 		"unspecified property op": {Kind: "Task", Filter: &Filter{Property: &PropertyFilter{Property: "n"}}},
+		"IN over disjunction limit": {Kind: "Task", Filter: &Filter{Property: &PropertyFilter{
+			Property: "n", Op: PropertyIn, Value: valArray(inValues(maxInValues + 1)...),
+		}}},
 	}
 	for name, q := range bad {
 		_, err := s.RunQuery(ctx, "p", q, nil)
@@ -73,15 +76,22 @@ func TestRunQueryValidatesFilterBeforeScan(t *testing.T) {
 	}
 
 	// A valid filter on an empty kind still returns an empty result set.
-	good := &Query{Kind: "Task", Filter: &Filter{Property: &PropertyFilter{
-		Property: "n", Op: PropertyIn, Value: valArray(valInt(1)),
-	}}}
-	res, err := s.RunQuery(ctx, "p", good, nil)
-	if err != nil {
-		t.Fatalf("RunQuery with a valid IN filter: %v", err)
+	good := map[string]*Query{
+		"IN one value": {Kind: "Task", Filter: &Filter{Property: &PropertyFilter{
+			Property: "n", Op: PropertyIn, Value: valArray(valInt(1)),
+		}}},
+		"IN at disjunction limit": {Kind: "Task", Filter: &Filter{Property: &PropertyFilter{
+			Property: "n", Op: PropertyIn, Value: valArray(inValues(maxInValues)...),
+		}}},
 	}
-	if len(res.Entities) != 0 {
-		t.Fatalf("RunQuery on an empty kind returned %d entities, want 0", len(res.Entities))
+	for name, q := range good {
+		res, err := s.RunQuery(ctx, "p", q, nil)
+		if err != nil {
+			t.Fatalf("RunQuery with a valid IN filter (%s): %v", name, err)
+		}
+		if len(res.Entities) != 0 {
+			t.Fatalf("RunQuery on an empty kind (%s) returned %d entities, want 0", name, len(res.Entities))
+		}
 	}
 }
 
