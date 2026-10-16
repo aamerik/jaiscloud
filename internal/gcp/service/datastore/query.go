@@ -3,6 +3,7 @@ package datastore
 import (
 	"bytes"
 	"cmp"
+	"fmt"
 	"math"
 	"time"
 
@@ -85,6 +86,14 @@ func validateFilter(f *Filter) error {
 	return unsupportedQueryOperator("unknown filter")
 }
 
+// maxInValues is the documented cap on the number of values an IN filter's
+// operand array may carry. The Discovery states only "subject to disjunction
+// limits"; the query docs pin the number:
+// "Use the IN operator to combine up to 30 equality (==) clauses on the same
+// property with a logical OR"
+// (https://cloud.google.com/datastore/docs/concepts/queries#in).
+const maxInValues = 30
+
 // validatePropertyFilter validates one property filter's static shape.
 func validatePropertyFilter(pf *PropertyFilter) error {
 	switch pf.Op {
@@ -94,9 +103,20 @@ func validatePropertyFilter(pf *PropertyFilter) error {
 		return nil
 	case PropertyIn:
 		// Real Datastore requires the IN operand to be a non-empty ArrayValue
-		// (Discovery: "That `value` is a non-empty `ArrayValue`").
+		// (Discovery: "That `value` is a non-empty `ArrayValue`, subject to
+		// disjunction limits"). The Discovery names no number; the query docs
+		// pin the disjunction cap at 30 values ("Use the IN operator to combine
+		// up to 30 equality (==) clauses on the same property with a logical
+		// OR"), so an over-cap array fails closed here rather than being
+		// evaluated. NOT_IN — whose operand is capped at 10 — is unsupported
+		// here and never reaches this arm (the default arm fails it closed; the
+		// TD16 precedent). The per-query aggregate budget across several
+		// disjunctive filters (TD43) is not modelled.
 		if pf.Value.ArrayValue == nil || len(pf.Value.ArrayValue.Values) == 0 {
 			return invalidArgument("IN requires a non-empty array value")
+		}
+		if n := len(pf.Value.ArrayValue.Values); n > maxInValues {
+			return invalidArgument(fmt.Sprintf("IN supports at most %d values, got %d", maxInValues, n))
 		}
 		return nil
 	case PropertyHasAncestor:

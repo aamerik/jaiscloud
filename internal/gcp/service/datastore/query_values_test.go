@@ -2,6 +2,7 @@ package datastore
 
 import (
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -32,6 +33,15 @@ func valEntity(e dsstore.Entity) dsstore.Value { return dsstore.Value{EntityValu
 
 func valArray(vs ...dsstore.Value) dsstore.Value {
 	return dsstore.Value{ArrayValue: &dsstore.ArrayValue{Values: vs}}
+}
+
+// inValues returns n distinct integer operands, for sizing an IN filter's array.
+func inValues(n int) []dsstore.Value {
+	vs := make([]dsstore.Value, n)
+	for i := range vs {
+		vs[i] = valInt(int64(i))
+	}
+	return vs
 }
 
 func entityWith(kind, key string, props map[string]dsstore.Value) dsstore.Entity {
@@ -340,6 +350,7 @@ func TestValidateFilter(t *testing.T) {
 		{"greater than", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyGreaterThan, Value: valInt(1)}}},
 		{"greater or equal", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyGreaterThanOrEqual, Value: valInt(1)}}},
 		{"in array", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valArray(valInt(1))}}},
+		{"in at disjunction limit", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valArray(inValues(maxInValues)...)}}},
 		{"has ancestor", &Filter{Property: &PropertyFilter{Property: keyPropertyName, Op: PropertyHasAncestor, Value: dsstore.Value{KeyValue: &key}}}},
 		{"and of valid", &Filter{Composite: &CompositeFilter{Op: CompositeAnd, Filters: []*Filter{
 			{Property: &PropertyFilter{Property: "n", Op: PropertyEqual, Value: valInt(1)}},
@@ -359,6 +370,7 @@ func TestValidateFilter(t *testing.T) {
 		{"in non-array", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valInt(1)}}},
 		{"in empty array", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valArray()}}},
 		{"in absent value", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn}}},
+		{"in over disjunction limit", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valArray(inValues(maxInValues + 1)...)}}},
 		{"has ancestor wrong prop", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyHasAncestor, Value: dsstore.Value{KeyValue: &key}}}},
 		{"has ancestor non-key", &Filter{Property: &PropertyFilter{Property: keyPropertyName, Op: PropertyHasAncestor, Value: valStr("x")}}},
 		{"unspecified op", &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyUnspecified}}},
@@ -377,6 +389,31 @@ func TestValidateFilter(t *testing.T) {
 		if err := validateFilter(tc.f); err == nil {
 			t.Errorf("%s: validateFilter = nil, want an error", tc.name)
 		}
+	}
+}
+
+// TestValidateINDisjunctionLimit pins the documented disjunction cap on an IN
+// filter's operand array: exactly maxInValues (30) values is accepted, one more
+// fails loud with InvalidArgument/400 and a message naming the limit. Real
+// Datastore: "Use the IN operator to combine up to 30 equality (==) clauses on
+// the same property with a logical OR" (TD31).
+func TestValidateINDisjunctionLimit(t *testing.T) {
+	atLimit := &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valArray(inValues(maxInValues)...)}}
+	if err := validateFilter(atLimit); err != nil {
+		t.Fatalf("IN with %d values: validateFilter = %v, want nil", maxInValues, err)
+	}
+
+	over := &Filter{Property: &PropertyFilter{Property: "n", Op: PropertyIn, Value: valArray(inValues(maxInValues + 1)...)}}
+	err := validateFilter(over)
+	if err == nil {
+		t.Fatalf("IN with %d values: validateFilter = nil, want an error", maxInValues+1)
+	}
+	pe := asProviderError(t, err)
+	if pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+		t.Fatalf("IN over limit = {%q,%d}, want InvalidArgument/400", pe.Code, pe.HTTPStatus)
+	}
+	if !strings.Contains(pe.Message, strconv.Itoa(maxInValues)) {
+		t.Fatalf("message %q should name the %d-value limit", pe.Message, maxInValues)
 	}
 }
 
