@@ -1,0 +1,195 @@
+// depth_test.go closes DC6 (plan_docs/gcp-depth-closure-wave-plan.md W2.4) for
+// Cloud Tasks: the p4 and p5 cells its record left exempt — queue/task listing
+// paging and a many-queues/tasks boundary — asserted through the official Cloud
+// Tasks v2 apiary client and the shared depth-test kit
+// (tests/integration/gcp/testdepth).
+//
+// The Discovery document declares `pageSize`/`pageToken` on
+// `projects.locations.queues.list` and `...queues.tasks.list`; it documents that
+// queues are returned in lexicographical order and that tasks may be in any
+// order, so the queue walk asserts OrderAscendingName and the task walk
+// OrderUnspecified. The queue list's `filter` is deliberately not exercised: the
+// emulator answers `name="…"` with a substring match and does not support the
+// documented Stackdriver/Logging `:` contains operator, so a filtered walk would
+// pin an emulator-only rule — recorded as DC16. p5 is the boundary the class
+// names: a twenty-five-element collection walked at a small page size, i.e. the
+// cursor chain over a large collection rather than one response.
+package sdk_tasks_test
+
+import (
+	"strconv"
+	"testing"
+
+	cloudtasks "google.golang.org/api/cloudtasks/v2"
+	testdepth "jaiscloud-gcp-testdepth"
+)
+
+// tasksDepthPageSize is deliberately small so a walk crosses many page
+// boundaries.
+const tasksDepthPageSize = 4
+
+// walkQueues runs projects.locations.queues.list through the kit and returns the
+// queues in walk order.
+func walkQueues(t *testing.T, svc *cloudtasks.Service, parent string, cfg testdepth.Paging[*cloudtasks.Queue]) []*cloudtasks.Queue {
+	t.Helper()
+	return testdepth.AssertPaging(t, func() testdepth.Lister[*cloudtasks.Queue] {
+		return func(req testdepth.ListRequest) (testdepth.Page[*cloudtasks.Queue], error) {
+			call := svc.Projects.Locations.Queues.List(parent)
+			if req.PageSize > 0 {
+				call = call.PageSize(req.PageSize)
+			}
+			if req.PageToken != "" {
+				call = call.PageToken(req.PageToken)
+			}
+			resp, err := call.Do()
+			if err != nil {
+				return testdepth.Page[*cloudtasks.Queue]{}, err
+			}
+			return testdepth.Page[*cloudtasks.Queue]{Items: resp.Queues, NextPageToken: resp.NextPageToken}, nil
+		}
+	}, cfg)
+}
+
+// walkTasks runs projects.locations.queues.tasks.list through the kit and
+// returns the tasks in walk order.
+func walkTasks(t *testing.T, svc *cloudtasks.Service, queue string, cfg testdepth.Paging[*cloudtasks.Task]) []*cloudtasks.Task {
+	t.Helper()
+	return testdepth.AssertPaging(t, func() testdepth.Lister[*cloudtasks.Task] {
+		return func(req testdepth.ListRequest) (testdepth.Page[*cloudtasks.Task], error) {
+			call := svc.Projects.Locations.Queues.Tasks.List(queue)
+			if req.PageSize > 0 {
+				call = call.PageSize(req.PageSize)
+			}
+			if req.PageToken != "" {
+				call = call.PageToken(req.PageToken)
+			}
+			resp, err := call.Do()
+			if err != nil {
+				return testdepth.Page[*cloudtasks.Task]{}, err
+			}
+			return testdepth.Page[*cloudtasks.Task]{Items: resp.Tasks, NextPageToken: resp.NextPageToken}, nil
+		}
+	}, cfg)
+}
+
+// fullQueueName returns a queue's full resource name.
+func fullQueueName(parent, id string) string { return parent + "/queues/" + id }
+
+// fullTaskName returns a task's full resource name.
+func fullTaskName(queue, id string) string { return queue + "/tasks/" + id }
+
+// mustCreateTask creates a task on an existing queue.
+func mustCreateTask(t *testing.T, svc *cloudtasks.Service, queue, id string) {
+	t.Helper()
+	_, err := svc.Projects.Locations.Queues.Tasks.Create(queue, &cloudtasks.CreateTaskRequest{
+		Task: &cloudtasks.Task{
+			Name:         fullTaskName(queue, id),
+			HttpRequest:  httpTask("http://example.com/hook"),
+			ScheduleTime: futureRFC(),
+		},
+	}).Do()
+	if err != nil {
+		t.Fatalf("CreateTask(%s): %v", id, err)
+	}
+}
+
+// TestSDKTasksDepthPaging is tasks p4: the list/paging contract over queues
+// (asserted in the documented lexicographical order) and over a queue's tasks
+// (any order) at a page size that forces several pages.
+func TestSDKTasksDepthPaging(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+	project := projectID()
+	parent := "projects/" + project + "/locations/" + locationID()
+
+	t.Run("Queues", func(t *testing.T) {
+		const queues = 12
+		want := make([]string, 0, queues)
+		for i := 0; i < queues; i++ {
+			name := fullQueueName(parent, unique("pageq")+"-"+strconv.Itoa(i))
+			mustCreateQueue(t, svc, parent, &cloudtasks.Queue{Name: name})
+			want = append(want, name)
+		}
+		got := walkQueues(t, svc, parent, testdepth.Paging[*cloudtasks.Queue]{
+			Name:                 func(q *cloudtasks.Queue) string { return q.Name },
+			PageSize:             tasksDepthPageSize,
+			Order:                testdepth.OrderAscendingName,
+			RequireNonEmptyPages: true,
+			Expect:               want,
+		})
+		if len(got) != queues {
+			t.Fatalf("queue walk returned %d queues, want %d", len(got), queues)
+		}
+	})
+
+	t.Run("Tasks", func(t *testing.T) {
+		queue := fullQueueName(parent, unique("pagetasks"))
+		mustCreateQueue(t, svc, parent, &cloudtasks.Queue{Name: queue})
+
+		const tasks = 12
+		want := make([]string, 0, tasks)
+		for i := 0; i < tasks; i++ {
+			id := unique("t") + "-" + strconv.Itoa(i)
+			mustCreateTask(t, svc, queue, id)
+			want = append(want, fullTaskName(queue, id))
+		}
+		got := walkTasks(t, svc, queue, testdepth.Paging[*cloudtasks.Task]{
+			Name:                 func(task *cloudtasks.Task) string { return task.Name },
+			PageSize:             tasksDepthPageSize,
+			Order:                testdepth.OrderUnspecified,
+			RequireNonEmptyPages: true,
+			Expect:               want,
+		})
+		if len(got) != tasks {
+			t.Fatalf("task walk returned %d tasks, want %d", len(got), tasks)
+		}
+	})
+}
+
+// TestSDKTasksDepthScale is tasks p5: a many-queues and many-tasks boundary,
+// each collection walked at a small page size so the whole cursor chain over a
+// large collection is exercised rather than a single response.
+func TestSDKTasksDepthScale(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+	project := projectID()
+	parent := "projects/" + project + "/locations/" + locationID()
+
+	const scale = 25
+
+	wantQueues := make([]string, 0, scale)
+	for i := 0; i < scale; i++ {
+		name := fullQueueName(parent, unique("scaleq")+"-"+strconv.Itoa(i))
+		mustCreateQueue(t, svc, parent, &cloudtasks.Queue{Name: name})
+		wantQueues = append(wantQueues, name)
+	}
+	gotQueues := walkQueues(t, svc, parent, testdepth.Paging[*cloudtasks.Queue]{
+		Name:                 func(q *cloudtasks.Queue) string { return q.Name },
+		PageSize:             tasksDepthPageSize,
+		Order:                testdepth.OrderAscendingName,
+		RequireNonEmptyPages: true,
+		Expect:               wantQueues,
+	})
+	if len(gotQueues) != scale {
+		t.Fatalf("queue scale walk returned %d queues, want %d", len(gotQueues), scale)
+	}
+
+	queue := fullQueueName(parent, unique("scaletasks"))
+	mustCreateQueue(t, svc, parent, &cloudtasks.Queue{Name: queue})
+	wantTasks := make([]string, 0, scale)
+	for i := 0; i < scale; i++ {
+		id := unique("scalet") + "-" + strconv.Itoa(i)
+		mustCreateTask(t, svc, queue, id)
+		wantTasks = append(wantTasks, fullTaskName(queue, id))
+	}
+	gotTasks := walkTasks(t, svc, queue, testdepth.Paging[*cloudtasks.Task]{
+		Name:                 func(task *cloudtasks.Task) string { return task.Name },
+		PageSize:             tasksDepthPageSize,
+		Order:                testdepth.OrderUnspecified,
+		RequireNonEmptyPages: true,
+		Expect:               wantTasks,
+	})
+	if len(gotTasks) != scale {
+		t.Fatalf("task scale walk returned %d tasks, want %d", len(gotTasks), scale)
+	}
+}
