@@ -149,6 +149,15 @@ func valueFromProto(p *datastorepb.Value) (dsstore.Value, error) {
 		f := v.DoubleValue
 		return dsstore.Value{DoubleValue: &f}, nil
 	case *datastorepb.Value_TimestampValue:
+		// A raw proto Timestamp has no range bound in Go, so an out-of-range or
+		// malformed instant would be stored as a string the read path cannot
+		// parse back (and would read as the epoch). The proto's own checker is
+		// the authority for validity (range and nanos); real GCP rejects an
+		// invalid Timestamp with INVALID_ARGUMENT, so the gRPC decode boundary
+		// must too. (TD46)
+		if err := v.TimestampValue.CheckValid(); err != nil {
+			return dsstore.Value{}, invalidArgument("invalid timestampValue")
+		}
 		s := core.CanonicalTimestamp(v.TimestampValue.AsTime())
 		return dsstore.Value{TimestampValue: &s}, nil
 	case *datastorepb.Value_KeyValue:

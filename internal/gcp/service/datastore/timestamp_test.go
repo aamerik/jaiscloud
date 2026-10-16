@@ -37,6 +37,11 @@ func TestNormalizeTimestamp(t *testing.T) {
 		// Datastore year boundary (0001..9999).
 		{"pre-epoch truncates down", "1969-12-31T23:59:59.9999995Z", "1969-12-31T23:59:59.999999Z"},
 		{"upper year boundary", "9999-12-31T23:59:59.9999999Z", "9999-12-31T23:59:59.999999Z"},
+		// The proto Timestamp range is inclusive at both ends, and a nine-digit
+		// fraction is the longest protojson accepts. (TD46)
+		{"lower proto boundary", "0001-01-01T00:00:00Z", "0001-01-01T00:00:00Z"},
+		{"upper proto boundary with nanosecond fraction", "9999-12-31T23:59:59.999999999Z", "9999-12-31T23:59:59.999999Z"},
+		{"nine-digit fraction accepted", "2020-01-01T00:00:00.123456789Z", "2020-01-01T00:00:00.123456Z"},
 	}
 	for _, tc := range cases {
 		got, err := NormalizeTimestamp(tc.in)
@@ -83,9 +88,47 @@ func TestNormalizeTimestampRejectsMalformed(t *testing.T) {
 		// Go's parser accepts a comma fractional separator; RFC 3339/protojson
 		// do not, so the boundary must reject it.
 		"2020-01-01T00:00:00,5Z",
+		// Go's parser truncates a fraction longer than nine digits, where
+		// protojson's unmarshalTimestamp rejects it. (TD46)
+		"2020-01-01T00:00:00.1234567890Z",
+		"2020-01-01T00:00:00.1234567890123Z",
+		// Go's parser accepts a year outside the proto Timestamp range
+		// [0001-01-01T00:00:00Z, 9999-12-31T23:59:59Z]; protojson rejects it.
+		// (TD46)
+		"0000-01-01T00:00:00Z",
+		"0000-12-31T23:59:59.999999999Z",
+		"10000-01-01T00:00:00Z",
+		// A UTC offset can push an in-range wall-clock time past the instant
+		// bound: 9999-12-31T23:59:59-01:00 is 10000-01-01T00:59:59Z.
+		"9999-12-31T23:59:59-01:00",
 	} {
 		if got, err := NormalizeTimestamp(s); err == nil {
 			t.Errorf("NormalizeTimestamp(%q) = %q, nil error; want a parse error", s, got)
+		}
+	}
+}
+
+// TestValidateTimestamp pins the proto Timestamp instant range the gRPC decode
+// boundary imposes: an instant before 0001-01-01 or after 9999-12-31 is
+// rejected, both inclusive ends are accepted. (TD46)
+func TestValidateTimestamp(t *testing.T) {
+	ok := []time.Time{
+		time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC),
+		time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	for _, ts := range ok {
+		if err := ValidateTimestamp(ts); err != nil {
+			t.Errorf("ValidateTimestamp(%v) = %v, want nil", ts, err)
+		}
+	}
+	bad := []time.Time{
+		time.Date(0, 12, 31, 23, 59, 59, 999999999, time.UTC),
+		time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	for _, ts := range bad {
+		if err := ValidateTimestamp(ts); err == nil {
+			t.Errorf("ValidateTimestamp(%v) = nil, want an out-of-range error", ts)
 		}
 	}
 }
