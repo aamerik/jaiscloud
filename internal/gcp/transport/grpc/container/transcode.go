@@ -9,8 +9,11 @@ import (
 
 	core "jaiscloud/internal/gcp/service/container"
 	containerstore "jaiscloud/internal/gcp/store/container"
-	"jaiscloud/internal/gcp/timestamp"
 )
+
+// timeFormat is the RFC3339 timestamp encoding GKE v1 uses for its string
+// timestamps (Cluster.createTime, Operation.startTime/endTime).
+const timeFormat = time.RFC3339Nano
 
 // stringToTimestamp parses an RFC3339 string into a protobuf Timestamp (nil
 // when empty/unparseable).
@@ -25,13 +28,12 @@ func stringToTimestamp(s string) *timestamppb.Timestamp {
 	return timestamppb.New(t)
 }
 
-// timestampToString renders a protobuf Timestamp as the protojson spelling of a
-// google-datetime field ("" when nil).
+// timestampToString renders a protobuf Timestamp as RFC3339 ("" when nil).
 func timestampToString(ts *timestamppb.Timestamp) string {
 	if ts == nil || !ts.IsValid() {
 		return ""
 	}
-	return timestamp.Canonical(ts.AsTime())
+	return ts.AsTime().UTC().Format(time.RFC3339)
 }
 
 // clusterToProto renders a stored cluster as the proto Cluster. Name is the
@@ -72,7 +74,7 @@ func clusterToProto(c containerstore.Cluster) *containerpb.Cluster {
 		out.MaintenancePolicy = maintenancePolicyToProto(c.MaintenancePolicy)
 	}
 	if !c.CreateTime.IsZero() {
-		out.CreateTime = timestamp.Canonical(c.CreateTime)
+		out.CreateTime = c.CreateTime.UTC().Format(timeFormat)
 	}
 	for _, p := range c.NodePools {
 		out.NodePools = append(out.NodePools, nodePoolToProto(p))
@@ -337,10 +339,10 @@ func operationToProto(op containerstore.Operation) *containerpb.Operation {
 		TargetLink:    op.TargetLink,
 	}
 	if !op.StartTime.IsZero() {
-		out.StartTime = timestamp.Canonical(op.StartTime)
+		out.StartTime = op.StartTime.UTC().Format(timeFormat)
 	}
 	if !op.EndTime.IsZero() {
-		out.EndTime = timestamp.Canonical(op.EndTime)
+		out.EndTime = op.EndTime.UTC().Format(timeFormat)
 	}
 	return out
 }

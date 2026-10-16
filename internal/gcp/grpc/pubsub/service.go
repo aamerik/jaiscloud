@@ -31,6 +31,7 @@ import (
 	pubsubcore "jaiscloud/internal/gcp/service/pubsub"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	pubsubstore "jaiscloud/internal/gcp/store/pubsub"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 
@@ -396,7 +397,7 @@ func (s *Service) deliverPush(ctx context.Context, accountID, topicFull string, 
 			"message": map[string]any{
 				"messageId":   msg.MessageID,
 				"data":        data,
-				"publishTime": msg.PublishTime.UTC().Format("2006-01-02T15:04:05.000000Z"),
+				"publishTime": timestamp.Canonical(msg.PublishTime),
 			},
 			"subscription": sub["name"],
 		}

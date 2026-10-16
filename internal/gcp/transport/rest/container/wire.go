@@ -6,9 +6,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	containerstore "jaiscloud/internal/gcp/store/container"
-	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 )
 
@@ -203,7 +203,7 @@ func clusterToJSON(c containerstore.Cluster) map[string]any {
 		out["resourceLabels"] = c.ResourceLabels
 	}
 	if !c.CreateTime.IsZero() {
-		out["createTime"] = timestamp.Canonical(c.CreateTime)
+		out["createTime"] = c.CreateTime.UTC().Format(time.RFC3339Nano)
 	}
 	return out
 }
@@ -527,10 +527,10 @@ func operationToJSON(op containerstore.Operation) map[string]any {
 		out["selfLink"] = op.SelfLink
 	}
 	if !op.StartTime.IsZero() {
-		out["startTime"] = timestamp.Canonical(op.StartTime)
+		out["startTime"] = op.StartTime.UTC().Format(time.RFC3339Nano)
 	}
 	if !op.EndTime.IsZero() {
-		out["endTime"] = timestamp.Canonical(op.EndTime)
+		out["endTime"] = op.EndTime.UTC().Format(time.RFC3339Nano)
 	}
 	return out
 }

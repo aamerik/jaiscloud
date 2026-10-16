@@ -219,7 +219,8 @@ func parseRestDuration(s string) time.Duration {
 	return d
 }
 
-// restRFC3339 renders a timestamp in the wire form (RFC3339Nano, UTC).
+// restRFC3339 renders a timestamp in the protojson spelling of a
+// google-datetime field (UTC, 0/3/6-digit fraction groups, microseconds).
 func restRFC3339(t time.Time) string { return timestamp.Canonical(t) }
 
 // lroResponse renders a terminal google.longrunning.Operation carrying a typed
