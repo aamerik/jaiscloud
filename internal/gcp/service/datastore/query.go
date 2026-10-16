@@ -113,6 +113,14 @@ func validatePropertyFilter(pf *PropertyFilter) error {
 // matchPropertyFilter applies an already-validated property filter to an entity
 // (validatePropertyFilter has guaranteed a non-empty array for IN and a key
 // value on the reserved __key__ property for HAS_ANCESTOR).
+//
+// An array-valued property is compared elementwise, as real Datastore's
+// exploded index does: "If the property of the given name is array-valued, the
+// entity satisfies the filter if any of the values compares to the value
+// specified in the filter in the manner described by the comparison operator"
+// (https://cloud.google.com/datastore/docs/concepts/queries). Every operator
+// here therefore goes through propertyElements/propertyEqual/propertyNotEqual
+// rather than valueEqual/valueCompare on the stored value as a whole.
 func matchPropertyFilter(e dsstore.Entity, pf *PropertyFilter) bool {
 	val, ok := e.Properties[pf.Property]
 	switch pf.Op {
@@ -123,15 +131,21 @@ func matchPropertyFilter(e dsstore.Entity, pf *PropertyFilter) bool {
 		// partition already scopes the result set).
 		return keyHasAncestor(e.Key, *pf.Value.KeyValue)
 	case PropertyEqual:
-		return ok && valueEqual(val, pf.Value)
+		return ok && propertyEqual(val, pf.Value)
 	case PropertyNotEqual:
-		return ok && !valueEqual(val, pf.Value)
+		// Datastore's multi-valued behavior makes != not the negation of EQUAL
+		// at the property level: "Not Equal requires only one element to match
+		// the given predicate" (Google Cloud blog, "IN, NOT_IN and NOT EQUAL
+		// query operators", 2022), so an array that merely contains the operand
+		// still matches when it also has another element, and an empty array
+		// (no element to compare, excluded from indexing) matches nothing.
+		return ok && propertyNotEqual(val, pf.Value)
 	case PropertyIn:
 		if !ok {
 			return false
 		}
 		for _, el := range pf.Value.ArrayValue.Values {
-			if valueEqual(val, el) {
+			if propertyEqual(val, el) {
 				return true
 			}
 		}
@@ -142,26 +156,84 @@ func matchPropertyFilter(e dsstore.Entity, pf *PropertyFilter) bool {
 		if !ok {
 			return false
 		}
-		c, comparable := valueCompare(val, pf.Value)
-		if !comparable {
-			return false
+		// The ordering operators use the same array expansion as EQUAL: an
+		// array-valued property satisfies the filter when any element compares
+		// in the manner of the operator.
+		for _, el := range propertyElements(val) {
+			c, comparable := valueCompare(el, pf.Value)
+			if !comparable {
+				continue
+			}
+			switch pf.Op {
+			case PropertyLessThan:
+				if c < 0 {
+					return true
+				}
+			case PropertyLessThanOrEqual:
+				if c <= 0 {
+					return true
+				}
+			case PropertyGreaterThan:
+				if c > 0 {
+					return true
+				}
+			default:
+				if c >= 0 {
+					return true
+				}
+			}
 		}
-		switch pf.Op {
-		case PropertyLessThan:
-			return c < 0
-		case PropertyLessThanOrEqual:
-			return c <= 0
-		case PropertyGreaterThan:
-			return c > 0
-		default:
-			return c >= 0
-		}
+		return false
 	}
 }
 
 // keyPropertyName is the reserved Datastore property that exposes an entity's
 // own key; the only legal operand of HAS_ANCESTOR.
 const keyPropertyName = "__key__"
+
+// propertyElements returns the values a property filter's comparison operators
+// see. An array-valued property is expanded into its elements (real Datastore's
+// index explodes each element into its own entry); any other value, including
+// the two non-array composite value types, is a single-element set.
+func propertyElements(val dsstore.Value) []dsstore.Value {
+	if val.ArrayValue != nil {
+		return val.ArrayValue.Values
+	}
+	return []dsstore.Value{val}
+}
+
+// propertyEqual reports whether a stored property value matches an equality
+// operand. An array-valued property matches when any element equals the operand;
+// a scalar matches by ordinary value equality. Note this is the documented
+// elementwise comparison, not valueEqual on the array as a whole: filtering
+// `tags = "a"` matches a `tags` of ["a","b"], while `tags = ["a","b"]` (an array
+// operand, which no element can equal) matches nothing, exactly as the exploded
+// index does.
+func propertyEqual(val, operand dsstore.Value) bool {
+	for _, el := range propertyElements(val) {
+		if valueEqual(el, operand) {
+			return true
+		}
+	}
+	return false
+}
+
+// propertyNotEqual reports whether a stored property value satisfies a
+// not-equal filter. Datastore's multi-valued behavior makes != the elementwise
+// predicate, not the negation of propertyEqual: "Not Equal requires only one
+// element to match the given predicate" (Google Cloud blog, "IN, NOT_IN and NOT
+// EQUAL query operators", 2022), so an array that merely contains the operand
+// still matches when it also has another element. An empty array has no element
+// to compare and so matches nothing (it is excluded from indexing), and a scalar
+// property is the ordinary value inequality.
+func propertyNotEqual(val, operand dsstore.Value) bool {
+	for _, el := range propertyElements(val) {
+		if !valueEqual(el, operand) {
+			return true
+		}
+	}
+	return false
+}
 
 // keyHasAncestor reports whether ancestorKey is a proper path prefix of
 // entityKey. Both arguments are canonical store keys, so the comparison is

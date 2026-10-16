@@ -404,10 +404,18 @@ func TestMatchPropertyFilterOperators(t *testing.T) {
 		{"gte miss", &PropertyFilter{Property: "n", Op: PropertyGreaterThanOrEqual, Value: valInt(6)}, false},
 		{"lte miss", &PropertyFilter{Property: "n", Op: PropertyLessThanOrEqual, Value: valInt(4)}, false},
 		{"comparison absent prop", &PropertyFilter{Property: "missing", Op: PropertyLessThan, Value: valInt(9)}, false},
-		// A value with no sort order (an array) never satisfies a range
-		// comparison, however the operator is spelled. (TD21)
-		{"range over array value", &PropertyFilter{Property: "tags", Op: PropertyGreaterThanOrEqual, Value: valStr("a")}, false},
+		// An array-valued property is compared elementwise (TD28): the entity
+		// satisfies the filter when any element compares to the operand. The
+		// `tags` property is ["a","b"].
+		{"range over array value", &PropertyFilter{Property: "tags", Op: PropertyGreaterThanOrEqual, Value: valStr("a")}, true},
 		{"range over array value lt", &PropertyFilter{Property: "tags", Op: PropertyLessThan, Value: valStr("a")}, false},
+		{"array equal element", &PropertyFilter{Property: "tags", Op: PropertyEqual, Value: valStr("b")}, true},
+		{"array equal miss", &PropertyFilter{Property: "tags", Op: PropertyEqual, Value: valStr("c")}, false},
+		{"array equal array operand", &PropertyFilter{Property: "tags", Op: PropertyEqual, Value: valArray(valStr("a"), valStr("b"))}, false},
+		{"array not equal element", &PropertyFilter{Property: "tags", Op: PropertyNotEqual, Value: valStr("a")}, true},
+		{"array not equal miss", &PropertyFilter{Property: "tags", Op: PropertyNotEqual, Value: valStr("c")}, true},
+		{"array in element", &PropertyFilter{Property: "tags", Op: PropertyIn, Value: valArray(valStr("x"), valStr("b"))}, true},
+		{"array in miss", &PropertyFilter{Property: "tags", Op: PropertyIn, Value: valArray(valStr("x"), valStr("y"))}, false},
 		// A cross-type comparison order by the documented type ordering: the
 		// integer 5 sorts before ANY string, so `n < "z"` matches. (TD21)
 		{"comparison cross-type", &PropertyFilter{Property: "n", Op: PropertyLessThan, Value: valStr("z")}, true},
@@ -416,6 +424,95 @@ func TestMatchPropertyFilterOperators(t *testing.T) {
 		// integer still sorts before the float.
 		{"equal cross-type misses", &PropertyFilter{Property: "n", Op: PropertyEqual, Value: valDbl(5)}, false},
 		{"lt cross-type int<float", &PropertyFilter{Property: "n", Op: PropertyLessThan, Value: valDbl(5)}, true},
+	}
+	for _, tc := range cases {
+		if got := matchPropertyFilter(e, tc.pf); got != tc.want {
+			t.Errorf("%s: = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestArrayPropertyFilterSemantics pins the documented array-valued property
+// semantics (TD28): "If the property of the given name is array-valued, the
+// entity satisfies the filter if any of the values compares to the value
+// specified in the filter in the manner described by the comparison operator"
+// (https://cloud.google.com/datastore/docs/concepts/queries). The stored array
+// is expanded elementwise for EQUAL, NOT_EQUAL, the four ordering comparisons
+// and IN; an array operand compared to a stored array still matches nothing
+// because no element is an array.
+func TestArrayPropertyFilterSemantics(t *testing.T) {
+	// propertyElements: a scalar is a singleton set, an array its elements.
+	if got := propertyElements(valInt(1)); len(got) != 1 || got[0].IntegerValue == nil {
+		t.Fatalf("propertyElements(scalar) = %+v, want the scalar", got)
+	}
+	if got := propertyElements(valArray(valStr("a"), valStr("b"))); len(got) != 2 {
+		t.Fatalf("propertyElements(array) = %d elements, want 2", len(got))
+	}
+	if got := propertyElements(valArray()); len(got) != 0 {
+		t.Fatalf("propertyElements(empty array) = %d elements, want 0", len(got))
+	}
+
+	// propertyEqual: any element equals the operand; array operands never match.
+	if !propertyEqual(valArray(valStr("a"), valStr("b")), valStr("b")) {
+		t.Fatal("array property should match an element equal to the operand")
+	}
+	if propertyEqual(valArray(valStr("a"), valStr("b")), valStr("c")) {
+		t.Fatal("array property should not match a value no element equals")
+	}
+	if propertyEqual(valArray(valStr("a"), valStr("b")), valArray(valStr("a"), valStr("b"))) {
+		t.Fatal("an array operand should not match an array-valued property elementwise")
+	}
+	if !propertyEqual(valStr("a"), valStr("a")) || propertyEqual(valStr("a"), valStr("b")) {
+		t.Fatal("scalar propertyEqual is ordinary value equality")
+	}
+
+	// propertyNotEqual: any element differs; an empty array has no element and a
+	// single-element array equal to the operand has none differing.
+	if !propertyNotEqual(valArray(valStr("a"), valStr("b")), valStr("a")) {
+		t.Fatal("array property should match not-equal when another element differs")
+	}
+	if propertyNotEqual(valArray(valStr("a")), valStr("a")) {
+		t.Fatal("a single-element array equal to the operand should not match not-equal")
+	}
+	if propertyNotEqual(valArray(), valStr("a")) {
+		t.Fatal("an empty array should not match not-equal")
+	}
+	if propertyNotEqual(valStr("a"), valStr("a")) || !propertyNotEqual(valStr("a"), valStr("b")) {
+		t.Fatal("scalar propertyNotEqual is ordinary value inequality")
+	}
+
+	// End to end through matchPropertyFilter: an integer array and a string
+	// array, so the range comparisons cross both the element and type axes.
+	e := entityWith("Kind", "k", map[string]dsstore.Value{
+		"tags": valArray(valStr("a"), valStr("b")),
+		"nums": valArray(valInt(1), valInt(3)),
+		"one":  valArray(valStr("a")),
+		"none": valArray(),
+	})
+	cases := []struct {
+		name string
+		pf   *PropertyFilter
+		want bool
+	}{
+		{"eq any element", &PropertyFilter{Property: "tags", Op: PropertyEqual, Value: valStr("a")}, true},
+		{"eq no element", &PropertyFilter{Property: "tags", Op: PropertyEqual, Value: valStr("z")}, false},
+		// != is elementwise: only one element need differ, so an array that
+		// contains the operand still matches when it has another element.
+		{"ne matches when another element differs", &PropertyFilter{Property: "tags", Op: PropertyNotEqual, Value: valStr("a")}, true},
+		{"ne matches an absent value", &PropertyFilter{Property: "tags", Op: PropertyNotEqual, Value: valStr("z")}, true},
+		{"ne excludes a single-element array equal to it", &PropertyFilter{Property: "one", Op: PropertyNotEqual, Value: valStr("a")}, false},
+		{"ne excludes an empty array", &PropertyFilter{Property: "none", Op: PropertyNotEqual, Value: valStr("a")}, false},
+		{"eq excludes an empty array", &PropertyFilter{Property: "none", Op: PropertyEqual, Value: valStr("a")}, false},
+		{"in any element", &PropertyFilter{Property: "tags", Op: PropertyIn, Value: valArray(valStr("z"), valStr("b"))}, true},
+		{"in no element", &PropertyFilter{Property: "tags", Op: PropertyIn, Value: valArray(valStr("z"), valStr("y"))}, false},
+		{"in excludes an empty array", &PropertyFilter{Property: "none", Op: PropertyIn, Value: valArray(valStr("a"))}, false},
+		{"lt any element", &PropertyFilter{Property: "nums", Op: PropertyLessThan, Value: valInt(2)}, true},
+		{"lte any element", &PropertyFilter{Property: "nums", Op: PropertyLessThanOrEqual, Value: valInt(1)}, true},
+		{"gt any element", &PropertyFilter{Property: "nums", Op: PropertyGreaterThan, Value: valInt(2)}, true},
+		{"gte any element", &PropertyFilter{Property: "nums", Op: PropertyGreaterThanOrEqual, Value: valInt(3)}, true},
+		{"gt no element", &PropertyFilter{Property: "nums", Op: PropertyGreaterThan, Value: valInt(3)}, false},
+		{"lte no element", &PropertyFilter{Property: "nums", Op: PropertyLessThanOrEqual, Value: valInt(0)}, false},
+		{"range excludes an empty array", &PropertyFilter{Property: "none", Op: PropertyGreaterThanOrEqual, Value: valStr("a")}, false},
 	}
 	for _, tc := range cases {
 		if got := matchPropertyFilter(e, tc.pf); got != tc.want {

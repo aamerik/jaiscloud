@@ -219,4 +219,50 @@ func TestDatastore(t *testing.T) {
 		var def Task
 		assert.ErrorIs(t, client.Get(ctx, key, &def), datastore.ErrNoSuchEntity)
 	})
+
+	// ArrayFilters exercises the array-valued property semantics end to end
+	// through the official client (TD28): a filter on an array property is
+	// satisfied when any element compares to the value, so `Tags = "beta"`
+	// matches an entity whose Tags is ["alpha","beta"], a range filter compares
+	// elementwise, and `!=` matches because only one element need differ.
+	t.Run("ArrayFilters", func(t *testing.T) {
+		kind := "TagTask-" + suffix
+		key := datastore.NameKey(kind, "tagged-"+suffix, nil)
+		_, err := client.Put(ctx, key, &TagTask{Tags: []string{"alpha", "beta"}})
+		require.NoError(t, err)
+		t.Cleanup(func() { client.Delete(ctx, key) })
+
+		soloKey := datastore.NameKey(kind, "solo-"+suffix, nil)
+		_, err = client.Put(ctx, soloKey, &TagTask{Tags: []string{"alpha"}})
+		require.NoError(t, err)
+		t.Cleanup(func() { client.Delete(ctx, soloKey) })
+
+		var got []TagTask
+		_, err = client.GetAll(ctx, datastore.NewQuery(kind).FilterField("Tags", "=", "beta"), &got)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+
+		got = nil
+		_, err = client.GetAll(ctx, datastore.NewQuery(kind).FilterField("Tags", "=", "gamma"), &got)
+		require.NoError(t, err)
+		assert.Empty(t, got)
+
+		got = nil
+		_, err = client.GetAll(ctx, datastore.NewQuery(kind).FilterField("Tags", ">", "alpha"), &got)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+
+		// `!= "alpha"` matches the two-tag entity (only one element need
+		// differ) but excludes the single-tag one whose only value is "alpha".
+		got = nil
+		_, err = client.GetAll(ctx, datastore.NewQuery(kind).FilterField("Tags", "!=", "alpha"), &got)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, []string{"alpha", "beta"}, got[0].Tags)
+	})
+}
+
+// TagTask is a kind whose property is array-valued, used by ArrayFilters.
+type TagTask struct {
+	Tags []string
 }
