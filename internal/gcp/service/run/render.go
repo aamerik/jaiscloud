@@ -74,7 +74,13 @@ func trafficStatuses(s runstore.Service) []any {
 			continue
 		}
 		tag, _ := m["tag"].(string)
-		status := map[string]any{"percent": intFrom(m["percent"]), "uri": taggedURI(s.Uri, tag)}
+		status := map[string]any{"percent": intFrom(m["percent"])}
+		// Real Cloud Run sets a target's status `uri` only when the target
+		// carries a tag, and then it is the tag-qualified URL
+		// (https://{tag}---{service-host}); an untagged target has no `uri` key.
+		if tag != "" {
+			status["uri"] = taggedURI(s.Uri, tag)
+		}
 		if v, ok := m["type"]; ok {
 			status["type"] = v
 		}
@@ -93,7 +99,6 @@ func trafficStatuses(s runstore.Service) []any {
 			"type":     "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST",
 			"revision": s.LatestReadyRevision,
 			"percent":  100,
-			"uri":      s.Uri,
 		})
 	}
 	return out
