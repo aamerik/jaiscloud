@@ -35,6 +35,21 @@ const servicePolicy = "run-service-policy"
 // validServiceID is Cloud Run's service-id grammar (RFC 1035 label).
 var validServiceID = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,47}[a-z0-9])?$`)
 
+// Cloud Run traffic-tag rules, probed against real GCP (the API answers 400
+// INVALID_ARGUMENT otherwise). A tag is an RFC 1035 label — lowercase letters,
+// digits and hyphens, beginning with a letter and not ending with a hyphen — 3
+// to 47 characters long, and the tag and the service id together may not exceed
+// 46 characters. Tags must also be unique within a service. The tag becomes the
+// leading DNS label of the tag-qualified host ("{tag}---{service-host}").
+const (
+	trafficTagMinLen      = 3
+	trafficTagMaxLen      = 47
+	trafficTagCombinedMax = 46
+)
+
+// validTrafficTag is the RFC 1035 label shape of a traffic tag.
+var validTrafficTag = regexp.MustCompile(`^[a-z][a-z0-9-]*[a-z0-9]$`)
+
 // Service is the transport-neutral Cloud Run core.
 type Service struct {
 	store     runstore.Store
@@ -147,6 +162,9 @@ func (s *Service) createService(ctx context.Context, project, location, serviceI
 	} else if !errors.Is(err, runstore.ErrNoSuchService) {
 		return runstore.Operation{}, err
 	}
+	if err := validateTraffic(serviceID, body); err != nil {
+		return runstore.Operation{}, err
+	}
 
 	now := clock.Now()
 	revID := serviceID + "-00001"
@@ -243,6 +261,9 @@ func (s *Service) UpdateService(ctx context.Context, project, location, id strin
 	updated := existing
 	updated.Data = cloneMap(existing.Data)
 	applyUpdate(updated.Data, body, updateMask)
+	if err := validateTraffic(id, updated.Data); err != nil {
+		return runstore.Operation{}, err
+	}
 
 	templateChanged := templateMasked(updateMask) || (strings.TrimSpace(updateMask) == "" && bodyHasTemplate(body))
 	updated.Generation++
@@ -731,6 +752,51 @@ func str(m map[string]any, key string) string {
 
 func invalidArgument(msg string) error {
 	return model.NewProviderError("InvalidArgument", msg, 400)
+}
+
+// validateTraffic checks every traffic target's tag against the rules real
+// Cloud Run enforces, answering 400 INVALID_ARGUMENT for a violation. Probed
+// against the live API: the tag is an RFC 1035 label (3–47 characters, lowercase
+// letters/digits/hyphens, beginning with a letter and not ending with a hyphen),
+// the tag and the service id together may not exceed 46 characters, and tags are
+// unique within a service. An absent traffic list, a non-array value, a
+// malformed entry or an empty tag are tolerated here — the tag is the only field
+// this validates.
+func validateTraffic(serviceID string, data map[string]any) error {
+	targets, ok := data["traffic"].([]any)
+	if !ok {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, t := range targets {
+		m, ok := t.(map[string]any)
+		if !ok {
+			continue
+		}
+		tag, _ := m["tag"].(string)
+		if tag == "" {
+			continue
+		}
+		if n := len(tag); n < trafficTagMinLen || n > trafficTagMaxLen {
+			return invalidArgument(fmt.Sprintf(
+				"invalid traffic tag %q: length must be between %d and %d characters",
+				tag, trafficTagMinLen, trafficTagMaxLen))
+		}
+		if !validTrafficTag.MatchString(tag) {
+			return invalidArgument("invalid traffic tag: must conform to RFC 1035: " +
+				"only lowercase, digits, and hyphens; must begin with letter, and cannot end with hyphen")
+		}
+		if serviceID != "" && len(tag)+len(serviceID) > trafficTagCombinedMax {
+			return invalidArgument(fmt.Sprintf(
+				"traffic tag %q and service name %q together are too long: combined length cannot exceed %d characters",
+				tag, serviceID, trafficTagCombinedMax))
+		}
+		if seen[tag] {
+			return invalidArgument("traffic targets may not contain a duplicate tag: " + tag)
+		}
+		seen[tag] = true
+	}
+	return nil
 }
 
 // abortedEtagMismatch is the etag-precondition failure, returned as HTTP 409
