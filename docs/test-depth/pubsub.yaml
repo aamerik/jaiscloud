@@ -15,9 +15,9 @@ classes:
     suites: [sdk-rest]
     note: "delete-of-missing 404 and dead-letter envelopes"
   p4:
-    state: exempt
-    reason: "no pageToken paging assertion over topic/subscription listings"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-pubsub]
+    note: "pageSize/pageToken walk over projects.topics.list and projects.subscriptions.list (every resource once, no page larger than requested, terminal token, stable second walk); the Discovery document specifies no order and no filter, so each is compared as a set"
   p5:
     state: present
     suites: [sdk-pubsub]
