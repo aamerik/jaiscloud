@@ -68,6 +68,15 @@ func TestValueEqual(t *testing.T) {
 		{"bool!=int", valBool(true), valInt(1), false},
 		{"ts==ts", valTS("2020-01-01T00:00:00Z"), valTS("2020-01-01T00:00:00Z"), true},
 		{"ts!=ts", valTS("2020-01-01T00:00:00Z"), valTS("2021-01-01T00:00:00Z"), false},
+		// A timestamp is an instant: the same instant with a different UTC
+		// offset, or an equivalent fractional spelling, is the same value. (TD30)
+		{"ts offset-equivalent", valTS("2019-12-31T19:00:00-05:00"), valTS("2020-01-01T00:00:00Z"), true},
+		{"ts fraction-equivalent", valTS("2020-01-01T00:00:00.500Z"), valTS("2020-01-01T00:00:00.5Z"), true},
+		{"ts offset different instant", valTS("2019-12-31T19:00:00-05:00"), valTS("2020-01-01T00:00:01Z"), false},
+		// An unparseable timestamp falls back to the literal string, so it
+		// equals itself and never a parseable instant.
+		{"ts unparseable equal", valTS("not-a-time"), valTS("not-a-time"), true},
+		{"ts unparseable vs parseable", valTS("not-a-time"), valTS("2020-01-01T00:00:00Z"), false},
 		{"key==key", valKey("k1"), valKey("k1"), true},
 		{"key!=key", valKey("k1"), valKey("k2"), false},
 		{"key!=string", valKey("k1"), valStr("k1"), false},
@@ -113,6 +122,50 @@ func TestValueEqual(t *testing.T) {
 		}
 		if got := valueEqual(tc.b, tc.a); got != tc.want {
 			t.Errorf("%s (swapped): valueEqual = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestTimestampEqualityMatchesOrdering pins the TD30 invariant: equality and
+// ordering agree on timestamps. Both compare parsed instants, so an entity
+// written over REST with a non-UTC offset (`2019-12-31T19:00:00-05:00`, stored
+// verbatim by transport/rest/datastore/wire.go) is EQUAL to the same instant
+// spelled in UTC and is also `<=`/`>=` it — previously EQUAL compared the raw
+// strings and missed it.
+func TestTimestampEqualityMatchesOrdering(t *testing.T) {
+	const stored = "2019-12-31T19:00:00-05:00" // == 2020-01-01T00:00:00Z
+	sameInstant := valTS("2020-01-01T00:00:00Z")
+	later := valTS("2020-01-01T00:00:01Z")
+
+	if !valueEqual(valTS(stored), sameInstant) {
+		t.Fatal("offset-equivalent timestamps must be equal")
+	}
+	if c, ok := valueCompare(valTS(stored), sameInstant); !ok || c != 0 {
+		t.Fatalf("valueCompare = %d,%v; want 0,true (equality and ordering must agree)", c, ok)
+	}
+	if valueEqual(valTS(stored), later) {
+		t.Fatal("a different instant must not be equal")
+	}
+
+	// End to end: the equality/range operators agree on the stored instant.
+	e := entityWith("Kind", "k", map[string]dsstore.Value{"t": valTS(stored)})
+	cases := []struct {
+		name string
+		op   PropertyOp
+		v    dsstore.Value
+		want bool
+	}{
+		{"equal across offsets", PropertyEqual, sameInstant, true},
+		{"not equal across offsets", PropertyNotEqual, sameInstant, false},
+		{"less or equal across offsets", PropertyLessThanOrEqual, sameInstant, true},
+		{"greater or equal across offsets", PropertyGreaterThanOrEqual, sameInstant, true},
+		{"greater than across offsets", PropertyGreaterThan, sameInstant, false},
+		{"equal to a later instant", PropertyEqual, later, false},
+	}
+	for _, tc := range cases {
+		pf := &PropertyFilter{Property: "t", Op: tc.op, Value: tc.v}
+		if got := matchPropertyFilter(e, pf); got != tc.want {
+			t.Errorf("%s: matchPropertyFilter = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

@@ -205,8 +205,8 @@ func valueFromWire(v any) (dsstore.Value, error) {
 		}
 		return dsstore.Value{DoubleValue: &f}, nil
 	case hasKey(m, "timestampValue"):
-		// Preserve the wire string verbatim (the store compares/orders by its
-		// RFC 3339 form).
+		// Preserve the wire string verbatim for echo fidelity; the store parses
+		// it as an instant for both comparison and ordering.
 		s := strFrom(m["timestampValue"])
 		return dsstore.Value{TimestampValue: &s}, nil
 	case hasKey(m, "keyValue"):

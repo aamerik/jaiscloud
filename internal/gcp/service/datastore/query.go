@@ -544,7 +544,24 @@ func valueEqual(a, b dsstore.Value) bool {
 	case a.StringValue != nil || b.StringValue != nil:
 		return a.StringValue != nil && b.StringValue != nil && *a.StringValue == *b.StringValue
 	case a.TimestampValue != nil || b.TimestampValue != nil:
-		return a.TimestampValue != nil && b.TimestampValue != nil && *a.TimestampValue == *b.TimestampValue
+		if a.TimestampValue == nil || b.TimestampValue == nil {
+			return false
+		}
+		// A timestamp names an instant (proto Timestamp = seconds+nanos since
+		// the epoch); the RFC 3339 UTC offset is presentation only, so two
+		// strings naming the same instant with different offsets are the same
+		// value. Compare parsed instants, matching valueCompare's instant
+		// ordering — the gRPC transport normalizes to UTC on write
+		// (transport/grpc/datastore/transcode.go) but the REST transport stores
+		// the wire string verbatim (transport/rest/datastore/wire.go), so a
+		// raw-string compare makes EQUAL miss a value the range operators match.
+		// Fall back to the literal strings only when a value is unparseable.
+		at, errA := time.Parse(time.RFC3339Nano, *a.TimestampValue)
+		bt, errB := time.Parse(time.RFC3339Nano, *b.TimestampValue)
+		if errA != nil || errB != nil {
+			return *a.TimestampValue == *b.TimestampValue
+		}
+		return at.Equal(bt)
 	case a.KeyValue != nil || b.KeyValue != nil:
 		// A key *value* is compared exactly, partition included (canonical keys
 		// of the same key are byte-identical). The reserved "__key__" property
