@@ -497,8 +497,11 @@ func valueCompare(a, b dsstore.Value) (int, bool) {
 	case rankInteger:
 		return cmp.Compare(*a.IntegerValue, *b.IntegerValue), true
 	case rankTimestamp:
-		at, errA := ParseTimestamp(*a.TimestampValue)
-		bt, errB := ParseTimestamp(*b.TimestampValue)
+		// Compare at Datastore's microsecond resolution, so two timestamps that
+		// differ only below the microsecond are the same value (see
+		// timestampInstant).
+		at, errA := timestampInstant(*a.TimestampValue)
+		bt, errB := timestampInstant(*b.TimestampValue)
 		if errA != nil || errB != nil {
 			return 0, false
 		}
@@ -569,15 +572,17 @@ func valueEqual(a, b dsstore.Value) bool {
 		// A timestamp names an instant (proto Timestamp = seconds+nanos since
 		// the epoch); the RFC 3339 UTC offset is presentation only, so two
 		// strings naming the same instant with different offsets are the same
-		// value. Compare parsed instants, matching valueCompare's instant
-		// ordering. Both transports now canonicalize to UTC on write (REST in
+		// value. Compare parsed instants at Datastore's microsecond resolution
+		// (timestampInstant), matching valueCompare's ordering, so two values
+		// that differ only below the microsecond are also equal. Both transports
+		// canonicalize to UTC and truncate to microseconds on write (REST in
 		// transport/rest/datastore/wire.go, gRPC in
 		// transport/grpc/datastore/transcode.go), so the comparison is
 		// instant-based rather than reliant on that; a raw-string compare would
 		// still make EQUAL miss a value the range operators match.
 		// Fall back to the literal strings only when a value is unparseable.
-		at, errA := ParseTimestamp(*a.TimestampValue)
-		bt, errB := ParseTimestamp(*b.TimestampValue)
+		at, errA := timestampInstant(*a.TimestampValue)
+		bt, errB := timestampInstant(*b.TimestampValue)
 		if errA != nil || errB != nil {
 			return *a.TimestampValue == *b.TimestampValue
 		}

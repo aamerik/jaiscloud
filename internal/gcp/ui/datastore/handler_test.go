@@ -164,6 +164,41 @@ func TestEntityCRUDRoundTrip(t *testing.T) {
 	}
 }
 
+// TestUpsertCanonicalizesTimestamp pins TD42: a timestampValue written through
+// the console is canonicalized the same way the transports canonicalize it
+// (UTC, microsecond precision, protojson fraction spelling), so the shared store
+// holds one form no matter which path wrote it. A malformed value is rejected.
+func TestUpsertCanonicalizesTimestamp(t *testing.T) {
+	router := newTestRouter()
+	ref := KeyRef{Path: []KeyElement{{Kind: "Task", Name: "ts"}}}
+	body, _ := json.Marshal(UpsertEntityRequest{Key: ref, Properties: map[string]any{
+		"t": map[string]any{"timestampValue": "2019-12-31T19:00:00.123456789-05:00"},
+	}})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/entity", strings.NewReader(string(body))))
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d: %s", w.Code, w.Body.String())
+	}
+	var created Entity
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	v, _ := created.Properties["t"].(map[string]any)
+	if v["timestampValue"] != "2020-01-01T00:00:00.123456Z" {
+		t.Fatalf("timestampValue = %v, want 2020-01-01T00:00:00.123456Z", v["timestampValue"])
+	}
+
+	// A malformed timestamp is rejected rather than stored verbatim.
+	bad, _ := json.Marshal(UpsertEntityRequest{Key: ref, Properties: map[string]any{
+		"t": map[string]any{"timestampValue": "not-a-time"},
+	}})
+	bw := httptest.NewRecorder()
+	router.ServeHTTP(bw, httptest.NewRequest(http.MethodPut, "/entity", strings.NewReader(string(bad))))
+	if bw.Code != http.StatusBadRequest {
+		t.Fatalf("PUT bad timestamp status = %d, want 400: %s", bw.Code, bw.Body.String())
+	}
+}
+
 func TestUpsertAutoAllocatesID(t *testing.T) {
 	router := newTestRouter()
 	// An incomplete final element (no id/name) makes the core allocate one.

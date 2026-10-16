@@ -82,6 +82,10 @@ func TestValueEqual(t *testing.T) {
 		// offset, or an equivalent fractional spelling, is the same value. (TD30)
 		{"ts offset-equivalent", valTS("2019-12-31T19:00:00-05:00"), valTS("2020-01-01T00:00:00Z"), true},
 		{"ts fraction-equivalent", valTS("2020-01-01T00:00:00.500Z"), valTS("2020-01-01T00:00:00.5Z"), true},
+		// Datastore stores a timestamp only to microseconds, so two values that
+		// differ below the microsecond are the same stored value. (TD42)
+		{"ts sub-microsecond-equivalent", valTS("2020-01-01T00:00:00.123456Z"), valTS("2020-01-01T00:00:00.123456789Z"), true},
+		{"ts sub-microsecond differs by a microsecond", valTS("2020-01-01T00:00:00.123456Z"), valTS("2020-01-01T00:00:00.123457Z"), false},
 		{"ts offset different instant", valTS("2019-12-31T19:00:00-05:00"), valTS("2020-01-01T00:00:01Z"), false},
 		// An unparseable timestamp falls back to the literal string, so it
 		// equals itself and never a parseable instant.
@@ -215,6 +219,9 @@ func TestValueCompare(t *testing.T) {
 		{"ts>", valTS("2021-01-01T00:00:00Z"), valTS("2020-01-01T00:00:00Z"), 1, true},
 		{"ts==", valTS("2020-01-01T00:00:00Z"), valTS("2020-01-01T00:00:00Z"), 0, true},
 		{"ts invalid", valTS("not-a-time"), valTS("2020-01-01T00:00:00Z"), 0, false},
+		// Ordering is at Datastore's microsecond resolution: values differing
+		// only below the microsecond order equal. (TD42)
+		{"ts sub-microsecond equal", valTS("2020-01-01T00:00:00.123456Z"), valTS("2020-01-01T00:00:00.123456789Z"), 0, true},
 		{"key<", valKey("a"), valKey("b"), -1, true},
 		{"key>", valKey("b"), valKey("a"), 1, true},
 		{"key==", valKey("a"), valKey("a"), 0, true},
