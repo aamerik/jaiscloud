@@ -665,7 +665,7 @@ func secretToProto(project string, s secretmanagerstore.Secret) *secretmanagerpb
 		},
 	}
 	if !s.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(s.CreateTime)
+		out.CreateTime = timestamp.Proto(s.CreateTime)
 	}
 	if s.Labels != nil {
 		out.Labels = s.Labels
@@ -694,10 +694,10 @@ func versionToProto(project string, v secretmanagerstore.Version) *secretmanager
 		ClientSpecifiedPayloadChecksum: true,
 	}
 	if !v.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(v.CreateTime)
+		out.CreateTime = timestamp.Proto(v.CreateTime)
 	}
 	if !v.DestroyTime.IsZero() {
-		out.DestroyTime = timestamppb.New(v.DestroyTime)
+		out.DestroyTime = timestamp.Proto(v.DestroyTime)
 	}
 	return out
 }
@@ -729,6 +729,11 @@ func rotationToProto(r *secretmanagerstore.Rotation) *secretmanagerpb.Rotation {
 	out := &secretmanagerpb.Rotation{}
 	if r.NextRotationTime != "" {
 		if t, err := time.Parse(time.RFC3339Nano, r.NextRotationTime); err == nil {
+			// nextRotationTime is a client-supplied instant stored as an RFC
+			// 3339 string; the REST reader echoes the stored string verbatim
+			// (provider/secretmanager secret.go), so the gRPC reader must not
+			// truncate it — doing so would make the two transports disagree on
+			// a value a REST client wrote.
 			out.NextRotationTime = timestamppb.New(t)
 		}
 	}

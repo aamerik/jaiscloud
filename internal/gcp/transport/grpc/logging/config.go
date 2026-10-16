@@ -9,9 +9,9 @@ import (
 	"jaiscloud/internal/gcp/resource"
 	core "jaiscloud/internal/gcp/service/logging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
+	"jaiscloud/internal/gcp/timestamp"
 
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // ConfigService implements the Cloud Logging v2 config-plane RPCs
@@ -204,10 +204,10 @@ func sinkToProto(s loggingstore.LogSink) *loggingpb.LogSink {
 		out.Exclusions = append(out.Exclusions, exclusionToProto(ex))
 	}
 	if !s.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(s.CreateTime)
+		out.CreateTime = timestamp.Proto(s.CreateTime)
 	}
 	if !s.UpdateTime.IsZero() {
-		out.UpdateTime = timestamppb.New(s.UpdateTime)
+		out.UpdateTime = timestamp.Proto(s.UpdateTime)
 	}
 	return out
 }
@@ -232,10 +232,10 @@ func exclusionToProto(e loggingstore.LogExclusion) *loggingpb.LogExclusion {
 		Disabled:    e.Disabled,
 	}
 	if !e.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(e.CreateTime)
+		out.CreateTime = timestamp.Proto(e.CreateTime)
 	}
 	if !e.UpdateTime.IsZero() {
-		out.UpdateTime = timestamppb.New(e.UpdateTime)
+		out.UpdateTime = timestamp.Proto(e.UpdateTime)
 	}
 	return out
 }

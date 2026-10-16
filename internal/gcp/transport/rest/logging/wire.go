@@ -185,11 +185,16 @@ func entryToWire(e loggingstore.LogEntry) map[string]any {
 		}
 		out["resource"] = res
 	}
+	// A LogEntry's own timestamp/receiveTimestamp are proto Timestamps with
+	// nanosecond accuracy (the Discovery: "Timestamps have nanosecond
+	// accuracy"), so they keep the caller's/server's full precision and are
+	// spelled without truncation — unlike the server-clock metadata fields
+	// below (sink/metric/bucket create/update times).
 	if !e.Timestamp.IsZero() {
-		out["timestamp"] = timestamp.Canonical(e.Timestamp)
+		out["timestamp"] = timestamp.ProtoJSON(e.Timestamp)
 	}
 	if !e.ReceiveTimestamp.IsZero() {
-		out["receiveTimestamp"] = timestamp.Canonical(e.ReceiveTimestamp)
+		out["receiveTimestamp"] = timestamp.ProtoJSON(e.ReceiveTimestamp)
 	}
 	if e.Severity != 0 {
 		out["severity"] = core.SeverityName(e.Severity)

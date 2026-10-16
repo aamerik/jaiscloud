@@ -54,6 +54,9 @@ func entryToProto(e loggingstore.LogEntry) *loggingpb.LogEntry {
 	if e.ResourceType != "" || len(e.ResourceLabels) > 0 {
 		out.Resource = &monitoredres.MonitoredResource{Type: e.ResourceType, Labels: e.ResourceLabels}
 	}
+	// A LogEntry's own timestamp/receiveTimestamp are proto Timestamps with
+	// nanosecond accuracy (the Discovery: "Timestamps have nanosecond
+	// accuracy"), so they keep the full precision — no microsecond truncation.
 	if !e.Timestamp.IsZero() {
 		out.Timestamp = timestamppb.New(e.Timestamp)
 	}

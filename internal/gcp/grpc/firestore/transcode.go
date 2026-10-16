@@ -40,6 +40,7 @@ import (
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	"jaiscloud/internal/gcp/timestamp"
 
 	"google.golang.org/genproto/googleapis/type/latlng"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -115,10 +116,10 @@ func encodeDocument(d firestorestore.Document) *firestorepb.Document {
 		}
 	}
 	if !d.CreateTime.IsZero() {
-		doc.CreateTime = timestamppb.New(d.CreateTime)
+		doc.CreateTime = timestamp.Proto(d.CreateTime)
 	}
 	if !d.UpdateTime.IsZero() {
-		doc.UpdateTime = timestamppb.New(d.UpdateTime)
+		doc.UpdateTime = timestamp.Proto(d.UpdateTime)
 	}
 	return doc
 }

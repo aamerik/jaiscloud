@@ -13,11 +13,11 @@ import (
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Service implements firestorepb.FirestoreServer over the shared, transport-
@@ -240,7 +240,7 @@ func (s *Service) Commit(ctx context.Context, req *firestorepb.CommitRequest) (*
 		return nil, mapError(err)
 	}
 	return &firestorepb.CommitResponse{
-		CommitTime:   timestamppb.New(commitTime),
+		CommitTime:   timestamp.Proto(commitTime),
 		WriteResults: wr,
 	}, nil
 }
@@ -299,7 +299,7 @@ func (s *Service) RunQuery(req *firestorepb.RunQueryRequest, stream firestorepb.
 	if err != nil {
 		return mapError(err)
 	}
-	readTime := timestamppb.New(clock.Now())
+	readTime := timestamp.Proto(clock.Now())
 	for _, d := range docs {
 		if err := stream.Send(&firestorepb.RunQueryResponse{
 			Document: encodeDocument(d),
@@ -336,7 +336,7 @@ func (s *Service) BatchGetDocuments(req *firestorepb.BatchGetDocumentsRequest, s
 	if err != nil {
 		return mapError(err)
 	}
-	readTime := timestamppb.New(clock.Now())
+	readTime := timestamp.Proto(clock.Now())
 	for i, item := range items {
 		resp := &firestorepb.BatchGetDocumentsResponse{ReadTime: readTime}
 		if i == 0 && len(txn) > 0 {
@@ -402,7 +402,7 @@ func writeResultToProto(m map[string]any) (*firestorepb.WriteResult, error) {
 		if err != nil {
 			return nil, err
 		}
-		wr.UpdateTime = timestamppb.New(t)
+		wr.UpdateTime = timestamp.Proto(t)
 	}
 	if tr, ok := m["transformResults"].([]any); ok {
 		for _, v := range tr {

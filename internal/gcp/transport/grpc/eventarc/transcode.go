@@ -24,10 +24,10 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	core "jaiscloud/internal/gcp/service/eventarc"
 	eventarcstore "jaiscloud/internal/gcp/store/eventarc"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // protojsonOpts tolerates unknown fields so a REST-created resource body (which
@@ -123,8 +123,8 @@ func maskString(paths []string) string { return strings.Join(paths, ",") }
 // caller-supplied response message (a Trigger/Channel, or Empty for delete).
 func (s *Service) operationToProto(project string, op core.Operation, response proto.Message) (*longrunningpb.Operation, error) {
 	metadata, err := anypb.New(&eventarcpb.OperationMetadata{
-		CreateTime: timestamppb.New(op.CreateTime),
-		EndTime:    timestamppb.New(op.CreateTime),
+		CreateTime: timestamp.Proto(op.CreateTime),
+		EndTime:    timestamp.Proto(op.CreateTime),
 		Target:     op.Target,
 		Verb:       op.Verb,
 		ApiVersion: "v1",

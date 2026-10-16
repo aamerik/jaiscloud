@@ -13,6 +13,7 @@ import (
 	adminpb "cloud.google.com/go/firestore/apiv1/admin/adminpb"
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 
 	"google.golang.org/genproto/googleapis/type/dayofweek"
@@ -20,7 +21,6 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // ─── generic operation wrapper ────────────────────────────────────────────────
@@ -158,13 +158,13 @@ func databaseToProto(d firestoreprovider.DatabaseDef) *adminpb.Database {
 		Etag:       d.Etag,
 	}
 	if !d.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(d.CreateTime)
+		out.CreateTime = timestamp.Proto(d.CreateTime)
 	}
 	if !d.UpdateTime.IsZero() {
-		out.UpdateTime = timestamppb.New(d.UpdateTime)
+		out.UpdateTime = timestamp.Proto(d.UpdateTime)
 	}
 	if !d.DeleteTime.IsZero() {
-		out.DeleteTime = timestamppb.New(d.DeleteTime)
+		out.DeleteTime = timestamp.Proto(d.DeleteTime)
 	}
 	if d.Type != "" {
 		out.Type = adminpb.Database_DatabaseType(adminpb.Database_DatabaseType_value[d.Type])
@@ -388,10 +388,10 @@ func userCredsToProto(u firestoreprovider.UserCredsDef) *adminpb.UserCreds {
 		SecurePassword: u.SecretPassword,
 	}
 	if !u.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(u.CreateTime)
+		out.CreateTime = timestamp.Proto(u.CreateTime)
 	}
 	if !u.UpdateTime.IsZero() {
-		out.UpdateTime = timestamppb.New(u.UpdateTime)
+		out.UpdateTime = timestamp.Proto(u.UpdateTime)
 	}
 	if u.State != "" {
 		out.State = adminpb.UserCreds_State(adminpb.UserCreds_State_value[u.State])
@@ -534,10 +534,10 @@ func backupScheduleFromProto(p *adminpb.BackupSchedule) firestoreprovider.Backup
 func backupScheduleToProto(bs firestoreprovider.BackupScheduleDef) *adminpb.BackupSchedule {
 	out := &adminpb.BackupSchedule{Name: bs.Name}
 	if !bs.CreateTime.IsZero() {
-		out.CreateTime = timestamppb.New(bs.CreateTime)
+		out.CreateTime = timestamp.Proto(bs.CreateTime)
 	}
 	if !bs.UpdateTime.IsZero() {
-		out.UpdateTime = timestamppb.New(bs.UpdateTime)
+		out.UpdateTime = timestamp.Proto(bs.UpdateTime)
 	}
 	if bs.Retention > 0 {
 		out.Retention = durationpb.New(bs.Retention)
@@ -654,10 +654,10 @@ func backupToProto(b firestoreprovider.BackupDef) *adminpb.Backup {
 		DatabaseUid: b.DatabaseUid,
 	}
 	if !b.SnapshotTime.IsZero() {
-		out.SnapshotTime = timestamppb.New(b.SnapshotTime)
+		out.SnapshotTime = timestamp.Proto(b.SnapshotTime)
 	}
 	if !b.ExpireTime.IsZero() {
-		out.ExpireTime = timestamppb.New(b.ExpireTime)
+		out.ExpireTime = timestamp.Proto(b.ExpireTime)
 	}
 	if b.State != "" {
 		out.State = adminpb.Backup_State(adminpb.Backup_State_value[b.State])

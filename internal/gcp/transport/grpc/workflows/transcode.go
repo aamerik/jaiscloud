@@ -10,10 +10,10 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	core "jaiscloud/internal/gcp/service/workflows"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
+	"jaiscloud/internal/gcp/timestamp"
 )
 
 // stateToProto maps a stored workflow state string to the proto enum.
@@ -70,9 +70,9 @@ func workflowToProto(w workflowsstore.Workflow, project string) *workflowspb.Wor
 		Description:        w.Description,
 		State:              stateToProto(w.State),
 		RevisionId:         w.RevisionID,
-		CreateTime:         timestamppb.New(w.CreateTime),
-		UpdateTime:         timestamppb.New(w.UpdateTime),
-		RevisionCreateTime: timestamppb.New(revisionCreateTime),
+		CreateTime:         timestamp.Proto(w.CreateTime),
+		UpdateTime:         timestamp.Proto(w.UpdateTime),
+		RevisionCreateTime: timestamp.Proto(revisionCreateTime),
 		Labels:             w.Labels,
 		UserEnvVars:        w.UserEnvVars,
 		Tags:               w.Tags,
@@ -97,7 +97,7 @@ func revisionToProto(r core.Revision, project string) *workflowspb.Workflow {
 	out := workflowToProto(r.Workflow, project)
 	out.State = stateToProto(r.State)
 	out.RevisionId = r.RevisionID
-	out.RevisionCreateTime = timestamppb.New(r.RevisionCreateTime)
+	out.RevisionCreateTime = timestamp.Proto(r.RevisionCreateTime)
 	if r.SourceContents != "" {
 		out.SourceCode = &workflowspb.Workflow_SourceContents{SourceContents: r.SourceContents}
 	} else {
@@ -121,13 +121,13 @@ func revisionToProto(r core.Revision, project string) *workflowspb.Workflow {
 // keeps the original output exactly.
 func operationToProto(op workflowsstore.Operation, project string, response proto.Message) (*longrunningpb.Operation, error) {
 	meta := &workflowspb.OperationMetadata{
-		CreateTime: timestamppb.New(op.CreateTime),
+		CreateTime: timestamp.Proto(op.CreateTime),
 		Target:     op.Target,
 		Verb:       op.Verb,
 		ApiVersion: "v1",
 	}
 	if op.Done {
-		meta.EndTime = timestamppb.New(op.EndTime)
+		meta.EndTime = timestamp.Proto(op.EndTime)
 	}
 	metadata, err := anypb.New(meta)
 	if err != nil {

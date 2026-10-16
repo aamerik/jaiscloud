@@ -2,9 +2,8 @@ package firestore
 
 import (
 	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
-
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // ExecutePipeline implements the server-streaming Firestore.ExecutePipeline RPC.
@@ -28,7 +27,7 @@ func (s *Service) ExecutePipeline(req *firestorepb.ExecutePipelineRequest, strea
 		return mapError(err)
 	}
 	resp := &firestorepb.ExecutePipelineResponse{
-		ExecutionTime: timestamppb.New(res.ExecutionTime),
+		ExecutionTime: timestamp.Proto(res.ExecutionTime),
 		Results:       encodeDocuments(res.Documents),
 		Transaction:   res.Transaction,
 	}
