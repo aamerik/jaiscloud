@@ -129,11 +129,11 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 539
+        "rest": 540
       },
       "unverified": {
         "grpc": 21,
-        "rest": 116
+        "rest": 115
       }
     },
     "grpc_only_services": [
@@ -15182,7 +15182,7 @@
         "discovery=workflows.projects.locations.workflows.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 8 transcript entries)"
+        "verified=true (rest, 9 transcript entries)"
       ]
     },
     {
@@ -15245,11 +15245,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "workflows.projects.locations.operations.list",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=workflows.projects.locations.operations.list",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
