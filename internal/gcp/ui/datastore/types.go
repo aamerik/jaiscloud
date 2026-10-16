@@ -288,7 +288,14 @@ func valueFromUI(v any) (dsstore.Value, error) {
 		}
 		return dsstore.Value{DoubleValue: &f}, nil
 	case hasKey(m, "timestampValue"):
-		s, _ := m["timestampValue"].(string)
+		// Route through the same canonicalizer the transports use so the shared
+		// store holds one form (UTC, microsecond precision) no matter which path
+		// wrote it. (TD42)
+		raw, _ := m["timestampValue"].(string)
+		s, err := core.NormalizeTimestamp(raw)
+		if err != nil {
+			return dsstore.Value{}, invalidArgument("invalid timestampValue")
+		}
 		return dsstore.Value{TimestampValue: &s}, nil
 	case hasKey(m, "keyValue"):
 		ref, err := keyRefFromAny(m["keyValue"])

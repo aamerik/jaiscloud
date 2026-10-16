@@ -315,7 +315,10 @@ func mutationPrecondition(m *datastorepb.Mutation) *dsstore.Precondition {
 		bv := v.BaseVersion
 		return &dsstore.Precondition{BaseVersion: &bv}
 	case *datastorepb.Mutation_UpdateTime:
-		ut := v.UpdateTime.AsTime()
+		// The stored update_time is held at Datastore's microsecond precision,
+		// so truncate the client-supplied token the same way before it is
+		// compared (real GCP coerces it to microseconds). (TD42)
+		ut := v.UpdateTime.AsTime().Truncate(time.Microsecond)
 		return &dsstore.Precondition{UpdateTime: &ut}
 	default:
 		return nil

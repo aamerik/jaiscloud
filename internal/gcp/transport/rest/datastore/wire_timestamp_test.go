@@ -1,7 +1,9 @@
 package datastore
 
 import (
+	"strconv"
 	"testing"
+	"time"
 
 	"jaiscloud/internal/model"
 )
@@ -62,6 +64,49 @@ func TestRESTTimestampValueNormalizedOnWrite(t *testing.T) {
 	}
 	if got := values[0].(map[string]any)["timestampValue"]; got != "2020-01-01T00:00:00Z" {
 		t.Fatalf("nested timestampValue = %v, want 2020-01-01T00:00:00Z", got)
+	}
+}
+
+// TestRESTTimestampValuePrecisionOnWrite pins TD42: a timestampValue is stored
+// and echoed at Datastore's microsecond resolution (sub-microsecond digits are
+// dropped) and spelled the way real GCP's protojson transcoder spells a proto
+// Timestamp (0, 3, or 6 digits — a one-digit fraction is padded to three, not
+// trimmed as time.RFC3339Nano would).
+func TestRESTTimestampValuePrecisionOnWrite(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"2020-01-01T00:00:00.5Z", "2020-01-01T00:00:00.500Z"},
+		{"2020-01-01T00:00:00.120Z", "2020-01-01T00:00:00.120Z"},
+		{"2020-01-01T00:00:00.123456789Z", "2020-01-01T00:00:00.123456Z"},
+		{"2020-01-01T00:00:00.9999999Z", "2020-01-01T00:00:00.999999Z"},
+	}
+	for i, tc := range cases {
+		c, p := newTestProvider(t)
+		name := "ts-" + strconv.Itoa(i)
+		if _, err := call(t, c, p, "test", "commit", timestampCommitBody(name, map[string]any{
+			"t": map[string]any{"timestampValue": tc.in},
+		})); err != nil {
+			t.Fatalf("commit(%q): %v", tc.in, err)
+		}
+		tv := lookupProperty(t, c, p, name, "t")
+		if got := tv["timestampValue"]; got != tc.want {
+			t.Errorf("commit(%q): timestampValue = %v, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestRESTUpdateTimePreconditionTruncated pins TD42: a client-supplied
+// Mutation.update_time precondition carrying sub-microsecond digits is truncated
+// to Datastore's microsecond resolution before it is compared, so it still
+// matches the stored (microsecond) update_time instead of reporting a spurious
+// conflict.
+func TestRESTUpdateTimePreconditionTruncated(t *testing.T) {
+	p := preconditionFromWire(map[string]any{"updateTime": "2020-01-01T00:00:00.123456789Z"})
+	if p == nil || p.UpdateTime == nil {
+		t.Fatalf("precondition = %+v, want an updateTime precondition", p)
+	}
+	want := time.Date(2020, 1, 1, 0, 0, 0, 123456000, time.UTC)
+	if !p.UpdateTime.Equal(want) {
+		t.Fatalf("UpdateTime = %v, want %v", p.UpdateTime, want)
 	}
 }
 

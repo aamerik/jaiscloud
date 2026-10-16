@@ -447,6 +447,11 @@ func preconditionFromWire(m map[string]any) *dsstore.Precondition {
 	}
 	if ut := strFrom(m["updateTime"]); ut != "" {
 		if t, err := time.Parse(time.RFC3339Nano, ut); err == nil {
+			// Preconditions are compared for equality against the stored
+			// update_time, which Datastore holds at microsecond precision, so a
+			// client-supplied value carrying sub-microsecond digits must be
+			// truncated the same way real GCP coerces it. (TD42)
+			t = t.Truncate(time.Microsecond)
 			return &dsstore.Precondition{UpdateTime: &t}
 		}
 	}
