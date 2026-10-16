@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"fmt"
 	"math"
-	"time"
 
 	dsstore "jaiscloud/internal/gcp/store/datastore"
 )
@@ -498,8 +497,8 @@ func valueCompare(a, b dsstore.Value) (int, bool) {
 	case rankInteger:
 		return cmp.Compare(*a.IntegerValue, *b.IntegerValue), true
 	case rankTimestamp:
-		at, errA := time.Parse(time.RFC3339Nano, *a.TimestampValue)
-		bt, errB := time.Parse(time.RFC3339Nano, *b.TimestampValue)
+		at, errA := ParseTimestamp(*a.TimestampValue)
+		bt, errB := ParseTimestamp(*b.TimestampValue)
 		if errA != nil || errB != nil {
 			return 0, false
 		}
@@ -571,13 +570,14 @@ func valueEqual(a, b dsstore.Value) bool {
 		// the epoch); the RFC 3339 UTC offset is presentation only, so two
 		// strings naming the same instant with different offsets are the same
 		// value. Compare parsed instants, matching valueCompare's instant
-		// ordering — the gRPC transport normalizes to UTC on write
-		// (transport/grpc/datastore/transcode.go) but the REST transport stores
-		// the wire string verbatim (transport/rest/datastore/wire.go), so a
-		// raw-string compare makes EQUAL miss a value the range operators match.
+		// ordering. Both transports now canonicalize to UTC on write (REST in
+		// transport/rest/datastore/wire.go, gRPC in
+		// transport/grpc/datastore/transcode.go), so the comparison is
+		// instant-based rather than reliant on that; a raw-string compare would
+		// still make EQUAL miss a value the range operators match.
 		// Fall back to the literal strings only when a value is unparseable.
-		at, errA := time.Parse(time.RFC3339Nano, *a.TimestampValue)
-		bt, errB := time.Parse(time.RFC3339Nano, *b.TimestampValue)
+		at, errA := ParseTimestamp(*a.TimestampValue)
+		bt, errB := ParseTimestamp(*b.TimestampValue)
 		if errA != nil || errB != nil {
 			return *a.TimestampValue == *b.TimestampValue
 		}

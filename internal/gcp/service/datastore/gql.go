@@ -704,7 +704,7 @@ func parseGQLDatetime(s string) (string, error) {
 		"2006-01-02",
 	} {
 		if t, err := time.Parse(layout, s); err == nil {
-			return t.UTC().Format(time.RFC3339Nano), nil
+			return CanonicalTimestamp(t), nil
 		}
 	}
 	return "", fmt.Errorf("expected an RFC 3339 timestamp")
