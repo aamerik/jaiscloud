@@ -166,11 +166,11 @@ func (s *Service) ResolveOperation(ctx context.Context, name string) (*longrunni
 // parameter is not modelled; the core fails loud on a non-empty filter rather
 // than silently returning unfiltered results.
 func (s *Service) ListOperations(ctx context.Context, parent string, pageSize int32, pageToken, filter string) (*longrunningpb.ListOperationsResponse, bool, error) {
-	if _, _, ok := parseOperationParent(parent); !ok {
+	project, location, ok := parseOperationParent(parent)
+	if !ok {
 		return nil, false, nil
 	}
-	project := s.projectFor(ctx, parent)
-	page, next, err := s.core.ListOperations(ctx, project, core.LocationFromName(parent),
+	page, next, err := s.core.ListOperations(ctx, project, location,
 		int(pageSize), pageToken, filter)
 	if err != nil {
 		return nil, true, mapError(err)

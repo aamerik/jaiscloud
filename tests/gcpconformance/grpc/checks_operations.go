@@ -39,6 +39,7 @@ func operationsChecks() []Check {
 		{Service: "operations", RPC: "ListOperations (managedkafka endpoint)", Method: "ListOperations", KeyField: "endpoint-scoped Get+List, sibling isolated", Run: checkManagedKafkaOperationsEndpoint},
 		{Service: "operations", RPC: "ListOperations (run endpoint)", Method: "ListOperations", KeyField: "endpoint-scoped Get+List, sibling isolated", Run: checkRunOperationsEndpoint},
 		{Service: "operations", RPC: "ListOperations (cloudfunctions endpoint)", Method: "ListOperations", KeyField: "endpoint-scoped Get+List, sibling isolated", Run: checkFunctionsOperationsEndpoint},
+		{Service: "operations", RPC: "ListOperations (workflows endpoint)", Method: "ListOperations", KeyField: "endpoint-scoped Get+List+Delete, sibling isolated", Run: checkWorkflowsOperationsEndpoint},
 	}
 }
 

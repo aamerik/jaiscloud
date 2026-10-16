@@ -9,6 +9,7 @@ import (
 	longrunningpb "cloud.google.com/go/longrunning/autogen/longrunningpb"
 	managedkafkapb "cloud.google.com/go/managedkafka/apiv1/managedkafkapb"
 	metastorepb "cloud.google.com/go/metastore/apiv1/metastorepb"
+	workflowspb "cloud.google.com/go/workflows/apiv1/workflowspb"
 )
 
 // managedKafkaParent is the project/location parent the Managed Kafka probes use.
@@ -179,6 +180,55 @@ func checkFunctionsOperationsEndpoint(ctx context.Context, cfg Config) error {
 	}
 	defer sibling.Close()
 	return operationsListExcludes(ctx, sibling, functionsParent(cfg), opName)
+}
+
+// checkWorkflowsOperationsEndpoint verifies google.longrunning.Operations is
+// endpoint-scoped for Cloud Workflows and serves its operations list/delete
+// surface: the operation a workflow create persisted is resolved and listed at
+// the workflows endpoint, a sibling endpoint (run) does not list it, and
+// deleting it at the workflows endpoint removes it from the page.
+func checkWorkflowsOperationsEndpoint(ctx context.Context, cfg Config) error {
+	client, err := newWorkflowsClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("workflows client: %w", err)
+	}
+	defer client.Close()
+
+	op, err := client.CreateWorkflow(ctx, &workflowspb.CreateWorkflowRequest{
+		Parent:     workflowParent(cfg),
+		WorkflowId: cfg.ResourceName("gcpc-grpc-wf-ops"),
+		Workflow: &workflowspb.Workflow{
+			SourceCode: &workflowspb.Workflow_SourceContents{SourceContents: workflowSource},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("create workflow: %w", err)
+	}
+	opName := op.Name()
+
+	own, err := newEndpointOperationsClient(ctx, cfg, "workflows.localhost")
+	if err != nil {
+		return fmt.Errorf("workflows operations client: %w", err)
+	}
+	defer own.Close()
+	if err := operationsEndpointResolvesAndLists(ctx, own, opName, workflowParent(cfg)); err != nil {
+		return err
+	}
+
+	sibling, err := newEndpointOperationsClient(ctx, cfg, "run.localhost")
+	if err != nil {
+		return fmt.Errorf("sibling operations client: %w", err)
+	}
+	defer sibling.Close()
+	if err := operationsListExcludes(ctx, sibling, workflowParent(cfg), opName); err != nil {
+		return err
+	}
+
+	// operations.delete (declared by the workflows Discovery) removes it.
+	if err := own.DeleteOperation(ctx, &longrunningpb.DeleteOperationRequest{Name: opName}); err != nil {
+		return fmt.Errorf("DeleteOperation at the workflows endpoint: %w", err)
+	}
+	return operationsListExcludes(ctx, own, workflowParent(cfg), opName)
 }
 
 // operationsEndpointResolvesAndLists asserts the endpoint's Get resolves opName
