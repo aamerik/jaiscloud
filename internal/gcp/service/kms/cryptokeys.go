@@ -16,20 +16,86 @@ import (
 
 // CryptoKeyInput carries the caller-supplied fields of a CreateCryptoKey.
 type CryptoKeyInput struct {
-	Purpose         string
-	Algorithm       string
-	Labels          map[string]string
-	RotationPeriod  time.Duration
-	ProtectionLevel string
-	ImportOnly      bool
+	Purpose          string
+	Algorithm        string
+	Labels           map[string]string
+	RotationPeriod   time.Duration
+	NextRotationTime *time.Time
+	ProtectionLevel  string
+	ImportOnly       bool
 }
 
-// CryptoKeyUpdate carries a masked UpdateCryptoKey. UpdateMask nil means
-// "replace every mutable field" (labels + rotation schedule).
+// CryptoKeyUpdate carries a masked UpdateCryptoKey. UpdateMask is the request's
+// required FieldMask path set: a nil mask means the field was omitted (real GCP
+// rejects that — UpdateCryptoKeyRequest.update_mask is REQUIRED), while a
+// non-nil empty mask is the explicit no-op real GCP accepts.
 type CryptoKeyUpdate struct {
-	UpdateMask     []string
-	Labels         map[string]string
-	RotationPeriod *time.Duration
+	UpdateMask       []string
+	Labels           map[string]string
+	RotationPeriod   *time.Duration
+	NextRotationTime *time.Time
+}
+
+// Rotation-schedule bounds documented on CryptoKey.rotation_period: "Must be at
+// least 24 hours and at most 876,000 hours."
+const (
+	minRotationPeriod = 24 * time.Hour
+	maxRotationPeriod = 876000 * time.Hour
+)
+
+// normalizeCryptoKeyMaskPath maps a FieldMask path onto the canonical snake_case
+// field name the core switches on. Real GCP accepts both the REST camelCase
+// spelling and the proto snake_case one.
+func normalizeCryptoKeyMaskPath(path string) string {
+	switch path {
+	case "rotationPeriod", "rotation_period":
+		return "rotation_period"
+	case "nextRotationTime", "next_rotation_time":
+		return "next_rotation_time"
+	default:
+		return path
+	}
+}
+
+// validateRotationSchedule enforces the rotation invariants the Discovery
+// documents on the resulting CryptoKey: only ENCRYPT_DECRYPT keys rotate and a
+// set rotation_period requires next_rotation_time. It deliberately does not
+// check that next_rotation_time is in the future, so a key whose rotation has
+// come due can still be updated.
+func validateRotationSchedule(purpose string, rp time.Duration, nrt time.Time) error {
+	if rp == 0 && nrt.IsZero() {
+		return nil
+	}
+	if purpose != "" && purpose != "ENCRYPT_DECRYPT" {
+		return invalidArgument("automatic rotation is not available for keys with purpose " + purpose)
+	}
+	if rp != 0 && nrt.IsZero() {
+		return invalidArgument("next_rotation_time is required if rotation_schedule is set")
+	}
+	return nil
+}
+
+// validateRotationPeriodBounds rejects a rotation_period outside the documented
+// [24h, 876000h] range. Callers pass an explicitly set period (create omits a
+// zero period, which means "no schedule"; an update's zeroed period is a real
+// value and is rejected here).
+func validateRotationPeriodBounds(rp time.Duration) error {
+	if rp < minRotationPeriod {
+		return invalidArgument("rotation_period must be at least 24h")
+	}
+	if rp > maxRotationPeriod {
+		return invalidArgument("rotation_period must be at most 876000h")
+	}
+	return nil
+}
+
+// validateNextRotationTime rejects a next_rotation_time that is not in the
+// future, the one schedule rule that depends on the current clock.
+func validateNextRotationTime(nrt time.Time) error {
+	if !nrt.IsZero() && !nrt.After(clock.Now()) {
+		return invalidArgument("next_rotation_time must be in the future")
+	}
+	return nil
 }
 
 // EncryptResult is the outcome of an Encrypt/RawEncrypt call.
@@ -119,14 +185,27 @@ func (s *Service) CreateCryptoKey(ctx context.Context, project, location, kr, id
 	if _, err := s.resources.Get(ctx, project, store.GlobalRegion, rtRetiredResource, retiredResourceID(location, id)); err == nil {
 		return kmsstore.CryptoKey{}, alreadyExists("crypto key name is retired and cannot be reused")
 	}
+	var nrt time.Time
+	if in.NextRotationTime != nil {
+		nrt = *in.NextRotationTime
+	}
+	if in.RotationPeriod != 0 {
+		if err := validateRotationPeriodBounds(in.RotationPeriod); err != nil {
+			return kmsstore.CryptoKey{}, err
+		}
+	}
+	if err := validateRotationSchedule(purpose, in.RotationPeriod, nrt); err != nil {
+		return kmsstore.CryptoKey{}, err
+	}
+	if err := validateNextRotationTime(nrt); err != nil {
+		return kmsstore.CryptoKey{}, err
+	}
 	now := clock.Now()
 	ck := kmsstore.CryptoKey{
 		Location: location, KeyRingID: kr, ID: id, Purpose: purpose, CreateTime: now,
 		PrimaryVersion: "1", Algorithm: algorithm, Labels: in.Labels,
-		RotationPeriod: in.RotationPeriod, ProtectionLevel: in.ProtectionLevel, ImportOnly: in.ImportOnly,
-	}
-	if in.RotationPeriod > 0 {
-		ck.NextRotationTime = now.Add(in.RotationPeriod)
+		RotationPeriod: in.RotationPeriod, NextRotationTime: nrt,
+		ProtectionLevel: in.ProtectionLevel, ImportOnly: in.ImportOnly,
 	}
 	if err := s.keys.CreateCryptoKey(ctx, project, location, kr, id, ck); err != nil {
 		if errorsIsAlreadyExists(err) {
@@ -163,11 +242,44 @@ func (s *Service) ListCryptoKeys(ctx context.Context, project, location, kr stri
 }
 
 // UpdateCryptoKey applies a masked update to a crypto key's mutable fields.
-// Supported mask paths are labels and rotation_period.
+// Real GCP requires the FieldMask (UpdateCryptoKeyRequest.update_mask is
+// REQUIRED) and validates every path against the resource's writable field set
+// (labels, rotation_period, next_rotation_time); an omitted mask is
+// INVALID_ARGUMENT and any other path is too (AIP-134/AIP-161, the AUD2-7
+// precedent). Only the masked fields are validated and merged; the rotation
+// schedule invariants (purpose, next_rotation_time required with a period) are
+// then enforced on the merged result.
 func (s *Service) UpdateCryptoKey(ctx context.Context, project, location, kr, id string, in CryptoKeyUpdate) (kmsstore.CryptoKey, error) {
-	paths := in.UpdateMask
-	if len(paths) == 0 {
-		paths = []string{"labels", "rotation_period"}
+	if in.UpdateMask == nil {
+		return kmsstore.CryptoKey{}, invalidArgument("update_mask is required")
+	}
+	paths := make([]string, 0, len(in.UpdateMask))
+	selected := make(map[string]bool, len(in.UpdateMask))
+	for _, raw := range in.UpdateMask {
+		path := normalizeCryptoKeyMaskPath(raw)
+		switch path {
+		case "labels", "rotation_period", "next_rotation_time":
+			if !selected[path] {
+				selected[path] = true
+				paths = append(paths, path)
+			}
+		default:
+			return kmsstore.CryptoKey{}, invalidArgument("unsupported update_mask path: " + raw)
+		}
+	}
+	// Validate only the fields the mask actually selects: AIP-134 field-mask
+	// semantics ignore (and do not validate) an unmasked body field, so a stale
+	// or invalid rotation value alongside a labels patch is not an error. This
+	// also keeps a due rotation on an untouched field from rejecting the update.
+	if selected["rotation_period"] && in.RotationPeriod != nil {
+		if err := validateRotationPeriodBounds(*in.RotationPeriod); err != nil {
+			return kmsstore.CryptoKey{}, err
+		}
+	}
+	if selected["next_rotation_time"] && in.NextRotationTime != nil {
+		if err := validateNextRotationTime(*in.NextRotationTime); err != nil {
+			return kmsstore.CryptoKey{}, err
+		}
 	}
 	k, err := s.keys.UpdateCryptoKeyAtomic(ctx, project, location, kr, id, func(stored kmsstore.CryptoKey) (kmsstore.CryptoKey, error) {
 		for _, path := range paths {
@@ -177,17 +289,19 @@ func (s *Service) UpdateCryptoKey(ctx context.Context, project, location, kr, id
 			case "rotation_period":
 				if in.RotationPeriod == nil {
 					stored.RotationPeriod = 0
+					continue
+				}
+				stored.RotationPeriod = *in.RotationPeriod
+			case "next_rotation_time":
+				if in.NextRotationTime == nil {
 					stored.NextRotationTime = time.Time{}
 					continue
 				}
-				if *in.RotationPeriod <= 0 {
-					return stored, invalidArgument("rotation period must be positive")
-				}
-				stored.RotationPeriod = *in.RotationPeriod
-				stored.NextRotationTime = clock.Now().Add(*in.RotationPeriod)
-			default:
-				return stored, unsupported("unsupported update_mask path: " + path)
+				stored.NextRotationTime = *in.NextRotationTime
 			}
+		}
+		if err := validateRotationSchedule(stored.Purpose, stored.RotationPeriod, stored.NextRotationTime); err != nil {
+			return stored, err
 		}
 		return stored, nil
 	})

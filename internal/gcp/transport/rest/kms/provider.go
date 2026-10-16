@@ -189,6 +189,13 @@ func (p *Provider) CryptoKeyCreate(ctx context.Context, nr *model.NormalizedRequ
 		if set {
 			in.RotationPeriod = period
 		}
+		nrt, set, err := parseTimestamp(body["nextRotationTime"])
+		if err != nil {
+			return nil, err
+		}
+		if set {
+			in.NextRotationTime = &nrt
+		}
 		if io, _ := body["importOnly"].(bool); io {
 			in.ImportOnly = true
 		}
@@ -240,8 +247,9 @@ func (p *Provider) CryptoKeyGet(ctx context.Context, nr *model.NormalizedRequest
 
 // CryptoKeyUpdate serves cryptoKeys.patch (the Discovery's PATCH v1/{+name} with
 // an updateMask query parameter) — the REST update the official clients send,
-// mirroring gRPC UpdateCryptoKey. Only the mutable fields the core models
-// (labels, rotation_period) are accepted; anything else fails loud.
+// mirroring gRPC UpdateCryptoKey. The shared core requires the mask, validates
+// each path against the resource's writable field set (labels, rotation_period,
+// next_rotation_time) and applies the rotation invariants.
 func (p *Provider) CryptoKeyUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
@@ -260,18 +268,20 @@ func (p *Provider) CryptoKeyUpdate(ctx context.Context, nr *model.NormalizedRequ
 }
 
 // cryptoKeyUpdateFromPatch builds the core update from the PATCH body and
-// updateMask query parameter. The Discovery encodes a FieldMask as
-// comma-separated camelCase paths (labels, rotationPeriod); the core keys its
-// mask on the proto snake_case spelling, so normalize here.
+// updateMask query parameter. The Discovery marks updateMask Required, so an
+// absent parameter leaves UpdateMask nil (the core rejects it) while an
+// explicitly empty one is the no-op real GCP accepts. Paths are passed through
+// verbatim; the core normalizes the REST camelCase / proto snake_case spellings.
 func cryptoKeyUpdateFromPatch(nr *model.NormalizedRequest) (kmscore.CryptoKeyUpdate, error) {
 	var in kmscore.CryptoKeyUpdate
-	if mask, _ := nr.Params["updateMask"].(string); mask != "" {
+	if raw, ok := nr.Params["updateMask"]; ok {
+		in.UpdateMask = []string{}
+		mask, _ := raw.(string)
 		for _, path := range strings.Split(mask, ",") {
 			path = strings.TrimSpace(path)
-			if path == "" {
-				continue
+			if path != "" {
+				in.UpdateMask = append(in.UpdateMask, path)
 			}
-			in.UpdateMask = append(in.UpdateMask, normalizeCryptoKeyMaskPath(path))
 		}
 	}
 	body, _ := nr.Params["body"].(map[string]any)
@@ -283,18 +293,14 @@ func cryptoKeyUpdateFromPatch(nr *model.NormalizedRequest) (kmscore.CryptoKeyUpd
 	if set {
 		in.RotationPeriod = &period
 	}
-	return in, nil
-}
-
-// normalizeCryptoKeyMaskPath maps a Discovery FieldMask path onto the core's
-// snake_case mask spelling.
-func normalizeCryptoKeyMaskPath(path string) string {
-	switch path {
-	case "rotationPeriod":
-		return "rotation_period"
-	default:
-		return path
+	nrt, set, err := parseTimestamp(body["nextRotationTime"])
+	if err != nil {
+		return kmscore.CryptoKeyUpdate{}, err
 	}
+	if set {
+		in.NextRotationTime = &nrt
+	}
+	return in, nil
 }
 
 func (p *Provider) CryptoKeyEncrypt(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -1063,6 +1069,19 @@ func parseRotationPeriod(v any) (time.Duration, bool, error) {
 		return 0, false, model.NewProviderError("InvalidRequest", "rotationPeriod must be positive", 400)
 	}
 	return d, true, nil
+}
+
+// parseTimestamp parses a google-datetime/RFC 3339 body field (nextRotationTime).
+func parseTimestamp(v any) (time.Time, bool, error) {
+	s, _ := v.(string)
+	if s == "" {
+		return time.Time{}, false, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}, false, model.NewProviderError("InvalidRequest", "nextRotationTime must be an RFC 3339 timestamp (e.g. \"2026-01-01T00:00:00Z\")", 400)
+	}
+	return t, true, nil
 }
 
 func durationString(d time.Duration) string {

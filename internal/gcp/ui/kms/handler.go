@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gcp/ui/uihelper"
 	"jaiscloud/internal/model"
@@ -264,6 +266,14 @@ func (h *Handler) CreateCryptoKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.RotationPeriod != "" {
 		body["rotationPeriod"] = req.RotationPeriod
+		// A rotation_schedule requires next_rotation_time. The console (like
+		// gcloud) starts the first rotation one period out unless the caller
+		// supplied its own; only derive when the period parses.
+		if req.NextRotationTime != "" {
+			body["nextRotationTime"] = req.NextRotationTime
+		} else if period, err := time.ParseDuration(req.RotationPeriod); err == nil {
+			body["nextRotationTime"] = clock.Now().Add(period).UTC().Format(time.RFC3339Nano)
+		}
 	}
 	if len(req.Labels) > 0 {
 		body["labels"] = uihelper.StringMapToAny(req.Labels)

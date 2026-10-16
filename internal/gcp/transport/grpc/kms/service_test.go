@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -326,11 +327,14 @@ func TestKMSMacSignVerify(t *testing.T) {
 }
 
 // TestKMSCryptoKeyLabelsAndRotation covers the stored labels/rotation schedule
-// surface: create persists both and derives nextRotationTime; get returns them;
-// UpdateCryptoKey honors labels/rotation_period masks; unsupported paths fail
-// loud; a non-positive period is rejected.
+// surface: create persists labels, a rotation_period and its required
+// nextRotationTime; get returns them; UpdateCryptoKey honors
+// labels/rotation_period/next_rotation_time masks while enforcing the
+// documented rotation rules; unsupported paths and an invalid period are
+// rejected.
 func TestKMSCryptoKeyLabelsAndRotation(t *testing.T) {
-	clock.SetGlobalClock(clock.FixedClock{T: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)})
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
 	defer clock.SetGlobalClock(clock.RealClock{})
 
 	client, _, cleanup := kmsTestService(t)
@@ -339,6 +343,7 @@ func TestKMSCryptoKeyLabelsAndRotation(t *testing.T) {
 	createKeyRing(t, client, "kr")
 
 	const period = 24 * time.Hour
+	wantNext := t0.Add(period)
 	created, err := client.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
 		Parent:      keyRing,
 		CryptoKeyId: "sym",
@@ -347,6 +352,7 @@ func TestKMSCryptoKeyLabelsAndRotation(t *testing.T) {
 			RotationSchedule: &kmspb.CryptoKey_RotationPeriod{
 				RotationPeriod: durationpb.New(period),
 			},
+			NextRotationTime: timestamppb.New(wantNext),
 		},
 	})
 	if err != nil {
@@ -358,12 +364,11 @@ func TestKMSCryptoKeyLabelsAndRotation(t *testing.T) {
 	if created.GetRotationPeriod().AsDuration() != period {
 		t.Fatalf("CreateCryptoKey rotationPeriod = %v, want %v", created.GetRotationPeriod(), period)
 	}
-	if got := created.GetNextRotationTime().AsTime().Sub(created.GetCreateTime().AsTime()); got != period {
-		t.Fatalf("CreateCryptoKey nextRotationTime - createTime = %v, want %v", got, period)
+	if !created.GetNextRotationTime().AsTime().Equal(wantNext) {
+		t.Fatalf("CreateCryptoKey nextRotationTime = %v, want %v", created.GetNextRotationTime().AsTime(), wantNext)
 	}
-	wantNext := created.GetNextRotationTime().AsTime()
 
-	// Get returns the persisted labels/rotation/derived next rotation time.
+	// Get returns the persisted labels/rotation/next rotation time.
 	got, err := client.GetCryptoKey(ctx, &kmspb.GetCryptoKeyRequest{Name: symKey})
 	if err != nil {
 		t.Fatalf("GetCryptoKey: %v", err)
@@ -396,7 +401,7 @@ func TestKMSCryptoKeyLabelsAndRotation(t *testing.T) {
 		t.Fatalf("labels-only update disturbed nextRotationTime: %v", updated.GetNextRotationTime().AsTime())
 	}
 
-	// Setting a new period recomputes nextRotationTime from now.
+	// Changing the period alone keeps the existing next rotation time.
 	newPeriod := 48 * time.Hour
 	reRotated, err := client.UpdateCryptoKey(ctx, &kmspb.UpdateCryptoKeyRequest{
 		CryptoKey: &kmspb.CryptoKey{
@@ -411,15 +416,35 @@ func TestKMSCryptoKeyLabelsAndRotation(t *testing.T) {
 	if reRotated.GetRotationPeriod().AsDuration() != newPeriod {
 		t.Fatalf("updated rotationPeriod = %v, want %v", reRotated.GetRotationPeriod(), newPeriod)
 	}
-	wantRecomputed := clock.Now().Add(newPeriod)
-	if !reRotated.GetNextRotationTime().AsTime().Equal(wantRecomputed) {
-		t.Fatalf("updated nextRotationTime = %v, want %v", reRotated.GetNextRotationTime().AsTime(), wantRecomputed)
+	if !reRotated.GetNextRotationTime().AsTime().Equal(wantNext) {
+		t.Fatalf("period-only update disturbed nextRotationTime: %v, want %v", reRotated.GetNextRotationTime().AsTime(), wantNext)
 	}
 	if reRotated.GetLabels()["env"] != "prod" {
 		t.Fatalf("rotation-only update disturbed labels: %v", reRotated.GetLabels())
 	}
 
-	// Clearing the period clears nextRotationTime.
+	// nextRotationTime is independently writable.
+	later := t0.Add(72 * time.Hour)
+	moved, err := client.UpdateCryptoKey(ctx, &kmspb.UpdateCryptoKeyRequest{
+		CryptoKey:  &kmspb.CryptoKey{Name: symKey, NextRotationTime: timestamppb.New(later)},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"next_rotation_time"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateCryptoKey next_rotation_time: %v", err)
+	}
+	if !moved.GetNextRotationTime().AsTime().Equal(later) {
+		t.Fatalf("updated nextRotationTime = %v, want %v", moved.GetNextRotationTime().AsTime(), later)
+	}
+
+	// Clearing nextRotationTime while a rotation_period is set is rejected.
+	if _, err := client.UpdateCryptoKey(ctx, &kmspb.UpdateCryptoKeyRequest{
+		CryptoKey:  &kmspb.CryptoKey{Name: symKey},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"next_rotation_time"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("clear nextRotationTime with a period err = %v, want InvalidArgument", err)
+	}
+
+	// Clearing the period keeps nextRotationTime (the fields are independent).
 	cleared, err := client.UpdateCryptoKey(ctx, &kmspb.UpdateCryptoKeyRequest{
 		CryptoKey:  &kmspb.CryptoKey{Name: symKey},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"rotation_period"}},
@@ -430,30 +455,58 @@ func TestKMSCryptoKeyLabelsAndRotation(t *testing.T) {
 	if cleared.GetRotationPeriod() != nil {
 		t.Fatalf("cleared rotationPeriod = %v, want nil", cleared.GetRotationPeriod())
 	}
-	if cleared.GetNextRotationTime() != nil {
-		t.Fatalf("cleared nextRotationTime = %v, want nil", cleared.GetNextRotationTime())
+	if !cleared.GetNextRotationTime().AsTime().Equal(later) {
+		t.Fatalf("cleared nextRotationTime = %v, want %v preserved", cleared.GetNextRotationTime().AsTime(), later)
 	}
 	if cleared.GetLabels()["env"] != "prod" {
 		t.Fatalf("clear-rotation update disturbed labels: %v", cleared.GetLabels())
 	}
 
-	// Unsupported mask path fails loud with Unimplemented.
+	// An unsupported mask path is 400 INVALID_ARGUMENT (AIP-134/AIP-161).
 	if _, err := client.UpdateCryptoKey(ctx, &kmspb.UpdateCryptoKeyRequest{
 		CryptoKey:  &kmspb.CryptoKey{Name: symKey},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"purpose"}},
-	}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("unsupported mask path err = %v, want Unimplemented", err)
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unsupported mask path err = %v, want InvalidArgument", err)
 	}
 
-	// A non-positive rotation period is rejected on create and update.
+	// An omitted update_mask is rejected: the field is REQUIRED. An explicitly
+	// empty mask is the no-op real GCP accepts.
+	if _, err := client.UpdateCryptoKey(ctx, &kmspb.UpdateCryptoKeyRequest{
+		CryptoKey: &kmspb.CryptoKey{Name: symKey, Labels: map[string]string{"a": "b"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("omitted update_mask err = %v, want InvalidArgument", err)
+	}
+	if _, err := client.UpdateCryptoKey(ctx, &kmspb.UpdateCryptoKeyRequest{
+		CryptoKey:  &kmspb.CryptoKey{Name: symKey, Labels: map[string]string{"should": "not-apply"}},
+		UpdateMask: &fieldmaskpb.FieldMask{},
+	}); err != nil {
+		t.Fatalf("empty update_mask (no-op): %v", err)
+	}
+
+	// Unmasked body fields are ignored, not validated (AIP-134).
+	if _, err := client.UpdateCryptoKey(ctx, &kmspb.UpdateCryptoKeyRequest{
+		CryptoKey: &kmspb.CryptoKey{
+			Name:             symKey,
+			Labels:           map[string]string{"x": "y"},
+			RotationSchedule: &kmspb.CryptoKey_RotationPeriod{RotationPeriod: durationpb.New(time.Second)},
+			NextRotationTime: timestamppb.New(t0.Add(-time.Hour)),
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+	}); err != nil {
+		t.Fatalf("unmasked invalid rotation fields: %v", err)
+	}
+
+	// A period outside [24h, 876000h] is rejected on create and update.
 	if _, err := client.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
 		Parent:      keyRing,
 		CryptoKeyId: "bad",
 		CryptoKey: &kmspb.CryptoKey{
-			RotationSchedule: &kmspb.CryptoKey_RotationPeriod{RotationPeriod: durationpb.New(-time.Hour)},
+			RotationSchedule: &kmspb.CryptoKey_RotationPeriod{RotationPeriod: durationpb.New(time.Hour)},
+			NextRotationTime: timestamppb.New(t0.Add(time.Hour)),
 		},
 	}); status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("negative rotation period err = %v, want InvalidArgument", err)
+		t.Fatalf("sub-24h rotation period err = %v, want InvalidArgument", err)
 	}
 	if _, err := client.UpdateCryptoKey(ctx, &kmspb.UpdateCryptoKeyRequest{
 		CryptoKey: &kmspb.CryptoKey{
@@ -463,6 +516,31 @@ func TestKMSCryptoKeyLabelsAndRotation(t *testing.T) {
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"rotation_period"}},
 	}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("zero update rotation period err = %v, want InvalidArgument", err)
+	}
+
+	// Rotation is unavailable for a non-ENCRYPT_DECRYPT key.
+	if _, err := client.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
+		Parent:      keyRing,
+		CryptoKeyId: "asym",
+		CryptoKey: &kmspb.CryptoKey{
+			Purpose:          kmspb.CryptoKey_ASYMMETRIC_SIGN,
+			RotationSchedule: &kmspb.CryptoKey_RotationPeriod{RotationPeriod: durationpb.New(period)},
+			NextRotationTime: timestamppb.New(t0.Add(period)),
+		},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("rotation on asymmetric key err = %v, want InvalidArgument", err)
+	}
+
+	// A rotation_period without a next_rotation_time is rejected (the key has
+	// none yet, so the mask must supply one).
+	if _, err := client.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
+		Parent:      keyRing,
+		CryptoKeyId: "orphan",
+		CryptoKey: &kmspb.CryptoKey{
+			RotationSchedule: &kmspb.CryptoKey_RotationPeriod{RotationPeriod: durationpb.New(period)},
+		},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("period without nextRotationTime err = %v, want InvalidArgument", err)
 	}
 }
 
@@ -483,13 +561,14 @@ func TestKMSCryptoKeyRotationExecutesOnRead(t *testing.T) {
 		Parent:      keyRing,
 		CryptoKeyId: "sym",
 		CryptoKey: &kmspb.CryptoKey{
-			RotationSchedule: &kmspb.CryptoKey_RotationPeriod{RotationPeriod: durationpb.New(time.Hour)},
+			RotationSchedule: &kmspb.CryptoKey_RotationPeriod{RotationPeriod: durationpb.New(24 * time.Hour)},
+			NextRotationTime: timestamppb.New(t0.Add(24 * time.Hour)),
 		},
 	}); err != nil {
 		t.Fatalf("CreateCryptoKey: %v", err)
 	}
 
-	// Before the due time (nextRotationTime = t0+1h) nothing rotates.
+	// Before the due time (nextRotationTime = t0+24h) nothing rotates.
 	got, err := client.GetCryptoKey(ctx, &kmspb.GetCryptoKeyRequest{Name: symKey})
 	if err != nil {
 		t.Fatalf("GetCryptoKey (not due): %v", err)
@@ -499,7 +578,7 @@ func TestKMSCryptoKeyRotationExecutesOnRead(t *testing.T) {
 	}
 
 	// Advance past nextRotationTime and read again: rotation runs.
-	due := t0.Add(2 * time.Hour)
+	due := t0.Add(25 * time.Hour)
 	clock.SetGlobalClock(clock.FixedClock{T: due})
 	got, err = client.GetCryptoKey(ctx, &kmspb.GetCryptoKeyRequest{Name: symKey})
 	if err != nil {
@@ -508,8 +587,8 @@ func TestKMSCryptoKeyRotationExecutesOnRead(t *testing.T) {
 	if got.GetPrimary().GetName() != symKey+"/cryptoKeyVersions/2" {
 		t.Fatalf("primary after rotation = %q, want version 2", got.GetPrimary().GetName())
 	}
-	if !got.GetNextRotationTime().AsTime().Equal(due.Add(time.Hour)) {
-		t.Fatalf("nextRotationTime = %v, want %v", got.GetNextRotationTime().AsTime(), due.Add(time.Hour))
+	if !got.GetNextRotationTime().AsTime().Equal(due.Add(24 * time.Hour)) {
+		t.Fatalf("nextRotationTime = %v, want %v", got.GetNextRotationTime().AsTime(), due.Add(24*time.Hour))
 	}
 	vers, err := client.ListCryptoKeyVersions(ctx, &kmspb.ListCryptoKeyVersionsRequest{Parent: symKey})
 	if err != nil {
