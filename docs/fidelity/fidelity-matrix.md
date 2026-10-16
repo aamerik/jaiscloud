@@ -6,13 +6,13 @@ operation registry, the vendored Discovery schemas, the conformance report, and
 
 States: **ga** = supported and wire-conformant · **limited** = implemented with a declared caveat · **preview** = not covered by the stability promise · **unsupported** = not implemented.
 
-Cells: **1136**
+Cells: **1137**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 984 |
+| ga | 985 |
 | limited | 106 |
 | preview | 14 |
 | unsupported | 32 |
@@ -21,7 +21,7 @@ Cells: **1136**
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 542 | 105 | 14 | 12 |
+| rest | 543 | 105 | 14 | 12 |
 | grpc | 442 | 1 | 0 | 20 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 554 | 119 |
+| rest | 555 | 119 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -421,7 +421,7 @@ _103 cell(s): ga=103 limited=0 preview=0 unsupported=0_
 
 ## firestore
 
-_61 cell(s): ga=61 limited=0 preview=0 unsupported=0_
+_62 cell(s): ga=62 limited=0 preview=0 unsupported=0_
 
 | operation | transport | state | verified | reason |
 | --- | --- | --- | --- | --- |
@@ -451,6 +451,7 @@ _61 cell(s): ga=61 limited=0 preview=0 unsupported=0_
 | Firestore.DeleteUserCreds | rest | ga | yes | — |
 | Firestore.DisableUserCreds | rest | ga | yes | — |
 | Firestore.EnableUserCreds | rest | ga | yes | — |
+| Firestore.ExecutePipeline | rest | ga | yes | — |
 | Firestore.GetBackup | rest | ga | no | — |
 | Firestore.GetBackupSchedule | rest | ga | yes | — |
 | Firestore.GetDatabase | rest | ga | yes | — |

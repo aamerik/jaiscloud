@@ -264,6 +264,20 @@ var bodyOverrides = map[string]map[string]any{
 		"partitionCount":  "1",
 		"structuredQuery": map[string]any{"from": []any{map[string]any{"collectionId": "conf-probe"}}},
 	},
+
+	// Firestore documents.executePipeline needs a non-empty stage list. A
+	// collection source over the (empty) probe collection is a valid pipeline
+	// that returns an empty result set rather than the 400 an empty request body
+	// produces.
+	"firestore.projects.databases.documents.executePipeline": {
+		"structuredPipeline": map[string]any{
+			"pipeline": map[string]any{
+				"stages": []any{
+					map[string]any{"name": "collection", "args": []any{map[string]any{"referenceValue": "/conf-probe"}}},
+				},
+			},
+		},
+	},
 }
 
 // extraSetupServices maps a probe service to other services whose Discovery

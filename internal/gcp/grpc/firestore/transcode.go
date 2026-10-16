@@ -47,53 +47,11 @@ import (
 
 // ─── Value ────────────────────────────────────────────────────────────────────
 
-// decodeValue converts a protobuf Value into the internal store Value.
+// decodeValue converts a protobuf Value into the internal store Value. The one
+// implementation lives in the provider package (shared with the REST
+// ExecutePipeline engine); this delegates so both transports map it identically.
 func decodeValue(pb *firestorepb.Value) (*firestorestore.Value, error) {
-	if pb == nil {
-		return nil, nil
-	}
-	switch tv := pb.ValueType.(type) {
-	case *firestorepb.Value_NullValue:
-		return firestorestore.NullVal(), nil
-	case *firestorepb.Value_BooleanValue:
-		return firestorestore.BoolVal(tv.BooleanValue), nil
-	case *firestorepb.Value_IntegerValue:
-		return firestorestore.IntVal(tv.IntegerValue), nil
-	case *firestorepb.Value_DoubleValue:
-		return firestorestore.DoubleVal(tv.DoubleValue), nil
-	case *firestorepb.Value_TimestampValue:
-		return firestorestore.TimestampVal(tv.TimestampValue.AsTime()), nil
-	case *firestorepb.Value_StringValue:
-		return firestorestore.StringVal(tv.StringValue), nil
-	case *firestorepb.Value_BytesValue:
-		return firestorestore.BytesVal(tv.BytesValue), nil
-	case *firestorepb.Value_ReferenceValue:
-		return firestorestore.ReferenceVal(tv.ReferenceValue), nil
-	case *firestorepb.Value_GeoPointValue:
-		return firestorestore.GeoPointVal(tv.GeoPointValue.GetLatitude(), tv.GeoPointValue.GetLongitude()), nil
-	case *firestorepb.Value_ArrayValue:
-		vals := make([]*firestorestore.Value, 0, len(tv.ArrayValue.GetValues()))
-		for _, e := range tv.ArrayValue.GetValues() {
-			v, err := decodeValue(e)
-			if err != nil {
-				return nil, err
-			}
-			vals = append(vals, v)
-		}
-		return firestorestore.ArrayVal(vals...), nil
-	case *firestorepb.Value_MapValue:
-		fields := make(map[string]*firestorestore.Value, len(tv.MapValue.GetFields()))
-		for k, e := range tv.MapValue.GetFields() {
-			v, err := decodeValue(e)
-			if err != nil {
-				return nil, err
-			}
-			fields[k] = v
-		}
-		return firestorestore.MapVal(fields), nil
-	default:
-		return nil, fmt.Errorf("unsupported Firestore value type %T", pb.ValueType)
-	}
+	return firestoreprovider.ValueFromProto(pb)
 }
 
 // encodeValue converts an internal store Value into a protobuf Value.
@@ -141,20 +99,10 @@ func encodeValue(v *firestorestore.Value) *firestorepb.Value {
 
 // ─── Document ─────────────────────────────────────────────────────────────────
 
-// decodeFields converts a protobuf Document's field map into internal Values.
+// decodeFields converts a protobuf Document's field map into internal Values,
+// delegating to the shared provider decoder.
 func decodeFields(pb *firestorepb.Document) (map[string]*firestorestore.Value, error) {
-	if pb == nil {
-		return map[string]*firestorestore.Value{}, nil
-	}
-	fields := make(map[string]*firestorestore.Value, len(pb.GetFields()))
-	for k, v := range pb.GetFields() {
-		fv, err := decodeValue(v)
-		if err != nil {
-			return nil, err
-		}
-		fields[k] = fv
-	}
-	return fields, nil
+	return firestoreprovider.FieldsFromProto(pb)
 }
 
 // encodeDocument converts an internal store Document into a protobuf Document.
@@ -386,19 +334,10 @@ func decodeFieldTransform(pb *firestorepb.DocumentTransform_FieldTransform) (fir
 	return t, nil
 }
 
+// decodeArrayValue converts a protobuf ArrayValue into the internal store
+// ArrayValue, delegating to the shared provider decoder.
 func decodeArrayValue(pb *firestorepb.ArrayValue) (*firestorestore.ArrayValue, error) {
-	av := &firestorestore.ArrayValue{}
-	if pb == nil {
-		return av, nil
-	}
-	for _, v := range pb.GetValues() {
-		dv, err := decodeValue(v)
-		if err != nil {
-			return nil, err
-		}
-		av.Values = append(av.Values, dv)
-	}
-	return av, nil
+	return firestoreprovider.ArrayValueFromProto(pb)
 }
 
 func decodePrecondition(pb *firestorepb.Precondition) (*firestoreprovider.PreconditionWire, error) {

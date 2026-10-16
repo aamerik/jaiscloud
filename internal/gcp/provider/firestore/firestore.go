@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	firestorepb "cloud.google.com/go/firestore/apiv1/firestorepb"
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/paging"
 	firestorestore "jaiscloud/internal/gcp/store/firestore"
@@ -25,6 +26,9 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 	"jaiscloud/internal/store"
+
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -81,6 +85,7 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Firestore.ListCollectionIds": p.ListCollectionIds,
 		"Firestore.RunQuery":          p.RunQuery,
 		"Firestore.PartitionQuery":    p.PartitionQuery,
+		"Firestore.ExecutePipeline":   p.ExecutePipeline,
 		"Firestore.Commit":            p.Commit,
 		"Firestore.BatchWrite":        p.BatchWrite,
 		"Firestore.BatchGet":          p.BatchGet,
@@ -148,6 +153,26 @@ func decodeBody(nr *model.NormalizedRequest, v any) error {
 	}
 	if err := json.Unmarshal(b, v); err != nil {
 		return model.NewProviderError("InvalidArgument", "malformed request body", 400)
+	}
+	return nil
+}
+
+// decodeProtoBody decodes nr.Params["body"] into a protobuf message using
+// protojson — the Firestore REST body encoding. It is used by request bodies
+// whose shape is richer than the flat wire structs (the pipeline expression
+// tree), so the REST handler can reuse the same proto types the gRPC transport
+// decodes. An absent body leaves the message at its zero value.
+func decodeProtoBody(nr *model.NormalizedRequest, m proto.Message) error {
+	body, ok := nr.Params["body"]
+	if !ok || body == nil {
+		return nil
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return model.NewProviderError("InvalidArgument", "malformed request body", 400)
+	}
+	if err := protojson.Unmarshal(b, m); err != nil {
+		return model.NewProviderError("InvalidArgument", "malformed request body: "+err.Error(), 400)
 	}
 	return nil
 }
@@ -873,6 +898,43 @@ func (p *Provider) PartitionQuery(ctx context.Context, nr *model.NormalizedReque
 		})
 	}
 	return provider.OK(map[string]any{"partitions": partitions}), nil
+}
+
+// ExecutePipeline implements documents.executePipeline. The request body is the
+// protojson form of google.firestore.v1.ExecutePipelineRequest; the pipeline
+// stages are evaluated by the shared engine (pipeline.go), the same one the gRPC
+// ExecutePipeline RPC uses. The response carries executionTime, the result
+// documents, and — when newTransaction was requested — the base64 transaction
+// id. The whole stream is collapsed into one JSON response (a valid batching).
+func (p *Provider) ExecutePipeline(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	var req firestorepb.ExecutePipelineRequest
+	if err := decodeProtoBody(nr, &req); err != nil {
+		return nil, err
+	}
+	database, _, err := relativeName(nr)
+	if err != nil {
+		return nil, err
+	}
+	// RunPipeline validates the stage list, so a missing/empty pipeline is the
+	// shared 400 INVALID_ARGUMENT (the same error the gRPC adapter surfaces).
+	res, err := p.Service.RunPipeline(ctx, nr.AccountID, database,
+		req.GetStructuredPipeline().GetPipeline().GetStages(),
+		req.GetTransaction(), req.GetNewTransaction() != nil)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]any, 0, len(res.Documents))
+	for _, d := range res.Documents {
+		results = append(results, documentMap(d))
+	}
+	out := map[string]any{
+		"executionTime": res.ExecutionTime.UTC().Format(time.RFC3339Nano),
+		"results":       results,
+	}
+	if len(res.Transaction) > 0 {
+		out["transaction"] = encodeTxn(res.Transaction)
+	}
+	return provider.OK(out), nil
 }
 
 // Commit implements documents.commit: an atomic batch of writes with optimistic

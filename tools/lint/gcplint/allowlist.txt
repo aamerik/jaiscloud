@@ -22,7 +22,6 @@ internal/gcp/store/firestore/memory.go:resource-prefix       # document path pre
 internal/gcp/store/firestore/store.go:resource-prefix        # parse-derived parent path
 internal/gcp/provider/firestore/indexes.go:resource-prefix   # no firestore-index formatter in the shared catalog
 internal/gcp/grpc/firestore/listen.go:resource-prefix        # document parent prefix built from parsed segments
-internal/gcp/grpc/firestore/pipeline.go:resource-prefix      # document base prefix
 internal/gcp/grpc/pubsub/service.go:resource-prefix          # snapshot name; no pubsub-snapshot formatter
 internal/gcp/transport/grpc/logging/admin.go:resource-prefix # project global-location parent; no formatter
 

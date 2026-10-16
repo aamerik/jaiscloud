@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 1136,
+    "total": 1137,
     "by_state": {
-      "ga": 984,
+      "ga": 985,
       "limited": 106,
       "preview": 14,
       "unsupported": 32
@@ -15,7 +15,7 @@
         "unsupported": 20
       },
       "rest": {
-        "ga": 542,
+        "ga": 543,
         "limited": 105,
         "preview": 14,
         "unsupported": 12
@@ -53,7 +53,7 @@
         "ga": 103
       },
       "firestore": {
-        "ga": 61
+        "ga": 62
       },
       "firestoreadmin": {
         "ga": 27,
@@ -129,7 +129,7 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 554
+        "rest": 555
       },
       "unverified": {
         "grpc": 21,
@@ -4846,7 +4846,7 @@
         "discovery=firestore.projects.databases.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 40 transcript entries)"
+        "verified=true (rest, 41 transcript entries)"
       ]
     },
     {
@@ -5013,6 +5013,19 @@
       "evidence": [
         "discovery=firestore.projects.databases.userCreds.enable",
         "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "firestore",
+      "operation": "Firestore.ExecutePipeline",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "firestore.projects.databases.documents.executePipeline",
+      "verified": true,
+      "evidence": [
+        "discovery=firestore.projects.databases.documents.executePipeline",
         "postgres=yes",
         "verified=true (rest, 1 transcript entries)"
       ]
