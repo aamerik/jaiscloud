@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/api v0.301.0
+	jaiscloud-gcp-testdepth v0.0.0
 )
 
 require (
@@ -36,3 +37,7 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// The shared behavioural-depth assertion kit (plan DC2): paging / error
+// envelope / contention contracts, imported by the depth tests.
+replace jaiscloud-gcp-testdepth => ../testdepth

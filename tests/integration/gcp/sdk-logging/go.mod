@@ -10,6 +10,7 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260401024825-9d38bb4040a9
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
+	jaiscloud-gcp-testdepth v0.0.0
 )
 
 require (
@@ -43,3 +44,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// The shared behavioural-depth assertion kit (plan DC2): paging / error
+// envelope / contention contracts, imported by the depth tests.
+replace jaiscloud-gcp-testdepth => ../testdepth
