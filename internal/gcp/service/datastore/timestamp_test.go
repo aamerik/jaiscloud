@@ -2,6 +2,7 @@ package datastore
 
 import (
 	"testing"
+	"time"
 )
 
 // TestNormalizeTimestamp pins the canonical form: an RFC 3339 instant with any
@@ -44,6 +45,27 @@ func TestNormalizeTimestamp(t *testing.T) {
 		}
 		if got != tc.want {
 			t.Errorf("%s: NormalizeTimestamp(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestTruncateTimestamp pins that a response-level timestamp (read_time,
+// commit_time) is held at Datastore's microsecond resolution, so both
+// transports hand a client the same instant and the gRPC proto Timestamp
+// carries no sub-microsecond digit real GCP would not send. (TD45)
+func TestTruncateTimestamp(t *testing.T) {
+	cases := []struct {
+		name string
+		in   time.Time
+		want time.Time
+	}{
+		{"sub-microsecond dropped", time.Date(2026, 1, 1, 0, 0, 0, 500000987, time.UTC), time.Date(2026, 1, 1, 0, 0, 0, 500000000, time.UTC)},
+		{"whole microseconds kept", time.Date(2026, 1, 1, 0, 0, 0, 123456000, time.UTC), time.Date(2026, 1, 1, 0, 0, 0, 123456000, time.UTC)},
+		{"pre-epoch truncates down", time.Date(1969, 12, 31, 23, 59, 59, 999999500, time.UTC), time.Date(1969, 12, 31, 23, 59, 59, 999999000, time.UTC)},
+	}
+	for _, tc := range cases {
+		if got := truncateTimestamp(tc.in); !got.Equal(tc.want) {
+			t.Errorf("%s: truncateTimestamp(%v) = %v, want %v", tc.name, tc.in, got, tc.want)
 		}
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"strconv"
-	"time"
 
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -108,10 +107,10 @@ func (p *Provider) Lookup(ctx context.Context, nr *model.NormalizedRequest) (*mo
 				"version": strconv.FormatInt(r.Version, 10),
 			}
 			if !r.CreateTime.IsZero() {
-				er["createTime"] = r.CreateTime.UTC().Format(time.RFC3339Nano)
+				er["createTime"] = core.CanonicalTimestamp(r.CreateTime)
 			}
 			if !r.Entity.UpdateTime.IsZero() {
-				er["updateTime"] = r.Entity.UpdateTime.UTC().Format(time.RFC3339Nano)
+				er["updateTime"] = core.CanonicalTimestamp(r.Entity.UpdateTime)
 			}
 			found = append(found, er)
 		}
@@ -128,7 +127,7 @@ func (p *Provider) Lookup(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		out["missing"] = missing
 	}
 	if !resp.ReadTime.IsZero() {
-		out["readTime"] = resp.ReadTime.UTC().Format(time.RFC3339Nano)
+		out["readTime"] = core.CanonicalTimestamp(resp.ReadTime)
 	}
 	return provider.OK(out), nil
 }
@@ -172,7 +171,7 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 		"moreResults":      "NO_MORE_RESULTS",
 	}
 	if !resp.ReadTime.IsZero() {
-		batch["readTime"] = resp.ReadTime.UTC().Format(time.RFC3339Nano)
+		batch["readTime"] = core.CanonicalTimestamp(resp.ReadTime)
 	}
 	if resp.SnapshotVersion != 0 {
 		batch["snapshotVersion"] = strconv.FormatInt(resp.SnapshotVersion, 10)
@@ -200,10 +199,10 @@ func (p *Provider) RunQuery(ctx context.Context, nr *model.NormalizedRequest) (*
 				"version": strconv.FormatInt(r.Version, 10),
 			}
 			if !r.CreateTime.IsZero() {
-				er["createTime"] = r.CreateTime.UTC().Format(time.RFC3339Nano)
+				er["createTime"] = core.CanonicalTimestamp(r.CreateTime)
 			}
 			if !r.Entity.UpdateTime.IsZero() {
-				er["updateTime"] = r.Entity.UpdateTime.UTC().Format(time.RFC3339Nano)
+				er["updateTime"] = core.CanonicalTimestamp(r.Entity.UpdateTime)
 			}
 			if len(r.Cursor) > 0 {
 				er["cursor"] = base64.StdEncoding.EncodeToString(r.Cursor)
@@ -256,7 +255,7 @@ func (p *Provider) RunAggregationQuery(ctx context.Context, nr *model.Normalized
 	batch := map[string]any{
 		"aggregationResults": []any{map[string]any{"aggregateProperties": props}},
 		"moreResults":        "NO_MORE_RESULTS",
-		"readTime":           resp.ReadTime.UTC().Format(time.RFC3339Nano),
+		"readTime":           core.CanonicalTimestamp(resp.ReadTime),
 	}
 	return provider.OK(map[string]any{"batch": batch}), nil
 }
@@ -304,10 +303,10 @@ func (p *Provider) Commit(ctx context.Context, nr *model.NormalizedRequest) (*mo
 			mr["key"] = keyToWire(*r.Key, project)
 		}
 		if !r.CreateTime.IsZero() {
-			mr["createTime"] = r.CreateTime.UTC().Format(time.RFC3339Nano)
+			mr["createTime"] = core.CanonicalTimestamp(r.CreateTime)
 		}
 		if !r.UpdateTime.IsZero() {
-			mr["updateTime"] = r.UpdateTime.UTC().Format(time.RFC3339Nano)
+			mr["updateTime"] = core.CanonicalTimestamp(r.UpdateTime)
 		}
 		if r.ConflictDetected {
 			mr["conflictDetected"] = true
@@ -319,7 +318,7 @@ func (p *Provider) Commit(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		out["indexUpdates"] = resp.IndexUpdates
 	}
 	if !resp.CommitTime.IsZero() {
-		out["commitTime"] = resp.CommitTime.UTC().Format(time.RFC3339Nano)
+		out["commitTime"] = core.CanonicalTimestamp(resp.CommitTime)
 	}
 	return provider.OK(out), nil
 }

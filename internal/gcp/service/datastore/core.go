@@ -376,7 +376,7 @@ func (s *Service) commitTransactional(ctx context.Context, project string, txn [
 		}
 	}
 
-	commitTime := clock.Now()
+	commitTime := truncateTimestamp(clock.Now())
 	applied, err := s.store.Commit(ctx, project, reads, writes)
 	s.clearReadSet(txn)
 	if err != nil {
@@ -403,7 +403,7 @@ func (s *Service) Lookup(ctx context.Context, project string, keys []Key, txn []
 	if err := s.requireActive(txn); err != nil {
 		return nil, err
 	}
-	resp := &LookupResult{ReadTime: clock.Now()}
+	resp := &LookupResult{ReadTime: truncateTimestamp(clock.Now())}
 	for _, k := range keys {
 		if !k.Complete() {
 			return nil, invalidArgument("lookup key is incomplete")
@@ -470,7 +470,7 @@ func (s *Service) RunQuery(ctx context.Context, project string, q *Query, txn []
 	if hi < lo {
 		hi = lo
 	}
-	now := clock.Now()
+	now := truncateTimestamp(clock.Now())
 	out := &QueryResult{
 		MoreResults:     MoreResultsNoMoreResults,
 		ResultType:      q.ResultType(),
@@ -642,7 +642,7 @@ func (s *Service) RunAggregationQuery(ctx context.Context, project string, aq *A
 
 	// A non-grouped aggregation query returns one result whose aggregate
 	// properties map holds one entry per aggregation.
-	result := &AggregationResult{Aggregates: make(map[string]dsstore.Value, len(aggs)), ReadTime: clock.Now()}
+	result := &AggregationResult{Aggregates: make(map[string]dsstore.Value, len(aggs)), ReadTime: truncateTimestamp(clock.Now())}
 	unnamed := 0
 	for _, agg := range aggs {
 		alias := agg.Alias
