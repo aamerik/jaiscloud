@@ -8,6 +8,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/api v0.303.0
 	google.golang.org/grpc v1.84.0
+	jaiscloud-gcp-testdepth v0.0.0
 )
 
 require (
@@ -43,3 +44,7 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// The shared behavioural-depth assertion kit (plan DC2): the p4 paging walk
+// imports it so the kit has a live reference adapter on the emulator.
+replace jaiscloud-gcp-testdepth => ../testdepth

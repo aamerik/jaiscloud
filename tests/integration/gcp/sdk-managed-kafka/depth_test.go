@@ -14,8 +14,11 @@
 //	                  (AlreadyExists), invalid topic and ACL input
 //	                  (InvalidArgument) and a stale ACL etag (Aborted).
 //	p4 listing      - cluster, topic and ACL pages walked with
-//	                  pageSize/pageToken, asserting the ascending name order
-//	                  across page boundaries and the terminal empty token.
+//	                  pageSize/pageToken through the shared depth-test kit
+//	                  (tests/integration/gcp/testdepth), asserting the
+//	                  ascending name order across page boundaries, the terminal
+//	                  empty token and a stable second walk. This is the kit's
+//	                  reference adapter for a gRPC iterator client.
 //	p5 scale        - a many-topic cluster plus the cluster create → operation →
 //	                  get/update/delete long-running lifecycle (done inline,
 //	                  persisted under operations.get).
@@ -54,6 +57,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	testdepth "jaiscloud-gcp-testdepth"
 )
 
 // kafkaGRPCEndpoint returns the emulator's gRPC listener (8081 by default),
@@ -606,83 +610,91 @@ func TestManagedKafkaDepthScale(t *testing.T) {
 }
 
 // walkTopicPages walks every topic under a cluster (pageSize 0 = the default
-// page size) and returns the leaf ids in service order, asserting each page is
-// no larger than the requested size, never empty before the last, and that the
-// walk ends on an empty token.
+// page size) through the shared depth-test kit, which asserts the paging
+// contract — each resource exactly once, ascending resource name across page
+// boundaries, no page larger than requested, no empty non-terminal page, an
+// empty final token, and an identical second walk — and returns the leaf ids in
+// service order.
 func walkTopicPages(t *testing.T, client *managedkafka.Client, cluster string, pageSize int32) []string {
 	t.Helper()
 	ctx := context.Background()
-	it := client.ListTopics(ctx, &managedkafkapb.ListTopicsRequest{Parent: kafkaClusterResource(cluster)})
-	var out []string
-	token := ""
-	for page := 0; ; page++ {
-		require.Less(t, page, 1000, "pagination must terminate")
-		items, next, err := it.InternalFetch(int(pageSize), token)
-		require.NoError(t, err)
-		if pageSize > 0 {
-			require.LessOrEqual(t, len(items), int(pageSize))
-			if next != "" {
-				require.NotEmpty(t, items, "a non-terminal page must not be empty")
-			}
-		}
-		for _, topic := range items {
-			out = append(out, leaf(topic.GetName()))
-		}
-		token = next
-		if token == "" {
-			return out
-		}
+	cfg := testdepth.Paging[*managedkafkapb.Topic]{
+		Name:     func(topic *managedkafkapb.Topic) string { return topic.GetName() },
+		PageSize: int64(pageSize),
+		Order:    testdepth.OrderAscendingName,
+		// The emulator fills every non-terminal page (the assertion this suite
+		// made before the kit); AIP-158 permits a zero-result mid-collection page,
+		// hence the explicit opt-in.
+		RequireNonEmptyPages: true,
 	}
+	topics := testdepth.AssertPaging(t, func() testdepth.Lister[*managedkafkapb.Topic] {
+		it := client.ListTopics(ctx, &managedkafkapb.ListTopicsRequest{Parent: kafkaClusterResource(cluster)})
+		return func(req testdepth.ListRequest) (testdepth.Page[*managedkafkapb.Topic], error) {
+			items, next, err := it.InternalFetch(int(req.PageSize), req.PageToken)
+			return testdepth.Page[*managedkafkapb.Topic]{Items: items, NextPageToken: next}, err
+		}
+	}, cfg)
+	out := make([]string, 0, len(topics))
+	for _, topic := range topics {
+		out = append(out, leaf(topic.GetName()))
+	}
+	return out
 }
 
-// walkClusterPages walks a location's clusters and returns the leaf ids.
+// walkClusterPages walks a location's clusters through the shared depth-test kit
+// and returns the leaf ids.
 func walkClusterPages(t *testing.T, client *managedkafka.Client, parent string, pageSize int32) []string {
 	t.Helper()
 	ctx := context.Background()
-	it := client.ListClusters(ctx, &managedkafkapb.ListClustersRequest{Parent: parent})
-	var out []string
-	token := ""
-	for page := 0; ; page++ {
-		require.Less(t, page, 1000, "pagination must terminate")
-		items, next, err := it.InternalFetch(int(pageSize), token)
-		require.NoError(t, err)
-		require.LessOrEqual(t, len(items), int(pageSize))
-		if next != "" {
-			require.NotEmpty(t, items, "a non-terminal page must not be empty")
-		}
-		for _, cluster := range items {
-			out = append(out, leaf(cluster.GetName()))
-		}
-		token = next
-		if token == "" {
-			return out
-		}
+	cfg := testdepth.Paging[*managedkafkapb.Cluster]{
+		Name:     func(cluster *managedkafkapb.Cluster) string { return cluster.GetName() },
+		PageSize: int64(pageSize),
+		Order:    testdepth.OrderAscendingName,
+		// The emulator fills every non-terminal page (the assertion this suite
+		// made before the kit); AIP-158 permits a zero-result mid-collection page,
+		// hence the explicit opt-in.
+		RequireNonEmptyPages: true,
 	}
+	clusters := testdepth.AssertPaging(t, func() testdepth.Lister[*managedkafkapb.Cluster] {
+		it := client.ListClusters(ctx, &managedkafkapb.ListClustersRequest{Parent: parent})
+		return func(req testdepth.ListRequest) (testdepth.Page[*managedkafkapb.Cluster], error) {
+			items, next, err := it.InternalFetch(int(req.PageSize), req.PageToken)
+			return testdepth.Page[*managedkafkapb.Cluster]{Items: items, NextPageToken: next}, err
+		}
+	}, cfg)
+	out := make([]string, 0, len(clusters))
+	for _, cluster := range clusters {
+		out = append(out, leaf(cluster.GetName()))
+	}
+	return out
 }
 
-// walkAclPages walks a cluster's ACLs and returns the acl ids (the `acls/`
-// suffix, which itself contains a slash: `topic/<name>`).
+// walkAclPages walks a cluster's ACLs through the shared depth-test kit and
+// returns the acl ids (the `acls/` suffix, which itself contains a slash:
+// `topic/<name>`).
 func walkAclPages(t *testing.T, client *managedkafka.Client, cluster string, pageSize int32) []string {
 	t.Helper()
 	ctx := context.Background()
 	prefix := kafkaClusterResource(cluster) + "/acls/"
-	it := client.ListAcls(ctx, &managedkafkapb.ListAclsRequest{Parent: kafkaClusterResource(cluster)})
-	var out []string
-	token := ""
-	for page := 0; ; page++ {
-		require.Less(t, page, 1000, "pagination must terminate")
-		items, next, err := it.InternalFetch(int(pageSize), token)
-		require.NoError(t, err)
-		require.LessOrEqual(t, len(items), int(pageSize))
-		if next != "" {
-			require.NotEmpty(t, items, "a non-terminal page must not be empty")
-		}
-		for _, acl := range items {
-			out = append(out, strings.TrimPrefix(acl.GetName(), prefix))
-		}
-		token = next
-		if token == "" {
-			return out
-		}
+	cfg := testdepth.Paging[*managedkafkapb.Acl]{
+		Name:     func(acl *managedkafkapb.Acl) string { return acl.GetName() },
+		PageSize: int64(pageSize),
+		Order:    testdepth.OrderAscendingName,
+		// The emulator fills every non-terminal page (the assertion this suite
+		// made before the kit); AIP-158 permits a zero-result mid-collection page,
+		// hence the explicit opt-in.
+		RequireNonEmptyPages: true,
 	}
+	acls := testdepth.AssertPaging(t, func() testdepth.Lister[*managedkafkapb.Acl] {
+		it := client.ListAcls(ctx, &managedkafkapb.ListAclsRequest{Parent: kafkaClusterResource(cluster)})
+		return func(req testdepth.ListRequest) (testdepth.Page[*managedkafkapb.Acl], error) {
+			items, next, err := it.InternalFetch(int(req.PageSize), req.PageToken)
+			return testdepth.Page[*managedkafkapb.Acl]{Items: items, NextPageToken: next}, err
+		}
+	}, cfg)
+	out := make([]string, 0, len(acls))
+	for _, acl := range acls {
+		out = append(out, strings.TrimPrefix(acl.GetName(), prefix))
+	}
+	return out
 }

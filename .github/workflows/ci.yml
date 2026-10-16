@@ -253,6 +253,10 @@ jobs:
       - name: Run raw-HTTP integration tests
         run: go test -race -count=1 -timeout 120s ./tests/integration/gcp/
 
+      - name: Run depth-test kit unit tests
+        working-directory: tests/integration/gcp/testdepth
+        run: go test -race -count=1 -timeout 120s ./...
+
       - name: Run GCS REST SDK tests
         working-directory: tests/integration/gcp/sdk
         env:
@@ -263,7 +267,7 @@ jobs:
         working-directory: tests/integration/gcp/sdk-rest
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Workflows SDK tests
         working-directory: tests/integration/gcp/sdk-workflows
@@ -287,21 +291,21 @@ jobs:
         working-directory: tests/integration/gcp/sdk-monitoring
         env:
           MONITORING_EMULATOR_HOST: localhost:8081
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Datastore SDK tests
         working-directory: tests/integration/gcp/sdk-datastore
         env:
           DATASTORE_EMULATOR_HOST: localhost:8081
           GCP_EMULATOR_PROJECT: test-project
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Logging SDK tests
         working-directory: tests/integration/gcp/sdk-logging
         env:
           LOGGING_EMULATOR_HOST: localhost:8081
           GCP_EMULATOR_PROJECT: test-project
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run GCS gRPC SDK tests
         working-directory: tests/integration/gcp/sdk-gcs-grpc
@@ -353,13 +357,13 @@ jobs:
         working-directory: tests/integration/gcp/sdk-scheduler
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Cloud Tasks SDK tests
         working-directory: tests/integration/gcp/sdk-tasks
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Memorystore SDK tests
         working-directory: tests/integration/gcp/sdk-memorystore
@@ -383,7 +387,7 @@ jobs:
         working-directory: tests/integration/gcp/sdk-container
         env:
           GCP_EMULATOR_ENDPOINT: http://localhost:8080/
-        run: go test -v -count=1 -timeout 120s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Run Cloud Run SDK tests
         working-directory: tests/integration/gcp/sdk-run
@@ -396,7 +400,7 @@ jobs:
         env:
           PUBSUB_EMULATOR_HOST: localhost:8081
           GCP_EMULATOR_PROJECT: test-project
-        run: go test -v -count=1 -timeout 180s ./...
+        run: go test -v -race -count=1 -timeout 180s ./...
 
       - name: Upload GCP server log (on failure)
         if: failure()
