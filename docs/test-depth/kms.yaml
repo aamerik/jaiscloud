@@ -7,17 +7,17 @@
 service: kms
 classes:
   p2:
-    state: exempt
-    reason: "no concurrent destroy/rotation contention suite"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-rest]
+    note: "concurrent crypto-key-version create allocates distinct version numbers (no lost update), destroy is idempotent (every caller settles DESTROY_SCHEDULED), and updatePrimaryVersion is atomic"
   p3:
     state: present
     suites: [sdk-rest]
     note: "key-version destroy / not-found envelopes"
   p4:
-    state: exempt
-    reason: "no pageToken paging over key rings / crypto key versions"
-    date: "2026-10-13"
+    state: present
+    suites: [sdk-rest]
+    note: "pageSize/pageToken paging over key rings and a key's crypto-key versions; the documented list filter/orderBy are ignored (DC14)"
   p5:
     state: present
     suites: [sdk-rest]
