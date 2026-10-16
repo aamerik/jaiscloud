@@ -205,9 +205,15 @@ func valueFromWire(v any) (dsstore.Value, error) {
 		}
 		return dsstore.Value{DoubleValue: &f}, nil
 	case hasKey(m, "timestampValue"):
-		// Preserve the wire string verbatim for echo fidelity; the store parses
-		// it as an instant for both comparison and ordering.
-		s := strFrom(m["timestampValue"])
+		// Real GCP parses timestampValue as a proto Timestamp: a malformed
+		// string is INVALID_ARGUMENT, and every timestamp is normalized to UTC
+		// on write. Canonicalize here so REST and gRPC hold the same form and
+		// the gRPC read path never has to fall back to the epoch for a value
+		// this transport accepted.
+		s, err := core.NormalizeTimestamp(strFrom(m["timestampValue"]))
+		if err != nil {
+			return dsstore.Value{}, invalidArgument("invalid timestampValue")
+		}
 		return dsstore.Value{TimestampValue: &s}, nil
 	case hasKey(m, "keyValue"):
 		k, err := keyFromWire(m["keyValue"])

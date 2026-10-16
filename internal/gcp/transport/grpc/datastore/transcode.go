@@ -149,7 +149,7 @@ func valueFromProto(p *datastorepb.Value) (dsstore.Value, error) {
 		f := v.DoubleValue
 		return dsstore.Value{DoubleValue: &f}, nil
 	case *datastorepb.Value_TimestampValue:
-		s := v.TimestampValue.AsTime().UTC().Format(time.RFC3339Nano)
+		s := core.CanonicalTimestamp(v.TimestampValue.AsTime())
 		return dsstore.Value{TimestampValue: &s}, nil
 	case *datastorepb.Value_KeyValue:
 		key, err := keyFromProto(v.KeyValue)
@@ -203,7 +203,11 @@ func valueToProto(v dsstore.Value, project string) *datastorepb.Value {
 	case v.DoubleValue != nil:
 		return &datastorepb.Value{ValueType: &datastorepb.Value_DoubleValue{DoubleValue: *v.DoubleValue}}
 	case v.TimestampValue != nil:
-		t, err := time.Parse(time.RFC3339Nano, *v.TimestampValue)
+		// Both transports canonicalize a timestamp on write (REST rejects a
+		// malformed string, gRPC receives a typed Timestamp), so a stored value
+		// is always parseable; the epoch fallback only guards a hand-edited
+		// store or an import of corrupt state.
+		t, err := core.ParseTimestamp(*v.TimestampValue)
 		if err != nil {
 			t = time.Time{}
 		}
