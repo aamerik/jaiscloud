@@ -68,8 +68,8 @@ service: storage
 classes:
   p2: {state: present, suites: [sdk], note: "object preconditions + version generations"}
   p3: {state: present, suites: [sdk], note: "404 delete-of-missing"}
-  p4: {state: exempt, reason: "no composed-paging suite yet", date: "2026-10-13"}
-  p5: {state: exempt, reason: "handled by the gRPC suite", date: "2026-10-13", owner: TD10}
+  p4: {state: exempt, reason: "no composed-paging suite yet", date: "2026-10-13", owner: DC3, review_by: "2099-01-01"}
+  p5: {state: exempt, reason: "handled by the gRPC suite", date: "2026-10-13", owner: TD10, review_by: "2099-01-01"}
 `
 	got, err := loadDepthDir(writeDepth(t, "storage.yaml", valid), rows)
 	if err != nil {
@@ -81,20 +81,23 @@ classes:
 
 	// An unquoted date is accepted too (yaml.v3 does not coerce a plain
 	// timestamp-looking scalar to time.Time for a string field).
-	unquoted := "service: storage\nclasses:\n  p2: {state: exempt, reason: r, date: 2026-10-13}\n"
+	unquoted := "service: storage\nclasses:\n  p2: {state: exempt, reason: r, date: 2026-10-13, owner: DC3, review_by: 2099-01-01}\n"
 	if _, err := loadDepthDir(writeDepth(t, "s.yaml", unquoted), rows); err != nil {
 		t.Errorf("unquoted date: %v", err)
 	}
 
 	for _, tc := range []struct{ name, body string }{
 		{"missing service", "classes:\n  p2: {state: present, suites: [sdk], note: n}\n"},
-		{"unknown service", "service: rnu\nclasses:\n  p2: {state: exempt, reason: r, date: \"2026-10-13\"}\n"},
-		{"unknown class", "service: storage\nclasses:\n  p6: {state: exempt, reason: r, date: \"2026-10-13\"}\n"},
+		{"unknown service", "service: rnu\nclasses:\n  p2: {state: exempt, reason: r, date: \"2026-10-13\", owner: X, review_by: \"2099-01-01\"}\n"},
+		{"unknown class", "service: storage\nclasses:\n  p6: {state: exempt, reason: r, date: \"2026-10-13\", owner: X, review_by: \"2099-01-01\"}\n"},
 		{"present without note", "service: storage\nclasses:\n  p2: {state: present, suites: [sdk]}\n"},
 		{"present without suite", "service: storage\nclasses:\n  p2: {state: present, note: n}\n"},
 		{"present unknown suite", "service: storage\nclasses:\n  p2: {state: present, suites: [sdk-nope], note: n}\n"},
-		{"exempt without reason", "service: storage\nclasses:\n  p2: {state: exempt, date: \"2026-10-13\"}\n"},
-		{"exempt bad date", "service: storage\nclasses:\n  p2: {state: exempt, reason: r, date: \"yesterday\"}\n"},
+		{"exempt without reason", "service: storage\nclasses:\n  p2: {state: exempt, date: \"2026-10-13\", owner: X, review_by: \"2099-01-01\"}\n"},
+		{"exempt bad date", "service: storage\nclasses:\n  p2: {state: exempt, reason: r, date: \"yesterday\", owner: X, review_by: \"2099-01-01\"}\n"},
+		{"exempt without owner", "service: storage\nclasses:\n  p2: {state: exempt, reason: r, date: \"2026-10-13\", review_by: \"2099-01-01\"}\n"},
+		{"exempt without review_by", "service: storage\nclasses:\n  p2: {state: exempt, reason: r, date: \"2026-10-13\", owner: X}\n"},
+		{"exempt bad review_by", "service: storage\nclasses:\n  p2: {state: exempt, reason: r, date: \"2026-10-13\", owner: X, review_by: \"soon\"}\n"},
 		{"bad state", "service: storage\nclasses:\n  p2: {state: maybe, note: n, suites: [sdk]}\n"},
 		{"malformed yaml", "service: storage\nclasses: [oops\n"},
 	} {
@@ -106,13 +109,37 @@ classes:
 	// Two files recording the same service fail loud.
 	dir := t.TempDir()
 	for _, name := range []string{"a.yaml", "b.yaml"} {
-		body := "service: storage\nclasses:\n  p2: {state: exempt, reason: r, date: \"2026-10-13\"}\n"
+		body := "service: storage\nclasses:\n  p2: {state: exempt, reason: r, date: \"2026-10-13\", owner: X, review_by: \"2099-01-01\"}\n"
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := loadDepthDir(dir, rows); err == nil {
 		t.Error("duplicate service across files: want error, got nil")
+	}
+}
+
+func TestDepthStaleExemptions(t *testing.T) {
+	records := map[string]depthRecord{
+		"storage": {Classes: map[string]depthClass{
+			"p2": {State: "present"},
+			"p3": {State: "exempt", ReviewBy: "2026-01-01"}, // overdue vs the probe date
+			"p4": {State: "exempt", ReviewBy: "2026-10-16"}, // due today: not yet overdue
+			"p5": {State: "exempt", ReviewBy: "2099-01-01"}, // future
+		}},
+		"scheduler": {Classes: map[string]depthClass{
+			"p4": {State: "exempt", ReviewBy: "2020-06-30"}, // long overdue
+		}},
+	}
+	// Probe date 2026-10-16: storage p3 + scheduler p4 are overdue (sorted by
+	// service then class), storage p4/p5 are not.
+	want := []string{"scheduler p4 (review_by 2020-06-30)", "storage p3 (review_by 2026-01-01)"}
+	if got := depthStaleExemptions(records, "2026-10-16"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("depthStaleExemptions = %v, want %v", got, want)
+	}
+	// A present-only record contributes nothing.
+	if got := depthStaleExemptions(map[string]depthRecord{"x": {Classes: map[string]depthClass{"p2": {State: "present"}}}}, "2099-01-01"); len(got) != 0 {
+		t.Fatalf("depthStaleExemptions(present-only) = %v, want none", got)
 	}
 }
 

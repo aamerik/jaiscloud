@@ -2,8 +2,9 @@
 #
 # p2-p5 are defined in docs/GCP-TESTABILITY.md §10. Each class is either
 # `present` (asserted by the official-client suite(s) listed) or `exempt`
-# (reasoned + dated). `make gcp-status-depth-gate` fails when a `ga` service
-# has no record here or leaves a class unaccounted for.
+# (reasoned, dated and owned, with a future `review_by`). `make
+# gcp-status-depth-gate` fails when a `ga` service has no record here or leaves a
+# class unaccounted for.
 #
 # The c1-c3 delivery classes the k8s e2e (EV4) proves locally are asserted in CI
 # by depth_test.go over an httptest sink: the emulator's own delivery engine

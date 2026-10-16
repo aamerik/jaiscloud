@@ -18,9 +18,19 @@
 # not minutes: several `gql.go` lexer mutants burn the full 60s exec timeout.
 # TD21's surface — the value comparison and the filter validation — is therefore
 # gated by the file-scoped entry, which was measured at 81.82%.
+#
+# DC10 (depth-closure) adds the two shared surfaces the depth suites' paging and
+# error assertions ride on: `internal/gcp/paging` (the pageSize/pageToken cursor
+# walk every Wave-2 p4 walk drives) and `internal/gcp/gcperr` (the google.rpc
+# status ↔ HTTP mapping behind every p3 error-envelope assertion). The floors are
+# the scores measured when DC10 landed.
 targets:
   - package: internal/gcp/adapter/jsoncodec.go
     min_msi_percent: 95.57
+  - package: internal/gcp/gcperr
+    min_msi_percent: 91.41
+  - package: internal/gcp/paging
+    min_msi_percent: 67.8
   - package: internal/gcp/service/datastore
     min_msi_percent: 68.7
   - package: internal/gcp/service/datastore/query.go

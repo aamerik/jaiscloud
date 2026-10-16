@@ -549,14 +549,16 @@ either:
 - `state: present` — with `suites` (the official-client suite(s) asserting it,
   each of which must be one of the service's §9 coverage suites) and a one-line
   `note`; or
-- `state: exempt` — with a `reason`, a `date` (`YYYY-MM-DD`), and optionally an
-  `owner` (the backlog ID that will close it, e.g. `TD6`; advisory, not
-  validated).
+- `state: exempt` — with a `reason`, a `date` (`YYYY-MM-DD`, when the exemption
+  was recorded), an `owner` (the backlog ID that will close or re-review it,
+  e.g. `DC3`) and a `review_by` (`YYYY-MM-DD`) — a dated promise to re-review,
+  not a permanent pass.
 
 The loader rejects a typo'd service, an unknown class key, a duplicate service
 across files, a `present` cell with no note/suite or a suite the service does
-not own, and an `exempt` cell with no reason or an unparseable date — so a typo
-can never silently inflate or swallow the record.
+not own, and an `exempt` cell with no reason, an unparseable `date`, no `owner`,
+or an unparseable `review_by`. The gate additionally fails an exemption whose
+`review_by` has passed, so an exemption cannot be inherited forever.
 
 **How it is measured and enforced.** `tools/gcpstatus` joins the §9 inventory
 with `docs/test-depth/` into a per-service `p1`–`p5` matrix: `make gcp-status`
@@ -574,6 +576,25 @@ dated exemptions (often `owner: TD<n>` from the test-depth wave), so a *newly
 added* `ga` service with no `docs/test-depth` record fails the gate on landing.
 The per-service test-depth sessions then replace those exemptions with `present`
 cells as the depth lands.
+
+**The shared depth-test kit (DC2).** The Wave-2 depth cells are closed through a
+small, service-agnostic kit at
+[`tests/integration/gcp/testdepth/`](../tests/integration/gcp/testdepth/) — a
+separate module (`jaiscloud-gcp-testdepth`, deps pinned to the oldest in-tree
+versions so MVS never forces a bump) that the suites import, never edit. It has
+three parts: a **list/paging contract** driver (`AssertPaging`/`Walk`/`CheckPages`
+— run a list method with `pageSize`/`pageToken`, composed with `filter`/`orderBy`,
+asserting every resource once, the documented within-page order, an empty final
+page and cross-page stability — plus `AssertInvalidPageSize` for the documented
+negative); **error-envelope** helpers (`StatusOf`/`CheckError`/`AssertError`/
+`RunNegatives` with the `SpecNotFound`/`SpecAlreadyExists`/… catalogue — one spec
+asserts both transports, since the `google.rpc` status name is the REST
+envelope's `error.status`); and a **contention** helper (`Race`/`AssertOneWinner`
+with a `-race` build-tag guard, since an un-raced writer run proves nothing). It
+is official-client-based and carries no service specifics, so a `p2`–`p4` cell
+costs a test function rather than a session — each service still asserts its own
+Discovery-document-pinned contract (order, filter, paged-vs-unpaged) on top of
+the shared driver.
 
 ---
 
@@ -786,6 +807,13 @@ where a wrong resource-type or action derivation silently misroutes a request �
 was scored but not fixed in the spike (**64.3%** MSI, 502/781 killed; the
 survivors are `expression/remove`/`branch/case` in the resource-type and action
 derivation); TD20 closed it, below.
+
+**DC10** extends the committed floor to the two shared surfaces the behavioural
+depth suites' assertions ride on: `internal/gcp/paging` (the `pageSize`/
+`pageToken` cursor walk every Wave-2 `p4` walk drives, floored at **67.80%**) and
+`internal/gcp/gcperr` (the `google.rpc` status ↔ HTTP mapping behind every `p3`
+error-envelope assertion, floored at **91.41%**) — so a paging- or error-mapping
+regression weakens an assertion and fails the ratchet instead of passing silently.
 
 ### 13.2 The codec derivation table and a file-scoped floor (TD20)
 

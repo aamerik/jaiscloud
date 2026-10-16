@@ -6,8 +6,9 @@
 // behavioural-depth axis borrowed from the AWS reference implementation's
 // test-suite taxonomy (its p1–p5 behaviour classes): every `ga` service records,
 // for each of `p2`–`p5`, either that the class is exercised (`present`, naming
-// the official-client suite(s)) or a reasoned, dated exemption. `p1` stays
-// derived from the coverage inventory (`coverageRow.Covered`).
+// the official-client suite(s)) or a reasoned, owned, dated exemption with a
+// future `review_by`. `p1` stays derived from the coverage inventory
+// (`coverageRow.Covered`).
 //
 // The record lives one file per service under docs/test-depth/<canonical>.yaml
 // (not a single central file) so per-service sessions can extend their own
@@ -18,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,10 +46,15 @@ type depthClass struct {
 	Note string `yaml:"note,omitempty"`
 	// Reason explains an exemption; required for `exempt`.
 	Reason string `yaml:"reason,omitempty"`
-	// Owner is the plan ID that will close an exemption (e.g. "TD6"); optional.
+	// Owner is the plan ID that will close or re-review an exemption (e.g.
+	// "DC3"); required for `exempt`.
 	Owner string `yaml:"owner,omitempty"`
 	// Date is when the exemption was recorded (YYYY-MM-DD); required for `exempt`.
 	Date string `yaml:"date,omitempty"`
+	// ReviewBy is the date by which the exemption must be re-reviewed
+	// (YYYY-MM-DD); required for `exempt` and must not have passed, so an
+	// exemption is a dated promise rather than a permanent pass.
+	ReviewBy string `yaml:"review_by,omitempty"`
 }
 
 // depthRecord is one docs/test-depth/<service>.yaml file.
@@ -76,7 +83,12 @@ func (r depthRecord) classState(class string) (string, bool) {
 //   - every class key must be one of depthClasses;
 //   - a `present` cell needs a note and ≥1 suite, and every named suite must be
 //     one of that service's official-client coverage suites;
-//   - an `exempt` cell needs a reason and a parseable YYYY-MM-DD date.
+//   - an `exempt` cell needs a reason, a parseable YYYY-MM-DD date, an owner (the
+//     backlog ID that will close or re-review it) and a parseable YYYY-MM-DD
+//     review_by.
+//
+// `loadDepthDir` validates shape only; `depthStaleExemptions` (called by the
+// gate) fails an exemption whose review_by has passed.
 func loadDepthDir(dir string, rows []coverageRow) (map[string]depthRecord, error) {
 	out := map[string]depthRecord{}
 	if strings.TrimSpace(dir) == "" {
@@ -147,6 +159,12 @@ func loadDepthDir(dir string, rows []coverageRow) (map[string]depthRecord, error
 				}
 				if _, err := time.Parse("2006-01-02", cell.Date); err != nil {
 					return nil, fmt.Errorf("depth record %s: class %s exemption needs a YYYY-MM-DD date, got %q", path, class, cell.Date)
+				}
+				if strings.TrimSpace(cell.Owner) == "" {
+					return nil, fmt.Errorf("depth record %s: class %s is `exempt` but names no owner (the backlog ID that will close or re-review it)", path, class)
+				}
+				if _, err := time.Parse("2006-01-02", cell.ReviewBy); err != nil {
+					return nil, fmt.Errorf("depth record %s: class %s exemption needs a YYYY-MM-DD review_by, got %q", path, class, cell.ReviewBy)
 				}
 			default:
 				return nil, fmt.Errorf("depth record %s: class %s has state %q (want `present` or `exempt`)", path, class, cell.State)
@@ -222,9 +240,37 @@ func depthTotalsFor(rows []coverageRow, records map[string]depthRecord) (recorde
 	return recorded, present, exempt
 }
 
+// depthStaleExemptions returns the `exempt` cells whose `review_by` date has
+// passed as of `today` (a YYYY-MM-DD string, so the comparison is calendar-only
+// and deterministic). An exemption is a dated promise to re-review, not a
+// permanent pass: the gate fails once that promise is overdue. It is pure and
+// sorted for stable output; `today` is injected so tests need no clock.
+func depthStaleExemptions(records map[string]depthRecord, today string) []string {
+	var out []string
+	svcs := make([]string, 0, len(records))
+	for svc := range records {
+		svcs = append(svcs, svc)
+	}
+	sort.Strings(svcs)
+	for _, svc := range svcs {
+		rec := records[svc]
+		for _, class := range depthClasses {
+			cell, ok := rec.Classes[class]
+			if !ok || cell.State != "exempt" {
+				continue
+			}
+			// A review_by equal to today is still due today, not yet overdue.
+			if cell.ReviewBy < today {
+				out = append(out, fmt.Sprintf("%s %s (review_by %s)", svc, class, cell.ReviewBy))
+			}
+		}
+	}
+	return out
+}
+
 // runDepthGate enforces the behavioural-depth DoD: every `ga` service must have
-// a docs/test-depth record accounting for each of p2–p5 (present or dated
-// exemption). Exit 1 on any violation (the CI gate).
+// a docs/test-depth record accounting for each of p2–p5 (present or an owned,
+// unexpired exemption). Exit 1 on any violation (the CI gate).
 func runDepthGate(matrixPath, testRoot, depthDir string) int {
 	rows, err := gatherCoverage(matrixPath, testRoot)
 	if err != nil {
@@ -252,9 +298,17 @@ func runDepthGate(matrixPath, testRoot, depthDir string) int {
 		for _, v := range violations {
 			fmt.Printf("  - %s\n", v)
 		}
-		fmt.Printf("\nAdd a docs/test-depth/<service>.yaml record (or a reasoned, dated exemption) for each above.\n")
+		fmt.Printf("\nAdd a docs/test-depth/<service>.yaml record (or a reasoned, owned, dated exemption) for each above.\n")
 		return 1
 	}
-	fmt.Println("=> every `ga` service accounts for each of p2–p5 (present or dated exemption).")
+	stale := depthStaleExemptions(records, time.Now().Format("2006-01-02"))
+	if len(stale) > 0 {
+		fmt.Printf("\n=> %d exemption(s) past their review_by (re-review, close, or re-date each):\n", len(stale))
+		for _, s := range stale {
+			fmt.Printf("  - %s\n", s)
+		}
+		return 1
+	}
+	fmt.Println("=> every `ga` service accounts for each of p2–p5 (present, or an owned exemption with a future review_by).")
 	return 0
 }

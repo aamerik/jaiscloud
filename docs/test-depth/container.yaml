@@ -2,8 +2,9 @@
 #
 # p2-p5 are defined in docs/GCP-TESTABILITY.md §10. Each class is either
 # `present` (asserted by the official-client suite(s) listed) or `exempt`
-# (reasoned + dated). `make gcp-status-depth-gate` fails when a `ga` service
-# has no record here or leaves a class unaccounted for.
+# (reasoned, dated and owned, with a future `review_by`). `make
+# gcp-status-depth-gate` fails when a `ga` service has no record here or leaves a
+# class unaccounted for.
 service: container
 classes:
   p2:
@@ -19,6 +20,7 @@ classes:
     reason: "no client-observable listing cursor: the GKE Discovery document declares no pageSize/pageToken on projects.locations.clusters.list or ...nodePools.list, neither ListClustersResponse nor ListNodePoolsResponse carries a nextPageToken, and the generated client has no PageSize method — so no client pages these collections (the emulator's offset paging is an undocumented extension); the complete-collection listing that is observable is asserted as p5"
     date: "2026-10-16"
     owner: DC6
+    review_by: "2027-04-16"
   p5:
     state: present
     suites: [sdk-container]
