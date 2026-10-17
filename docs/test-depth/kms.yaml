@@ -18,7 +18,7 @@ classes:
   p4:
     state: present
     suites: [sdk-rest]
-    note: "pageSize/pageToken paging over key rings and a key's crypto-key versions, composed with the documented name/name desc orderBy and the name/labels/state filter (DC14)"
+    note: "pageSize/pageToken paging over key rings, a key's crypto-key versions and a key ring's import jobs, composed with the documented name/name desc orderBy and the name/labels/state/importMethod/protectionLevel filter (DC14, DC23)"
   p5:
     state: present
     suites: [sdk-rest]

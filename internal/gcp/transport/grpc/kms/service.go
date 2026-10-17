@@ -778,7 +778,7 @@ func (s *Service) ListImportJobs(ctx context.Context, req *kmspb.ListImportJobsR
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid parent resource name", 400))
 	}
-	jobs, err := s.core.ListImportJobs(ctx, project, loc, kr)
+	jobs, next, total, err := s.core.PageImportJobs(ctx, project, loc, kr, kmsListQuery(req.GetFilter(), req.GetOrderBy(), req.GetPageSize(), req.GetPageToken()))
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -786,7 +786,7 @@ func (s *Service) ListImportJobs(ctx context.Context, req *kmspb.ListImportJobsR
 	for _, ij := range jobs {
 		out = append(out, importJobToProto(ij))
 	}
-	return &kmspb.ListImportJobsResponse{ImportJobs: out, TotalSize: int32(len(out))}, nil
+	return &kmspb.ListImportJobsResponse{ImportJobs: out, NextPageToken: next, TotalSize: int32(total)}, nil
 }
 
 // ─── IAM (google.iam.v1.IAMPolicy over keyrings/keys) ─────────────────────────

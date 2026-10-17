@@ -222,3 +222,87 @@ func TestCryptoKeyPrimaryHasCreateAndGenerateTime(t *testing.T) {
 			primary.GetCreateTime().AsTime(), primary.GetGenerateTime().AsTime())
 	}
 }
+
+// TestKMSListImportJobsFilterOrderByPaging closes DC23 over gRPC:
+// importJobs.list documents filter/orderBy/pageSize/pageToken, so all four must
+// reach the response instead of returning every job in one unpaged slice.
+func TestKMSListImportJobsFilterOrderByPaging(t *testing.T) {
+	client, _, cleanup := kmsTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createKeyRing(t, client, "kr")
+
+	for _, spec := range []struct {
+		id    string
+		level kmspb.ProtectionLevel
+	}{
+		{"job-a", kmspb.ProtectionLevel_SOFTWARE},
+		{"job-b", kmspb.ProtectionLevel_HSM},
+		{"cloud-job", kmspb.ProtectionLevel_SOFTWARE},
+	} {
+		if _, err := client.CreateImportJob(ctx, &kmspb.CreateImportJobRequest{
+			Parent:      keyRing,
+			ImportJobId: spec.id,
+			ImportJob: &kmspb.ImportJob{
+				ImportMethod:    kmspb.ImportJob_RSA_OAEP_3072_SHA256,
+				ProtectionLevel: spec.level,
+			},
+		}); err != nil {
+			t.Fatalf("CreateImportJob %s: %v", spec.id, err)
+		}
+	}
+
+	// Filter + orderBy + cursor: the two "job-" jobs, descending, one per page.
+	var names []string
+	token := ""
+	for i := 0; i < 10; i++ {
+		resp, err := client.ListImportJobs(ctx, &kmspb.ListImportJobsRequest{
+			Parent:    keyRing,
+			Filter:    `name:"job-"`,
+			OrderBy:   "name desc",
+			PageSize:  1,
+			PageToken: token,
+		})
+		if err != nil {
+			t.Fatalf("page %d: %v", i, err)
+		}
+		if resp.GetTotalSize() != 2 {
+			t.Errorf("page %d total_size = %d, want the matched count 2", i, resp.GetTotalSize())
+		}
+		for _, job := range resp.GetImportJobs() {
+			names = append(names, job.GetName())
+		}
+		if len(resp.GetImportJobs()) != 1 {
+			t.Fatalf("page %d returned %d jobs, want the requested 1", i, len(resp.GetImportJobs()))
+		}
+		token = resp.GetNextPageToken()
+		if token == "" {
+			break
+		}
+	}
+	want := []string{
+		keyRing + "/importJobs/job-b",
+		keyRing + "/importJobs/job-a",
+	}
+	if len(names) != len(want) || names[0] != want[0] || names[1] != want[1] {
+		t.Fatalf("filtered, ordered, paged walk = %v, want %v", names, want)
+	}
+
+	// protectionLevel filter: the HSM job is the only match.
+	resp, err := client.ListImportJobs(ctx, &kmspb.ListImportJobsRequest{
+		Parent: keyRing, Filter: `protectionLevel=HSM`,
+	})
+	if err != nil {
+		t.Fatalf("protectionLevel list: %v", err)
+	}
+	if len(resp.GetImportJobs()) != 1 || resp.GetImportJobs()[0].GetName() != keyRing+"/importJobs/job-b" {
+		t.Fatalf("protectionLevel=HSM = %v, want [job-b]", resp.GetImportJobs())
+	}
+
+	// An unsupported filter is INVALID_ARGUMENT, not a silently unfiltered list.
+	if _, err := client.ListImportJobs(ctx, &kmspb.ListImportJobsRequest{
+		Parent: keyRing, Filter: `bogus=1`,
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("bogus filter err = %v, want InvalidArgument", err)
+	}
+}

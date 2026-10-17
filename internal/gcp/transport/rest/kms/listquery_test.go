@@ -3,7 +3,9 @@ package kms
 import (
 	"context"
 	"testing"
+	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 )
 
@@ -255,5 +257,299 @@ func TestKMSListRejectsBadFilterOrderBy(t *testing.T) {
 				t.Fatalf("err = %#v, want InvalidArgument/400", err)
 			}
 		})
+	}
+}
+
+// createImportJobs creates import jobs under the kr key ring, one per
+// id/protection-level pair.
+func createImportJobs(t *testing.T, p *Provider, levels map[string]string) {
+	t.Helper()
+	for id, level := range levels {
+		body := map[string]any{"importMethod": "RSA_OAEP_3072_SHA256"}
+		if level != "" {
+			body["protectionLevel"] = level
+		}
+		if _, err := p.ImportJobCreate(context.Background(), newNR(map[string]any{
+			"name": "locations/global/keyRings/kr", "importJobId": id, "body": body,
+		})); err != nil {
+			t.Fatalf("create import job %s: %v", id, err)
+		}
+	}
+}
+
+// TestImportJobListFilterOrderBy closes DC23: importJobs.list documents the same
+// filter/orderBy pair as the other KMS lists, and used to ignore both (and to
+// return every job with no cursor).
+func TestImportJobListFilterOrderBy(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	createRings(t, p, "kr")
+	createImportJobs(t, p, map[string]string{
+		"job-a": "SOFTWARE", "job-b": "HSM", "cloud-job": "",
+	})
+
+	// Substring filter on the full resource name.
+	resp, err := p.ImportJobList(ctx, newNR(map[string]any{
+		"name": "locations/global/keyRings/kr/importJobs", "filter": `name:"cloud"`,
+	}))
+	if err != nil {
+		t.Fatalf("filtered list: %v", err)
+	}
+	names := listItemNames(t, resp, "importJobs")
+	if len(names) != 1 || names[0] != "projects/proj/locations/global/keyRings/kr/importJobs/cloud-job" {
+		t.Fatalf("filter name:\"cloud\" = %v, want only cloud-job", names)
+	}
+	if resp.Data["totalSize"] != 1 {
+		t.Errorf("totalSize = %v, want the matched count 1", resp.Data["totalSize"])
+	}
+
+	// protectionLevel: the empty stored level renders as SOFTWARE, so the filter
+	// must normalize it the same way (and must still tell the HSM job apart).
+	resp, err = p.ImportJobList(ctx, newNR(map[string]any{
+		"name": "locations/global/keyRings/kr/importJobs", "filter": `protectionLevel=SOFTWARE`,
+	}))
+	if err != nil {
+		t.Fatalf("protectionLevel-filtered list: %v", err)
+	}
+	if names := listItemNames(t, resp, "importJobs"); len(names) != 2 {
+		t.Fatalf("protectionLevel=SOFTWARE = %v, want the two SOFTWARE jobs", names)
+	}
+	resp, err = p.ImportJobList(ctx, newNR(map[string]any{
+		"name": "locations/global/keyRings/kr/importJobs", "filter": `protectionLevel=HSM`,
+	}))
+	if err != nil {
+		t.Fatalf("HSM-filtered list: %v", err)
+	}
+	if names := listItemNames(t, resp, "importJobs"); len(names) != 1 ||
+		names[0] != "projects/proj/locations/global/keyRings/kr/importJobs/job-b" {
+		t.Fatalf("protectionLevel=HSM = %v, want only job-b", names)
+	}
+
+	// importMethod and state are filterable ImportJob fields too.
+	resp, err = p.ImportJobList(ctx, newNR(map[string]any{
+		"name": "locations/global/keyRings/kr/importJobs", "filter": `importMethod=RSA_OAEP_3072_SHA256 state=ACTIVE`,
+	}))
+	if err != nil {
+		t.Fatalf("importMethod+state list: %v", err)
+	}
+	if names := listItemNames(t, resp, "importJobs"); len(names) != 3 {
+		t.Fatalf("importMethod+state filter = %v, want all three ACTIVE jobs", names)
+	}
+	resp, err = p.ImportJobList(ctx, newNR(map[string]any{
+		"name": "locations/global/keyRings/kr/importJobs", "filter": `state=EXPIRED`,
+	}))
+	if err != nil {
+		t.Fatalf("EXPIRED-filtered list: %v", err)
+	}
+	if names := listItemNames(t, resp, "importJobs"); len(names) != 0 || resp.Data["totalSize"] != 0 {
+		t.Fatalf("state=EXPIRED = %v (totalSize %v), want none", names, resp.Data["totalSize"])
+	}
+
+	// publicKeyFormat is derived from the stored key, exactly as the renderers
+	// derive it (the RSA-wrapped jobs carry a PEM public key).
+	for _, tc := range []struct {
+		filter string
+		want   int
+	}{
+		{`publicKeyFormat=PEM`, 3},
+		{`publicKeyFormat=NIST_PQC`, 0},
+	} {
+		resp, err := p.ImportJobList(ctx, newNR(map[string]any{
+			"name": "locations/global/keyRings/kr/importJobs", "filter": tc.filter,
+		}))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.filter, err)
+		}
+		if names := listItemNames(t, resp, "importJobs"); len(names) != tc.want {
+			t.Fatalf("%s = %v, want %d jobs", tc.filter, names, tc.want)
+		}
+	}
+
+	// Timestamp clauses reach the job's create/generate/expire times. Each pair
+	// is discriminating: the lower bound must match all three and the identical
+	// upper bound none, so an accessor that returned the zero time cannot pass.
+	for _, tc := range []struct {
+		filter string
+		want   int
+	}{
+		{`createTime>="2000-01-01T00:00:00Z"`, 3},
+		{`createTime<"2000-01-01T00:00:00Z"`, 0},
+		{`generateTime>"2000-01-01T00:00:00Z"`, 3},
+		{`generateTime<"2000-01-01T00:00:00Z"`, 0},
+		{`expireTime>"2000-01-01"`, 3},
+		{`expireTime<"2000-01-01"`, 0},
+	} {
+		resp, err := p.ImportJobList(ctx, newNR(map[string]any{
+			"name": "locations/global/keyRings/kr/importJobs", "filter": tc.filter,
+		}))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.filter, err)
+		}
+		if names := listItemNames(t, resp, "importJobs"); len(names) != tc.want {
+			t.Fatalf("%s = %v, want %d jobs", tc.filter, names, tc.want)
+		}
+	}
+
+	// orderBy name desc over the whole key ring.
+	resp, err = p.ImportJobList(ctx, newNR(map[string]any{
+		"name": "locations/global/keyRings/kr/importJobs", "orderBy": "name desc",
+	}))
+	if err != nil {
+		t.Fatalf("orderBy list: %v", err)
+	}
+	got := listItemNames(t, resp, "importJobs")
+	want := []string{
+		"projects/proj/locations/global/keyRings/kr/importJobs/job-b",
+		"projects/proj/locations/global/keyRings/kr/importJobs/job-a",
+		"projects/proj/locations/global/keyRings/kr/importJobs/cloud-job",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("orderBy name desc = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("orderBy name desc = %v, want %v", got, want)
+		}
+	}
+	// The unfiltered total is every job in the key ring, not the page length.
+	if resp.Data["totalSize"] != 3 {
+		t.Errorf("unfiltered totalSize = %v, want 3", resp.Data["totalSize"])
+	}
+}
+
+// TestImportJobListComposesWithPaging verifies the new cursor: a filtered,
+// ordered import-job walk neither drops nor duplicates a job across the page
+// boundary, and totalSize reports the matched count once, not per page.
+func TestImportJobListComposesWithPaging(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	createRings(t, p, "kr")
+	createImportJobs(t, p, map[string]string{"job-a": "", "job-b": "", "cloud-job": ""})
+
+	var seen []string
+	token := ""
+	for i := 0; i < 10; i++ {
+		params := map[string]any{
+			"name":   "locations/global/keyRings/kr/importJobs",
+			"filter": `name:"job-"`, "orderBy": "name", "pageSize": "1",
+		}
+		if token != "" {
+			params["pageToken"] = token
+		}
+		resp, err := p.ImportJobList(ctx, newNR(params))
+		if err != nil {
+			t.Fatalf("page %d: %v", i, err)
+		}
+		if resp.Data["totalSize"] != 2 {
+			t.Errorf("page %d totalSize = %v, want the matched count 2", i, resp.Data["totalSize"])
+		}
+		page := listItemNames(t, resp, "importJobs")
+		if len(page) != 1 {
+			t.Fatalf("page %d returned %d jobs (%v), want the requested 1", i, len(page), page)
+		}
+		seen = append(seen, page...)
+		token, _ = resp.Data["nextPageToken"].(string)
+		if token == "" {
+			// The last page must not carry a token.
+			if _, present := resp.Data["nextPageToken"]; present {
+				t.Fatalf("the last page of the walk must not carry nextPageToken: %v", resp.Data)
+			}
+			break
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("the walk visited %d pages worth of jobs (%v), want 2", len(seen), seen)
+	}
+	want := []string{
+		"projects/proj/locations/global/keyRings/kr/importJobs/job-a",
+		"projects/proj/locations/global/keyRings/kr/importJobs/job-b",
+	}
+	if len(seen) != len(want) || seen[0] != want[0] || seen[1] != want[1] {
+		t.Fatalf("paged filtered walk = %v, want %v", seen, want)
+	}
+
+	// A negative pageSize is INVALID_ARGUMENT on the new cursor (AIP-158).
+	_, err := p.ImportJobList(ctx, newNR(map[string]any{
+		"name": "locations/global/keyRings/kr/importJobs", "pageSize": "-1",
+	}))
+	if err == nil || errStatus(err) != 400 {
+		t.Fatalf("pageSize=-1: err = %v, want 400", err)
+	}
+}
+
+// TestImportJobListRejectsBadFilterOrderBy verifies an import job filter or
+// orderBy outside the documented grammar is INVALID_ARGUMENT, never silently
+// ignored.
+func TestImportJobListRejectsBadFilterOrderBy(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	createRings(t, p, "kr")
+	createImportJobs(t, p, map[string]string{"job-a": ""})
+
+	cases := []struct {
+		name   string
+		params map[string]any
+	}{
+		{"or-filter", map[string]any{"filter": `name:"a" OR name:"b"`}},
+		{"unknown-field", map[string]any{"filter": `bogus=1`}},
+		{"unknown-order", map[string]any{"orderBy": "createTime"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.params["name"] = "locations/global/keyRings/kr/importJobs"
+			_, err := p.ImportJobList(ctx, newNR(tc.params))
+			if err == nil || errStatus(err) != 400 {
+				t.Fatalf("err = %v, want 400", err)
+			}
+		})
+	}
+}
+
+// TestImportJobListAppliesExpiryBeforeFilter pins the one semantic the filter
+// depends on: ListImportJobs marks a job EXPIRED once its window passed, so a
+// `state` clause must select the state the response renders, not a stale stored
+// ACTIVE that the client never sees.
+func TestImportJobListAppliesExpiryBeforeFilter(t *testing.T) {
+	t0 := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	ctx := context.Background()
+	p := newTestProvider()
+	createRings(t, p, "kr")
+	createImportJobs(t, p, map[string]string{"job-a": ""})
+
+	states := func(filter string) []any {
+		t.Helper()
+		resp, err := p.ImportJobList(ctx, newNR(map[string]any{
+			"name": "locations/global/keyRings/kr/importJobs", "filter": filter,
+		}))
+		if err != nil {
+			t.Fatalf("%s: %v", filter, err)
+		}
+		items, _ := resp.Data["importJobs"].([]any)
+		return items
+	}
+
+	// Inside the 72h import window the job is ACTIVE.
+	if items := states("state=ACTIVE"); len(items) != 1 {
+		t.Fatalf("state=ACTIVE within the window = %v, want the job", items)
+	}
+	if items := states("state=EXPIRED"); len(items) != 0 {
+		t.Fatalf("state=EXPIRED within the window = %v, want none", items)
+	}
+
+	// Past expire_time the same job lists as EXPIRED.
+	clock.SetGlobalClock(clock.FixedClock{T: t0.Add(73 * time.Hour)})
+	items := states("state=EXPIRED")
+	if len(items) != 1 {
+		t.Fatalf("state=EXPIRED past expire_time = %v, want the job", items)
+	}
+	item, _ := items[0].(map[string]any)
+	if state, _ := item["state"].(string); state != "EXPIRED" {
+		t.Fatalf("rendered state = %q, want EXPIRED", state)
+	}
+	if items := states("state=ACTIVE"); len(items) != 0 {
+		t.Fatalf("state=ACTIVE past expire_time = %v, want none", items)
 	}
 }
