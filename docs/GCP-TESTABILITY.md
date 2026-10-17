@@ -584,9 +584,10 @@ separate module (`jaiscloud-gcp-testdepth`, deps pinned to the oldest in-tree
 versions so MVS never forces a bump) that the suites import, never edit. It has
 three parts: a **list/paging contract** driver (`AssertPaging`/`Walk`/`CheckPages`
 — run a list method with `pageSize`/`pageToken`, composed with `filter`/`orderBy`,
-asserting every resource once, the documented within-page order, an empty final
-page and cross-page stability — plus `AssertInvalidPageSize` for the documented
-negative); **error-envelope** helpers (`StatusOf`/`CheckError`/`AssertError`/
+asserting every resource once, the documented ascending-name order **across page
+boundaries** (the last item of a page is compared with the first item of the
+next), an empty final page and cross-page stability — plus
+`AssertInvalidPageSize` for the documented negative); **error-envelope** helpers (`StatusOf`/`CheckError`/`AssertError`/
 `RunNegatives` with the `SpecNotFound`/`SpecAlreadyExists`/… catalogue — one spec
 asserts both transports, since the `google.rpc` status name is the REST
 envelope's `error.status`); and a **contention** helper (`Race`/`AssertOneWinner`

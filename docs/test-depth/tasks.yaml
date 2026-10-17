@@ -18,7 +18,7 @@ classes:
   p4:
     state: present
     suites: [sdk-tasks]
-    note: "pageSize/pageToken walk over projects.locations.queues.list, asserting the documented lexicographical queue order (the kit compares order within a page and across two walks; its cross-page order check is deferred as DC17), and over ...queues.tasks.list (tasks in any order, compared as a set); the queues-list filter is asserted separately for the documented equality (`=`) and contains (`:`) operators, the state field and a filtered paged walk (DC16)"
+    note: "pageSize/pageToken walk over projects.locations.queues.list, asserting the documented lexicographical queue order across page boundaries (the kit's cross-page order check, DC17), and over ...queues.tasks.list (tasks in any order, compared as a set); the queues-list filter is asserted separately for the documented equality (`=`) and contains (`:`) operators, the state field and a filtered paged walk (DC16)"
   p5:
     state: present
     suites: [sdk-tasks]

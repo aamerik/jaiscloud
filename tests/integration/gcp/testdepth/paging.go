@@ -103,15 +103,18 @@ func Walk[T any](lister Lister[T], cfg Paging[T]) ([]Page[T], error) {
 
 // CheckPages returns one message per paging-contract violation across the pages
 // a Walk returned. It is pure, so the kit's own tests can drive seeded negatives
-// (a dropped resource, a duplicate, a mis-ordered page) through it.
+// (a dropped resource, a duplicate, a mis-ordered resource — within a page or
+// across a page boundary) through it.
 func CheckPages[T any](pages []Page[T], cfg Paging[T]) []string {
 	if cfg.Name == nil {
 		return []string{"Paging.Name is required (uniqueness and ordering are name-based)"}
 	}
 	var out []string
 	firstPage := map[string]int{}
+	// prev/prevPage carry the last name seen in the walk, not just the last name
+	// of the current page, so the order guard spans page boundaries too.
 	var prev string
-	lastPage := -1
+	prevPage := -1
 	for i, page := range pages {
 		if cfg.PageSize > 0 && int64(len(page.Items)) > cfg.PageSize {
 			out = append(out, fmt.Sprintf("page %d returned %d items, more than the requested pageSize %d",
@@ -126,20 +129,27 @@ func CheckPages[T any](pages []Page[T], cfg Paging[T]) []string {
 		}
 		for _, item := range page.Items {
 			name := cfg.Name(item)
-			if prevPage, seen := firstPage[name]; seen {
+			if seenPage, seen := firstPage[name]; seen {
 				out = append(out, fmt.Sprintf("resource %q appears on more than one page (pages %d and %d)",
-					name, prevPage+1, i+1))
+					name, seenPage+1, i+1))
 			} else {
 				firstPage[name] = i
 			}
-			if cfg.Order == OrderAscendingName && lastPage == i && prev > name {
-				out = append(out, fmt.Sprintf("page %d is out of order: %q comes after %q", i+1, name, prev))
+			if cfg.Order == OrderAscendingName {
+				switch {
+				case prevPage < 0 || prev <= name:
+				case prevPage == i:
+					out = append(out, fmt.Sprintf("page %d is out of order: %q comes after %q", i+1, name, prev))
+				default:
+					out = append(out, fmt.Sprintf("page %d is out of order across the page boundary: %q comes after page %d's last item %q",
+						i+1, name, prevPage+1, prev))
+				}
 			}
 			if cfg.Include != nil && !cfg.Include(item) {
 				out = append(out, fmt.Sprintf("page %d item %q is outside the expected set for filter %q",
 					i+1, name, cfg.Filter))
 			}
-			prev, lastPage = name, i
+			prev, prevPage = name, i
 		}
 	}
 	for _, want := range cfg.Expect {
@@ -154,7 +164,9 @@ func CheckPages[T any](pages []Page[T], cfg Paging[T]) []string {
 // return the same resources. With ordered (the API documents a resource order)
 // the comparison is sequence-sensitive; otherwise it compares the resources as a
 // set, because a List method that documents no order is not obliged to return
-// the same order twice.
+// the same order twice. It asserts *stability*, not validity: a walk that is
+// consistently mis-ordered repeats itself exactly, so the documented order is
+// CheckPages' assertion, not this one's.
 func CheckStable(first, second []string, ordered bool) []string {
 	if len(first) != len(second) {
 		return []string{fmt.Sprintf("a second walk returned %d resources, the first returned %d", len(second), len(first))}
