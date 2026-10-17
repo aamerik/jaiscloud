@@ -908,15 +908,19 @@ func (p *Provider) ImportJobList(ctx context.Context, nr *model.NormalizedReques
 		return nil, err
 	}
 	loc, kr := parseKeyRing(strings.TrimSuffix(name, "/importJobs"))
-	jobs, err := p.core.ListImportJobs(ctx, nr.AccountID, loc, kr)
+	page, next, total, err := p.core.PageImportJobs(ctx, nr.AccountID, loc, kr, listQueryFromParams(nr.Params))
 	if err != nil {
 		return nil, err
 	}
-	items := make([]any, 0, len(jobs))
-	for _, ij := range jobs {
+	items := make([]any, 0, len(page))
+	for _, ij := range page {
 		items = append(items, importJobMap(ij))
 	}
-	return provider.OK(map[string]any{"importJobs": items, "totalSize": len(items)}), nil
+	resp := map[string]any{"importJobs": items, "totalSize": total}
+	if next != "" {
+		resp["nextPageToken"] = next
+	}
+	return provider.OK(resp), nil
 }
 
 // ─── IAM ──────────────────────────────────────────────────────────────────────

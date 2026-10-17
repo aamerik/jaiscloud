@@ -1,8 +1,8 @@
 package kms
 
 // This file wires the documented `filter`/`orderBy` list parameters Cloud KMS
-// used to drop: keyRings.list, cryptoKeys.list and cryptoKeyVersions.list all
-// document an AIP-160 `filter` and a `name` `orderBy`
+// used to drop: keyRings.list, cryptoKeys.list, cryptoKeyVersions.list and
+// importJobs.list all document an AIP-160 `filter` and a `name` `orderBy`
 // (https://cloud.google.com/kms/docs/sorting-and-filtering). The transports
 // used to hand every list straight to paging.Page, so a client that filtered or
 // sorted silently received the unfiltered, id-ascending list. Anything outside
@@ -70,6 +70,18 @@ func (s *Service) PageVersions(ctx context.Context, project, location, kr, key s
 		return nil, "", 0, err
 	}
 	return pageKMS(versions, q, "kms cryptoKeyVersions.list", versionFilterFields(project, location, kr, key), versionOrderSpec)
+}
+
+// PageImportJobs filters, orders by name and pages a key ring's import jobs,
+// applying the expiry state first (as ListImportJobs does) so a filter on
+// `state` sees the value the response renders. importJobs.list documents the
+// same filter/orderBy pair as the other KMS lists.
+func (s *Service) PageImportJobs(ctx context.Context, project, location, kr string, q ListQuery) (page []ImportJob, next string, total int, err error) {
+	jobs, err := s.ListImportJobs(ctx, project, location, kr)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	return pageKMS(jobs, q, "kms importJobs.list", importJobFilterFields(), importJobOrderSpec)
 }
 
 // pageKMS compiles the filter, retains the matching items, applies the orderBy
@@ -152,6 +164,52 @@ func versionFilterFields(project, location, kr, key string) aip160.Fields[kmssto
 	}
 }
 
+// importJobFilterFields describes the bounded subset of ImportJob fields the
+// emulator models and the KMS "Sorting and filtering list results" page makes
+// filterable. The job's canonical name is stored on the record, so the name
+// clause matches the rendered resource name; protectionLevel and publicKeyFormat
+// are normalized exactly as both renderers normalize them, so a filter can never
+// disagree with the response body. Schema fields the emulator does not model
+// (expireEventTime, attestation, cryptoKeyBackend) are rejected with
+// INVALID_ARGUMENT rather than silently ignored, and are recorded as DC42.
+func importJobFilterFields() aip160.Fields[ImportJob] {
+	return aip160.Fields[ImportJob]{
+		Desc: "name, importMethod, protectionLevel, publicKeyFormat, state, createTime, generateTime and expireTime",
+		Name: func(ij ImportJob) string { return ij.Name },
+		Strings: map[string]func(ImportJob) string{
+			"importmethod": func(ij ImportJob) string { return ij.ImportMethod },
+			// An empty stored protection level renders as SOFTWARE, so the
+			// filter must normalize it the same way.
+			"protectionlevel": func(ij ImportJob) string {
+				if ij.ProtectionLevel == "" {
+					return "SOFTWARE"
+				}
+				return ij.ProtectionLevel
+			},
+			"state": func(ij ImportJob) string { return ij.State },
+			// publicKeyFormat is derived exactly as both renderers derive it, so
+			// the filter cannot disagree with the response body.
+			"publickeyformat": func(ij ImportJob) string {
+				switch {
+				case len(ij.PublicKeyRaw) > 0:
+					if ij.ImportMethod == "HPKE_KEM_XWING_HKDF_SHA256_AES_256_GCM" {
+						return "XWING_RAW_BYTES"
+					}
+					return "NIST_PQC"
+				case ij.PublicKeyPEM != "":
+					return "PEM"
+				}
+				return ""
+			},
+		},
+		Times: map[string]func(ImportJob) time.Time{
+			"createtime":   func(ij ImportJob) time.Time { return ij.CreateTime },
+			"generatetime": func(ij ImportJob) time.Time { return ij.GenerateTime },
+			"expiretime":   func(ij ImportJob) time.Time { return ij.ExpireTime },
+		},
+	}
+}
+
 // ─── orderBy specs ────────────────────────────────────────────────────────────
 //
 // Cloud KMS documents a single orderable field, `name` (ascending, or
@@ -177,6 +235,24 @@ var versionOrderSpec = aip160.NewOrderSpec(
 	func(v kmsstore.Version) string { return versionOrderKey(v.Version) },
 	aip160.OrderField[kmsstore.Version]{Name: "name", Value: func(v kmsstore.Version) string { return versionOrderKey(v.Version) }},
 )
+
+// importJobOrderSpec orders import jobs by name. Every job in a list shares the
+// key-ring prefix, so the job id is the sort key (and the default page cursor).
+var importJobOrderSpec = aip160.NewOrderSpec(
+	importJobSortKey,
+	aip160.OrderField[ImportJob]{Name: "name", Value: importJobSortKey},
+)
+
+// importJobSortKey is the trailing segment of an import job's resource name.
+func importJobSortKey(ij ImportJob) string { return lastSegment(ij.Name) }
+
+// lastSegment returns the segment after the last slash of a resource name.
+func lastSegment(name string) string {
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		return name[i+1:]
+	}
+	return name
+}
 
 // versionOrderKey renders a version number so a lexicographic string comparison
 // matches the numeric order the API documents. A non-numeric id (which the

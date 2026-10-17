@@ -6,13 +6,9 @@
 // official apiary REST clients and the shared depth-test kit
 // (tests/integration/gcp/testdepth, DC2).
 //
-// p4 uses the kit's plain cursor walk: both services' Discovery documents also
-// document a list `filter` (and, for KMS, `orderBy`), but the emulator ignores
-// both — verified against the running server, which returns the unfiltered,
-// order-insensitive set — so the walk asserts the pageSize/pageToken mechanics
-// only and the ignored parameters are recorded as DC14. The list order is
-// compared as a set: neither Discovery document specifies a default order for
-// these methods.
+// p4 uses the kit's plain cursor walk (the filtered/ordered forms are asserted
+// separately below and in the DC14/DC23 cases). The list order is compared as a
+// set: neither Discovery document specifies a default order for these methods.
 //
 // p2 asserts the documented state under contention, not a one-winner race the
 // API does not define. A KMS crypto-key-version id is allocated atomically
@@ -548,4 +544,102 @@ func TestSDKSecretManagerDepthConcurrency(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "DISABLED", got.State, "concurrent disables settle the version on DISABLED")
 	})
+}
+
+// walkImportJobNames walks importJobs.list through the kit and returns the full
+// job names in walk order.
+func walkImportJobNames(t *testing.T, svc *cloudkms.Service, keyRing string, cfg testdepth.Paging[*cloudkms.ImportJob]) []string {
+	t.Helper()
+	jobs := testdepth.AssertPaging(t, func() testdepth.Lister[*cloudkms.ImportJob] {
+		return func(req testdepth.ListRequest) (testdepth.Page[*cloudkms.ImportJob], error) {
+			call := svc.Projects.Locations.KeyRings.ImportJobs.List(keyRing)
+			if req.PageSize > 0 {
+				call = call.PageSize(req.PageSize)
+			}
+			if req.PageToken != "" {
+				call = call.PageToken(req.PageToken)
+			}
+			if req.Filter != "" {
+				call = call.Filter(req.Filter)
+			}
+			if req.OrderBy != "" {
+				call = call.OrderBy(req.OrderBy)
+			}
+			resp, err := call.Do()
+			if err != nil {
+				return testdepth.Page[*cloudkms.ImportJob]{}, err
+			}
+			return testdepth.Page[*cloudkms.ImportJob]{Items: resp.ImportJobs, NextPageToken: resp.NextPageToken}, nil
+		}
+	}, cfg)
+	return testdepth.Names(jobs, cfg)
+}
+
+// TestSDKKMSImportJobsListFilterOrderBy closes DC23's client-side half:
+// importJobs.list documents filter/orderBy/pageSize/pageToken (KMS Discovery and
+// the "Sorting and filtering list results" page), so the official apiary client
+// must see all four honoured, and the filter and name order must compose with
+// the cursor instead of returning the unfiltered key ring in one unpaged slice.
+func TestSDKKMSImportJobsListFilterOrderBy(t *testing.T) {
+	ctx := context.Background()
+	svc, err := cloudkms.NewService(ctx, opts()...)
+	require.NoError(t, err)
+
+	ring := createKeyRing(t, svc)
+	marker := unique("depth-ij")
+	want := make([]string, 0, 3)
+	for i := 0; i < 3; i++ {
+		job, err := svc.Projects.Locations.KeyRings.ImportJobs.Create(ring, &cloudkms.ImportJob{
+			ImportMethod:    "RSA_OAEP_3072_SHA256",
+			ProtectionLevel: "SOFTWARE",
+		}).ImportJobId(fmt.Sprintf("%s-%d", marker, i)).Do()
+		require.NoError(t, err)
+		want = append(want, job.Name)
+	}
+	// A decoy job the filter must exclude.
+	_, err = svc.Projects.Locations.KeyRings.ImportJobs.Create(ring, &cloudkms.ImportJob{
+		ImportMethod: "RSA_OAEP_3072_SHA256",
+	}).ImportJobId(unique("decoy-ij")).Do()
+	require.NoError(t, err)
+
+	// filter + orderBy + paging composed: exactly the marker jobs, ascending,
+	// across the page boundary.
+	sorted := append([]string(nil), want...)
+	sort.Strings(sorted)
+	got := walkImportJobNames(t, svc, ring, testdepth.Paging[*cloudkms.ImportJob]{
+		Name:                 func(ij *cloudkms.ImportJob) string { return ij.Name },
+		PageSize:             2,
+		Filter:               `name:"` + marker + `"`,
+		OrderBy:              "name",
+		Order:                testdepth.OrderAscendingName,
+		RequireNonEmptyPages: true,
+		Expect:               want,
+		Include:              func(ij *cloudkms.ImportJob) bool { return strings.Contains(ij.Name, marker) },
+	})
+	require.Equal(t, sorted, got, "the filtered, name-ordered import-job walk returns exactly the marker jobs in order")
+
+	// orderBy name desc over the whole key ring, across pages.
+	all := walkImportJobNames(t, svc, ring, testdepth.Paging[*cloudkms.ImportJob]{
+		Name:     func(ij *cloudkms.ImportJob) string { return ij.Name },
+		PageSize: 2,
+		OrderBy:  "name desc",
+	})
+	require.Len(t, all, len(want)+1, "the unfiltered walk returns every job in the key ring")
+	require.Truef(t, sort.SliceIsSorted(all, func(i, j int) bool { return all[i] > all[j] }),
+		"orderBy name desc must return the import jobs in descending name order: %v", all)
+
+	// A protectionLevel filter distinguishes the HSM job from the SOFTWARE ones.
+	_, err = svc.Projects.Locations.KeyRings.ImportJobs.Create(ring, &cloudkms.ImportJob{
+		ImportMethod:    "RSA_OAEP_3072_SHA256",
+		ProtectionLevel: "HSM",
+	}).ImportJobId(unique("hsm-ij")).Do()
+	require.NoError(t, err)
+	resp, err := svc.Projects.Locations.KeyRings.ImportJobs.List(ring).Filter("protectionLevel=HSM").Do()
+	require.NoError(t, err)
+	require.Len(t, resp.ImportJobs, 1, "protectionLevel=HSM must match only the HSM job")
+	require.Equal(t, "HSM", resp.ImportJobs[0].ProtectionLevel)
+
+	// An unsupported filter is a 400, not a silently ignored parameter.
+	_, err = svc.Projects.Locations.KeyRings.ImportJobs.List(ring).Filter("bogus=1").Do()
+	require.Error(t, err, "an unsupported import-job filter must be INVALID_ARGUMENT")
 }

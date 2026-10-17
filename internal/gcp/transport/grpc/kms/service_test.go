@@ -1178,6 +1178,10 @@ func TestKMSListNegativePageSizeRejected(t *testing.T) {
 			_, err := client.ListCryptoKeyVersions(ctx, &kmspb.ListCryptoKeyVersionsRequest{Parent: symKey, PageSize: -1})
 			return err
 		}},
+		{"ListImportJobs", func() error {
+			_, err := client.ListImportJobs(ctx, &kmspb.ListImportJobsRequest{Parent: keyRing, PageSize: -1})
+			return err
+		}},
 	}
 	for _, tc := range cases {
 		if err := tc.call(); status.Code(err) != codes.InvalidArgument {
