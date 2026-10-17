@@ -65,10 +65,27 @@ func TestCheckPagesSeededNegatives(t *testing.T) {
 			expect: `page 1 is out of order: "a" comes after "b"`,
 		},
 		{
+			// The DC17 regression: the misorder is between the last item of page 1
+			// and the first item of page 2, so no within-page comparison can see it.
 			name:   "order violation across a page boundary",
-			pages:  []Page[string]{page("t2", "a", "b"), page("", "c", "b")},
+			pages:  []Page[string]{page("t2", "a", "c"), page("", "b", "d")},
 			cfg:    strCfg(2, OrderAscendingName),
-			expect: `page 2 is out of order`,
+			expect: `page 2 is out of order across the page boundary: "b" comes after page 1's last item "c"`,
+		},
+		{
+			name:   "order violation across a page boundary onto an empty page's successor",
+			pages:  []Page[string]{page("t2", "a"), page("t3"), page("", "0")},
+			cfg:    strCfg(1, OrderAscendingName),
+			expect: `page 3 is out of order across the page boundary: "0" comes after page 1's last item "a"`,
+		},
+		{
+			// A globally consistent mis-order (every walk descending) is a real
+			// contract violation even though a second walk repeats it exactly, so
+			// CheckPages — not CheckStable — must be the thing that bites.
+			name:   "consistently descending walk",
+			pages:  []Page[string]{page("t2", "c", "b"), page("", "a")},
+			cfg:    strCfg(2, OrderAscendingName, "a", "b", "c"),
+			expect: `page 2 is out of order across the page boundary: "a" comes after page 1's last item "b"`,
 		},
 		{
 			name:   "page larger than the requested pageSize",
@@ -282,6 +299,28 @@ func TestAssertPagingWalksTwiceAndFiresOnASeededNegative(t *testing.T) {
 	rec = wantReported(func(tb TB) { AssertPaging[string](tb, factory, Paging[string]{PageSize: 2}) })
 	if !strings.Contains(rec.reported(), "Paging.Name is required") {
 		t.Fatalf("AssertPaging with no Name reported %q, want the Name-required fatal", rec.reported())
+	}
+}
+
+// TestAssertPagingCatchesAPageOrderedInternallyButOutOfOrderAcrossTheBoundary is
+// the DC17 end-to-end proof: the first walk is ascending *within* each page and a
+// second walk repeats it exactly, so only a cross-page order check can fire.
+func TestAssertPagingCatchesAPageOrderedInternallyButOutOfOrderAcrossTheBoundary(t *testing.T) {
+	pages := []Page[string]{page("t2", "b", "d"), page("", "a", "c")}
+	factory := func() Lister[string] {
+		i := 0
+		return func(ListRequest) (Page[string], error) {
+			p := pages[i]
+			if i < len(pages)-1 {
+				i++
+			}
+			return p, nil
+		}
+	}
+	cfg := strCfg(2, OrderAscendingName, "a", "b", "c", "d")
+	rec := wantReported(func(tb TB) { AssertPaging(tb, factory, cfg) })
+	if !strings.Contains(rec.reported(), `page 2 is out of order across the page boundary: "a" comes after page 1's last item "d"`) {
+		t.Fatalf("AssertPaging on a cross-page misorder reported %q, want the boundary violation", rec.reported())
 	}
 }
 
