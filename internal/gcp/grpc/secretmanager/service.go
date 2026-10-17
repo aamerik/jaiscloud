@@ -39,6 +39,10 @@ import (
 // matching the REST provider's persisted type so both transports share state.
 const rtSecretPolicy = "gcp_secret_policy"
 
+// errSkipRotation aborts maybeRotate's atomic mutate without writing, when
+// rotation turns out not to be due after the locked re-read.
+var errSkipRotation = errors.New("secret rotation not due")
+
 // Service implements secretmanagerpb.SecretManagerServiceServer and
 // iampb.IAMPolicyServer over the shared stores.
 type Service struct {
@@ -221,6 +225,12 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 	// concurrent AddVersion's NextVersion() counter advance can't land
 	// between our read and our write and get silently rolled back by it.
 	updated, err := s.secrets.UpdateSecretAtomic(ctx, project, id, func(cur secretmanagerstore.Secret) (secretmanagerstore.Secret, error) {
+		// Secret.etag is the resource's optimistic-concurrency token (AIP-154),
+		// enforced here like the delete and version-request preconditions; the
+		// atomic mutate sees exactly the state this write replaces.
+		if err := secretmanagersvc.CheckSecretEtag(secretName(project, id), cur, proto.GetEtag()); err != nil {
+			return secretmanagerstore.Secret{}, err
+		}
 		if selected("labels") {
 			if labels := proto.GetLabels(); labels != nil || !applyAll {
 				cur.Labels = labels
@@ -268,7 +278,13 @@ func (s *Service) DeleteSecret(ctx context.Context, req *secretmanagerpb.DeleteS
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
-	if err := s.secrets.DeleteSecret(ctx, project, id); err != nil {
+	// The documented `etag` precondition (same contract as the REST provider),
+	// checked inside the store's atomic delete so a concurrent update cannot
+	// land between the comparison and the removal.
+	err := s.secrets.DeleteSecretIf(ctx, project, id, func(sec secretmanagerstore.Secret) error {
+		return secretmanagersvc.CheckSecretEtag(secretName(project, id), sec, req.GetEtag())
+	})
+	if err != nil {
 		return nil, mapSecretErr(err)
 	}
 	return &emptypb.Empty{}, nil
@@ -426,40 +442,46 @@ func (s *Service) ListSecretVersions(ctx context.Context, req *secretmanagerpb.L
 }
 
 func (s *Service) DisableSecretVersion(ctx context.Context, req *secretmanagerpb.DisableSecretVersionRequest) (*secretmanagerpb.SecretVersion, error) {
-	return s.setVersionState(ctx, req.GetName(), "DISABLED")
+	return s.setVersionState(ctx, req.GetName(), "DISABLED", req.GetEtag())
 }
 
 func (s *Service) EnableSecretVersion(ctx context.Context, req *secretmanagerpb.EnableSecretVersionRequest) (*secretmanagerpb.SecretVersion, error) {
-	return s.setVersionState(ctx, req.GetName(), "ENABLED")
+	return s.setVersionState(ctx, req.GetName(), "ENABLED", req.GetEtag())
 }
 
 func (s *Service) DestroySecretVersion(ctx context.Context, req *secretmanagerpb.DestroySecretVersionRequest) (*secretmanagerpb.SecretVersion, error) {
-	return s.setVersionState(ctx, req.GetName(), "DESTROYED")
+	return s.setVersionState(ctx, req.GetName(), "DESTROYED", req.GetEtag())
 }
 
 // setVersionState applies a lifecycle transition (DISABLED/ENABLED/DESTROYED)
-// to a secret version.
-func (s *Service) setVersionState(ctx context.Context, name, state string) (*secretmanagerpb.SecretVersion, error) {
+// to a secret version. etag is the optional documented precondition: a mismatch
+// fails the transition with ABORTED.
+func (s *Service) setVersionState(ctx context.Context, name, state, etag string) (*secretmanagerpb.SecretVersion, error) {
 	project, secret, version, ok := splitSecretResource(name)
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
-	v, err := s.secrets.GetVersion(ctx, project, secret, version)
+	// The etag precondition and the transition run inside one atomic store
+	// mutate, so a concurrent transition cannot invalidate the etag between the
+	// check and the write.
+	v, err := s.secrets.UpdateVersionIf(ctx, project, secret, version, func(v secretmanagerstore.Version) (secretmanagerstore.Version, error) {
+		if err := secretmanagersvc.CheckVersionEtag(versionName(project, secret, version), v, etag); err != nil {
+			return secretmanagerstore.Version{}, err
+		}
+		// DESTROYED is terminal: a version may not leave this state once entered.
+		if v.State == "DESTROYED" {
+			return secretmanagerstore.Version{}, &model.ProviderError{
+				Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
+				Message: "secret version " + v.VersionID + " is DESTROYED",
+			}
+		}
+		v.State = state
+		if state == "DESTROYED" {
+			v.DestroyTime = clock.Now()
+		}
+		return v, nil
+	})
 	if err != nil {
-		return nil, mapVersionErr(err)
-	}
-	// DESTROYED is terminal: a version may not leave this state once entered.
-	if v.State == "DESTROYED" {
-		return nil, mapError(&model.ProviderError{
-			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
-			Message: "secret version " + v.VersionID + " is DESTROYED",
-		})
-	}
-	v.State = state
-	if state == "DESTROYED" {
-		v.DestroyTime = clock.Now()
-	}
-	if err := s.secrets.UpdateVersion(ctx, project, v); err != nil {
 		return nil, mapVersionErr(err)
 	}
 	return versionToProto(project, v), nil
@@ -611,21 +633,44 @@ func (s *Service) maybeRotate(ctx context.Context, account, id string, sec secre
 	if err != nil || clock.Now().Before(next) {
 		return sec
 	}
-	if sec.Rotation.RotationPeriod != "" {
-		if d, err := time.ParseDuration(sec.Rotation.RotationPeriod); err == nil {
-			sec.Rotation.NextRotationTime = timestamp.Canonical(clock.Now().Add(d))
+	// Everything that matters — whether rotation is STILL due, the schedule
+	// advance and the version-counter allocation — is re-done from a fresh read
+	// inside UpdateSecretAtomic's locked section (mirroring the REST provider),
+	// so a concurrent Update/AddVersion/maybeRotate cannot interleave. The
+	// caller's snapshot is used only for the cheap up-front due check above.
+	var allocated int
+	updated, err := s.secrets.UpdateSecretAtomic(ctx, account, id, func(cur secretmanagerstore.Secret) (secretmanagerstore.Secret, error) {
+		if cur.Rotation == nil || cur.Rotation.NextRotationTime == "" {
+			return secretmanagerstore.Secret{}, errSkipRotation
 		}
-	}
-	ver, err := s.secrets.NextVersion(ctx, account, id)
+		next, err := time.Parse(time.RFC3339Nano, cur.Rotation.NextRotationTime)
+		if err != nil || clock.Now().Before(next) {
+			return secretmanagerstore.Secret{}, errSkipRotation
+		}
+		if cur.Rotation.RotationPeriod != "" {
+			if d, err := time.ParseDuration(cur.Rotation.RotationPeriod); err == nil {
+				rotation := *cur.Rotation
+				rotation.NextRotationTime = timestamp.Canonical(clock.Now().Add(d))
+				cur.Rotation = &rotation
+			}
+		}
+		allocated = cur.NextVer
+		cur.NextVer++
+		return cur, nil
+	})
 	if err != nil {
+		// errSkipRotation or a store error: re-read so the response (and the
+		// etag, which covers nextRotationTime) reflects the stored state rather
+		// than this caller's possibly stale snapshot.
+		if fresh, gerr := s.secrets.GetSecret(ctx, account, id); gerr == nil {
+			return fresh
+		}
 		return sec
 	}
-	sec.NextVer = ver + 1
 	_ = s.secrets.CreateVersion(ctx, account, secretmanagerstore.Version{
-		SecretID: id, VersionID: strconv.Itoa(ver), State: "ENABLED", CreateTime: clock.Now(),
+		SecretID: id, VersionID: strconv.Itoa(allocated), State: "ENABLED", CreateTime: clock.Now(),
 	})
-	_ = s.secrets.UpdateSecret(ctx, account, id, sec)
-	return sec
+	return updated
 }
 
 // ─── IAM (google.iam.v1.IAMPolicy over secrets) ───────────────────────────────
@@ -679,9 +724,9 @@ func (s *Service) TestIamPermissions(ctx context.Context, req *iampb.TestIamPerm
 func secretToProto(project string, s secretmanagerstore.Secret) *secretmanagerpb.Secret {
 	out := &secretmanagerpb.Secret{
 		Name: secretName(project, s.ID),
-		// etag is a stable hash of name+createTime (matches GCP's
-		// immutable-etag semantics and the REST provider's computation).
-		Etag: policy.Etag(secretName(project, s.ID) + timestamp.Canonical(s.CreateTime)),
+		// etag is the shared Secret Manager etag (see service/secretmanager):
+		// stable across reads, different after any metadata mutation.
+		Etag: secretmanagersvc.SecretEtag(secretName(project, s.ID), s),
 		Replication: &secretmanagerpb.Replication{
 			Replication: &secretmanagerpb.Replication_Automatic_{
 				Automatic: &secretmanagerpb.Replication_Automatic{},
@@ -710,9 +755,14 @@ func secretToProto(project string, s secretmanagerstore.Secret) *secretmanagerpb
 }
 
 func versionToProto(project string, v secretmanagerstore.Version) *secretmanagerpb.SecretVersion {
+	name := versionName(project, v.SecretID, v.VersionID)
 	out := &secretmanagerpb.SecretVersion{
-		Name:  versionName(project, v.SecretID, v.VersionID),
+		Name:  name,
 		State: stateToProto(v.State),
+		// SecretVersion.etag is output-only in the API and is the value the
+		// disable/enable/destroy preconditions compare against, so it must be
+		// present on every response (the gRPC surface used to omit it).
+		Etag: secretmanagersvc.VersionEtag(name, timestamp.Canonical(v.CreateTime), v.State),
 		// Mirror the REST provider's versionToMap: real Secret Manager marks
 		// version responses as carrying a client-specified payload checksum.
 		ClientSpecifiedPayloadChecksum: true,

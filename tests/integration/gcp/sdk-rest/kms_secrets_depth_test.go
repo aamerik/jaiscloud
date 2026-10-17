@@ -18,14 +18,14 @@
 // API does not define. A KMS crypto-key-version id is allocated atomically
 // (concurrent creates get distinct numbers, no lost update) and its destruction
 // is idempotent (every concurrent caller settles it on DESTROY_SCHEDULED, a
-// second destroy returns the version unchanged); updating the primary version is
-// atomic (the key settles on one of the requested versions, never a torn value).
-// A Secret Manager version number is likewise allocated atomically, and disable
-// is idempotent. The API does define one precondition the emulator does not
-// enforce — the `etag` on `secrets.delete` (and `DisableSecretVersionRequest`,
-// `SecretVersion.etag`) — so that conflict is recorded as DC13 rather than
-// asserted. The kit's negative-pageSize negative is not asserted either (DC12:
-// the emulator coerces a negative pageSize to its default).
+// second destroy returns the version unchanged); updating the primary version
+// is atomic (the key settles on one of the requested versions, never a torn
+// value). A Secret Manager version number is likewise allocated atomically, and
+// disable is idempotent. The etag preconditions (secrets.delete and the version
+// disable/enable/destroy requests) are asserted separately in
+// secretmanager_etag_test.go (DC13). The kit's negative-pageSize negative is not
+// asserted either (DC12: the emulator coerces a negative pageSize to its
+// default).
 //
 // The concurrency cases run under -race (the module's integration step adds it);
 // asserting a contention property in a binary without the race detector is a

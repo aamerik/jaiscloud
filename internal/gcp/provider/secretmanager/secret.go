@@ -271,13 +271,14 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if kmsKeyName := kmsKeyNameFromBody(body); kmsKeyName != "" {
 		m.KmsKeyName = kmsKeyName
 	}
-	if err := p.secrets.CreateSecret(ctx, nr.AccountID, id, toStoreSecret(m)); err != nil {
+	sec := toStoreSecret(m)
+	if err := p.secrets.CreateSecret(ctx, nr.AccountID, id, sec); err != nil {
 		if errors.Is(err, secretmanagerstore.ErrAlreadyExists) {
 			return nil, model.NewProviderError("AlreadyExists", "secret already exists", 409)
 		}
 		return nil, err
 	}
-	return provider.OK(secretToMap(m)), nil
+	return provider.OK(secretToMap(nr, sec)), nil
 }
 
 func (p *Provider) List(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -297,7 +298,7 @@ func (p *Provider) List(ctx context.Context, nr *model.NormalizedRequest) (*mode
 
 	items := make([]any, 0, len(page))
 	for _, s := range page {
-		items = append(items, secretToMap(fromStoreSecret(nr, s)))
+		items = append(items, secretToMap(nr, s))
 	}
 	// Secret Manager does not report a total count once a filter is applied
 	// ("If filter is set in a list request, the response does not indicate the
@@ -324,7 +325,7 @@ func (p *Provider) Get(ctx context.Context, nr *model.NormalizedRequest) (*model
 		return nil, mapSecretErr(err)
 	}
 	s = p.maybeRotate(ctx, nr.AccountID, id, s)
-	return provider.OK(secretToMap(fromStoreSecret(nr, s))), nil
+	return provider.OK(secretToMap(nr, s)), nil
 }
 
 func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -339,6 +340,15 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	// concurrent AddVersion's NextVersion() counter advance can't land between
 	// our read and our write and get silently rolled back by it.
 	updated, err := p.secrets.UpdateSecretAtomic(ctx, nr.AccountID, id, func(current secretmanagerstore.Secret) (secretmanagerstore.Secret, error) {
+		// Secret.etag is the resource's optimistic-concurrency token (AIP-154).
+		// The Discovery document spells the delete and version-request
+		// preconditions out; update's follows from the field's documented role
+		// and is enforced here for the same reason. Checking it inside the
+		// atomic mutate keeps it race-free (it sees the state this write
+		// replaces).
+		if err := secretmanagersvc.CheckSecretEtag(nr.ResourceID("secret", id), current, bodyEtag(nr)); err != nil {
+			return secretmanagerstore.Secret{}, err
+		}
 		m := fromStoreSecret(nr, current)
 		if body != nil {
 			if labels, ok := body["labels"].(map[string]any); ok {
@@ -372,7 +382,7 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if err != nil {
 		return nil, mapSecretErr(err)
 	}
-	return provider.OK(secretToMap(fromStoreSecret(nr, updated))), nil
+	return provider.OK(secretToMap(nr, updated)), nil
 }
 
 // errSkipRotation aborts maybeRotate's atomic mutate without writing, when
@@ -426,7 +436,14 @@ func (p *Provider) maybeRotate(ctx context.Context, account, id string, s secret
 	})
 	if err != nil {
 		// errSkipRotation (already rotated, or rotation disabled, since our
-		// caller's read) or any store error: behave as if untouched.
+		// caller's read) or a store error: behave as if untouched. Re-read so
+		// the response — and its etag, which covers nextRotationTime — reflects
+		// the stored state rather than this caller's possibly stale snapshot
+		// (returning the snapshot could hand the client an etag the store no
+		// longer has, and its next etag-carrying write would spuriously ABORT).
+		if fresh, gerr := p.secrets.GetSecret(ctx, account, id); gerr == nil {
+			return fresh
+		}
 		return s
 	}
 	_ = p.secrets.CreateVersion(ctx, account, secretmanagerstore.Version{
@@ -440,10 +457,32 @@ func (p *Provider) Delete(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if err != nil {
 		return nil, err
 	}
-	if err := p.secrets.DeleteSecret(ctx, nr.AccountID, secretID(name)); err != nil {
+	id := secretID(name)
+	// The documented `etag` precondition: the delete succeeds only when the
+	// caller's etag matches the currently stored secret (ABORTED otherwise).
+	// The check runs inside the store's atomic delete, so a concurrent update
+	// cannot land between the comparison and the removal (which would let a
+	// stale etag through).
+	err = p.secrets.DeleteSecretIf(ctx, nr.AccountID, id, func(sec secretmanagerstore.Secret) error {
+		return secretmanagersvc.CheckSecretEtag(nr.ResourceID("secret", id), sec, etagParam(nr))
+	})
+	if err != nil {
 		return nil, mapSecretErr(err)
 	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
+}
+
+// etagParam returns the request's `etag` query parameter (empty when absent).
+func etagParam(nr *model.NormalizedRequest) string {
+	e, _ := nr.Params["etag"].(string)
+	return e
+}
+
+// bodyEtag returns the `etag` carried in the request body (empty when absent).
+func bodyEtag(nr *model.NormalizedRequest) string {
+	body, _ := nr.Params["body"].(map[string]any)
+	e, _ := body["etag"].(string)
+	return e
 }
 
 func (p *Provider) AddVersion(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -804,22 +843,27 @@ func (p *Provider) setVersionState(ctx context.Context, nr *model.NormalizedRequ
 		return nil, err
 	}
 	secret, version := parseSecretName(name)
-	v, err := p.secrets.GetVersion(ctx, nr.AccountID, secret, version)
-	if err != nil {
-		return nil, mapVersionErr(err)
-	}
-	// DESTROYED is terminal: a version may not leave this state once entered.
-	if v.State == "DESTROYED" {
-		return nil, &model.ProviderError{
-			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
-			Message: "secret version " + v.VersionID + " is DESTROYED",
+	// The etag precondition and the transition run inside one atomic store
+	// mutate, so a concurrent transition cannot invalidate the etag between the
+	// check and the write.
+	v, err := p.secrets.UpdateVersionIf(ctx, nr.AccountID, secret, version, func(v secretmanagerstore.Version) (secretmanagerstore.Version, error) {
+		if err := secretmanagersvc.CheckVersionEtag(fromStoreVersion(nr, v).Name, v, bodyEtag(nr)); err != nil {
+			return secretmanagerstore.Version{}, err
 		}
-	}
-	v.State = state
-	if state == "DESTROYED" {
-		v.DestroyTime = clock.Now()
-	}
-	if err := p.secrets.UpdateVersion(ctx, nr.AccountID, v); err != nil {
+		// DESTROYED is terminal: a version may not leave this state once entered.
+		if v.State == "DESTROYED" {
+			return secretmanagerstore.Version{}, &model.ProviderError{
+				Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
+				Message: "secret version " + v.VersionID + " is DESTROYED",
+			}
+		}
+		v.State = state
+		if state == "DESTROYED" {
+			v.DestroyTime = clock.Now()
+		}
+		return v, nil
+	})
+	if err != nil {
 		return nil, mapVersionErr(err)
 	}
 	m := fromStoreVersion(nr, v)
@@ -904,13 +948,16 @@ func crc32c(b64 string) string {
 	return strconv.FormatUint(uint64(crc32.Checksum(raw, crc32.MakeTable(crc32.Castagnoli))), 10)
 }
 
-func secretToMap(m secretMeta) map[string]any {
+func secretToMap(nr *model.NormalizedRequest, s secretmanagerstore.Secret) map[string]any {
+	m := fromStoreSecret(nr, s)
 	out := map[string]any{
 		"name":       m.Name,
 		"createTime": m.CreateTime,
-		// etag is a stable hash of name+createTime (matches GCP's immutable-etag
-		// semantics for secrets that never change their create time).
-		"etag": policy.Etag(m.Name + m.CreateTime),
+		// etag is the shared Secret Manager etag (see service/secretmanager):
+		// a hash of the secret's mutable metadata, so it is stable across reads
+		// of an unchanged secret and different after any update — the same
+		// contract GCP's opaque token provides for the delete precondition.
+		"etag": secretmanagersvc.SecretEtag(m.Name, s),
 		"replication": map[string]any{
 			"automatic": map[string]any{},
 		},
@@ -947,9 +994,10 @@ func versionToMap(v versionMeta) map[string]any {
 		"name":       v.Name,
 		"state":      v.State,
 		"createTime": v.CreateTime,
-		// etag is a stable hash of the version's identity and lifecycle state
-		// (GCP bumps a SecretVersion's etag on every state transition).
-		"etag": policy.Etag(v.Name + "|" + v.CreateTime + "|" + v.State),
+		// etag is the shared Secret Manager version etag: it changes on every
+		// lifecycle transition (the version's only mutable field), so a stale
+		// disable/enable/destroy precondition is detectable.
+		"etag": secretmanagersvc.VersionEtag(v.Name, v.CreateTime, v.State),
 		// replicationStatus mirrors the parent secret's replication. JaisCloud
 		// only models automatic replication, which GCP renders as an empty
 		// automatic object.
