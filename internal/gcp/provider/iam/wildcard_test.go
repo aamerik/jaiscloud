@@ -90,15 +90,23 @@ func TestServiceAccountWildcardProject(t *testing.T) {
 		t.Errorf("concrete get displayName = %v, want the wildcard patch to have applied", got)
 	}
 
-	// disable / enable.
+	// disable / enable. Both answer Empty (Discovery), so the state is read back.
 	if resp, err = p.Disable(ctx, wild(map[string]any{})); err != nil {
 		t.Fatalf("wildcard disable: %v", err)
+	}
+	assertEmptyResponse(t, "wildcard disable", resp)
+	if resp, err = p.Get(ctx, wild(map[string]any{})); err != nil {
+		t.Fatalf("wildcard get after disable: %v", err)
 	}
 	if got := resp.Data["disabled"]; got != true {
 		t.Errorf("wildcard disable disabled = %v, want true", got)
 	}
 	if resp, err = p.Enable(ctx, wild(map[string]any{})); err != nil {
 		t.Fatalf("wildcard enable: %v", err)
+	}
+	assertEmptyResponse(t, "wildcard enable", resp)
+	if resp, err = p.Get(ctx, wild(map[string]any{})); err != nil {
+		t.Fatalf("wildcard get after enable: %v", err)
 	}
 	if got := resp.Data["disabled"]; got != false {
 		t.Errorf("wildcard enable disabled = %v, want false", got)
@@ -221,15 +229,23 @@ func TestServiceAccountKeysWildcardProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wildcard keys.disable: %v", err)
 	}
-	if dis.Data["disabled"] != true {
-		t.Errorf("wildcard keys.disable disabled = %v, want true", dis.Data["disabled"])
+	assertEmptyResponse(t, "wildcard keys.disable", dis)
+	if got, err = p.ServiceAccountKeyGet(ctx, wildNR(map[string]any{"name": parent + "/keys/" + keyID})); err != nil {
+		t.Fatalf("wildcard keys.get after disable: %v", err)
+	}
+	if got.Data["disabled"] != true {
+		t.Errorf("wildcard keys.disable disabled = %v, want true", got.Data["disabled"])
 	}
 	en, err := p.ServiceAccountKeyEnable(ctx, wildNR(map[string]any{"name": parent + "/keys/" + keyID}))
 	if err != nil {
 		t.Fatalf("wildcard keys.enable: %v", err)
 	}
-	if en.Data["disabled"] != false {
-		t.Errorf("wildcard keys.enable disabled = %v, want false", en.Data["disabled"])
+	assertEmptyResponse(t, "wildcard keys.enable", en)
+	if got, err = p.ServiceAccountKeyGet(ctx, wildNR(map[string]any{"name": parent + "/keys/" + keyID})); err != nil {
+		t.Fatalf("wildcard keys.get after enable: %v", err)
+	}
+	if got.Data["disabled"] != false {
+		t.Errorf("wildcard keys.enable disabled = %v, want false", got.Data["disabled"])
 	}
 	if _, err := p.ServiceAccountKeyDelete(ctx, wildNR(map[string]any{"name": parent + "/keys/" + keyID})); err != nil {
 		t.Fatalf("wildcard keys.delete: %v", err)

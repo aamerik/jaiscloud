@@ -129,11 +129,11 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 555
+        "rest": 558
       },
       "unverified": {
         "grpc": 21,
-        "rest": 119
+        "rest": 116
       }
     },
     "grpc_only_services": [
@@ -6568,12 +6568,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "iam.projects.serviceAccounts.keys.disable",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=iam.projects.serviceAccounts.keys.disable",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -6582,12 +6582,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "iam.projects.serviceAccounts.keys.enable",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=iam.projects.serviceAccounts.keys.enable",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -6596,11 +6596,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "iam.projects.serviceAccounts.keys.get",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=iam.projects.serviceAccounts.keys.get",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {

@@ -162,6 +162,14 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "iam", Method: "POST", Path: saBase + "/" + saEmail + "/keys", Body: `{}`,
 			Save: map[string]string{"keyName": "name"}},
 		Scenario{Service: "iam", Method: "GET", Path: saBase + "/" + saEmail + "/keys"},
+		// keys.get / keys.disable / keys.enable: disable/enable declare an Empty
+		// response, so the state they set is validated through the get that
+		// follows each verb (and the Empty body itself against Discovery).
+		Scenario{Service: "iam", Method: "GET", Path: "/v1/${keyName}"},
+		Scenario{Service: "iam", Method: "POST", Path: "/v1/${keyName}:disable"},
+		Scenario{Service: "iam", Method: "GET", Path: "/v1/${keyName}"},
+		Scenario{Service: "iam", Method: "POST", Path: "/v1/${keyName}:enable"},
+		Scenario{Service: "iam", Method: "GET", Path: "/v1/${keyName}"},
 		Scenario{Service: "iam", Method: "POST", Path: saBase + "/" + saEmail + ":signBlob",
 			Body: `{"bytesToSign":"aGVsbG8="}`},
 		Scenario{Service: "iam", Method: "GET", Path: saBase + "/missing-" + suffix + "@" + p + ".iam.gserviceaccount.com"},

@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 555 | 119 |
+| rest | 558 | 116 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -588,9 +588,9 @@ _23 cell(s): ga=23 limited=0 preview=0 unsupported=0_
 | IAM.ServiceAccountGetIamPolicy | rest | ga | yes | — |
 | IAM.ServiceAccountKeyCreate | rest | ga | yes | — |
 | IAM.ServiceAccountKeyDelete | rest | ga | yes | — |
-| IAM.ServiceAccountKeyDisable | rest | ga | no | — |
-| IAM.ServiceAccountKeyEnable | rest | ga | no | — |
-| IAM.ServiceAccountKeyGet | rest | ga | no | — |
+| IAM.ServiceAccountKeyDisable | rest | ga | yes | — |
+| IAM.ServiceAccountKeyEnable | rest | ga | yes | — |
+| IAM.ServiceAccountKeyGet | rest | ga | yes | — |
 | IAM.ServiceAccountKeyList | rest | ga | yes | — |
 | IAM.ServiceAccountList | rest | ga | yes | — |
 | IAM.ServiceAccountPatch | rest | ga | yes | — |

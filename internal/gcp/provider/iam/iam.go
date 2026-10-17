@@ -526,7 +526,9 @@ func (p *Provider) saveServiceAccountMeta(ctx context.Context, account string, m
 }
 
 // setDisabled flips a service account's disabled flag (projects.serviceAccounts
-// .disable/.enable).
+// .disable/.enable). Both methods declare an Empty response, so the new state is
+// observable only through a follow-up get — real GCP never returns the account
+// here, and a client decoding strictly against Discovery must not receive one.
 func (p *Provider) setDisabled(ctx context.Context, nr *model.NormalizedRequest, disabled bool) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
@@ -544,7 +546,7 @@ func (p *Provider) setDisabled(ctx context.Context, nr *model.NormalizedRequest,
 	if err := p.saveServiceAccountMeta(ctx, ref.Account, m); err != nil {
 		return nil, err
 	}
-	return provider.OK(saToMap(m)), nil
+	return provider.OK(map[string]any{}), nil
 }
 
 func (p *Provider) Disable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
