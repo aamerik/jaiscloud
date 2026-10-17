@@ -247,6 +247,85 @@ func TestRESTExclusionRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRESTListNonPositivePageSize pins the wire contract of the config/admin
+// lists: sinks/exclusions/buckets/views/logScopes document "Non-positive values
+// are ignored" and answer the default page, while links.list — whose Discovery
+// document carries no such exception — keeps AIP-158's 400 INVALID_ARGUMENT.
+func TestRESTListNonPositivePageSize(t *testing.T) {
+	c, p := newTestProvider(t)
+	if _, err := call(t, c, p, http.MethodPost, "/v2/projects/test/sinks",
+		map[string]any{"name": "s", "destination": "d"}); err != nil {
+		t.Fatalf("create sink: %v", err)
+	}
+	if _, err := call(t, c, p, http.MethodPost, "/v2/projects/test/exclusions",
+		map[string]any{"name": "e", "filter": "severity<DEBUG"}); err != nil {
+		t.Fatalf("create exclusion: %v", err)
+	}
+
+	sinks, err := call(t, c, p, http.MethodGet, "/v2/projects/test/sinks?pageSize=-1", nil)
+	if err != nil {
+		t.Fatalf("list sinks with pageSize=-1: %v", err)
+	}
+	if list, _ := wireData(t, sinks)["sinks"].([]any); len(list) != 1 {
+		t.Fatalf("sinks = %v, want the single sink", list)
+	}
+	exclusions, err := call(t, c, p, http.MethodGet, "/v2/projects/test/exclusions?pageSize=-1", nil)
+	if err != nil {
+		t.Fatalf("list exclusions with pageSize=-1: %v", err)
+	}
+	if list, _ := wireData(t, exclusions)["exclusions"].([]any); len(list) != 1 {
+		t.Fatalf("exclusions = %v, want the single exclusion", list)
+	}
+
+	location := "/v2/projects/test/locations/global"
+	if _, err := call(t, c, p, http.MethodPost, location+"/buckets?bucketId=b1",
+		map[string]any{"description": "d"}); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	if _, err := call(t, c, p, http.MethodPost, location+"/buckets/b1/views?viewId=v1",
+		map[string]any{"filter": "severity>=ERROR"}); err != nil {
+		t.Fatalf("create view: %v", err)
+	}
+	if _, err := call(t, c, p, http.MethodPost, location+"/logScopes?logScopeId=s1",
+		map[string]any{"resourceNames": []any{"projects/test"}}); err != nil {
+		t.Fatalf("create logScope: %v", err)
+	}
+
+	for _, tc := range []struct {
+		path string
+		key  string
+	}{
+		{location + "/buckets", "buckets"},
+		{location + "/buckets/b1/views", "views"},
+		{location + "/logScopes", "logScopes"},
+	} {
+		resp, err := call(t, c, p, http.MethodGet, tc.path+"?pageSize=-1", nil)
+		if err != nil {
+			t.Fatalf("GET %s with pageSize=-1: %v", tc.path, err)
+		}
+		if list, _ := wireData(t, resp)[tc.key].([]any); len(list) != 1 {
+			t.Fatalf("%s = %v, want the seeded resource", tc.key, list)
+		}
+	}
+
+	_, err = call(t, c, p, http.MethodGet, location+"/buckets/b1/links?pageSize=-1", nil)
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("list links with pageSize=-1 = %v, want InvalidArgument/400", err)
+	}
+
+	// entries.list is the documented rejection: negative and over-maximum sizes
+	// are 400s on the REST path too.
+	for _, pageSize := range []int{-1, 1001} {
+		_, err := call(t, c, p, http.MethodPost, "/v2/entries:list",
+			map[string]any{"resourceNames": []any{"projects/test"}, "pageSize": pageSize})
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Fatalf("entries:list pageSize %d = %v, want InvalidArgument/400", pageSize, err)
+		}
+	}
+}
+
 func TestRESTConfigCodecRouting(t *testing.T) {
 	cases := []struct {
 		method string

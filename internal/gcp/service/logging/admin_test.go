@@ -260,6 +260,47 @@ func TestLinkAndLogScope(t *testing.T) {
 	}
 }
 
+// TestAdminListNonPositivePageSize pins the admin list page-size contract:
+// buckets/views/logScopes.list document "Non-positive values are ignored" and
+// an over-maximum size is clamped (AIP-158), while links.list is the one config
+// list without that documented exception, so a negative size there keeps
+// InvalidArgument.
+func TestAdminListNonPositivePageSize(t *testing.T) {
+	ctx := context.Background()
+	s := newAdminService()
+	seedBucket(t, s)
+	if _, err := s.CreateView(ctx, testBucketName, "v1", loggingstore.LogView{Filter: "severity>=ERROR"}); err != nil {
+		t.Fatalf("CreateView: %v", err)
+	}
+	if _, err := s.CreateLink(ctx, testBucketName, "l1", loggingstore.LogLink{BigQueryDatasetID: "ds"}); err != nil {
+		t.Fatalf("CreateLink: %v", err)
+	}
+	if _, err := s.CreateLogScope(ctx, testBucketParent, "s1", loggingstore.LogScope{ResourceNames: []string{"projects/p"}}); err != nil {
+		t.Fatalf("CreateLogScope: %v", err)
+	}
+
+	for _, pageSize := range []int{-1, 1001} {
+		if page, _, err := s.ListBuckets(ctx, testBucketParent, pageSize, ""); err != nil || len(page) != 1 {
+			t.Fatalf("ListBuckets(%d) = %v, %v; want the seeded bucket", pageSize, page, err)
+		}
+		if page, _, err := s.ListViews(ctx, testBucketName, pageSize, ""); err != nil || len(page) != 1 {
+			t.Fatalf("ListViews(%d) = %v, %v; want the seeded view", pageSize, page, err)
+		}
+		if page, _, err := s.ListLogScopes(ctx, testBucketParent, pageSize, ""); err != nil || len(page) != 1 {
+			t.Fatalf("ListLogScopes(%d) = %v, %v; want the seeded scope", pageSize, page, err)
+		}
+	}
+	if page, _, err := s.ListLinks(ctx, testBucketName, 1001, ""); err != nil || len(page) != 1 {
+		t.Fatalf("ListLinks(1001) = %v, %v; want the seeded link (clamped)", page, err)
+	}
+
+	_, _, err := s.ListLinks(ctx, testBucketName, -1, "")
+	var perr *model.ProviderError
+	if !errors.As(err, &perr) || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("ListLinks(-1) = %v, want InvalidArgument/400", err)
+	}
+}
+
 func TestSettingsAndCmek(t *testing.T) {
 	ctx := context.Background()
 	s := newAdminService()

@@ -326,3 +326,69 @@ func exclusionListContains(ctx context.Context, c *logging.ConfigClient, parent,
 		}
 	}
 }
+
+// TestLoggingConfigListNonPositivePageSize closes DC21 on the official gRPC
+// client: the config/admin lists whose Discovery documents say "Non-positive
+// values are ignored" (sinks, exclusions, buckets, views) must answer the
+// default page for PageSize=-1 instead of INVALID_ARGUMENT. links.list is the
+// one config list without that documented exception, so it keeps AIP-158's
+// rejection.
+func TestLoggingConfigListNonPositivePageSize(t *testing.T) {
+	ctx := context.Background()
+	c := ConfigClient(ctx)
+	defer c.Close()
+
+	parent := "projects/" + ProjectID()
+	location := parent + "/locations/global"
+	bucketID := uniqueName("list-page-size")
+	bucket := location + "/buckets/" + bucketID
+
+	_, err := c.CreateBucket(ctx, &loggingpb.CreateBucketRequest{
+		Parent: location, BucketId: bucketID, Bucket: &loggingpb.LogBucket{Description: "d"},
+	})
+	require.NoError(t, err)
+	_, err = c.CreateView(ctx, &loggingpb.CreateViewRequest{
+		Parent: bucket, ViewId: "v1", View: &loggingpb.LogView{Filter: "severity>=ERROR"},
+	})
+	require.NoError(t, err)
+
+	sinkID := uniqueName("page-size-sink")
+	_, err = c.CreateSink(ctx, &loggingpb.CreateSinkRequest{
+		Parent: parent, Sink: &loggingpb.LogSink{Name: sinkID, Destination: "storage.googleapis.com/bucket"},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = c.DeleteSink(ctx, &loggingpb.DeleteSinkRequest{SinkName: parent + "/sinks/" + sinkID})
+	})
+
+	exclusionID := uniqueName("page-size-excl")
+	_, err = c.CreateExclusion(ctx, &loggingpb.CreateExclusionRequest{
+		Parent: parent, Exclusion: &loggingpb.LogExclusion{Name: exclusionID, Filter: "severity<DEBUG"},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = c.DeleteExclusion(ctx, &loggingpb.DeleteExclusionRequest{Name: parent + "/exclusions/" + exclusionID})
+	})
+
+	// Every ignore-the-non-positive list must return its default page with the
+	// seeded resource, not an empty page and not an error.
+	sink, err := c.ListSinks(ctx, &loggingpb.ListSinksRequest{Parent: parent, PageSize: -1}).Next()
+	require.NoError(t, err)
+	require.NotNil(t, sink)
+
+	exclusion, err := c.ListExclusions(ctx, &loggingpb.ListExclusionsRequest{Parent: parent, PageSize: -1}).Next()
+	require.NoError(t, err)
+	require.NotNil(t, exclusion)
+
+	gotBucket, err := c.ListBuckets(ctx, &loggingpb.ListBucketsRequest{Parent: location, PageSize: -1}).Next()
+	require.NoError(t, err)
+	require.Equal(t, bucket, gotBucket.GetName())
+
+	view, err := c.ListViews(ctx, &loggingpb.ListViewsRequest{Parent: bucket, PageSize: -1}).Next()
+	require.NoError(t, err)
+	require.Equal(t, bucket+"/views/v1", view.GetName())
+
+	if _, err := c.ListLinks(ctx, &loggingpb.ListLinksRequest{Parent: bucket, PageSize: -1}).Next(); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("links PageSize=-1 err = %v, want InvalidArgument", err)
+	}
+}
