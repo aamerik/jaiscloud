@@ -117,6 +117,8 @@ packages:
     min_percent: 77.88
   - package: internal/gcp/service/scheduler
     min_percent: 74.14
+  - package: internal/gcp/service/secretmanager
+    min_percent: 91.67
   - package: internal/gcp/service/serviceusage
     min_percent: 85.65
   - package: internal/gcp/service/tasks
