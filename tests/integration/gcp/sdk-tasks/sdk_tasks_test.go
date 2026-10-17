@@ -230,14 +230,57 @@ func TestSDKTasksQueueLifecycle(t *testing.T) {
 	_, err = svc.Projects.Locations.Queues.Create(parent, &cloudtasks.Queue{Name: name}).Do()
 	require.Equal(t, 409, apiErr(t, err).Code)
 
-	// List with a name filter; a non-matching filter yields nothing.
-	matched, err := svc.Projects.Locations.Queues.List(parent).Filter(`name="` + qid + `"`).Do()
+	// List with a filter. The Discovery document defers to Stackdriver's
+	// Advanced Logs Filters syntax: "=" is equality on the Queue field (the full
+	// resource name), ":" is the contains operator.
+	matched, err := svc.Projects.Locations.Queues.List(parent).Filter(`name="` + name + `"`).Do()
 	require.NoError(t, err)
 	require.Len(t, matched.Queues, 1)
 	require.Equal(t, name, matched.Queues[0].Name)
+	bare, err := svc.Projects.Locations.Queues.List(parent).Filter(`name="` + qid + `"`).Do()
+	require.NoError(t, err)
+	require.Empty(t, bare.Queues, "= is equality on the full name, not a substring")
+	contains, err := svc.Projects.Locations.Queues.List(parent).Filter(`name:"` + qid + `"`).Do()
+	require.NoError(t, err)
+	require.Len(t, contains.Queues, 1)
+	require.Equal(t, name, contains.Queues[0].Name)
 	unmatched, err := svc.Projects.Locations.Queues.List(parent).Filter(`name="no-such-queue-xyz"`).Do()
 	require.NoError(t, err)
 	require.Empty(t, unmatched.Queues)
+	// An out-of-grammar filter is INVALID_ARGUMENT, not silently ignored.
+	_, err = svc.Projects.Locations.Queues.List(parent).Filter(`bogus="x"`).Do()
+	require.Equal(t, 400, apiErr(t, err).Code)
+
+	// The filter composes with the cursor: a filtered walk visits only the
+	// matching queues, page by page.
+	var extras []string
+	for _, suffix := range []string{"-a", "-b"} {
+		id := qid + suffix
+		mustCreateQueue(t, svc, parent, &cloudtasks.Queue{Name: parent + "/queues/" + id})
+		extras = append(extras, parent+"/queues/"+id)
+	}
+	var walked []string
+	pageToken := ""
+	for {
+		call := svc.Projects.Locations.Queues.List(parent).Filter(`name:"` + qid + `"`).PageSize(1)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+		page, err := call.Do()
+		require.NoError(t, err)
+		for _, q := range page.Queues {
+			walked = append(walked, q.Name)
+		}
+		pageToken = page.NextPageToken
+		if pageToken == "" {
+			break
+		}
+	}
+	require.Equal(t, []string{name, extras[0], extras[1]}, walked)
+	for _, extra := range extras {
+		_, err := svc.Projects.Locations.Queues.Delete(extra).Do()
+		require.NoError(t, err)
+	}
 
 	// Patch only rateLimits; retryConfig is preserved.
 	patched, err := svc.Projects.Locations.Queues.Patch(name, &cloudtasks.Queue{
@@ -254,6 +297,11 @@ func TestSDKTasksQueueLifecycle(t *testing.T) {
 	require.Equal(t, "PAUSED", paused.State)
 	_, err = svc.Projects.Locations.Queues.Pause(name, &cloudtasks.PauseQueueRequest{}).Do()
 	require.Equal(t, 400, apiErr(t, err).Code)
+	// The Discovery document's own sample filter, verbatim ("state: PAUSED").
+	pausedOnly, err := svc.Projects.Locations.Queues.List(parent).Filter(`state: PAUSED`).Do()
+	require.NoError(t, err)
+	require.Len(t, pausedOnly.Queues, 1)
+	require.Equal(t, name, pausedOnly.Queues[0].Name)
 	resumed, err := svc.Projects.Locations.Queues.Resume(name, &cloudtasks.ResumeQueueRequest{}).Do()
 	require.NoError(t, err)
 	require.Equal(t, "RUNNING", resumed.State)

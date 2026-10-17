@@ -8,10 +8,9 @@
 // `projects.locations.queues.list` and `...queues.tasks.list`; it documents that
 // queues are returned in lexicographical order and that tasks may be in any
 // order, so the queue walk asserts OrderAscendingName and the task walk
-// OrderUnspecified. The queue list's `filter` is deliberately not exercised: the
-// emulator answers `name="…"` with a substring match and does not support the
-// documented Stackdriver/Logging `:` contains operator, so a filtered walk would
-// pin an emulator-only rule — recorded as DC16. p5 is the boundary the class
+// OrderUnspecified. The queue list's `filter` is exercised separately
+// (sdk_tasks_test.go) after DC16 aligned it with the documented
+// Stackdriver/Logging syntax; p5 is the boundary the class
 // names: a twenty-five-element collection walked at a small page size, i.e. the
 // cursor chain over a large collection rather than one response.
 package sdk_tasks_test
