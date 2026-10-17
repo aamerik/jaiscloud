@@ -54,10 +54,32 @@ func TestServiceAccountKeysAndSign(t *testing.T) {
 	if _, ok := kr.Data["privateKeyData"]; !ok {
 		t.Error("expected privateKeyData on key create")
 	}
+	if kr.Data["privateKeyType"] != "TYPE_GOOGLE_CREDENTIALS_FILE" {
+		t.Errorf("privateKeyType = %v, want TYPE_GOOGLE_CREDENTIALS_FILE", kr.Data["privateKeyType"])
+	}
+	// Discovery scopes publicKeyData to keys.get, so create must not return it.
+	if _, present := kr.Data["publicKeyData"]; present {
+		t.Error("keys.create must not emit publicKeyData (get-only per Discovery)")
+	}
+	if kr.Data["validBeforeTime"] != nonExpiringKeyTime {
+		t.Errorf("validBeforeTime = %v, want %s", kr.Data["validBeforeTime"], nonExpiringKeyTime)
+	}
+
+	// keys.get returns publicKeyData (and not the create-only fields).
+	gr, err := p.ServiceAccountKeyGet(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email + "/keys/" + keyIDField}))
+	if err != nil {
+		t.Fatalf("key get: %v", err)
+	}
+	if _, present := gr.Data["privateKeyType"]; present {
+		t.Error("keys.get must not emit privateKeyType (create-only per Discovery)")
+	}
+	if _, present := gr.Data["privateKeyData"]; present {
+		t.Error("keys.get must not emit privateKeyData (create-only per Discovery)")
+	}
 	// publicKeyData is a base64 PKIX public-key PEM derived from the private key.
-	pubData, _ := kr.Data["publicKeyData"].(string)
+	pubData, _ := gr.Data["publicKeyData"].(string)
 	if pubData == "" {
-		t.Error("expected publicKeyData on key create")
+		t.Error("expected publicKeyData on key get")
 	} else {
 		pubPEM, err := base64.StdEncoding.DecodeString(pubData)
 		if err != nil {
@@ -102,21 +124,51 @@ func TestServiceAccountKeysAndSign(t *testing.T) {
 		t.Fatalf("expected 3-part JWT, got %d dots", got)
 	}
 
-	// List keys → 1.
+	// signBlob signs with the Google-managed key, never with the user-managed key
+	// created above (real GCP maintains a system-managed pair per account).
+	if keyID == keyIDField {
+		t.Errorf("signBlob signed with the user-managed key %q; want the system-managed key", keyID)
+	}
+
+	// List keys → the created user key plus the system-managed signing key.
 	lr, err := p.ServiceAccountKeyList(ctx, newNR(map[string]any{"name": "serviceAccounts/" + email + "/keys"}))
 	if err != nil {
 		t.Fatalf("key list: %v", err)
 	}
 	keys, _ := lr.Data["keys"].([]any)
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %v", lr.Data["keys"])
+	if len(keys) != 2 {
+		t.Fatalf("expected 2 keys (user + system managed), got %v", lr.Data["keys"])
 	}
-	listed, _ := keys[0].(map[string]any)
-	if listedName, _ := listed["name"].(string); !strings.HasSuffix(listedName, "/keys/"+keyIDField) {
-		t.Errorf("listed key name = %v, want suffix /keys/%s (stable across list)", listedName, keyIDField)
+	byName := map[string]map[string]any{}
+	for _, item := range keys {
+		listed, _ := item.(map[string]any)
+		if _, present := listed["keyId"]; present {
+			t.Errorf("keys.list must not emit a non-schema keyId field: %v", listed["keyId"])
+		}
+		// Discovery scopes these to create/get, so list carries neither.
+		if _, present := listed["publicKeyData"]; present {
+			t.Error("keys.list must not emit publicKeyData (get-only per Discovery)")
+		}
+		if _, present := listed["privateKeyType"]; present {
+			t.Error("keys.list must not emit privateKeyType (create-only per Discovery)")
+		}
+		name, _ := listed["name"].(string)
+		byName[name] = listed
 	}
-	if _, present := listed["keyId"]; present {
-		t.Errorf("keys.list must not emit a non-schema keyId field: %v", listed["keyId"])
+	listed, ok := byName[keyName]
+	if !ok {
+		t.Fatalf("keys.list dropped the created key %q: %v", keyName, lr.Data["keys"])
+	}
+	if listed["keyType"] != "USER_MANAGED" || listed["keyOrigin"] != "USER_PROVIDED" {
+		t.Errorf("created key listed as keyType=%v keyOrigin=%v, want USER_MANAGED/USER_PROVIDED",
+			listed["keyType"], listed["keyOrigin"])
+	}
+	systemName := keyName[:strings.LastIndex(keyName, "/")+1] + keyID
+	if sys, ok := byName[systemName]; !ok {
+		t.Errorf("keys.list is missing the system-managed signing key %q", systemName)
+	} else if sys["keyType"] != "SYSTEM_MANAGED" || sys["keyOrigin"] != "GOOGLE_PROVIDED" {
+		t.Errorf("signing key listed as keyType=%v keyOrigin=%v, want SYSTEM_MANAGED/GOOGLE_PROVIDED",
+			sys["keyType"], sys["keyOrigin"])
 	}
 
 	// Delete the key.

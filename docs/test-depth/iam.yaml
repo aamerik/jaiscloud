@@ -20,7 +20,7 @@ classes:
   p4:
     state: present
     suites: [sdk-rest]
-    note: "pageSize/pageToken walk over projects.serviceAccounts.list (every account once, terminal token, stable second walk; the Discovery document specifies no order, so it is compared as a set); keys.list is unpaged by Discovery (no pageToken, no nextPageToken) and is asserted as a single complete response"
+    note: "pageSize/pageToken walk over projects.serviceAccounts.list (every account once, terminal token, stable second walk; the Discovery document specifies no order, so it is compared as a set); keys.list is unpaged by Discovery (no pageToken, no nextPageToken) and is asserted as a single complete response whose repeated keyTypes filter selects USER_MANAGED, SYSTEM_MANAGED or their union, with KEY_TYPE_UNSPECIFIED and duplicate values rejected as INVALID_ARGUMENT"
   p5:
     state: exempt
     reason: "no enforced boundary and no version/rotation lineage: the documented 10-user-managed-keys-per-SA quota is not modelled, and a service account carries no update history to walk"
