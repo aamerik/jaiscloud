@@ -206,3 +206,64 @@ func TestDeleteKeyAndReserveIDsValidation(t *testing.T) {
 		t.Fatal("AllocateIDs with a complete key must be rejected")
 	}
 }
+
+// TestCommitUpdateMissingIsNotFound pins DC18: real Datastore documents
+// NOT_FOUND for "the request attempted to update an entity that does not exist"
+// (Firestore in Datastore mode, "Errors and Error Handling"), on both commit
+// paths. A delete of an absent entity stays idempotent, so the mapping is not
+// over-broad.
+func TestCommitUpdateMissingIsNotFound(t *testing.T) {
+	s := NewService(dsstore.NewMemoryStore(), "p")
+	ctx := context.Background()
+	missing := nameKey("Task", "ghost")
+
+	cases := []struct {
+		name    string
+		mode    CommitMode
+		beginTx bool
+	}{
+		{name: "non-transactional", mode: CommitModeNonTransactional},
+		{name: "transactional", mode: CommitModeTransactional, beginTx: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &CommitRequest{
+				Mode:      tc.mode,
+				Mutations: []Mutation{{Op: MutationUpdate, Key: missing, Entity: intProp(1)}},
+			}
+			if tc.beginTx {
+				txn, err := s.BeginTransaction(ctx)
+				if err != nil {
+					t.Fatalf("BeginTransaction: %v", err)
+				}
+				req.Transaction = txn
+			}
+			_, err := s.Commit(ctx, "p", req)
+			pe := asProviderError(t, err)
+			if pe.Code != "NotFound" || pe.HTTPStatus != 404 {
+				t.Fatalf("update missing = {%q,%d}, want NotFound/404", pe.Code, pe.HTTPStatus)
+			}
+			// The failed mutation wrote nothing.
+			got, err := s.Lookup(ctx, "p", []Key{missing}, nil)
+			if err != nil || len(got.Found) != 0 || len(got.Missing) != 1 {
+				t.Fatalf("Lookup after failed update = %d found / %d missing, %v; want the entity still absent",
+					len(got.Found), len(got.Missing), err)
+			}
+			// A transactional miss still consumes the transaction handle.
+			if tc.beginTx {
+				if err := s.requireActive(req.Transaction); err == nil {
+					t.Fatal("a commit that failed on a missing update must terminate the transaction")
+				}
+			}
+		})
+	}
+
+	// Delete of an absent entity is documented as "may or may not already
+	// exist" and is idempotent — never NOT_FOUND.
+	if _, err := s.Commit(ctx, "p", &CommitRequest{
+		Mode:      CommitModeNonTransactional,
+		Mutations: []Mutation{{Op: MutationDelete, DeleteKey: Key{Kind: "Task", Name: "ghost", HasName: true}}},
+	}); err != nil {
+		t.Fatalf("delete of an absent entity = %v, want nil (idempotent)", err)
+	}
+}

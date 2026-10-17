@@ -278,9 +278,10 @@ func (s *Service) Commit(ctx context.Context, project string, req *CommitRequest
 				mr.Version = applied.Version
 				mr.CreateTime = applied.CreateTime
 				mr.UpdateTime = applied.UpdateTime
-			case errors.Is(err, dsstore.ErrEntityNotFound):
-				return nil, failedPrecondition("entity not found", 400)
 			case err != nil:
+				// Includes ErrEntityNotFound, which maps to NOT_FOUND (real
+				// Datastore's status for an update on an absent entity) on both
+				// this path and the transactional one — see mapStoreError.
 				return nil, mapStoreError(err)
 			default:
 				mr.Version = applied.Version

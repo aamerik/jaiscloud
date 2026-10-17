@@ -447,17 +447,19 @@ func (f failingListStore) ListKind(context.Context, string, string) ([]dsstore.E
 
 // TestQueryCandidatesErrorMapping asserts the store error ListKind returns is
 // translated into the transport-neutral ProviderError on both the metadata and
-// the ordinary-kind path.
+// the ordinary-kind path. The sentinel is only a fixture (a listing cannot
+// actually miss, so ErrInvalidKey stands in for "ListKind failed") and the
+// assertion is that every path goes through mapStoreError.
 func TestQueryCandidatesErrorMapping(t *testing.T) {
-	s := NewService(failingListStore{err: dsstore.ErrEntityNotFound}, "p")
+	s := NewService(failingListStore{err: dsstore.ErrInvalidKey}, "p")
 	for _, kind := range []string{metadataKindKind, metadataKindProperty, "Task"} {
 		_, err := s.queryCandidates(context.Background(), "p", kind, "", "")
 		if err == nil {
 			t.Fatalf("queryCandidates(%q) should fail", kind)
 		}
 		pe := asProviderError(t, err)
-		if pe.Code != "FailedPrecondition" {
-			t.Fatalf("queryCandidates(%q) error = %q, want FailedPrecondition", kind, pe.Code)
+		if pe.Code != "InvalidArgument" {
+			t.Fatalf("queryCandidates(%q) error = %q, want InvalidArgument", kind, pe.Code)
 		}
 	}
 }
