@@ -262,10 +262,7 @@ func (s *Service) ListBuckets(ctx context.Context, parent string, pageSize int, 
 	if err != nil {
 		return nil, "", mapAdminStoreError(err)
 	}
-	page, next, err := paginateConfig(buckets, pageSize, pageToken)
-	if err != nil {
-		return nil, "", err
-	}
+	page, next := paginateConfig(buckets, pageSize, pageToken)
 	return page, next, nil
 }
 
@@ -457,10 +454,7 @@ func (s *Service) ListViews(ctx context.Context, parent string, pageSize int, pa
 	if err != nil {
 		return nil, "", mapAdminStoreError(err)
 	}
-	page, next, err := paginateConfig(views, pageSize, pageToken)
-	if err != nil {
-		return nil, "", err
-	}
+	page, next := paginateConfig(views, pageSize, pageToken)
 	return page, next, nil
 }
 
@@ -593,6 +587,13 @@ func (s *Service) GetLink(ctx context.Context, name string) (loggingstore.LogLin
 
 // ListLinks returns a page of a bucket's links ordered by id.
 func (s *Service) ListLinks(ctx context.Context, parent string, pageSize int, pageToken string) ([]loggingstore.LogLink, string, error) {
+	// links.list is the one config list whose Discovery document and proto do
+	// not document the "non-positive values are ignored" exception, so a
+	// negative size keeps AIP-158's InvalidArgument — validated before the
+	// parent lookup and store read so the client error is not masked by them.
+	if pageSize < 0 {
+		return nil, "", invalidArgument("pageSize must not be negative")
+	}
 	bucketName, err := bucketScope(parent)
 	if err != nil {
 		return nil, "", err
@@ -601,10 +602,7 @@ func (s *Service) ListLinks(ctx context.Context, parent string, pageSize int, pa
 	if err != nil {
 		return nil, "", mapAdminStoreError(err)
 	}
-	page, next, err := paginateConfig(links, pageSize, pageToken)
-	if err != nil {
-		return nil, "", err
-	}
+	page, next := paginateConfig(links, pageSize, pageToken)
 	return page, next, nil
 }
 
@@ -667,10 +665,7 @@ func (s *Service) ListLogScopes(ctx context.Context, parent string, pageSize int
 	if err != nil {
 		return nil, "", mapAdminStoreError(err)
 	}
-	page, next, err := paginateConfig(scopes, pageSize, pageToken)
-	if err != nil {
-		return nil, "", err
-	}
+	page, next := paginateConfig(scopes, pageSize, pageToken)
 	return page, next, nil
 }
 

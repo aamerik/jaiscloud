@@ -274,6 +274,32 @@ func TestExclusionCRUD(t *testing.T) {
 	}
 }
 
+// TestConfigListNonPositivePageSize pins the documented config-list contract:
+// sinks.list and exclusions.list say "Non-positive values are ignored", so a
+// negative page size selects the default page instead of raising
+// InvalidArgument (the exception entries.list does not take — see
+// TestCorePageSizeValidation), and a size above the 1000 maximum is clamped per
+// AIP-158.
+func TestConfigListNonPositivePageSize(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+	if _, err := s.CreateSink(ctx, "projects/p", loggingstore.LogSink{Name: "s", Destination: "d"}, false, ""); err != nil {
+		t.Fatalf("CreateSink: %v", err)
+	}
+	if _, err := s.CreateExclusion(ctx, "projects/p", loggingstore.LogExclusion{Name: "e", Filter: "severity<DEBUG"}); err != nil {
+		t.Fatalf("CreateExclusion: %v", err)
+	}
+
+	for _, pageSize := range []int{-1, 1001} {
+		if page, _, err := s.ListSinks(ctx, "projects/p", pageSize, ""); err != nil || len(page) != 1 {
+			t.Fatalf("ListSinks(%d) = %v, %v; want the single sink", pageSize, page, err)
+		}
+		if page, _, err := s.ListExclusions(ctx, "projects/p", pageSize, ""); err != nil || len(page) != 1 {
+			t.Fatalf("ListExclusions(%d) = %v, %v; want the single exclusion", pageSize, page, err)
+		}
+	}
+}
+
 func TestExclusionCreateRequiresFilter(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService()

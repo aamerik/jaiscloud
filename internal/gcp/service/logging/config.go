@@ -275,10 +275,7 @@ func (s *Service) ListSinks(ctx context.Context, parent string, pageSize int, pa
 	if err != nil {
 		return nil, "", err
 	}
-	page, next, err := paginateConfig(sinks, pageSize, pageToken)
-	if err != nil {
-		return nil, "", err
-	}
+	page, next := paginateConfig(sinks, pageSize, pageToken)
 	return page, next, nil
 }
 
@@ -450,10 +447,7 @@ func (s *Service) ListExclusions(ctx context.Context, parent string, pageSize in
 	if err != nil {
 		return nil, "", err
 	}
-	page, next, err := paginateConfig(list, pageSize, pageToken)
-	if err != nil {
-		return nil, "", err
-	}
+	page, next := paginateConfig(list, pageSize, pageToken)
 	return page, next, nil
 }
 
@@ -664,14 +658,20 @@ func (s *Service) recordRouting(ctx context.Context, e loggingstore.LogEntry) {
 	}
 }
 
-// paginateConfig applies the standard Cloud Logging pageSize/pageToken contract
-// (0 → 50, max 1000) to a name-sorted slice.
-func paginateConfig[T any](items []T, pageSize int, token string) ([]T, string, error) {
-	if pageSize < 0 || pageSize > 1000 {
-		return nil, "", invalidArgument("page_size must be between 0 and 1000")
-	}
-	if pageSize == 0 {
+// paginateConfig applies the non-positive-ignored pageSize/pageToken contract to
+// a name-sorted slice. Cloud Logging documents "Non-positive values are ignored"
+// on sinks/exclusions/buckets/views/logScopes/metrics.list (links.list is the
+// one config list without that exception and validates the sign itself), so a
+// non-positive size selects the default (50) rather than raising
+// InvalidArgument — the documented exception to AIP-158 that entries.list does
+// not take. An over-large size is clamped to 1000, the server-side cap AIP-158
+// permits (the Discovery/proto documents no maximum for these lists).
+func paginateConfig[T any](items []T, pageSize int, token string) ([]T, string) {
+	if pageSize <= 0 {
 		pageSize = 50
+	}
+	if pageSize > 1000 {
+		pageSize = 1000
 	}
 	start := decodeOffset(token)
 	if start > len(items) {
@@ -685,5 +685,5 @@ func paginateConfig[T any](items []T, pageSize int, token string) ([]T, string, 
 	if end < len(items) {
 		next = encodeOffset(end)
 	}
-	return items[start:end], next, nil
+	return items[start:end], next
 }

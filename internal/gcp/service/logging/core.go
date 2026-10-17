@@ -297,5 +297,11 @@ func ValidateOrderBy(orderBy string) error {
 }
 
 func paginateEntries(entries []loggingstore.LogEntry, pageSize int, token string) ([]loggingstore.LogEntry, string, error) {
-	return paginateConfig(entries, pageSize, token)
+	// entries.list is the documented exception: "If the value is negative or
+	// exceeds 1000, the request is rejected."
+	if pageSize < 0 || pageSize > 1000 {
+		return nil, "", invalidArgument("page_size must be between 0 and 1000")
+	}
+	page, next := paginateConfig(entries, pageSize, token)
+	return page, next, nil
 }
