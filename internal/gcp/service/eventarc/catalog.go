@@ -65,7 +65,10 @@ func (s *Service) ListProviders(ctx context.Context, project, location, filter, 
 		}
 	}
 	order.Sort(filtered)
-	page, next := paging.PageOrdered(filtered, pageParams(pageSize, pageToken), order.Cursor, order.AfterCursor)
+	page, next, err := paging.PageOrdered(filtered, pageParams(pageSize, pageToken), order.Cursor, order.AfterCursor)
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

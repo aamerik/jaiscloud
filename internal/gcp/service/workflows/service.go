@@ -113,9 +113,6 @@ func (s *Service) ListWorkflows(ctx context.Context, project, location, filter, 
 	if location == "" {
 		return nil, "", invalidArgument("missing location")
 	}
-	if pageSize < 0 {
-		return nil, "", invalidArgument("pageSize must not be negative")
-	}
 	nameOf := func(w workflowsstore.Workflow) string { return WorkflowName(project, location, w.ID) }
 	flt, err := compileWorkflowFilter(filter, nameOf)
 	if err != nil {
@@ -140,7 +137,10 @@ func (s *Service) ListWorkflows(ctx context.Context, project, location, filter, 
 	if pageToken != "" {
 		params["pageToken"] = pageToken
 	}
-	page, next := paging.PageOrdered(out, params, order.Cursor, order.AfterCursor)
+	page, next, err := paging.PageOrdered(out, params, order.Cursor, order.AfterCursor)
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 
@@ -240,6 +240,11 @@ func (s *Service) GetWorkflowRevision(ctx context.Context, project, location, id
 func (s *Service) ListWorkflowRevisions(ctx context.Context, project, location, id string, pageSize int, pageToken string) ([]Revision, string, error) {
 	if location == "" || id == "" {
 		return nil, "", invalidArgument("missing workflow name")
+	}
+	// This surface has its own newest-first cursor (pageRevisions), not the
+	// shared pager, so it validates the AIP-158 negative-pageSize rule itself.
+	if pageSize < 0 {
+		return nil, "", invalidArgument("pageSize must not be negative")
 	}
 	w, err := s.workflows.GetWorkflow(ctx, project, location, id)
 	if err != nil {
@@ -468,7 +473,10 @@ func (s *Service) ListOperations(ctx context.Context, project, location string, 
 	if pageToken != "" {
 		params["pageToken"] = pageToken
 	}
-	page, next := paging.Page(ops, func(op workflowsstore.Operation) string { return op.ID }, params)
+	page, next, err := paging.Page(ops, func(op workflowsstore.Operation) string { return op.ID }, params)
+	if err != nil {
+		return nil, "", err
+	}
 	for i := range page {
 		page[i] = s.settle(page[i])
 	}
@@ -552,10 +560,11 @@ func maskedFields(mask string) (map[string]bool, error) {
 }
 
 // clampPageSize applies ListWorkflows' paging contract: a default of 500 when
-// unspecified, and a maximum of 1000.
+// unspecified, and a maximum of 1000. A negative size is passed through so the
+// shared cursor pager rejects it with INVALID_ARGUMENT.
 func clampPageSize(n int) int {
 	switch {
-	case n <= 0:
+	case n == 0:
 		return 500
 	case n > 1000:
 		return 1000
@@ -566,6 +575,8 @@ func clampPageSize(n int) int {
 
 // clampRevisionPageSize applies ListWorkflowRevisions' paging contract: a
 // default of 20 when unspecified, and a maximum of 100 (per the Discovery doc).
+// ListWorkflowRevisions rejects a negative pageSize before reaching here, so the
+// clamp only ever sees 0 (unset) or a positive size.
 func clampRevisionPageSize(n int) int {
 	switch {
 	case n <= 0:

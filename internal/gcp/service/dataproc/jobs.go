@@ -190,9 +190,6 @@ func (s *Service) ListJobs(ctx context.Context, project, region, clusterName, fi
 	if region == "" {
 		return nil, "", invalidArgument("missing region")
 	}
-	if err := validatePageSize(pageSize); err != nil {
-		return nil, "", err
-	}
 	filter = strings.TrimSpace(filter)
 	var compiled jobFilter
 	if filter != "" {
@@ -227,7 +224,10 @@ func (s *Service) ListJobs(ctx context.Context, project, region, clusterName, fi
 		}
 		filtered = append(filtered, advanced)
 	}
-	page, next := paging.Page(filtered, func(j dpstore.Job) string { return j.JobID }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(filtered, func(j dpstore.Job) string { return j.JobID }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

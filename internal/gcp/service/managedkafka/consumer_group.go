@@ -113,7 +113,10 @@ func (s *Service) ListConsumerGroups(ctx context.Context, project, location, clu
 		}
 		groups = append(groups, g)
 	}
-	page, next := paging.Page(groups, func(g ConsumerGroup) string { return g.Name }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(groups, func(g ConsumerGroup) string { return g.Name }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

@@ -68,7 +68,10 @@ func (s *Service) ListFederations(ctx context.Context, project, location string,
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(federations, func(f metastorestore.Federation) string { return f.Name }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(federations, func(f metastorestore.Federation) string { return f.Name }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

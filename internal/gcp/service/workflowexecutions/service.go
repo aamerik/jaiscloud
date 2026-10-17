@@ -157,9 +157,6 @@ func (s *Service) ListExecutions(ctx context.Context, project, location, workflo
 	if location == "" || workflowID == "" {
 		return nil, "", invalidArgument("missing workflow in parent")
 	}
-	if pageSize < 0 {
-		return nil, "", invalidArgument("pageSize must not be negative")
-	}
 	// A list under an unknown workflow is NotFound (real GCP), decided before
 	// the filter/orderBy grammar so a bad filter cannot mask a missing parent.
 	if _, err := s.workflows.GetWorkflow(ctx, project, location, workflowID); err != nil {
@@ -191,7 +188,10 @@ func (s *Service) ListExecutions(ctx context.Context, project, location, workflo
 	if pageToken != "" {
 		params["pageToken"] = pageToken
 	}
-	page, next := paging.PageOrdered(matched, params, order.Cursor, order.AfterCursor)
+	page, next, err := paging.PageOrdered(matched, params, order.Cursor, order.AfterCursor)
+	if err != nil {
+		return nil, "", err
+	}
 	out := make([]workflowsstore.Execution, 0, len(page))
 	for _, e := range page {
 		out = append(out, applyView(e, view))

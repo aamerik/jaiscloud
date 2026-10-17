@@ -221,8 +221,17 @@ func (s *Service) ListLogs(ctx context.Context, parent, defaultScope string, pag
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(names, func(n string) string { return n },
+	// logs.list's Discovery document says non-positive page sizes are ignored
+	// (a documented exception to AIP-158), so a negative size takes the default
+	// rather than raising InvalidArgument.
+	if pageSize < 0 {
+		pageSize = 0
+	}
+	page, next, err := paging.Page(names, func(n string) string { return n },
 		map[string]any{"pageSize": pageSize, "pageToken": pageToken})
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

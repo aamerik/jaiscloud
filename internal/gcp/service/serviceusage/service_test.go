@@ -256,3 +256,24 @@ func TestStorageErrorsPropagate(t *testing.T) {
 		t.Errorf("EnableAPI error = %v, want ErrStorageUnavailable", err)
 	}
 }
+
+// TestListPageSizeNegativeRejected pins AIP-158 on serviceusage's two
+// cursor-paged list surfaces: a negative pageSize is INVALID_ARGUMENT, not a
+// fall-back to the documented default of 50.
+func TestListPageSizeNegativeRejected(t *testing.T) {
+	ctx := context.Background()
+	s := newCore()
+	cases := []struct {
+		name string
+		call func() error
+	}{
+		{"ListAPIs", func() error { _, _, err := s.ListAPIs(ctx, "proj", FilterAll, -1, ""); return err }},
+		{"ListOperations", func() error { _, _, err := s.ListOperations(ctx, "proj", -1, ""); return err }},
+	}
+	for _, tc := range cases {
+		var pe *model.ProviderError
+		if err := tc.call(); !errors.As(err, &pe) || pe.Code != "InvalidArgument" {
+			t.Errorf("%s(pageSize=-1) = %v, want InvalidArgument", tc.name, err)
+		}
+	}
+}

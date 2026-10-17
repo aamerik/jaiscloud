@@ -227,7 +227,10 @@ func (s *Service) SearchProjects(ctx context.Context, pageSize int, pageToken, q
 	if pageToken != "" {
 		params["pageToken"] = pageToken
 	}
-	page, next := paging.Page(out, func(p Project) string { return p.ProjectID }, params)
+	page, next, err := paging.Page(out, func(p Project) string { return p.ProjectID }, params)
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

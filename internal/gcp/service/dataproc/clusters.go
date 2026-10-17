@@ -157,9 +157,6 @@ func (s *Service) ListClusters(ctx context.Context, project, region, filter stri
 	if region == "" {
 		return nil, "", invalidArgument("missing region")
 	}
-	if err := validatePageSize(pageSize); err != nil {
-		return nil, "", err
-	}
 	filter = strings.TrimSpace(filter)
 	var compiled clusterFilter
 	if filter != "" {
@@ -186,7 +183,10 @@ func (s *Service) ListClusters(ctx context.Context, project, region, filter stri
 		}
 		settled = append(settled, advanced)
 	}
-	page, next := pageClusters(settled, pageParams(pageSize, pageToken))
+	page, next, err := pageClusters(settled, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 
@@ -495,7 +495,7 @@ func clusterNameFromTarget(target string) string {
 }
 
 // pageClusters paginates cluster records using the shared GCP paging helper.
-func pageClusters(clusters []dpstore.Cluster, params map[string]any) ([]dpstore.Cluster, string) {
+func pageClusters(clusters []dpstore.Cluster, params map[string]any) ([]dpstore.Cluster, string, error) {
 	return paging.Page(clusters, func(c dpstore.Cluster) string { return c.Name }, params)
 }
 

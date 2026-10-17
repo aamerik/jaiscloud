@@ -446,7 +446,10 @@ func (s *Service) ListClusters(ctx context.Context, project, location string, pa
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(clusters, func(c mkstore.Cluster) string { return c.Name }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(clusters, func(c mkstore.Cluster) string { return c.Name }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	for i := range page {
 		page[i].BootstrapAddress = s.brokerEndpoint(project, page[i].Location, page[i].Name)
 	}
@@ -535,7 +538,10 @@ func (s *Service) ListOperations(ctx context.Context, project, location string, 
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(ops, func(op mkstore.Operation) string { return op.ID }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(ops, func(op mkstore.Operation) string { return op.ID }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	for i := range page {
 		page[i] = s.settle(page[i])
 	}
@@ -630,7 +636,10 @@ func (s *Service) ListTopics(ctx context.Context, project, location, clusterID s
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(topics, func(t mkstore.Topic) string { return t.Name }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(topics, func(t mkstore.Topic) string { return t.Name }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

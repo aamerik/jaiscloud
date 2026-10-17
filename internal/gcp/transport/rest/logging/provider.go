@@ -207,8 +207,11 @@ func (p *Provider) LogDelete(ctx context.Context, nr *model.NormalizedRequest) (
 }
 
 func (p *Provider) MonitoredResourceDescriptorList(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	page, next := p.core.ListMonitoredResourceDescriptors(
+	page, next, err := p.core.ListMonitoredResourceDescriptors(
 		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]any{}
 	if len(page) > 0 {
 		descs := make([]any, 0, len(page))

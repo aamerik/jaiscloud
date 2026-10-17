@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"jaiscloud/internal/gcp/resource"
 	workflowsstore "jaiscloud/internal/gcp/store/workflows"
+	"jaiscloud/internal/model"
 )
 
 const simpleSource = "main:\n  steps:\n    - r:\n        return: 1\n"
@@ -549,5 +551,22 @@ func TestCurrentRevisionConsistency(t *testing.T) {
 	live, _ = s.GetWorkflow(ctx, "proj", "us-central1", "wf1")
 	if !live.RevisionCreateTime.After(prevRevTime) {
 		t.Fatalf("revisionCreateTime did not advance on a new revision: %v -> %v", prevRevTime, live.RevisionCreateTime)
+	}
+}
+
+// TestListWorkflowRevisionsRejectsNegativePageSize pins listRevisions' cursor
+// contract: a negative pageSize is INVALID_ARGUMENT, not a slice panic. This
+// surface has its own newest-first pager (not the shared cursor), so it
+// validates the AIP-158 rule itself.
+func TestListWorkflowRevisionsRejectsNegativePageSize(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(workflowsstore.NewMemoryStore())
+	if _, _, err := s.CreateWorkflow(ctx, "proj", "us-central1", CreateInput{ID: "wf1", SourceContents: simpleSource}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	_, _, err := s.ListWorkflowRevisions(ctx, "proj", "us-central1", "wf1", -1, "")
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) || pe.Code != "InvalidArgument" {
+		t.Fatalf("ListWorkflowRevisions(pageSize=-1) = %v, want InvalidArgument", err)
 	}
 }

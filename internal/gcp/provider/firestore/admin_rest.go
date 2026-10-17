@@ -496,7 +496,11 @@ func (p *Provider) ListFields(ctx context.Context, nr *model.NormalizedRequest) 
 	if !ok || !isCollection {
 		return nil, model.NewProviderError("InvalidArgument", "invalid collection group parent", 400)
 	}
-	fields, nextToken, err := p.Service.ListFields(ctx, nr.AccountID, db, cg, strParam(nr, "filter"), pageFromNR(nr))
+	page, err := pageFromNR(nr)
+	if err != nil {
+		return nil, err
+	}
+	fields, nextToken, err := p.Service.ListFields(ctx, nr.AccountID, db, cg, strParam(nr, "filter"), page)
 	if err != nil {
 		return nil, err
 	}

@@ -259,7 +259,10 @@ func (s *Service) ListTopics(ctx context.Context, req *pubsubpb.ListTopicsReques
 	if err != nil {
 		return nil, mapError(err)
 	}
-	page, nextToken := paging.Apply(entries, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	page, nextToken, err := paging.Apply(entries, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	if err != nil {
+		return nil, mapError(err)
+	}
 	topics := make([]*pubsubpb.Topic, 0, len(page))
 	for _, e := range page {
 		var m map[string]any
@@ -544,7 +547,10 @@ func (s *Service) ListSubscriptions(ctx context.Context, req *pubsubpb.ListSubsc
 	if err != nil {
 		return nil, mapError(err)
 	}
-	page, nextToken := paging.Apply(entries, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	page, nextToken, err := paging.Apply(entries, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	if err != nil {
+		return nil, mapError(err)
+	}
 	subs := make([]*pubsubpb.Subscription, 0, len(page))
 	for _, e := range page {
 		var m map[string]any
@@ -1430,8 +1436,11 @@ func (s *Service) ListTopicSubscriptions(ctx context.Context, req *pubsubpb.List
 		}
 		names = append(names, subscriptionName(project, e.ID))
 	}
-	page, nextToken := paging.Page(names, func(s string) string { return s },
+	page, nextToken, err := paging.Page(names, func(s string) string { return s },
 		map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	if err != nil {
+		return nil, mapError(err)
+	}
 	return &pubsubpb.ListTopicSubscriptionsResponse{Subscriptions: page, NextPageToken: nextToken}, nil
 }
 
@@ -1536,7 +1545,10 @@ func (s *Service) ListSnapshots(ctx context.Context, req *pubsubpb.ListSnapshots
 	if err != nil {
 		return nil, mapError(err)
 	}
-	page, nextToken := paging.Apply(entries, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	page, nextToken, err := paging.Apply(entries, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	if err != nil {
+		return nil, mapError(err)
+	}
 	snaps := make([]*pubsubpb.Snapshot, 0, len(page))
 	for _, e := range page {
 		var meta snapshotMeta
@@ -1626,8 +1638,11 @@ func (s *Service) ListTopicSnapshots(ctx context.Context, req *pubsubpb.ListTopi
 		}
 		names = append(names, meta.Name)
 	}
-	page, nextToken := paging.Page(names, func(s string) string { return s },
+	page, nextToken, err := paging.Page(names, func(s string) string { return s },
 		map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	if err != nil {
+		return nil, mapError(err)
+	}
 	return &pubsubpb.ListTopicSnapshotsResponse{Snapshots: page, NextPageToken: nextToken}, nil
 }
 

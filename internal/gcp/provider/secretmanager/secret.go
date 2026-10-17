@@ -284,7 +284,10 @@ func (p *Provider) List(ctx context.Context, nr *model.NormalizedRequest) (*mode
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(secrets, secretListKey, nr.Params)
+	page, next, err := paging.Page(secrets, secretListKey, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 
 	items := make([]any, 0, len(page))
 	for _, s := range page {
@@ -702,7 +705,10 @@ func (p *Provider) ListVersions(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(versions, func(v secretmanagerstore.Version) string { return v.VersionID }, nr.Params)
+	page, next, err := paging.Page(versions, func(v secretmanagerstore.Version) string { return v.VersionID }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, v := range page {
 		items = append(items, versionToMap(fromStoreVersion(nr, v)))

@@ -480,7 +480,10 @@ func (p *Provider) ListDatasets(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(datasets, func(d bqstore.Dataset) string { return d.DatasetID }, pagingParams(nr.Params))
+	page, next, err := paging.Page(datasets, func(d bqstore.Dataset) string { return d.DatasetID }, pagingParams(nr.Params))
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, d := range page {
 		items = append(items, p.datasetSummaryMap(projectOf(nr), d))
@@ -601,7 +604,10 @@ func (p *Provider) ListTables(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(tables, func(t bqstore.Table) string { return t.TableID }, pagingParams(nr.Params))
+	page, next, err := paging.Page(tables, func(t bqstore.Table) string { return t.TableID }, pagingParams(nr.Params))
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, t := range page {
 		items = append(items, p.tableSummaryMap(projectOf(nr), t))
@@ -971,7 +977,10 @@ func (p *Provider) ListRows(ctx context.Context, nr *model.NormalizedRequest) (*
 			rows = rows[startIndex:]
 		}
 	}
-	page, next := paging.Page(rows, func(r bqstore.Row) string { return fmt.Sprintf("%020d", r.Seq) }, pagingParams(nr.Params))
+	page, next, err := paging.Page(rows, func(r bqstore.Row) string { return fmt.Sprintf("%020d", r.Seq) }, pagingParams(nr.Params))
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, r := range page {
 		items = append(items, rowToTableRow(r.Data, fields))
@@ -1320,7 +1329,10 @@ func (p *Provider) ListJobs(ctx context.Context, nr *model.NormalizedRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(jobs, func(j bqstore.Job) string { return j.JobID }, pagingParams(nr.Params))
+	page, next, err := paging.Page(jobs, func(j bqstore.Job) string { return j.JobID }, pagingParams(nr.Params))
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, j := range page {
 		items = append(items, p.jobSummaryMap(projectOf(nr), j))

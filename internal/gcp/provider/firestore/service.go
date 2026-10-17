@@ -447,7 +447,10 @@ func (s *Service) ListDocuments(ctx context.Context, project, database, path str
 		}
 	}
 
-	pageDocs, nextToken := paging.Page(children, func(d firestorestore.Document) string { return d.Name }, page.params())
+	pageDocs, nextToken, err := paging.Page(children, func(d firestorestore.Document) string { return d.Name }, page.params())
+	if err != nil {
+		return nil, "", err
+	}
 
 	if len(transaction) > 0 {
 		for _, d := range pageDocs {
@@ -499,7 +502,10 @@ func (s *Service) ListCollectionIds(ctx context.Context, project, database, path
 	}
 	sort.Strings(ids)
 
-	pageIDs, nextToken := paging.Page(ids, func(id string) string { return id }, page.params())
+	pageIDs, nextToken, err := paging.Page(ids, func(id string) string { return id }, page.params())
+	if err != nil {
+		return nil, "", err
+	}
 	return pageIDs, nextToken, nil
 }
 
@@ -973,7 +979,10 @@ func (s *Service) ListIndexes(ctx context.Context, project, database, cg, filter
 		idxs = kept
 	}
 
-	pageIdxs, nextToken := paging.Page(idxs, func(d indexDef) string { return d.Name }, page.params())
+	pageIdxs, nextToken, err := paging.Page(idxs, func(d indexDef) string { return d.Name }, page.params())
+	if err != nil {
+		return nil, "", err
+	}
 	return pageIdxs, nextToken, nil
 }
 

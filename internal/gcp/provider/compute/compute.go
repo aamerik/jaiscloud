@@ -307,7 +307,10 @@ func (p *Provider) InstancesList(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	if err != nil {
+		return nil, err
+	}
 	out := toAnySlice(page)
 	resp := map[string]any{"kind": kindInstanceList, "items": out}
 	if next != "" {
@@ -350,9 +353,12 @@ func (p *Provider) InstancesAggregatedList(ctx context.Context, nr *model.Normal
 		}
 		flat = append(flat, scopedInstance{zone: e.Region, m: m})
 	}
-	page, next := paging.Page(flat, func(s scopedInstance) string {
+	page, next, err := paging.Page(flat, func(s scopedInstance) string {
 		return s.zone + "/" + stringField(s.m, "name")
 	}, listParams(nr))
+	if err != nil {
+		return nil, err
+	}
 	items := map[string]any{}
 	for _, s := range page {
 		key := "zones/" + s.zone
@@ -536,7 +542,10 @@ func (p *Provider) DisksList(ctx context.Context, nr *model.NormalizedRequest) (
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]any{"kind": kindDiskList, "items": toAnySlice(page)}
 	if next != "" {
 		resp["nextPageToken"] = next
@@ -640,7 +649,10 @@ func (p *Provider) NetworksList(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]any{"kind": kindNetworkList, "items": toAnySlice(page)}
 	if next != "" {
 		resp["nextPageToken"] = next
@@ -762,7 +774,10 @@ func (p *Provider) FirewallsList(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]any{"kind": kindFirewallList, "items": toAnySlice(page)}
 	if next != "" {
 		resp["nextPageToken"] = next
@@ -881,7 +896,10 @@ func (p *Provider) SubnetworksList(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]any{"kind": kindSubnetworkList, "items": toAnySlice(page)}
 	if next != "" {
 		resp["nextPageToken"] = next
@@ -938,7 +956,10 @@ func (p *Provider) MachineTypesList(ctx context.Context, nr *model.NormalizedReq
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	page, next, err := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]any{"kind": kindMachineTypeList, "items": toAnySlice(page)}
 	if next != "" {
 		resp["nextPageToken"] = next
@@ -966,7 +987,10 @@ func (p *Provider) ZonesList(ctx context.Context, nr *model.NormalizedRequest) (
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	page, next, err := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]any{"kind": kindZoneList, "items": toAnySlice(page)}
 	if next != "" {
 		resp["nextPageToken"] = next
@@ -994,7 +1018,10 @@ func (p *Provider) RegionsList(ctx context.Context, nr *model.NormalizedRequest)
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	page, next, err := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]any{"kind": kindRegionList, "items": toAnySlice(page)}
 	if next != "" {
 		resp["nextPageToken"] = next
@@ -1026,7 +1053,10 @@ func (p *Provider) OperationsList(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	if err != nil {
+		return nil, err
+	}
 	resp := map[string]any{"kind": kindOperationList, "items": toAnySlice(page)}
 	if next != "" {
 		resp["nextPageToken"] = next
@@ -1277,9 +1307,11 @@ func listParams(nr *model.NormalizedRequest) map[string]any {
 
 // computePageSize clamps Compute Engine's maxResults to its documented 0-500
 // range; an absent, zero or unparseable value takes the documented 500 default.
+// A negative value is passed through as-is so the shared cursor pager rejects it
+// with INVALID_ARGUMENT — the documented range is 0 to 500 inclusive.
 func computePageSize(v any) int {
 	n, ok := toInt(v)
-	if !ok || n <= 0 {
+	if !ok || n == 0 {
 		return defaultComputePageSize
 	}
 	if n > maxComputePageSize {

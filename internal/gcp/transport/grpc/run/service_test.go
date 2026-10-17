@@ -308,3 +308,41 @@ func TestServiceMutationFlagsOverGRPC(t *testing.T) {
 		t.Fatalf("allowMissing update did not create the service: %v", err)
 	}
 }
+
+// TestListNegativePageSizeRejected pins the shared paging contract on Cloud
+// Run's gRPC list surfaces: a negative pageSize is INVALID_ARGUMENT. A created
+// service (and its operation) makes the list non-empty, though the cursor
+// rejects before paging either way.
+func TestListNegativePageSizeRejected(t *testing.T) {
+	ctx := context.Background()
+	s := newTestAdapter()
+	if _, err := s.CreateService(ctx, createReq(testParent, "svc")); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	cases := []struct {
+		name string
+		call func() error
+	}{
+		{"ListServices", func() error {
+			_, err := s.ListServices(ctx, &runpb.ListServicesRequest{Parent: testParent, PageSize: -1})
+			return err
+		}},
+		{"ListRevisions", func() error {
+			_, err := s.ListRevisions(ctx, &runpb.ListRevisionsRequest{Parent: testParent + "/services/svc", PageSize: -1})
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		if err := tc.call(); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("%s(pageSize=-1) = %v, want InvalidArgument", tc.name, err)
+		}
+	}
+
+	// run.projects.locations.operations.list documents "If not set or set to
+	// less than or equal to 0, the default page size is 100" — a documented
+	// exception to the reject-negative rule, so a negative size takes the
+	// default rather than raising InvalidArgument.
+	if _, _, err := s.ListOperations(ctx, testParent, -1, "", ""); err != nil {
+		t.Errorf("ListOperations(pageSize=-1) = %v, want nil (documented default)", err)
+	}
+}

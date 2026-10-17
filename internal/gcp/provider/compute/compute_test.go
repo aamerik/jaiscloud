@@ -774,6 +774,9 @@ func TestListParamsPageSizeDefaults(t *testing.T) {
 		{"maxResults int", map[string]any{"maxResults": 2}, 2},
 		{"maxResults string", map[string]any{"maxResults": "3"}, 3},
 		{"zero means default", map[string]any{"maxResults": 0}, defaultComputePageSize},
+		// A negative maxResults is out of the documented 0-500 range and is
+		// passed through for the shared pager to reject (not clamped to 500).
+		{"negative passes through", map[string]any{"maxResults": -1}, -1},
 		{"clamped to max", map[string]any{"maxResults": 501}, maxComputePageSize},
 		{"at max", map[string]any{"maxResults": 500}, 500},
 		// Compute Engine has no pageSize parameter; it must not override maxResults.
@@ -1071,4 +1074,36 @@ func isCode(err error, code string) bool {
 		return false
 	}
 	return perr.Code == code
+}
+
+// TestListHandlersRejectNegativeMaxResults pins AIP-158 on Compute's list
+// surfaces: a negative maxResults is INVALID_ARGUMENT (the documented range is
+// 0 to 500 inclusive), never a silent fall-back to the 500 default. Every list
+// handler that pages through listParams is exercised so the shared reject is
+// covered on each cursor walk.
+func TestListHandlersRejectNegativeMaxResults(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	handlers := []struct {
+		name string
+		call func(*model.NormalizedRequest) (*model.ProviderResponse, error)
+	}{
+		{"InstancesList", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) { return p.InstancesList(ctx, nr) }},
+		{"InstancesAggregatedList", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.InstancesAggregatedList(ctx, nr)
+		}},
+		{"DisksList", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) { return p.DisksList(ctx, nr) }},
+		{"NetworksList", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) { return p.NetworksList(ctx, nr) }},
+		{"FirewallsList", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) { return p.FirewallsList(ctx, nr) }},
+		{"SubnetworksList", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) { return p.SubnetworksList(ctx, nr) }},
+		{"MachineTypesList", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) { return p.MachineTypesList(ctx, nr) }},
+		{"ZonesList", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) { return p.ZonesList(ctx, nr) }},
+		{"RegionsList", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) { return p.RegionsList(ctx, nr) }},
+		{"OperationsList", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) { return p.OperationsList(ctx, nr) }},
+	}
+	for _, h := range handlers {
+		if _, err := h.call(newNR(map[string]any{"maxResults": "-1"})); !isCode(err, "InvalidArgument") {
+			t.Errorf("%s(maxResults=-1) = %v, want InvalidArgument", h.name, err)
+		}
+	}
 }

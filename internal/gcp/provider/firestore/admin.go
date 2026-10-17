@@ -545,7 +545,10 @@ func (s *Service) ListFields(ctx context.Context, project, db, cg, filter string
 		}
 		fields = kept
 	}
-	pageFields, nextToken := paging.Page(fields, func(f fieldDef) string { return f.Name }, page.params())
+	pageFields, nextToken, err := paging.Page(fields, func(f fieldDef) string { return f.Name }, page.params())
+	if err != nil {
+		return nil, "", err
+	}
 	return pageFields, nextToken, nil
 }
 

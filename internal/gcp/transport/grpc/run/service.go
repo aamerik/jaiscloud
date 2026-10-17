@@ -104,7 +104,10 @@ func (s *Service) ListServices(ctx context.Context, req *runpb.ListServicesReque
 	if err != nil {
 		return nil, mapError(err)
 	}
-	page, next := paging.Page(svcs, func(s runstore.Service) string { return s.ID }, pageParams(req.GetPageSize(), req.GetPageToken()))
+	page, next, err := paging.Page(svcs, func(s runstore.Service) string { return s.ID }, pageParams(req.GetPageSize(), req.GetPageToken()))
+	if err != nil {
+		return nil, mapError(err)
+	}
 	out := &runpb.ListServicesResponse{NextPageToken: next}
 	for _, svc := range page {
 		out.Services = append(out.Services, serviceToProto(svc))
@@ -203,7 +206,7 @@ func (s *Service) ListRevisions(ctx context.Context, req *runpb.ListRevisionsReq
 		if err != nil {
 			return nil, mapError(err)
 		}
-		return s.pageRevisions(req, revs), nil
+		return s.pageRevisions(req, revs)
 	}
 	svcs, err := s.core.ListServices(ctx, project, location)
 	if err != nil {
@@ -217,16 +220,19 @@ func (s *Service) ListRevisions(ctx context.Context, req *runpb.ListRevisionsReq
 		}
 		all = append(all, revs...)
 	}
-	return s.pageRevisions(req, all), nil
+	return s.pageRevisions(req, all)
 }
 
-func (s *Service) pageRevisions(req *runpb.ListRevisionsRequest, revs []runstore.Revision) *runpb.ListRevisionsResponse {
-	page, next := paging.Page(revs, func(r runstore.Revision) string { return r.ID }, pageParams(req.GetPageSize(), req.GetPageToken()))
+func (s *Service) pageRevisions(req *runpb.ListRevisionsRequest, revs []runstore.Revision) (*runpb.ListRevisionsResponse, error) {
+	page, next, err := paging.Page(revs, func(r runstore.Revision) string { return r.ID }, pageParams(req.GetPageSize(), req.GetPageToken()))
+	if err != nil {
+		return nil, mapError(err)
+	}
 	out := &runpb.ListRevisionsResponse{NextPageToken: next}
 	for _, rev := range page {
 		out.Revisions = append(out.Revisions, revisionToProto(rev))
 	}
-	return out
+	return out, nil
 }
 
 func (s *Service) DeleteRevision(ctx context.Context, req *runpb.DeleteRevisionRequest) (*longrunningpb.Operation, error) {
@@ -281,7 +287,17 @@ func (s *Service) ListOperations(ctx context.Context, parent string, pageSize in
 	if filter != "" {
 		return nil, true, status.Error(codes.InvalidArgument, "operations filter is not supported")
 	}
-	page, next := paging.Page(owned, func(o runstore.Operation) string { return o.ID }, pageParams(pageSize, pageToken))
+	// run.projects.locations.operations.list documents "If not set or set to
+	// less than or equal to 0, the default page size is 100" — a documented
+	// exception to AIP-158's reject-negative rule, so a non-positive size is
+	// cleared to the default rather than raising InvalidArgument.
+	if pageSize < 0 {
+		pageSize = 0
+	}
+	page, next, err := paging.Page(owned, func(o runstore.Operation) string { return o.ID }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, true, mapError(err)
+	}
 	out := &longrunningpb.ListOperationsResponse{NextPageToken: next}
 	for _, op := range page {
 		out.Operations = append(out.Operations, operationToProto(op))

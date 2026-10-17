@@ -116,7 +116,10 @@ func (p *Provider) KeyRingList(ctx context.Context, nr *model.NormalizedRequest)
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(krs, func(kr kmsstore.KeyRing) string { return kr.ID }, nr.Params)
+	page, next, err := paging.Page(krs, func(kr kmsstore.KeyRing) string { return kr.ID }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, kr := range page {
 		items = append(items, map[string]any{
@@ -221,7 +224,10 @@ func (p *Provider) CryptoKeyList(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(keys, func(k kmsstore.CryptoKey) string { return k.ID }, nr.Params)
+	page, next, err := paging.Page(keys, func(k kmsstore.CryptoKey) string { return k.ID }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, k := range page {
 		items = append(items, cryptoKeyMap(nr, k, p.core.PrimaryVersion(ctx, nr.AccountID, k)))
@@ -471,7 +477,10 @@ func (p *Provider) CryptoKeyVersionList(ctx context.Context, nr *model.Normalize
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(versions, func(v kmsstore.Version) string { return versionPageKey(v) }, nr.Params)
+	page, next, err := paging.Page(versions, func(v kmsstore.Version) string { return versionPageKey(v) }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, v := range page {
 		items = append(items, versionMap(nr, loc, kr, key, v))

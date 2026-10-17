@@ -1150,3 +1150,38 @@ func TestKMSMacVerifyCRC32CVerification(t *testing.T) {
 		t.Fatalf("MacVerify mac mismatch err = %v, want InvalidArgument", err)
 	}
 }
+
+// TestKMSListNegativePageSizeRejected pins the shared paging contract over the
+// gRPC surface: a negative pageSize is INVALID_ARGUMENT (AIP-158), not a
+// fall-back to the default.
+func TestKMSListNegativePageSizeRejected(t *testing.T) {
+	client, _, cleanup := kmsTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createKeyRing(t, client, "kr")
+	if _, err := client.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{Parent: keyRing, CryptoKeyId: "sym"}); err != nil {
+		t.Fatalf("CreateCryptoKey: %v", err)
+	}
+	cases := []struct {
+		name string
+		call func() error
+	}{
+		{"ListKeyRings", func() error {
+			_, err := client.ListKeyRings(ctx, &kmspb.ListKeyRingsRequest{Parent: "projects/test/locations/global", PageSize: -1})
+			return err
+		}},
+		{"ListCryptoKeys", func() error {
+			_, err := client.ListCryptoKeys(ctx, &kmspb.ListCryptoKeysRequest{Parent: keyRing, PageSize: -1})
+			return err
+		}},
+		{"ListCryptoKeyVersions", func() error {
+			_, err := client.ListCryptoKeyVersions(ctx, &kmspb.ListCryptoKeyVersionsRequest{Parent: symKey, PageSize: -1})
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		if err := tc.call(); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("%s(pageSize=-1) = %v, want InvalidArgument", tc.name, err)
+		}
+	}
+}

@@ -20,9 +20,8 @@
 // the emulator's own sort as a contract real GCP does not promise.
 //
 // The kit's documented negative (a negative pageSize → INVALID_ARGUMENT,
-// AssertInvalidPageSize) is not asserted here: the emulator coerces a
-// non-positive pageSize to its default rather than rejecting it. That shared
-// paging-contract gap is recorded as DC12 in the depth-closure wave plan.
+// AssertInvalidPageSize) is asserted here as TestSDKNegativePageSizeRejected —
+// the shared paging contract now rejects it (DC12) instead of coercing it.
 //
 // The concurrency cases run under -race (the module's gate adds it); the create
 // arbiter and the accept-and-succeed upsert are the store's, not the client's.
@@ -448,4 +447,43 @@ func countService(services []*serviceusage.GoogleApiServiceusageV1Service, name 
 		}
 	}
 	return n
+}
+
+// TestSDKNegativePageSizeRejected closes DC12 end to end: a negative pageSize is
+// INVALID_ARGUMENT over the official REST clients (AIP-158), not a silent
+// fall-back to the server default. It exercises the three identity/control-plane
+// list methods DC3 walks — the shared internal/gcp/paging contract they and every
+// other cursor-paged list method rely on.
+func TestSDKNegativePageSizeRejected(t *testing.T) {
+	ctx := context.Background()
+
+	iamSvc, err := iam.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	testdepth.AssertInvalidPageSize(t, func(req testdepth.ListRequest) (testdepth.Page[*iam.ServiceAccount], error) {
+		resp, err := iamSvc.Projects.ServiceAccounts.List("projects/proj").PageSize(req.PageSize).Do()
+		if err != nil {
+			return testdepth.Page[*iam.ServiceAccount]{}, err
+		}
+		return testdepth.Page[*iam.ServiceAccount]{Items: resp.Accounts, NextPageToken: resp.NextPageToken}, nil
+	}, -1, testdepth.SpecInvalidArgument())
+
+	rmSvc, err := cloudresourcemanager.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	testdepth.AssertInvalidPageSize(t, func(req testdepth.ListRequest) (testdepth.Page[*cloudresourcemanager.Project], error) {
+		resp, err := rmSvc.Projects.List().PageSize(req.PageSize).Do()
+		if err != nil {
+			return testdepth.Page[*cloudresourcemanager.Project]{}, err
+		}
+		return testdepth.Page[*cloudresourcemanager.Project]{Items: resp.Projects, NextPageToken: resp.NextPageToken}, nil
+	}, -1, testdepth.SpecInvalidArgument())
+
+	suSvc, err := serviceusage.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	testdepth.AssertInvalidPageSize(t, func(req testdepth.ListRequest) (testdepth.Page[*serviceusage.GoogleApiServiceusageV1Service], error) {
+		resp, err := suSvc.Services.List("projects/proj").PageSize(req.PageSize).Do()
+		if err != nil {
+			return testdepth.Page[*serviceusage.GoogleApiServiceusageV1Service]{}, err
+		}
+		return testdepth.Page[*serviceusage.GoogleApiServiceusageV1Service]{Items: resp.Services, NextPageToken: resp.NextPageToken}, nil
+	}, -1, testdepth.SpecInvalidArgument())
 }
