@@ -54,6 +54,22 @@ func TestCrossServiceCMEK(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, secret.Name)
 
+	// DC31: the Secret response echoes the configured CMEK key, so a client can
+	// read back what it set instead of seeing an empty automatic policy (the
+	// value also drives Terraform's computed kms_key_name and the console chip).
+	secretCMEK := func(s *secretmanager.Secret) string {
+		if s.Replication == nil || s.Replication.Automatic == nil ||
+			s.Replication.Automatic.CustomerManagedEncryption == nil {
+			return ""
+		}
+		return s.Replication.Automatic.CustomerManagedEncryption.KmsKeyName
+	}
+	require.Equal(t, kmsKeyName, secretCMEK(secret), "create must echo the CMEK key")
+
+	readBack, err := sm.Projects.Secrets.Get(secret.Name).Do()
+	require.NoError(t, err)
+	require.Equal(t, kmsKeyName, secretCMEK(readBack), "get must echo the CMEK key")
+
 	_, err = sm.Projects.Secrets.AddVersion(secret.Name, &secretmanager.AddSecretVersionRequest{
 		Payload: &secretmanager.SecretPayload{Data: "aGk="},
 	}).Do()
@@ -64,6 +80,33 @@ func TestCrossServiceCMEK(t *testing.T) {
 	decoded, err := base64.StdEncoding.DecodeString(acc.Payload.Data)
 	require.NoError(t, err)
 	require.Equal(t, "hi", string(decoded), "secret payload must decrypt to the plaintext")
+
+	// Patching the replication CMEK is visible on the response and applies to
+	// versions added afterwards (the documented semantics), while the existing
+	// version keeps the key it was wrapped with.
+	ck2, err := kms.Projects.Locations.KeyRings.CryptoKeys.Create(krName, &cloudkms.CryptoKey{
+		Purpose: "ENCRYPT_DECRYPT",
+	}).CryptoKeyId(unique("k2")).Do()
+	require.NoError(t, err)
+	patched, err := sm.Projects.Secrets.Patch(secret.Name, &secretmanager.Secret{
+		Replication: &secretmanager.Replication{
+			Automatic: &secretmanager.Automatic{
+				CustomerManagedEncryption: &secretmanager.CustomerManagedEncryption{KmsKeyName: ck2.Name},
+			},
+		},
+	}).UpdateMask("replication").Do()
+	require.NoError(t, err)
+	require.Equal(t, ck2.Name, secretCMEK(patched), "patch must echo the new CMEK key")
+
+	_, err = sm.Projects.Secrets.AddVersion(secret.Name, &secretmanager.AddSecretVersionRequest{
+		Payload: &secretmanager.SecretPayload{Data: "aGk="},
+	}).Do()
+	require.NoError(t, err)
+	acc2, err := sm.Projects.Secrets.Versions.Access(secret.Name + "/versions/2").Do()
+	require.NoError(t, err)
+	decoded, err = base64.StdEncoding.DecodeString(acc2.Payload.Data)
+	require.NoError(t, err)
+	require.Equal(t, "hi", string(decoded), "version added after the patch must decrypt under the new key")
 
 	// 3. Pub/Sub — a messaging service encrypting with the same shared key.
 	ps, err := pubsub.NewService(ctx, opts()...)

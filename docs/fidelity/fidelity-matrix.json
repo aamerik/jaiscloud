@@ -13527,7 +13527,7 @@
       "evidence": [
         "grpc-checks=GetSecret",
         "postgres=yes",
-        "transport=grpc (conformance=1/1 pass)",
+        "transport=grpc (conformance=2/2 pass)",
         "verified=true (grpc)"
       ]
     },

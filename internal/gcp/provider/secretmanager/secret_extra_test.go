@@ -408,9 +408,18 @@ func TestSecretManagerCMEKRoundTrip(t *testing.T) {
 	})
 	createNR.AccountID = projectID
 
-	_, err = p.Create(ctx, createNR)
+	created, err := p.Create(ctx, createNR)
 	if err != nil {
 		t.Fatalf("create secret: %v", err)
+	}
+	// The Secret response must echo the configured CMEK key (DC31): a client
+	// reads back what it set under
+	// replication.automatic.customerManagedEncryption.kmsKeyName.
+	if got := cmekFromSecretMap(t, created.Data); got != kmsKeyName {
+		t.Fatalf("create replication CMEK = %q, want %q (replication=%#v)", got, kmsKeyName, created.Data["replication"])
+	}
+	if got := cmekFromSecretMap(t, mustGetSecret(t, p, ctx, projectID, "cmek-secret").Data); got != kmsKeyName {
+		t.Fatalf("get replication CMEK = %q, want %q", got, kmsKeyName)
 	}
 
 	// Add Version
@@ -446,6 +455,122 @@ func TestSecretManagerCMEKRoundTrip(t *testing.T) {
 	if payloadResp["data"] != payloadB64 {
 		t.Fatalf("expected payload %q, got %q", payloadB64, payloadResp["data"])
 	}
+
+	// Patching the replication policy is observable too (DC31): the Secret etag
+	// already covered kmsKeyName (DC13), so before this fix a CMEK change moved
+	// the etag while the rendered resource stayed byte-identical.
+	key2ID := "second-key"
+	if err := kmsStore.CreateCryptoKey(ctx, projectID, location, keyringID, key2ID, kms.CryptoKey{ID: key2ID, Purpose: "ENCRYPT_DECRYPT"}); err != nil {
+		t.Fatal(err)
+	}
+	v2, err := kmsStore.CreateVersion(ctx, projectID, location, keyringID, key2ID, kms.Version{State: "ENABLED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := kmsStore.UpdatePrimaryVersion(ctx, projectID, location, keyringID, key2ID, v2); err != nil {
+		t.Fatal(err)
+	}
+	key2Name := "projects/" + projectID + "/locations/" + location + "/keyRings/" + keyringID + "/cryptoKeys/" + key2ID
+
+	patchNR := newNR(map[string]any{
+		"name": "projects/" + projectID + "/secrets/cmek-secret",
+		"body": map[string]any{
+			"replication": map[string]any{
+				"automatic": map[string]any{
+					"customerManagedEncryption": map[string]any{"kmsKeyName": key2Name},
+				},
+			},
+		},
+	})
+	patchNR.AccountID = projectID
+	patched, err := p.Update(ctx, patchNR)
+	if err != nil {
+		t.Fatalf("patch replication: %v", err)
+	}
+	if got := cmekFromSecretMap(t, patched.Data); got != key2Name {
+		t.Fatalf("patch replication CMEK = %q, want %q", got, key2Name)
+	}
+	if got := cmekFromSecretMap(t, mustGetSecret(t, p, ctx, projectID, "cmek-secret").Data); got != key2Name {
+		t.Fatalf("get replication CMEK after patch = %q, want %q", got, key2Name)
+	}
+
+	// The patched secret is also readable through list.
+	listNR := newNR(map[string]any{})
+	listNR.AccountID = projectID
+	list, err := p.List(ctx, listNR)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	items, _ := list.Data["secrets"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("list returned %d secrets, want 1", len(items))
+	}
+	if got := cmekFromSecretMap(t, items[0].(map[string]any)); got != key2Name {
+		t.Fatalf("list replication CMEK = %q, want %q", got, key2Name)
+	}
+}
+
+// TestSecretReplicationWithoutCMEK pins the no-CMEK shape: the automatic arm is
+// present and empty, with no customerManagedEncryption object at all (real GCP
+// omits the nested message rather than sending it empty).
+func TestSecretReplicationWithoutCMEK(t *testing.T) {
+	ctx := context.Background()
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+
+	resp, err := p.Create(ctx, newNR(map[string]any{"secretId": "plain-secret"}))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	repl, ok := resp.Data["replication"].(map[string]any)
+	if !ok {
+		t.Fatalf("replication = %#v, want an object", resp.Data["replication"])
+	}
+	auto, ok := repl["automatic"].(map[string]any)
+	if !ok {
+		t.Fatalf("replication.automatic = %#v, want an object", repl["automatic"])
+	}
+	if _, present := auto["customerManagedEncryption"]; present {
+		t.Fatalf("replication.automatic.customerManagedEncryption = %#v, want absent", auto["customerManagedEncryption"])
+	}
+	if got := cmekFromSecretMap(t, resp.Data); got != "" {
+		t.Fatalf("CMEK = %q, want empty", got)
+	}
+}
+
+// cmekFromSecretMap returns the CMEK key name from a rendered Secret, or "" when
+// the automatic replication policy carries no customerManagedEncryption.
+func cmekFromSecretMap(t *testing.T, data map[string]any) string {
+	t.Helper()
+	repl, ok := data["replication"].(map[string]any)
+	if !ok {
+		t.Fatalf("replication = %#v, want an object", data["replication"])
+	}
+	auto, ok := repl["automatic"].(map[string]any)
+	if !ok {
+		t.Fatalf("replication.automatic = %#v, want an object", repl["automatic"])
+	}
+	raw, present := auto["customerManagedEncryption"]
+	if !present {
+		return ""
+	}
+	cme, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("customerManagedEncryption = %#v, want an object", raw)
+	}
+	name, _ := cme["kmsKeyName"].(string)
+	return name
+}
+
+// mustGetSecret reads a secret back through the provider.
+func mustGetSecret(t *testing.T, p *Provider, ctx context.Context, project, id string) *model.ProviderResponse {
+	t.Helper()
+	nr := newNR(map[string]any{"name": "projects/" + project + "/secrets/" + id})
+	nr.AccountID = project
+	resp, err := p.Get(ctx, nr)
+	if err != nil {
+		t.Fatalf("get secret %s: %v", id, err)
+	}
+	return resp
 }
 
 // TestSecretVersionStateEnforcement verifies Secret Manager lifecycle rules:

@@ -44,6 +44,19 @@ resource "google_secret_manager_secret_version" "compat" {
   secret_data = "jaiscloud-tf-secret-value"
 }
 
+resource "google_secret_manager_secret" "cmek" {
+  secret_id = "jaiscloud-tf-secret-cmek"
+  project   = var.project
+
+  replication {
+    auto {
+      customer_managed_encryption {
+        kms_key_name = google_kms_crypto_key.compat.id
+      }
+    }
+  }
+}
+
 resource "google_secret_manager_secret_iam_member" "accessor" {
   project   = var.project
   secret_id = google_secret_manager_secret.compat.secret_id
