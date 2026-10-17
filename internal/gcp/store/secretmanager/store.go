@@ -93,12 +93,23 @@ type Store interface {
 	// exist (mutate is not called in that case).
 	UpdateSecretAtomic(ctx context.Context, projectID, id string, mutate func(current Secret) (Secret, error)) (Secret, error)
 	DeleteSecret(ctx context.Context, projectID, id string) error // cascades versions
+	// DeleteSecretIf atomically deletes the secret (cascading its versions) only
+	// when cond returns nil for the currently stored value. A non-nil cond error
+	// aborts the delete and is returned unchanged; ErrNoSuchSecret when absent.
+	// Callers use it for a precondition (the API etag) so that a concurrent
+	// mutation cannot land between the check and the delete.
+	DeleteSecretIf(ctx context.Context, projectID, id string, cond func(Secret) error) error
 	ListSecrets(ctx context.Context, projectID string) ([]Secret, error)
 
 	CreateVersion(ctx context.Context, projectID string, v Version) error
 	GetVersion(ctx context.Context, projectID, secretID, versionID string) (Version, error)
 	ListVersions(ctx context.Context, projectID, secretID string) ([]Version, error)
 	UpdateVersion(ctx context.Context, projectID string, v Version) error
+	// UpdateVersionIf atomically reads the current version, calls mutate, and
+	// writes it back — no other transition can interleave. A non-nil mutate
+	// error aborts the write and is returned unchanged; ErrNoSuchVersion when
+	// the version is absent. Used for the version etag precondition.
+	UpdateVersionIf(ctx context.Context, projectID, secretID, versionID string, mutate func(current Version) (Version, error)) (Version, error)
 
 	// NextVersion atomically allocates the next version number for a secret and
 	// advances its counter, so concurrent AddVersion calls never collide.

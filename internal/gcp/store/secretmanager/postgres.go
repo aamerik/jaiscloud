@@ -167,6 +167,58 @@ func (s *PostgresStore) DeleteSecret(ctx context.Context, projectID, id string) 
 	return nil
 }
 
+// DeleteSecretIf runs the precondition against a row-locked snapshot and
+// deletes in the same Serializable transaction, so a concurrent mutation
+// cannot land between the check and the delete (the same convention as
+// UpdateSecretAtomic).
+func (s *PostgresStore) DeleteSecretIf(ctx context.Context, projectID, id string, cond func(Secret) error) error {
+	return storeutil.RetrySerializableErr(ctx, func() error {
+		return s.deleteSecretIfOnce(ctx, projectID, id, cond)
+	})
+}
+
+func (s *PostgresStore) deleteSecretIfOnce(ctx context.Context, projectID, id string, cond func(Secret) error) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var sec Secret
+	var labels, annotations, rotation, aliases []byte
+	err = tx.QueryRow(ctx, `
+		SELECT secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations
+		FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2 FOR UPDATE
+	`, projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNoSuchSecret
+	}
+	if err != nil {
+		return err
+	}
+	json.Unmarshal(labels, &sec.Labels)
+	json.Unmarshal(annotations, &sec.Annotations)
+	if len(rotation) > 0 {
+		json.Unmarshal(rotation, &sec.Rotation)
+	}
+	if len(aliases) > 0 {
+		json.Unmarshal(aliases, &sec.VersionAliases)
+	}
+
+	if cond != nil {
+		if err := cond(sec); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_sm_versions WHERE project_id=$1 AND secret_id=$2`, projectID, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2`, projectID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *PostgresStore) ListSecrets(ctx context.Context, projectID string) ([]Secret, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations
@@ -263,6 +315,55 @@ func (s *PostgresStore) UpdateVersion(ctx context.Context, projectID string, v V
 		return ErrNoSuchVersion
 	}
 	return nil
+}
+
+// UpdateVersionIf reads the version FOR UPDATE, applies mutate, and writes it
+// back in one Serializable transaction, so a concurrent transition cannot land
+// between the precondition check and the update.
+func (s *PostgresStore) UpdateVersionIf(ctx context.Context, projectID, secretID, versionID string, mutate func(Version) (Version, error)) (Version, error) {
+	return storeutil.RetrySerializable(ctx, func() (Version, error) {
+		return s.updateVersionIfOnce(ctx, projectID, secretID, versionID, mutate)
+	})
+}
+
+func (s *PostgresStore) updateVersionIfOnce(ctx context.Context, projectID, secretID, versionID string, mutate func(Version) (Version, error)) (Version, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Version{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var v Version
+	var destroyTime *time.Time
+	err = tx.QueryRow(ctx, `
+		SELECT secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek
+		FROM jc_sm_versions WHERE project_id=$1 AND secret_id=$2 AND version_id=$3 FOR UPDATE
+	`, projectID, secretID, versionID).Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Version{}, ErrNoSuchVersion
+	}
+	if err != nil {
+		return Version{}, err
+	}
+	if destroyTime != nil {
+		v.DestroyTime = *destroyTime
+	}
+
+	next, err := mutate(v)
+	if err != nil {
+		return Version{}, err
+	}
+	// Identity is the address, not a mutation: never let mutate move the record.
+	next.SecretID, next.VersionID = v.SecretID, v.VersionID
+	if _, err := tx.Exec(ctx, `
+		UPDATE jc_sm_versions SET state=$4, destroy_time=$5 WHERE project_id=$1 AND secret_id=$2 AND version_id=$3
+	`, projectID, next.SecretID, next.VersionID, next.State, nullableTime(next.DestroyTime)); err != nil {
+		return Version{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Version{}, err
+	}
+	return next, nil
 }
 
 // NextVersion atomically allocates and advances a secret's version counter via
