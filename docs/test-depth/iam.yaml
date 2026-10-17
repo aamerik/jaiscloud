@@ -16,7 +16,7 @@ classes:
   p3:
     state: present
     suites: [sdk-rest]
-    note: "invalid-create / not-found service-account envelopes"
+    note: "invalid-create / not-found service-account envelopes, including the documented wildcard distinction: a miss through `projects/-` (the form every `gcloud iam service-accounts` command addresses) is 403 PERMISSION_DENIED while the concrete project path stays 404 NOT_FOUND"
   p4:
     state: present
     suites: [sdk-rest]
