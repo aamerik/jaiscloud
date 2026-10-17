@@ -54,9 +54,13 @@ const nonExpiringKeyTime = "9999-12-31T23:59:59Z"
 // — it is the trailing segment of `name`, and that is the only place real GCP
 // exposes it. The emulator must not invent a separate `keyId` field to match a
 // sibling emulator's internal model.
-func keyBaseMap(nr *model.NormalizedRequest, m serviceAccountKeyMeta) map[string]any {
+//
+// account is the resolved store account, which differs from the request's
+// project on a "projects/-" wildcard request: the key name is always rendered
+// under the account's real project.
+func keyBaseMap(nr *model.NormalizedRequest, account string, m serviceAccountKeyMeta) map[string]any {
 	out := map[string]any{
-		"name":            nr.ResourceID("service-account", m.Email) + "/keys/" + m.KeyID,
+		"name":            saNameFormat(nr, account)("service-account", m.Email) + "/keys/" + m.KeyID,
 		"keyAlgorithm":    m.Algorithm,
 		"keyOrigin":       m.Origin(),
 		"keyType":         m.Type(),
@@ -73,14 +77,14 @@ func keyBaseMap(nr *model.NormalizedRequest, m serviceAccountKeyMeta) map[string
 // keyListMap renders a ListServiceAccountKeysResponse item. Discovery scopes
 // privateKeyType to keys.create and publicKeyData to keys.get, so list carries
 // neither.
-func keyListMap(nr *model.NormalizedRequest, m serviceAccountKeyMeta) map[string]any {
-	return keyBaseMap(nr, m)
+func keyListMap(nr *model.NormalizedRequest, account string, m serviceAccountKeyMeta) map[string]any {
+	return keyBaseMap(nr, account, m)
 }
 
 // keyGetMap renders a keys.get resource: publicKeyData is populated there (and
 // only there) from the stored private key's public half.
-func keyGetMap(nr *model.NormalizedRequest, m serviceAccountKeyMeta) map[string]any {
-	out := keyBaseMap(nr, m)
+func keyGetMap(nr *model.NormalizedRequest, account string, m serviceAccountKeyMeta) map[string]any {
+	out := keyBaseMap(nr, account, m)
 	if pub, ok := m.PublicKeyData(); ok {
 		out["publicKeyData"] = pub
 	}
@@ -89,8 +93,8 @@ func keyGetMap(nr *model.NormalizedRequest, m serviceAccountKeyMeta) map[string]
 
 // keyCreateMap renders a keys.create resource: privateKeyType and
 // privateKeyData are returned only by create (never by get or list).
-func keyCreateMap(nr *model.NormalizedRequest, m serviceAccountKeyMeta, privateKeyData string) map[string]any {
-	out := keyBaseMap(nr, m)
+func keyCreateMap(nr *model.NormalizedRequest, account string, m serviceAccountKeyMeta, privateKeyData string) map[string]any {
+	out := keyBaseMap(nr, account, m)
 	out["privateKeyType"] = "TYPE_GOOGLE_CREDENTIALS_FILE"
 	out["privateKeyData"] = privateKeyData
 	return out
@@ -179,16 +183,31 @@ func (p *Provider) loadKey(ctx context.Context, account, email, keyID string) (*
 	return k, nil
 }
 
+// requireWildcardServiceAccount re-checks the parent account on a "projects/-"
+// request: a key addressed under an account the wildcard cannot resolve answers
+// the documented 403 rather than the per-key 404. The concrete project path
+// keeps its per-resource 404 ("key not found"), which the conformance
+// transcripts pin, so the check is deliberately wildcard-only.
+func (p *Provider) requireWildcardServiceAccount(ctx context.Context, nr *model.NormalizedRequest, ref saRef) error {
+	if nr.AccountID != "-" {
+		return nil
+	}
+	return p.requireServiceAccount(ctx, nr, ref)
+}
+
 func (p *Provider) ServiceAccountKeyCreate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
 		return nil, err
 	}
-	email := parseKeyParent(name)
-	if err := p.requireServiceAccount(ctx, nr.AccountID, email); err != nil {
+	ref, err := p.resolveSA(ctx, nr, parseKeyParent(name))
+	if err != nil {
 		return nil, err
 	}
-	m, err := p.createKey(ctx, nr.AccountID, email)
+	if err := p.requireServiceAccount(ctx, nr, ref); err != nil {
+		return nil, err
+	}
+	m, err := p.createKey(ctx, ref.Account, ref.Email)
 	if err != nil {
 		return nil, err
 	}
@@ -196,16 +215,16 @@ func (p *Provider) ServiceAccountKeyCreate(ctx context.Context, nr *model.Normal
 	privPEM, _ := kmsstore.PrivateKeyPEM(privDER)
 	creds, _ := json.Marshal(map[string]any{
 		"type":            "service_account",
-		"project_id":      nr.AccountID,
+		"project_id":      ref.Account,
 		"private_key_id":  m.KeyID,
 		"private_key":     privPEM,
-		"client_email":    email,
+		"client_email":    ref.Email,
 		"client_id":       "0",
 		"auth_uri":        "https://accounts.google.com/o/oauth2/auth",
 		"token_uri":       "https://oauth2.googleapis.com/token",
 		"universe_domain": "googleapis.com",
 	})
-	resp := keyCreateMap(nr, *m, base64.StdEncoding.EncodeToString(creds))
+	resp := keyCreateMap(nr, ref.Account, *m, base64.StdEncoding.EncodeToString(creds))
 	return provider.OK(resp), nil
 }
 
@@ -220,19 +239,22 @@ func (p *Provider) ServiceAccountKeyList(ctx context.Context, nr *model.Normaliz
 	if err != nil {
 		return nil, err
 	}
-	email := parseKeyParent(name)
-	if err := p.requireServiceAccount(ctx, nr.AccountID, email); err != nil {
+	ref, err := p.resolveSA(ctx, nr, parseKeyParent(name))
+	if err != nil {
 		return nil, err
 	}
-	entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccountKey, "")
+	if err := p.requireServiceAccount(ctx, nr, ref); err != nil {
+		return nil, err
+	}
+	entries, err := p.resources.List(ctx, ref.Account, store.GlobalRegion, rtServiceAccountKey, "")
 	if err != nil {
 		return nil, err
 	}
 	items := make([]any, 0)
 	for _, e := range entries {
 		var m serviceAccountKeyMeta
-		if json.Unmarshal(e.Data, &m) == nil && m.Email == email && matchesKeyType(m.Type(), keyTypes) {
-			items = append(items, keyListMap(nr, m))
+		if json.Unmarshal(e.Data, &m) == nil && m.Email == ref.Email && matchesKeyType(m.Type(), keyTypes) {
+			items = append(items, keyListMap(nr, ref.Account, m))
 		}
 	}
 	return provider.OK(map[string]any{"keys": items}), nil
@@ -244,11 +266,18 @@ func (p *Provider) ServiceAccountKeyGet(ctx context.Context, nr *model.Normalize
 		return nil, err
 	}
 	email, keyID := parseKeyName(name)
-	m, err := p.loadKey(ctx, nr.AccountID, email, keyID)
+	ref, err := p.resolveSA(ctx, nr, email)
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(keyGetMap(nr, *m)), nil
+	if err := p.requireWildcardServiceAccount(ctx, nr, ref); err != nil {
+		return nil, err
+	}
+	m, err := p.loadKey(ctx, ref.Account, ref.Email, keyID)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(keyGetMap(nr, ref.Account, *m)), nil
 }
 
 func (p *Provider) ServiceAccountKeyDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -257,10 +286,17 @@ func (p *Provider) ServiceAccountKeyDelete(ctx context.Context, nr *model.Normal
 		return nil, err
 	}
 	email, keyID := parseKeyName(name)
-	if _, err := p.loadKey(ctx, nr.AccountID, email, keyID); err != nil {
+	ref, err := p.resolveSA(ctx, nr, email)
+	if err != nil {
 		return nil, err
 	}
-	if err := p.resources.Delete(ctx, nr.AccountID, store.GlobalRegion, rtServiceAccountKey, keyID); err != nil {
+	if err := p.requireWildcardServiceAccount(ctx, nr, ref); err != nil {
+		return nil, err
+	}
+	if _, err := p.loadKey(ctx, ref.Account, ref.Email, keyID); err != nil {
+		return nil, err
+	}
+	if err := p.resources.Delete(ctx, ref.Account, store.GlobalRegion, rtServiceAccountKey, keyID); err != nil {
 		return nil, err
 	}
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
@@ -274,7 +310,14 @@ func (p *Provider) setKeyDisabled(ctx context.Context, nr *model.NormalizedReque
 		return nil, err
 	}
 	email, keyID := parseKeyName(name)
-	m, err := p.loadKey(ctx, nr.AccountID, email, keyID)
+	ref, err := p.resolveSA(ctx, nr, email)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.requireWildcardServiceAccount(ctx, nr, ref); err != nil {
+		return nil, err
+	}
+	m, err := p.loadKey(ctx, ref.Account, ref.Email, keyID)
 	if err != nil {
 		return nil, err
 	}
@@ -285,12 +328,12 @@ func (p *Provider) setKeyDisabled(ctx context.Context, nr *model.NormalizedReque
 		m.DisableTime = ""
 	}
 	data, _ := json.Marshal(m)
-	if err := p.resources.Update(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{
+	if err := p.resources.Update(ctx, ref.Account, store.GlobalRegion, store.ResourceEntry{
 		Type: rtServiceAccountKey, ID: keyID, Data: data,
 	}); err != nil {
 		return nil, err
 	}
-	return provider.OK(keyListMap(nr, *m)), nil
+	return provider.OK(keyListMap(nr, ref.Account, *m)), nil
 }
 
 // ServiceAccountKeyDisable implements projects.serviceAccounts.keys.disable.
@@ -301,6 +344,34 @@ func (p *Provider) ServiceAccountKeyDisable(ctx context.Context, nr *model.Norma
 // ServiceAccountKeyEnable implements projects.serviceAccounts.keys.enable.
 func (p *Provider) ServiceAccountKeyEnable(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return p.setKeyDisabled(ctx, nr, false)
+}
+
+// signTarget resolves the service account a signBlob/signJwt request signs for.
+// Both identifier forms are documented, but signing resolves the account more
+// leniently than the management surface: through "projects/-" it signs lazily
+// for an account that need not exist (the IAM Credentials surface does the
+// same), while a concrete project path requires the account. A unique-id
+// identifier names no project of its own, so it is resolved against the
+// addressed account; the wildcard cannot resolve one (DC29) and answers the
+// documented miss instead of signing for a phantom account.
+func (p *Provider) signTarget(ctx context.Context, nr *model.NormalizedRequest, name string) (saRef, error) {
+	identifier := emailFromName(name)
+	if !strings.Contains(identifier, "@") {
+		return p.resolveSA(ctx, nr, identifier)
+	}
+	account := serviceaccount.AccountForSA(nr.AccountID, identifier)
+	if account == "" || account == "-" {
+		// The identifier embeds no project and the path project is the
+		// wildcard, so there is nothing to scope the signature to.
+		return saRef{}, saLookupError(nr, "serviceAccounts/"+identifier, "service account not found")
+	}
+	ref := saRef{Account: account, Email: identifier}
+	if nr.AccountID != "-" {
+		if err := p.requireServiceAccount(ctx, nr, ref); err != nil {
+			return saRef{}, err
+		}
+	}
+	return ref, nil
 }
 
 // ServiceAccountSignBlob serves iam.projects.serviceAccounts.signBlob. The
@@ -314,18 +385,11 @@ func (p *Provider) ServiceAccountSignBlob(ctx context.Context, nr *model.Normali
 	if err != nil {
 		return nil, err
 	}
-	email := emailFromName(name)
-	// Impersonation addresses the account through "projects/-"; the project in
-	// the email is authoritative then. The IAM Credentials surface signs
-	// lazily (the account need not exist); the IAM management API on a
-	// concrete project path requires it.
-	account := serviceaccount.AccountForSA(nr.AccountID, email)
-	if nr.AccountID != "-" {
-		if err := p.requireServiceAccount(ctx, account, email); err != nil {
-			return nil, err
-		}
+	ref, err := p.signTarget(ctx, nr, name)
+	if err != nil {
+		return nil, err
 	}
-	m, err := p.ensureKey(ctx, account, email)
+	m, err := p.ensureKey(ctx, ref.Account, ref.Email)
 	if err != nil {
 		return nil, err
 	}
@@ -374,19 +438,16 @@ func (p *Provider) ServiceAccountSignJwt(ctx context.Context, nr *model.Normaliz
 	if err != nil {
 		return nil, err
 	}
-	email := emailFromName(name)
-	account := serviceaccount.AccountForSA(nr.AccountID, email)
-	if nr.AccountID != "-" {
-		if err := p.requireServiceAccount(ctx, account, email); err != nil {
-			return nil, err
-		}
+	ref, err := p.signTarget(ctx, nr, name)
+	if err != nil {
+		return nil, err
 	}
 	body, _ := nr.Params["body"].(map[string]any)
 	payloadStr, _ := body["payload"].(string)
 	if err := serviceaccount.ValidateJWTPayload(payloadStr, clock.Now().UTC()); err != nil {
 		return nil, err
 	}
-	m, err := p.ensureKey(ctx, account, email)
+	m, err := p.ensureKey(ctx, ref.Account, ref.Email)
 	if err != nil {
 		return nil, err
 	}
