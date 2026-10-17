@@ -204,7 +204,8 @@ func (p *Provider) ServiceAccountKeyCreate(ctx context.Context, nr *model.Normal
 	if err != nil {
 		return nil, err
 	}
-	if err := p.requireServiceAccount(ctx, nr, ref); err != nil {
+	sa, err := p.loadServiceAccountMeta(ctx, nr, ref)
+	if err != nil {
 		return nil, err
 	}
 	m, err := p.createKey(ctx, ref.Account, ref.Email)
@@ -213,13 +214,17 @@ func (p *Provider) ServiceAccountKeyCreate(ctx context.Context, nr *model.Normal
 	}
 	privDER, _ := m.PrivDER()
 	privPEM, _ := kmsstore.PrivateKeyPEM(privDER)
+	// client_id is the account's oauth2ClientId: the official client libraries
+	// read it out of the credentials file to build the OAuth2 client, so a
+	// placeholder value would make the file unusable against real Google
+	// endpoints.
 	creds, _ := json.Marshal(map[string]any{
 		"type":            "service_account",
 		"project_id":      ref.Account,
 		"private_key_id":  m.KeyID,
 		"private_key":     privPEM,
 		"client_email":    ref.Email,
-		"client_id":       "0",
+		"client_id":       sa.Oauth2ClientID,
 		"auth_uri":        "https://accounts.google.com/o/oauth2/auth",
 		"token_uri":       "https://oauth2.googleapis.com/token",
 		"universe_domain": "googleapis.com",

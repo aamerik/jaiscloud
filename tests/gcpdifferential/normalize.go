@@ -363,8 +363,9 @@ var volatileStringKeys = map[string]string{
 	"CloudPubSubDeadLetterSourceDeliveryCount": "<deadLetterDeliveryCount>",
 	"jobId":         "<jobId>",
 	"temporaryHold": "<temporaryHold>",
-	// IAM service accounts generate these server-side (the emulator leaves
-	// oauth2ClientId empty), so fold both sides to a placeholder.
+	// IAM service accounts generate these server-side (21-digit numeric ids on
+	// real GCP and in the emulator, but different values), so fold both sides to
+	// a placeholder.
 	"uniqueId":       "<uniqueId>",
 	"oauth2ClientId": "<oauth2ClientId>",
 	// Cloud Run / Eventarc resources carry a server-generated uid (a UUID on

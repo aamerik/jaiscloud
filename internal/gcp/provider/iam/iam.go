@@ -3,6 +3,7 @@ package iam
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -82,7 +83,7 @@ type serviceAccountMeta struct {
 	// UniqueID is the account's numeric unique id, the second identifier real
 	// IAM accepts in a serviceAccounts resource name. Records written before
 	// the field was modelled leave it empty and keep reporting the email there
-	// (see saToMap); DC25 replaces the placeholder with a real 21-digit id.
+	// (see saToMap); new accounts carry a generated 21-digit id.
 	UniqueID string `json:"uniqueId,omitempty"`
 }
 
@@ -233,6 +234,29 @@ func saNameFormat(nr *model.NormalizedRequest, account string) func(resourceType
 	return resource.ResourceID(account)
 }
 
+// newNumericID returns a 21-digit decimal identifier in the shape real IAM
+// assigns to a service account's uniqueId and oauth2ClientId. The two are
+// distinct values on real GCP (the Discovery sample pairs
+// 123456789012345678901 with 987654321098765432109), so Create draws each
+// separately; the leading digit is non-zero to keep the value 21 characters
+// long.
+//
+// The id is random rather than derived from the account because IAM documents
+// that a deleted service account keeps its id while an account re-created under
+// the same name gets a different one, so a stable hash of the email would
+// violate that contract.
+func newNumericID() string {
+	const digits = 21
+	buf := make([]byte, digits)
+	_, _ = rand.Read(buf)
+	out := make([]byte, digits)
+	out[0] = '1' + buf[0]%9
+	for i := 1; i < digits; i++ {
+		out[i] = '0' + buf[i]%10
+	}
+	return string(out)
+}
+
 func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	accountID, _ := nr.Params["accountId"].(string)
 	if accountID == "" {
@@ -249,29 +273,29 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	}
 	displayName := accountID
 	description := ""
-	disabled := false
-	oauthClientID := ""
 	if body, ok := nr.Params["body"].(map[string]any); ok {
 		if sa, ok := body["serviceAccount"].(map[string]any); ok {
 			if dn, _ := sa["displayName"].(string); dn != "" {
 				displayName = dn
 			}
 			description, _ = sa["description"].(string)
-			disabled, _ = sa["disabled"].(bool)
-			oauthClientID, _ = sa["oauth2ClientId"].(string)
 		}
 	}
 	email := accountID + "@" + nr.AccountID + ".iam.gserviceaccount.com"
+	// uniqueId, oauth2ClientId and disabled are output-only in the Discovery
+	// schema: real IAM ignores them on input and answers the server-generated
+	// values (a disabled service account is created enabled, then disabled
+	// through projects.serviceAccounts.disable).
 	m := serviceAccountMeta{
 		Name:           nr.ResourceID("service-account", email),
 		Email:          email,
 		DisplayName:    displayName,
 		ProjectID:      nr.AccountID,
 		Description:    description,
-		Disabled:       disabled,
-		Oauth2ClientID: oauthClientID,
+		Disabled:       false,
+		Oauth2ClientID: newNumericID(),
 		Etag:           policy.Etag(displayName),
-		UniqueID:       email,
+		UniqueID:       newNumericID(),
 	}
 	data, _ := json.Marshal(m)
 	if err := p.resources.Create(ctx, nr.AccountID, store.GlobalRegion, store.ResourceEntry{Type: rtServiceAccount, ID: email, Data: data}); err != nil {
@@ -664,7 +688,8 @@ func (p *Provider) requireServiceAccount(ctx context.Context, nr *model.Normaliz
 
 func saToMap(m serviceAccountMeta) map[string]any {
 	// Records written before the unique id was stored report the email there,
-	// which is what the API returned for them.
+	// which is what the API returned for them; they also keep their empty
+	// oauth2ClientId. Everything created since carries numeric ids.
 	uniqueID := m.UniqueID
 	if uniqueID == "" {
 		uniqueID = m.Email

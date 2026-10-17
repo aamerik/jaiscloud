@@ -45,7 +45,7 @@ func TestIAMNegativesPaginationAndOCC(t *testing.T) {
 	}
 
 	// saToMap includes the full schema fields.
-	nr := newNR(map[string]any{"body": map[string]any{"accountId": "rich", "serviceAccount": map[string]any{"displayName": "Rich", "description": "d", "disabled": true, "oauth2ClientId": "cid"}}})
+	nr := newNR(map[string]any{"body": map[string]any{"accountId": "rich", "serviceAccount": map[string]any{"displayName": "Rich", "description": "d"}}})
 	resp, err := p.Create(ctx, nr)
 	if err != nil {
 		t.Fatalf("create rich: %v", err)
