@@ -188,6 +188,41 @@ func assertDoneOperation(t *testing.T, op map[string]any, wantMetaType, wantResp
 	}
 }
 
+func TestProviderListNegativePageSize(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+	if _, err := p.CreateQueue(ctx, req(map[string]any{"project": "p", "location": "l", "body": queueBody()})); err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+	// AIP-158: a negative pageSize is INVALID_ARGUMENT on both list methods,
+	// rather than silently falling back to the documented maximum.
+	for name, call := range map[string]func() error{
+		"queues.list": func() error {
+			_, err := p.ListQueues(ctx, req(map[string]any{"project": "p", "location": "l", "pageSize": float64(-1)}))
+			return err
+		},
+		"tasks.list": func() error {
+			_, err := p.ListTasks(ctx, req(map[string]any{"project": "p", "location": "l", "queue": "q1", "pageSize": float64(-1)}))
+			return err
+		},
+	} {
+		err := call()
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("%s(pageSize=-1) err = %v, want InvalidArgument/400", name, err)
+		}
+	}
+	// queues.list documents a 9800 ceiling (not tasks.list's 1000), so a 9800
+	// request is legal and returns the whole small collection.
+	resp, err := p.ListQueues(ctx, req(map[string]any{"project": "p", "location": "l", "pageSize": float64(9800)}))
+	if err != nil {
+		t.Fatalf("ListQueues(pageSize=9800): %v", err)
+	}
+	if got := resp.Data["queues"].([]any); len(got) != 1 {
+		t.Fatalf("queues = %v, want the seeded queue", got)
+	}
+}
+
 func taskNameOf(t *testing.T, full string) string {
 	t.Helper()
 	_, _, _, id, ok := core.ParseTaskName(full)

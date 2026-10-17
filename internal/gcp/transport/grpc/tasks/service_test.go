@@ -140,3 +140,24 @@ func TestGRPCQueueIAM(t *testing.T) {
 		t.Fatalf("TestIamPermissions = %+v, %v", resp, err)
 	}
 }
+
+// TestGRPCListNegativePageSize pins AIP-158 on the gRPC surface: a negative
+// page_size is INVALID_ARGUMENT on both list methods, and queues.list accepts
+// its documented 9800 ceiling.
+func TestGRPCListNegativePageSize(t *testing.T) {
+	ctx := context.Background()
+	s := newServer()
+	q, err := s.CreateQueue(ctx, &cloudtaskspb.CreateQueueRequest{Parent: parent, Queue: &cloudtaskspb.Queue{Name: parent + "/queues/q1"}})
+	if err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+	if _, err := s.ListQueues(ctx, &cloudtaskspb.ListQueuesRequest{Parent: parent, PageSize: -1}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ListQueues(page_size=-1) err = %v, want InvalidArgument", err)
+	}
+	if _, err := s.ListTasks(ctx, &cloudtaskspb.ListTasksRequest{Parent: q.GetName(), PageSize: -1}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ListTasks(page_size=-1) err = %v, want InvalidArgument", err)
+	}
+	if _, err := s.ListQueues(ctx, &cloudtaskspb.ListQueuesRequest{Parent: parent, PageSize: core.MaxQueuesPageSize}); err != nil {
+		t.Fatalf("ListQueues(page_size=9800): %v", err)
+	}
+}

@@ -254,3 +254,29 @@ func TestSDKSchedulerDepthDispatchBoundary(t *testing.T) {
 		},
 	})
 }
+
+// TestSDKSchedulerDepthNegativePageSize pins AIP-158 on the REST surface through
+// the official apiary client: a negative pageSize is INVALID_ARGUMENT/400 rather
+// than a silent fall-back to the documented 500-job maximum.
+func TestSDKSchedulerDepthNegativePageSize(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+	project := projectID()
+	parent := "projects/" + project + "/locations/" + locationID()
+
+	testdepth.RunNegatives(t, []testdepth.NegativeCase{
+		{
+			Name: "JobsListNegativePageSize",
+			Run: func() error {
+				_, err := svc.Projects.Locations.Jobs.List(parent).PageSize(-1).Do()
+				return err
+			},
+			Want: testdepth.SpecInvalidArgument(),
+		},
+	})
+
+	// The documented maximum itself stays legal (coercion only applies above it).
+	list, err := svc.Projects.Locations.Jobs.List(parent).PageSize(500).Do()
+	require.NoError(t, err)
+	require.NotNil(t, list)
+}

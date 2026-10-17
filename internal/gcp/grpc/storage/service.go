@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -32,6 +33,7 @@ import (
 	"jaiscloud/internal/gcp/downscope"
 	grpcutil "jaiscloud/internal/gcp/grpc"
 	storagepb "jaiscloud/internal/gcp/grpc/storage/storagepb"
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
 	"jaiscloud/internal/gcp/resource"
@@ -133,6 +135,15 @@ func (s *Service) Reset(_ context.Context) {
 }
 
 func mapError(err error) error { return grpcutil.GRPCStatus(err) }
+
+// Documented page-size ceilings for the gRPC list methods: "The service will
+// use this parameter or 1,000 items, whichever is smaller."
+// ListBuckets drops to 200 when the read_mask asks for acl; this surface does
+// not implement read_mask yet, so the 1,000 cap is what applies.
+const (
+	listBucketsMaxPageSize = 1000
+	listObjectsMaxPageSize = 1000
+)
 
 // ─── resource-name helpers ───────────────────────────────────────────────────
 
@@ -675,7 +686,11 @@ func (s *Service) ListBuckets(ctx context.Context, req *storagepb.ListBucketsReq
 		nj, _ := filtered[j]["name"].(string)
 		return ni < nj
 	})
-	page, next := pageBuckets(filtered, int(req.GetPageSize()), req.GetPageToken())
+	pageSize, err := paging.Size(int(req.GetPageSize()), listBucketsMaxPageSize)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	page, next := pageBuckets(filtered, pageSize, req.GetPageToken())
 	out := make([]*storagepb.Bucket, 0, len(page))
 	for _, m := range page {
 		out = append(out, bucketToProto(m))
@@ -684,6 +699,7 @@ func (s *Service) ListBuckets(ctx context.Context, req *storagepb.ListBucketsReq
 }
 
 // pageBuckets applies cursor pagination over a name-sorted bucket slice.
+// pageSize is already resolved by paging.Size, so it is always positive.
 func pageBuckets(buckets []map[string]any, pageSize int, pageToken string) ([]map[string]any, string) {
 	start := 0
 	if pageToken != "" {
@@ -696,9 +712,6 @@ func pageBuckets(buckets []map[string]any, pageSize int, pageToken string) ([]ma
 				start++
 			}
 		}
-	}
-	if pageSize <= 0 {
-		pageSize = len(buckets)
 	}
 	end := start + pageSize
 	if end > len(buckets) {
@@ -1010,17 +1023,41 @@ func (s *Service) ListObjects(ctx context.Context, req *storagepb.ListObjectsReq
 	}
 
 	// Cursor pagination over object names (already name-sorted by the store).
-	pageSize := int(req.GetPageSize())
+	// A versions listing is ordered by name ascending then generation
+	// descending, so its cursor must also carry the generation: with the
+	// documented 1,000-item default page, a boundary landing inside a name's
+	// generations would otherwise skip every remaining generation of that name.
+	pageSize, err := paging.Size(int(req.GetPageSize()), listObjectsMaxPageSize)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	versions := req.GetVersions()
 	start := 0
-	if req.GetPageToken() != "" {
-		if cursor := decodeCursor(req.GetPageToken()); cursor != "" {
+	if tok := req.GetPageToken(); tok != "" {
+		if versions {
+			if cur, ok := decodeVersionCursor(tok); ok {
+				for start < len(objs) {
+					m := objs[start]
+					if m.Name < cur.Name {
+						start++
+						continue
+					}
+					if m.Name == cur.Name {
+						mg, _ := strconv.ParseInt(m.Generation, 10, 64)
+						cg, _ := strconv.ParseInt(cur.Generation, 10, 64)
+						if mg >= cg {
+							start++
+							continue
+						}
+					}
+					break
+				}
+			}
+		} else if cursor := decodeCursor(tok); cursor != "" {
 			for start < len(objs) && objs[start].Name <= cursor {
 				start++
 			}
 		}
-	}
-	if pageSize <= 0 {
-		pageSize = len(objs)
 	}
 	end := start + pageSize
 	if end > len(objs) {
@@ -1029,7 +1066,12 @@ func (s *Service) ListObjects(ctx context.Context, req *storagepb.ListObjectsReq
 	page := objs[start:end]
 	next := ""
 	if end < len(objs) {
-		next = encodeCursor(page[len(page)-1].Name)
+		last := page[len(page)-1]
+		if versions {
+			next = encodeVersionCursor(last.Name, last.Generation)
+		} else {
+			next = encodeCursor(last.Name)
+		}
 	}
 
 	out := make([]*storagepb.Object, 0, len(page))
@@ -2101,4 +2143,32 @@ func decodeCursor(token string) string {
 		return ""
 	}
 	return string(b)
+}
+
+// versionCursor is the page token of a versions=true listing: the REST
+// provider's objects.list cursor carries (name, generation) for the same
+// reason, because ListObjectVersions orders a name's generations newest first.
+type versionCursor struct {
+	Name       string `json:"n"`
+	Generation string `json:"g"`
+}
+
+func encodeVersionCursor(name, generation string) string {
+	b, err := json.Marshal(versionCursor{Name: name, Generation: generation})
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func decodeVersionCursor(token string) (versionCursor, bool) {
+	b, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return versionCursor{}, false
+	}
+	var c versionCursor
+	if err := json.Unmarshal(b, &c); err != nil {
+		return versionCursor{}, false
+	}
+	return c, true
 }

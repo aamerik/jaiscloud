@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -1704,4 +1705,97 @@ func readObjectCSEK(t *testing.T, client storagepb.StorageClient, bucket, object
 		}
 	}
 	return out
+}
+
+// TestGRPCListPageSizeContract pins the documented page-size contract on the
+// gRPC lists (DC22): a negative page_size is INVALID_ARGUMENT, and an
+// unspecified one is the documented 1,000-item cap ("The service will use this
+// parameter or 1,000 items, whichever is smaller") rather than an unbounded page.
+func TestGRPCListPageSizeContract(t *testing.T) {
+	client, svc, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	if _, err := client.ListBuckets(ctx, &storagepb.ListBucketsRequest{Parent: "projects/test-project", PageSize: -1}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ListBuckets(page_size=-1) code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := client.ListObjects(ctx, &storagepb.ListObjectsRequest{Parent: testBucket, PageSize: -1}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ListObjects(page_size=-1) code = %v, want InvalidArgument", status.Code(err))
+	}
+
+	for i := 0; i < listObjectsMaxPageSize+1; i++ {
+		name := fmt.Sprintf("obj-%04d", i)
+		if err := svc.objects.PutObjectMeta(ctx, "bucket-a", name, gcs.ObjectMeta{ContentType: "text/plain"}); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	first, err := client.ListObjects(ctx, &storagepb.ListObjectsRequest{Parent: testBucket})
+	if err != nil {
+		t.Fatalf("ListObjects(default): %v", err)
+	}
+	if len(first.GetObjects()) != listObjectsMaxPageSize || first.GetNextPageToken() == "" {
+		t.Fatalf("default page = %d objects, next=%q; want %d and a token", len(first.GetObjects()), first.GetNextPageToken(), listObjectsMaxPageSize)
+	}
+	second, err := client.ListObjects(ctx, &storagepb.ListObjectsRequest{Parent: testBucket, PageToken: first.GetNextPageToken()})
+	if err != nil {
+		t.Fatalf("ListObjects(page 2): %v", err)
+	}
+	if len(second.GetObjects()) != 1 || second.GetNextPageToken() != "" {
+		t.Fatalf("page 2 = %d objects, next=%q; want the remaining 1 and no token", len(second.GetObjects()), second.GetNextPageToken())
+	}
+	// An over-large page_size is coerced down to the same documented cap.
+	coerced, err := client.ListObjects(ctx, &storagepb.ListObjectsRequest{Parent: testBucket, PageSize: 5000})
+	if err != nil {
+		t.Fatalf("ListObjects(page_size=5000): %v", err)
+	}
+	if len(coerced.GetObjects()) != listObjectsMaxPageSize || coerced.GetNextPageToken() == "" {
+		t.Fatalf("page_size=5000 = %d objects, next=%q; want %d and a token", len(coerced.GetObjects()), coerced.GetNextPageToken(), listObjectsMaxPageSize)
+	}
+}
+
+// TestGRPCListObjectsVersionsPageWalk pins the version-aware page cursor: a
+// versions=true listing orders a name's generations newest first, so a page
+// boundary inside a name's generations must not skip the rest of that name.
+// With the documented 1,000-item default this is reachable without any explicit
+// page size, so the walk is driven at page_size=1 to cross the same boundary.
+func TestGRPCListObjectsVersionsPageWalk(t *testing.T) {
+	client, svc, cleanup := newStorageTestServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
+
+	for _, m := range []struct{ name, gen string }{
+		{"dup", "1"}, {"dup", "2"}, {"dup", "3"},
+		{"other", "1"},
+		{"zzz", "1"},
+	} {
+		if err := svc.objects.PutObjectGeneration(ctx, "bucket-a", m.name, gcs.ObjectMeta{Generation: m.gen, ContentType: "text/plain"}); err != nil {
+			t.Fatalf("seed %s#%s: %v", m.name, m.gen, err)
+		}
+	}
+
+	var got []string
+	token := ""
+	for pages := 0; ; pages++ {
+		if pages > 10 {
+			t.Fatalf("page walk did not terminate; got %v", got)
+		}
+		resp, err := client.ListObjects(ctx, &storagepb.ListObjectsRequest{Parent: testBucket, Versions: true, PageSize: 1, PageToken: token})
+		if err != nil {
+			t.Fatalf("ListObjects(versions, page %d): %v", pages, err)
+		}
+		for _, o := range resp.GetObjects() {
+			got = append(got, fmt.Sprintf("%s#%d", o.GetName(), o.GetGeneration()))
+		}
+		token = resp.GetNextPageToken()
+		if token == "" {
+			break
+		}
+	}
+
+	want := []string{"dup#3", "dup#2", "dup#1", "other#1", "zzz#1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("versions walk = %v, want %v", got, want)
+	}
 }
