@@ -33,10 +33,9 @@
 // The terminal DeleteDatabase operation carries the soft-deleted Database (the
 // proto's operation_info declares response_type "Database"), so the suite waits
 // on it through the official client's DeleteDatabaseOperation.Wait and asserts
-// the returned record, then the resource's absence. A separate divergence is
-// recorded as DC20 (a maskless UpdateDatabase is rejected with INVALID_ARGUMENT
-// though AIP-134 requires an omitted mask to mean "all fields") and is likewise
-// not asserted here.
+// the returned record, then the resource's absence. A maskless UpdateDatabase
+// (AIP-134's implied mask of the populated fields) is asserted in the lifecycle's
+// Databases case — DC20.
 //
 // The concurrency cases run under -race (the module's integration step adds it);
 // asserting a contention property in a binary without the race detector is a
@@ -94,6 +93,20 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 		updated, err := updOp.Wait(ctx)
 		require.NoError(t, err)
 		require.Equal(t, adminpb.Database_PESSIMISTIC, updated.GetConcurrencyMode())
+
+		// An omitted update_mask is an implied mask of the populated fields
+		// (AIP-134, DC20): a maskless patch applies instead of
+		// failing INVALID_ARGUMENT.
+		impliedOp, err := c.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+			Database: &adminpb.Database{Name: databaseName(id), ConcurrencyMode: adminpb.Database_OPTIMISTIC},
+		})
+		require.NoError(t, err)
+		implied, err := impliedOp.Wait(ctx)
+		require.NoError(t, err)
+		require.Equal(t, adminpb.Database_OPTIMISTIC, implied.GetConcurrencyMode())
+		require.Equal(t, created.GetLocationId(), implied.GetLocationId(),
+			"a maskless patch must not clear an unpopulated field")
+		require.NotEqual(t, updated.GetEtag(), implied.GetEtag(), "a maskless update rotates the etag")
 
 		// Delete returns a terminal operation carrying the soft-deleted
 		// database (operation_info response_type "Database"), so the typed
@@ -405,10 +418,9 @@ func TestSDKFirestoreAdminConcurrency(t *testing.T) {
 // TestSDKFirestoreAdminErrors is p3: the official client's typed error envelope
 // on the documented negatives, asserted through the kit's catalogue.
 //
-// A maskless UpdateDatabase is deliberately not asserted: the proto does not
-// mark UpdateDatabaseRequest.update_mask REQUIRED and AIP-134 mandates treating
-// an omitted mask as "all populated fields", but the emulator rejects it with
-// INVALID_ARGUMENT — so that divergence is recorded as DC20 rather than pinned.
+// A maskless UpdateDatabase is not a negative: AIP-134 makes an omitted mask an
+// implied mask of the populated fields, and that positive contract is asserted
+// in the lifecycle's Databases case (DC20).
 func TestSDKFirestoreAdminErrors(t *testing.T) {
 	ctx := context.Background()
 	c := newAdmin(t)

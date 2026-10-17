@@ -27,7 +27,7 @@ func firestoreAdminControlChecks() []Check {
 		{Service: "firestoreadmin", RPC: "CreateDatabase", KeyField: "operation done=true; database name", Run: checkFsAdminCreateDatabase},
 		{Service: "firestoreadmin", RPC: "GetDatabase", KeyField: "database name/uid", Run: checkFsAdminGetDatabase},
 		{Service: "firestoreadmin", RPC: "ListDatabases", KeyField: "created database present + (default)", Run: checkFsAdminListDatabases},
-		{Service: "firestoreadmin", RPC: "UpdateDatabase", KeyField: "concurrency_mode updated under mask", Run: checkFsAdminUpdateDatabase},
+		{Service: "firestoreadmin", RPC: "UpdateDatabase", KeyField: "concurrency_mode updated under mask + omitted mask applies populated fields", Run: checkFsAdminUpdateDatabase},
 		{Service: "firestoreadmin", RPC: "DeleteDatabase", KeyField: "operation response carries database; absent after delete", Run: checkFsAdminDeleteDatabase},
 		{Service: "firestoreadmin", RPC: "UpdateField", Method: "UpdateField", KeyField: "operation done=true; index_config", Run: checkFsAdminUpdateField},
 		{Service: "firestoreadmin", RPC: "GetField", Method: "GetField", KeyField: "index_config round-trip", Run: checkFsAdminGetField},
@@ -189,6 +189,21 @@ func checkFsAdminUpdateDatabase(ctx context.Context, cfg Config) error {
 	}
 	if upd.GetConcurrencyMode() != adminpb.Database_PESSIMISTIC {
 		return fmt.Errorf("UpdateDatabase concurrency = %v, want PESSIMISTIC", upd.GetConcurrencyMode())
+	}
+	// AIP-134: an omitted update_mask is an implied mask of the populated
+	// fields, so the maskless patch must apply.
+	op, err = stub.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{Name: name, Etag: upd.GetEtag(), ConcurrencyMode: adminpb.Database_OPTIMISTIC},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateDatabase(omitted mask): %w", err)
+	}
+	implied := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(implied); err != nil {
+		return fmt.Errorf("UpdateDatabase(omitted mask) response: %w", err)
+	}
+	if implied.GetConcurrencyMode() != adminpb.Database_OPTIMISTIC {
+		return fmt.Errorf("UpdateDatabase(omitted mask) concurrency = %v, want OPTIMISTIC", implied.GetConcurrencyMode())
 	}
 	return nil
 }

@@ -1085,7 +1085,7 @@
       "rpc": "UpdateDatabase",
       "method": "UpdateDatabase",
       "status": "pass",
-      "key_field": "concurrency_mode updated under mask"
+      "key_field": "concurrency_mode updated under mask + omitted mask applies populated fields"
     },
     {
       "service": "firestoreadmin",

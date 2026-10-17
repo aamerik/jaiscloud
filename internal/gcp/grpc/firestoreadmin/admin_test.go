@@ -78,6 +78,32 @@ func TestDatabaseAdminRoundTrip(t *testing.T) {
 		t.Fatalf("updated concurrency = %v, want PESSIMISTIC", updated.GetConcurrencyMode())
 	}
 
+	// An omitted update_mask is an implied mask of the populated fields
+	// (AIP-134): the maskless patch applies instead of failing INVALID_ARGUMENT.
+	impliedOp, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:            created.GetName(),
+			Etag:            updated.GetEtag(),
+			ConcurrencyMode: adminpb.Database_OPTIMISTIC,
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabase(omitted mask): %v", err)
+	}
+	implied := &adminpb.Database{}
+	if err := impliedOp.GetResponse().UnmarshalTo(implied); err != nil {
+		t.Fatalf("UpdateDatabase(omitted mask) response unmarshal: %v", err)
+	}
+	if implied.GetConcurrencyMode() != adminpb.Database_OPTIMISTIC {
+		t.Fatalf("maskless update concurrency = %v, want OPTIMISTIC", implied.GetConcurrencyMode())
+	}
+	if implied.GetLocationId() != "nam5" {
+		t.Errorf("maskless update changed an unpopulated field: location = %q, want nam5", implied.GetLocationId())
+	}
+	if implied.GetEtag() == updated.GetEtag() {
+		t.Error("etag not rotated on maskless update")
+	}
+
 	// Stale etag is rejected.
 	if _, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
 		Database:   &adminpb.Database{Name: created.GetName(), Etag: created.GetEtag()},
@@ -86,7 +112,7 @@ func TestDatabaseAdminRoundTrip(t *testing.T) {
 		t.Errorf("stale etag code = %v, want Aborted", status.Code(err))
 	}
 
-	delOp, err := client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: created.GetName(), Etag: updated.GetEtag()})
+	delOp, err := client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: created.GetName(), Etag: implied.GetEtag()})
 	if err != nil {
 		t.Fatalf("DeleteDatabase: %v", err)
 	}
