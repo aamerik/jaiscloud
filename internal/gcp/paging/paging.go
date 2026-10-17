@@ -14,8 +14,9 @@
 // Run's projects.locations.operations.list ("If not set or set to less than or
 // equal to 0, the default page size is 100") — must clear a negative size
 // before calling Page/PageOrdered, not lean on the default. A list method with
-// a bespoke cursor (Cloud Workflows ListWorkflowRevisions) validates the rule
-// itself.
+// a bespoke cursor (Cloud Scheduler and Cloud Tasks lists, Cloud Workflows
+// ListWorkflowRevisions, the gRPC Cloud Storage lists) applies Size to its
+// already-parsed pageSize instead of re-deriving the rule.
 package paging
 
 import (
@@ -122,6 +123,35 @@ func PageSize(params map[string]any) (int, error) {
 		return normalizePageSize(int(v))
 	}
 	return defaultPageSize, nil
+}
+
+// Size applies the AIP-158 page-size contract to a bespoke pager that has
+// already parsed its own pageSize (the REST handlers parse the query value and
+// the gRPC ones read the int32 field). Zero — including an absent parameter,
+// which such callers pass as zero — selects the maximum, a negative value is
+// InvalidArgument, and an over-large value is coerced down to the maximum
+// (AIP-158's "should coerce", matching the Discovery documents' "If unspecified,
+// the page size will be the maximum"). This deliberately differs from PageSize,
+// which leaves an over-large value to Page's caller because Page already returns
+// at most the available items: here the resolver owns the ceiling as well, so a
+// bespoke pager cannot accidentally page with an unbounded size.
+//
+// max must be the service's documented positive ceiling; a non-positive value
+// is floored to 1 so the resolver always returns a usable page size (and a
+// bespoke pager can never index an empty page). A pager with a bespoke cursor
+// calls this instead of re-deriving the rule, so the negative case cannot
+// silently fall back to the first page.
+func Size(n, max int) (int, error) {
+	if max < 1 {
+		max = 1
+	}
+	if n < 0 {
+		return 0, negativePageSize()
+	}
+	if n == 0 || n > max {
+		return max, nil
+	}
+	return n, nil
 }
 
 // normalizePageSize applies the AIP-158 rule to a parsed integer size: zero

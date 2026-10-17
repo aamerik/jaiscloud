@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 
@@ -57,9 +58,9 @@ func (p *Provider) ListQueues(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, err
 	}
-	pageSize := intFrom(nr.Params["pageSize"])
-	if pageSize <= 0 || pageSize > 1000 {
-		pageSize = 1000
+	pageSize, err := paging.Size(intFrom(nr.Params["pageSize"]), core.MaxQueuesPageSize)
+	if err != nil {
+		return nil, err
 	}
 	offset := pageOffset(nr)
 	if offset > len(queues) {
@@ -174,9 +175,9 @@ func (p *Provider) ListTasks(ctx context.Context, nr *model.NormalizedRequest) (
 	if err != nil {
 		return nil, err
 	}
-	pageSize := intFrom(nr.Params["pageSize"])
-	if pageSize <= 0 || pageSize > 1000 {
-		pageSize = 1000
+	pageSize, err := paging.Size(intFrom(nr.Params["pageSize"]), core.MaxTasksPageSize)
+	if err != nil {
+		return nil, err
 	}
 	offset := pageOffset(nr)
 	if offset > len(tasks) {

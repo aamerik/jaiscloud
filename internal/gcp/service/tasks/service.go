@@ -28,6 +28,14 @@ import (
 
 const rtQueuePolicy = "gcp_tasks_queue_policy"
 
+// Documented page-size ceilings for the two list methods, shared by the REST
+// and gRPC adapters: projects.locations.queues.list documents "The maximum page
+// size is 9800" while projects.locations.queues.tasks.list documents 1000.
+const (
+	MaxQueuesPageSize = 9800
+	MaxTasksPageSize  = 1000
+)
+
 var (
 	queueIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,100}$`)
 	taskIDPattern  = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)

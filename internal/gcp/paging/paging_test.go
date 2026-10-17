@@ -137,6 +137,38 @@ func TestPageSizeFallback(t *testing.T) {
 	}
 }
 
+// TestSizeBespokePager pins the rule a bespoke pager applies to its own parsed
+// pageSize: zero (an absent parameter) and an over-large value both select the
+// documented maximum, while a negative value is INVALID_ARGUMENT (AIP-158).
+func TestSizeBespokePager(t *testing.T) {
+	for _, tc := range []struct{ n, max, want int }{
+		{0, 500, 500},   // absent / zero → the maximum
+		{250, 500, 250}, // in range passes through
+		{500, 500, 500}, // exactly the maximum
+		{501, 500, 500}, // over-large coerces down
+		{100000, 9800, 9800},
+		{0, 0, 1}, // a non-positive ceiling still yields a usable page size
+	} {
+		got, err := Size(tc.n, tc.max)
+		if err != nil || got != tc.want {
+			t.Errorf("Size(%d, %d) = %d, %v; want %d, nil", tc.n, tc.max, got, err, tc.want)
+		}
+	}
+	for _, n := range []int{-1, -500} {
+		got, err := Size(n, 500)
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) {
+			t.Fatalf("Size(%d, 500) error = %v, want a *model.ProviderError", n, err)
+		}
+		if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("Size(%d, 500) = %+v, want InvalidArgument/400", n, perr)
+		}
+		if got != 0 {
+			t.Errorf("Size(%d, 500) = %d, want 0 alongside the error", n, got)
+		}
+	}
+}
+
 // TestPageSizeNegativeRejected pins AIP-158: a negative pageSize is
 // INVALID_ARGUMENT rather than a silent fall-back to the default.
 func TestPageSizeNegativeRejected(t *testing.T) {

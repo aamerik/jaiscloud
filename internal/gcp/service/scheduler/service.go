@@ -21,6 +21,11 @@ var (
 	appEngineMethod = map[string]bool{"": true, "POST": true, "GET": true, "HEAD": true, "PUT": true, "DELETE": true}
 )
 
+// MaxPageSize is the documented maximum for projects.locations.jobs.list
+// ("The maximum page size is 500. If unspecified, the page size will be the
+// maximum."), shared by the REST and gRPC adapters.
+const MaxPageSize = 500
+
 // Service is the transport-neutral Cloud Scheduler core. Both the REST and gRPC
 // adapters share one instance (and one store), so the two transports cannot
 // drift.

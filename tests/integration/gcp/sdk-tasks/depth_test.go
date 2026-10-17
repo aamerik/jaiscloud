@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	cloudtasks "google.golang.org/api/cloudtasks/v2"
 	testdepth "jaiscloud-gcp-testdepth"
 )
@@ -191,4 +192,43 @@ func TestSDKTasksDepthScale(t *testing.T) {
 	if len(gotTasks) != scale {
 		t.Fatalf("task scale walk returned %d tasks, want %d", len(gotTasks), scale)
 	}
+}
+
+// TestSDKTasksDepthNegativePageSize pins AIP-158 on the REST surface through
+// the official apiary client: a negative pageSize is INVALID_ARGUMENT/400 on
+// both list methods, rather than a silent fall-back to the documented maximum.
+func TestSDKTasksDepthNegativePageSize(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+	project := projectID()
+	parent := "projects/" + project + "/locations/" + locationID()
+
+	queue := fullQueueName(parent, unique("negpage"))
+	mustCreateQueue(t, svc, parent, &cloudtasks.Queue{Name: queue})
+
+	testdepth.RunNegatives(t, []testdepth.NegativeCase{
+		{
+			Name: "QueuesListNegativePageSize",
+			Run: func() error {
+				_, err := svc.Projects.Locations.Queues.List(parent).PageSize(-1).Do()
+				return err
+			},
+			Want: testdepth.SpecInvalidArgument(),
+		},
+		{
+			Name: "TasksListNegativePageSize",
+			Run: func() error {
+				_, err := svc.Projects.Locations.Queues.Tasks.List(queue).PageSize(-1).Do()
+				return err
+			},
+			Want: testdepth.SpecInvalidArgument(),
+		},
+	})
+
+	// queues.list documents a 9800 ceiling, not tasks.list's 1000: 9800 is a
+	// legal request and returns the queue, not an over-large fall-back.
+	list, err := svc.Projects.Locations.Queues.List(parent).PageSize(9800).Do()
+	require.NoError(t, err)
+	require.Len(t, list.Queues, 1)
+	require.Equal(t, queue, list.Queues[0].Name)
 }
