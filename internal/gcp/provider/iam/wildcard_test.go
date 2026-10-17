@@ -315,8 +315,9 @@ func TestServiceAccountWildcardMissIsPermissionDenied(t *testing.T) {
 
 // TestServiceAccountUniqueIDName covers the second documented identifier form:
 // projects.serviceAccounts.get/patch/... and the key methods accept the
-// account's unique id in place of the email. DC25 makes the emulator's uniqueId
-// numeric; until then the resolver must already honor a stored one.
+// account's unique id in place of the email. The fixture overwrites the
+// generated id with a fixed one so the assertions do not depend on the random
+// generator (TestServiceAccountCreateNumericIDs covers the generated values).
 func TestServiceAccountUniqueIDName(t *testing.T) {
 	ctx := context.Background()
 	p := New(store.NewMemoryResourceStore())
@@ -385,6 +386,9 @@ func TestServiceAccountUniqueIDName(t *testing.T) {
 	}
 	if resp.Data["uniqueId"] != legacyEmail {
 		t.Errorf("legacy uniqueId = %v, want %q", resp.Data["uniqueId"], legacyEmail)
+	}
+	if resp.Data["oauth2ClientId"] != "" {
+		t.Errorf("legacy oauth2ClientId = %v, want the empty value such a record was written with", resp.Data["oauth2ClientId"])
 	}
 }
 
