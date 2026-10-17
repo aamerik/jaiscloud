@@ -99,8 +99,16 @@ func TestDatabaseUpdateEtagAndDelete(t *testing.T) {
 		t.Error("empty update_mask accepted")
 	}
 
-	if _, err := p.DeleteDatabaseDef(ctx, "proj", "db01", updated.Etag); err != nil {
+	deleted, _, err := p.DeleteDatabaseDef(ctx, "proj", "db01", updated.Etag)
+	if err != nil {
 		t.Fatalf("DeleteDatabaseDef: %v", err)
+	}
+	// The operation's documented response is the soft-deleted Database.
+	if !deleted.Deleted || deleted.DeleteTime.IsZero() {
+		t.Errorf("DeleteDatabaseDef returned %+v, want a soft-deleted record with deleteTime", deleted)
+	}
+	if !strings.HasSuffix(deleted.Name, "/databases/db01") {
+		t.Errorf("deleted database name = %q", deleted.Name)
 	}
 	if _, err := p.GetDatabase(ctx, "proj", "db01"); !isNotFound(err) {
 		t.Errorf("GetDatabase after delete err = %v, want NotFound", err)

@@ -1092,7 +1092,7 @@
       "rpc": "DeleteDatabase",
       "method": "DeleteDatabase",
       "status": "pass",
-      "key_field": "database absent after delete"
+      "key_field": "operation response carries database; absent after delete"
     },
     {
       "service": "firestoreadmin",

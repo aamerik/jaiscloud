@@ -264,11 +264,11 @@ func (s *Service) DeleteDatabase(ctx context.Context, req *adminpb.DeleteDatabas
 	if project == "" {
 		project = s.resolveProject(ctx)
 	}
-	opName, err := s.svc.DeleteDatabaseDef(ctx, project, database, req.GetEtag())
+	deleted, opName, err := s.svc.DeleteDatabaseDef(ctx, project, database, req.GetEtag())
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return &longrunningpb.Operation{Name: opName, Done: true}, nil
+	return operationResponse(opName, databaseToProto(deleted))
 }
 
 // ─── Field conversions ────────────────────────────────────────────────────────

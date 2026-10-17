@@ -78,13 +78,24 @@ func TestRESTDatabaseLifecycle(t *testing.T) {
 		t.Errorf("concurrencyMode = %v, want PESSIMISTIC", uin["concurrencyMode"])
 	}
 
-	// delete returns a terminal operation.
+	// delete returns a terminal operation carrying the soft-deleted database
+	// (operation_info response_type "Database").
 	del, err := p.DeleteDatabase(ctx, adminNR("databases/test-db", nil))
 	if err != nil {
 		t.Fatalf("DeleteDatabase: %v", err)
 	}
 	if del.Data["done"] != true {
 		t.Errorf("delete op done = %v", del.Data["done"])
+	}
+	dresp, _ := del.Data["response"].(map[string]any)
+	if dresp["@type"] != "type.googleapis.com/google.firestore.admin.v1.Database" {
+		t.Errorf("delete op response @type = %v", dresp["@type"])
+	}
+	if dresp["name"] != "projects/proj/databases/test-db" {
+		t.Errorf("delete op response name = %v", dresp["name"])
+	}
+	if dresp["deleteTime"] == nil {
+		t.Error("delete op response carries no deleteTime")
 	}
 	if _, err := p.GetDatabase(ctx, adminNR("databases/test-db", nil)); err == nil {
 		t.Error("GetDatabase after delete succeeded, want NotFound")

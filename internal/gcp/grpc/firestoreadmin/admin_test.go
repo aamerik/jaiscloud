@@ -86,8 +86,21 @@ func TestDatabaseAdminRoundTrip(t *testing.T) {
 		t.Errorf("stale etag code = %v, want Aborted", status.Code(err))
 	}
 
-	if _, err := client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: created.GetName(), Etag: updated.GetEtag()}); err != nil {
+	delOp, err := client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: created.GetName(), Etag: updated.GetEtag()})
+	if err != nil {
 		t.Fatalf("DeleteDatabase: %v", err)
+	}
+	// operation_info declares response_type "Database": the terminal operation
+	// carries the soft-deleted database, so the typed response resolves.
+	deleted := &adminpb.Database{}
+	if err := delOp.GetResponse().UnmarshalTo(deleted); err != nil {
+		t.Fatalf("DeleteDatabase response unmarshal: %v", err)
+	}
+	if deleted.GetName() != created.GetName() {
+		t.Errorf("deleted database name = %q, want %q", deleted.GetName(), created.GetName())
+	}
+	if deleted.GetDeleteTime() == nil {
+		t.Error("deleted database response carries no deleteTime")
 	}
 	if _, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()}); status.Code(err) != codes.NotFound {
 		t.Errorf("GetDatabase after delete = %v, want NotFound", err)
