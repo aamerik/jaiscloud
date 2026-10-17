@@ -46,6 +46,17 @@ func TestGRPCQueueLifecycle(t *testing.T) {
 	if err != nil || len(list.GetQueues()) != 1 {
 		t.Fatalf("ListQueues = %+v, %v", list, err)
 	}
+	// The list filter is the core's (DC16): "=" is equality on the full name and
+	// ":" is contains, on both transports; an unknown field is InvalidArgument.
+	if got, err := s.ListQueues(ctx, &cloudtaskspb.ListQueuesRequest{Parent: parent, Filter: `name:"` + name + `"`}); err != nil || len(got.GetQueues()) != 1 {
+		t.Fatalf("ListQueues(contains) = %+v, %v", got, err)
+	}
+	if got, err := s.ListQueues(ctx, &cloudtaskspb.ListQueuesRequest{Parent: parent, Filter: `name="q1"`}); err != nil || len(got.GetQueues()) != 0 {
+		t.Fatalf("ListQueues(bare id equality) = %+v, %v", got, err)
+	}
+	if _, err := s.ListQueues(ctx, &cloudtaskspb.ListQueuesRequest{Parent: parent, Filter: `bogus="x"`}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ListQueues(bad filter) code = %v", status.Code(err))
+	}
 	if _, err := s.UpdateQueue(ctx, &cloudtaskspb.UpdateQueueRequest{
 		Queue:      &cloudtaskspb.Queue{Name: name, RateLimits: &cloudtaskspb.RateLimits{MaxDispatchesPerSecond: 9}},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"rate_limits"}},
