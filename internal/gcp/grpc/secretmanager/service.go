@@ -729,7 +729,7 @@ func secretToProto(project string, s secretmanagerstore.Secret) *secretmanagerpb
 		Etag: secretmanagersvc.SecretEtag(secretName(project, s.ID), s),
 		Replication: &secretmanagerpb.Replication{
 			Replication: &secretmanagerpb.Replication_Automatic_{
-				Automatic: &secretmanagerpb.Replication_Automatic{},
+				Automatic: automaticReplicationToProto(s.KmsKeyName),
 			},
 		},
 	}
@@ -833,6 +833,19 @@ func managedStateToProto(state string) secretmanagerpb.Rotation_ManagedRotationS
 		return secretmanagerpb.Rotation_ManagedRotationStatus_INACTIVE
 	}
 	return secretmanagerpb.Rotation_ManagedRotationStatus_STATE_UNSPECIFIED
+}
+
+// automaticReplicationToProto renders the automatic replication arm, echoing
+// the configured CMEK key when the secret has one. JaisCloud models automatic
+// replication only; the nested customerManagedEncryption object is omitted
+// (not sent empty) when no CMEK is configured, matching real GCP — this is the
+// gRPC mirror of the REST provider's replicationToMap.
+func automaticReplicationToProto(kmsKeyName string) *secretmanagerpb.Replication_Automatic {
+	auto := &secretmanagerpb.Replication_Automatic{}
+	if kmsKeyName != "" {
+		auto.CustomerManagedEncryption = &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: kmsKeyName}
+	}
+	return auto
 }
 
 // kmsKeyNameFromSecret extracts the CMEK key name from the secret's

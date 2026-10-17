@@ -497,3 +497,91 @@ func TestManagedRotationGRPC(t *testing.T) {
 		t.Fatalf("RotateSecret version = %q, want %q", rotated.GetName(), parent+"/versions/2")
 	}
 }
+
+// TestSecretManagerCMEKReplication covers DC31 on the gRPC surface: a Secret
+// created or updated with a customer-managed encryption key must echo that key
+// under replication.automatic.customerManagedEncryption.kmsKeyName, and a
+// secret without CMEK must omit the nested message entirely (as real GCP does),
+// so both transports render the same shape.
+func TestSecretManagerCMEKReplication(t *testing.T) {
+	client, _, cleanup := secretTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const (
+		name  = "projects/test/secrets/cmek-secret"
+		key1  = "projects/test/locations/global/keyRings/kr/cryptoKeys/key-one"
+		key2  = "projects/test/locations/global/keyRings/kr/cryptoKeys/key-two"
+		plain = "projects/test/secrets/plain-secret"
+	)
+	cme := func(key string) *secretmanagerpb.Replication {
+		return &secretmanagerpb.Replication{
+			Replication: &secretmanagerpb.Replication_Automatic_{
+				Automatic: &secretmanagerpb.Replication_Automatic{
+					CustomerManagedEncryption: &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: key},
+				},
+			},
+		}
+	}
+	assertCMEK := func(what string, sec *secretmanagerpb.Secret, want string) {
+		t.Helper()
+		if got := sec.GetReplication().GetAutomatic().GetCustomerManagedEncryption().GetKmsKeyName(); got != want {
+			t.Fatalf("%s CMEK = %q, want %q", what, got, want)
+		}
+	}
+
+	created, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/test", SecretId: "cmek-secret",
+		Secret: &secretmanagerpb.Secret{Replication: cme(key1)},
+	})
+	if err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+	assertCMEK("CreateSecret", created, key1)
+
+	got, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: name})
+	if err != nil {
+		t.Fatalf("GetSecret: %v", err)
+	}
+	assertCMEK("GetSecret", got, key1)
+
+	listed, err := client.ListSecrets(ctx, &secretmanagerpb.ListSecretsRequest{Parent: "projects/test"})
+	if err != nil {
+		t.Fatalf("ListSecrets: %v", err)
+	}
+	if len(listed.GetSecrets()) != 1 {
+		t.Fatalf("ListSecrets returned %d secrets, want 1", len(listed.GetSecrets()))
+	}
+	assertCMEK("ListSecrets", listed.GetSecrets()[0], key1)
+
+	updated, err := client.UpdateSecret(ctx, &secretmanagerpb.UpdateSecretRequest{
+		Secret:     &secretmanagerpb.Secret{Name: name, Replication: cme(key2)},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"replication"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSecret: %v", err)
+	}
+	assertCMEK("UpdateSecret", updated, key2)
+	got, err = client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: name})
+	if err != nil {
+		t.Fatalf("GetSecret after update: %v", err)
+	}
+	assertCMEK("GetSecret after update", got, key2)
+
+	// A secret without CMEK omits the nested message rather than sending it empty.
+	if _, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/test", SecretId: "plain-secret",
+		Secret: &secretmanagerpb.Secret{Replication: &secretmanagerpb.Replication{
+			Replication: &secretmanagerpb.Replication_Automatic_{Automatic: &secretmanagerpb.Replication_Automatic{}},
+		}},
+	}); err != nil {
+		t.Fatalf("CreateSecret plain: %v", err)
+	}
+	plainSec, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: plain})
+	if err != nil {
+		t.Fatalf("GetSecret plain: %v", err)
+	}
+	if cme := plainSec.GetReplication().GetAutomatic().GetCustomerManagedEncryption(); cme != nil {
+		t.Fatalf("plain secret customerManagedEncryption = %v, want nil", cme)
+	}
+}

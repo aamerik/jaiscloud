@@ -18,6 +18,7 @@ func secretManagerChecks() []Check {
 	return []Check{
 		{Service: "secretmanager", RPC: "CreateSecret", KeyField: "success", Run: checkSecretCreate},
 		{Service: "secretmanager", RPC: "GetSecret", KeyField: "name", Run: checkSecretGet},
+		{Service: "secretmanager", RPC: "GetSecret", KeyField: "replication.automatic.customerManagedEncryption.kmsKeyName", Run: checkSecretCMEKReplication},
 		{Service: "secretmanager", RPC: "ListSecrets", KeyField: "secrets[].name", Run: checkSecretList},
 		{Service: "secretmanager", RPC: "AddSecretVersion", KeyField: "name", Run: checkSecretAddVersion},
 		{Service: "secretmanager", RPC: "AccessSecretVersion", KeyField: "payload.data", Run: checkSecretAccessVersion},
@@ -79,6 +80,58 @@ func checkSecretGet(ctx context.Context, cfg Config) error {
 	}
 	if secret.GetName() != secretName(cfg) {
 		return fmt.Errorf("GetSecret returned name %q, want %q", secret.GetName(), secretName(cfg))
+	}
+	return nil
+}
+
+// checkSecretCMEKReplication asserts that a Secret created with a
+// customer-managed encryption key echoes the key back through the official
+// client: real GCP returns the configured key under
+// replication.automatic.customerManagedEncryption.kmsKeyName (DC31), not an
+// empty automatic policy.
+func checkSecretCMEKReplication(ctx context.Context, cfg Config) error {
+	client, err := newSecretClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := cfg.ResourceName("gcpc-grpc-secret-cmek")
+	name := secretProject(cfg) + "/secrets/" + id
+	// The key only has to be a well-formed CryptoKey name: CreateSecret stores
+	// the policy and never wraps until a version is added, which this probe
+	// deliberately does not do.
+	key := secretProject(cfg) + "/locations/global/keyRings/gcpc-cmek/cryptoKeys/gcpc-cmek-key"
+
+	created, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent:   secretProject(cfg),
+		SecretId: id,
+		Secret: &secretmanagerpb.Secret{
+			Replication: &secretmanagerpb.Replication{
+				Replication: &secretmanagerpb.Replication_Automatic_{
+					Automatic: &secretmanagerpb.Replication_Automatic{
+						CustomerManagedEncryption: &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: key},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = client.DeleteSecret(context.Background(), &secretmanagerpb.DeleteSecretRequest{Name: name})
+	}()
+
+	if got := created.GetReplication().GetAutomatic().GetCustomerManagedEncryption().GetKmsKeyName(); got != key {
+		return fmt.Errorf("CreateSecret CMEK = %q, want %q", got, key)
+	}
+	got, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: name})
+	if err != nil {
+		return err
+	}
+	if gotKey := got.GetReplication().GetAutomatic().GetCustomerManagedEncryption().GetKmsKeyName(); gotKey != key {
+		return fmt.Errorf("GetSecret CMEK = %q, want %q", gotKey, key)
 	}
 	return nil
 }

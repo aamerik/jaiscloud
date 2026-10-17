@@ -957,10 +957,8 @@ func secretToMap(nr *model.NormalizedRequest, s secretmanagerstore.Secret) map[s
 		// a hash of the secret's mutable metadata, so it is stable across reads
 		// of an unchanged secret and different after any update — the same
 		// contract GCP's opaque token provides for the delete precondition.
-		"etag": secretmanagersvc.SecretEtag(m.Name, s),
-		"replication": map[string]any{
-			"automatic": map[string]any{},
-		},
+		"etag":        secretmanagersvc.SecretEtag(m.Name, s),
+		"replication": replicationToMap(m.KmsKeyName),
 	}
 	if m.Labels != nil {
 		out["labels"] = m.Labels
@@ -987,6 +985,23 @@ func secretToMap(nr *model.NormalizedRequest, s secretmanagerstore.Secret) map[s
 		out["versionAliases"] = m.VersionAliases
 	}
 	return out
+}
+
+// replicationToMap renders the secret's replication policy. JaisCloud models
+// the automatic policy only (see versionToMap), so the response always carries
+// the automatic arm; when the secret was created/patched with CMEK, the
+// configured Cloud KMS key is echoed under
+// automatic.customerManagedEncryption.kmsKeyName — real GCP returns the key a
+// caller set, and Terraform's computed
+// replication[0].auto[0].customer_managed_encryption[0].kms_key_name (and the
+// console's CMEK chip) read it back from here. With no CMEK the nested object
+// is omitted entirely, as real GCP does.
+func replicationToMap(kmsKeyName string) map[string]any {
+	auto := map[string]any{}
+	if kmsKeyName != "" {
+		auto["customerManagedEncryption"] = map[string]any{"kmsKeyName": kmsKeyName}
+	}
+	return map[string]any{"automatic": auto}
 }
 
 func versionToMap(v versionMeta) map[string]any {
