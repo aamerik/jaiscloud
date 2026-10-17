@@ -108,11 +108,13 @@ export const updateServiceAccount = (email: string, body: UpdateServiceAccountRe
 export const deleteServiceAccount = (email: string) =>
   api.delete<void>(`${BASE}/serviceAccounts/${encodeURIComponent(email)}`)
 
+// disable/enable answer the Empty response real GCP sends (the new state is
+// read back through getServiceAccount).
 export const disableServiceAccount = (email: string) =>
-  api.post<ServiceAccount>(`${BASE}/serviceAccounts/${encodeURIComponent(email)}/disable`)
+  api.post<void>(`${BASE}/serviceAccounts/${encodeURIComponent(email)}/disable`)
 
 export const enableServiceAccount = (email: string) =>
-  api.post<ServiceAccount>(`${BASE}/serviceAccounts/${encodeURIComponent(email)}/enable`)
+  api.post<void>(`${BASE}/serviceAccounts/${encodeURIComponent(email)}/enable`)
 
 // IAM policy.
 export const getServiceAccountIam = (email: string) =>
@@ -148,12 +150,12 @@ export const deleteServiceAccountKey = (email: string, key: string) =>
   )
 
 export const disableServiceAccountKey = (email: string, key: string) =>
-  api.post<ServiceAccountKey>(
+  api.post<void>(
     `${BASE}/serviceAccounts/${encodeURIComponent(email)}/keys/${encodeURIComponent(key)}/disable`,
   )
 
 export const enableServiceAccountKey = (email: string, key: string) =>
-  api.post<ServiceAccountKey>(
+  api.post<void>(
     `${BASE}/serviceAccounts/${encodeURIComponent(email)}/keys/${encodeURIComponent(key)}/enable`,
   )
 

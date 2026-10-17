@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
 
@@ -22,9 +23,9 @@ func TestServiceAccountDisableEnable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	if dis.Data["disabled"] != true {
-		t.Fatalf("disabled = %v, want true", dis.Data["disabled"])
-	}
+	// projects.serviceAccounts.disable declares an Empty response: the account is
+	// never echoed back (real GCP sends {}), so read the state through get.
+	assertEmptyResponse(t, "disable", dis)
 
 	// The disabled state is persisted and visible on get.
 	got, err := p.Get(ctx, newNR(map[string]any{"name": name}))
@@ -39,8 +40,13 @@ func TestServiceAccountDisableEnable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enable: %v", err)
 	}
-	if en.Data["disabled"] != false {
-		t.Fatalf("disabled = %v, want false", en.Data["disabled"])
+	assertEmptyResponse(t, "enable", en)
+	got, err = p.Get(ctx, newNR(map[string]any{"name": name}))
+	if err != nil {
+		t.Fatalf("get after enable: %v", err)
+	}
+	if got.Data["disabled"] != false {
+		t.Fatalf("get disabled after enable = %v, want false", got.Data["disabled"])
 	}
 }
 
@@ -104,10 +110,17 @@ func TestServiceAccountKeyDisableEnable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("key disable: %v", err)
 	}
-	if dis.Data["disabled"] != true {
-		t.Fatalf("key disabled = %v, want true", dis.Data["disabled"])
+	// keys.disable declares an Empty response; disabled/disableTime are read
+	// back through keys.get, exactly as the official clients must.
+	assertEmptyResponse(t, "keys.disable", dis)
+	got, err := p.ServiceAccountKeyGet(ctx, newNR(map[string]any{"name": keyName}))
+	if err != nil {
+		t.Fatalf("key get after disable: %v", err)
 	}
-	if dt, _ := dis.Data["disableTime"].(string); dt == "" {
+	if got.Data["disabled"] != true {
+		t.Fatalf("key disabled = %v, want true", got.Data["disabled"])
+	}
+	if dt, _ := got.Data["disableTime"].(string); dt == "" {
 		t.Fatal("expected disableTime when a key is disabled")
 	}
 
@@ -115,10 +128,31 @@ func TestServiceAccountKeyDisableEnable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("key enable: %v", err)
 	}
-	if en.Data["disabled"] != false {
-		t.Fatalf("key disabled = %v, want false", en.Data["disabled"])
+	assertEmptyResponse(t, "keys.enable", en)
+	got, err = p.ServiceAccountKeyGet(ctx, newNR(map[string]any{"name": keyName}))
+	if err != nil {
+		t.Fatalf("key get after enable: %v", err)
 	}
-	if _, present := en.Data["disableTime"]; present {
-		t.Fatalf("disableTime should be cleared on enable, got %v", en.Data["disableTime"])
+	if got.Data["disabled"] != false {
+		t.Fatalf("key disabled = %v, want false", got.Data["disabled"])
+	}
+	if _, present := got.Data["disableTime"]; present {
+		t.Fatalf("disableTime should be cleared on enable, got %v", got.Data["disableTime"])
+	}
+}
+
+// assertEmptyResponse pins the Discovery-declared Empty body of the four
+// service-account disable/enable verbs: a 200 whose data map is empty, so the
+// encoder emits {} rather than the mutated resource.
+func assertEmptyResponse(t *testing.T, name string, resp *model.ProviderResponse) {
+	t.Helper()
+	if resp.HTTPStatus != 200 {
+		t.Fatalf("%s status = %d, want 200", name, resp.HTTPStatus)
+	}
+	if resp.Data == nil {
+		t.Fatalf("%s data = nil, want an empty object (JSON null is not Empty)", name)
+	}
+	if len(resp.Data) != 0 {
+		t.Fatalf("%s body = %v, want the Empty response real GCP sends", name, resp.Data)
 	}
 }

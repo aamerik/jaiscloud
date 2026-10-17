@@ -308,7 +308,9 @@ func (p *Provider) ServiceAccountKeyDelete(ctx context.Context, nr *model.Normal
 }
 
 // setKeyDisabled flips a service-account key's disabled flag
-// (projects.serviceAccounts.keys.disable/.enable) and persists it.
+// (projects.serviceAccounts.keys.disable/.enable) and persists it. Both methods
+// declare an Empty response, so the state (and disableTime) is readable only
+// through keys.get.
 func (p *Provider) setKeyDisabled(ctx context.Context, nr *model.NormalizedRequest, disabled bool) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
@@ -338,7 +340,7 @@ func (p *Provider) setKeyDisabled(ctx context.Context, nr *model.NormalizedReque
 	}); err != nil {
 		return nil, err
 	}
-	return provider.OK(keyListMap(nr, ref.Account, *m)), nil
+	return provider.OK(map[string]any{}), nil
 }
 
 // ServiceAccountKeyDisable implements projects.serviceAccounts.keys.disable.
