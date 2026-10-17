@@ -492,9 +492,12 @@ func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 }
 
 // DeleteDatabaseDef soft-deletes a database record (or tombstones the implicit
-// default) and returns the terminal operation name.
-func (s *Service) DeleteDatabaseDef(ctx context.Context, project, db, etag string) (string, error) {
-	_, err := s.mutateDatabase(ctx, project, db, func(cur databaseDef) (databaseDef, error) {
+// default) and returns the soft-deleted record plus the terminal operation
+// name. The record is the operation's documented response_type "Database"; real
+// GCP returns it (deleteTime set) so the official client's
+// DeleteDatabaseOperation.Wait resolves.
+func (s *Service) DeleteDatabaseDef(ctx context.Context, project, db, etag string) (databaseDef, string, error) {
+	deleted, err := s.mutateDatabase(ctx, project, db, func(cur databaseDef) (databaseDef, error) {
 		if etag != "" && etag != cur.Etag {
 			return databaseDef{}, gcpAborted("etag mismatch")
 		}
@@ -505,9 +508,9 @@ func (s *Service) DeleteDatabaseDef(ctx context.Context, project, db, etag strin
 		return cur, nil
 	})
 	if err != nil {
-		return "", err
+		return databaseDef{}, "", err
 	}
-	return databaseOperationName(project, db, randomHex(12)), nil
+	return deleted, databaseOperationName(project, db, randomHex(12)), nil
 }
 
 // ─── Fields ───────────────────────────────────────────────────────────────────

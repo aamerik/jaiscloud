@@ -394,11 +394,11 @@ func (p *Provider) DeleteDatabase(ctx context.Context, nr *model.NormalizedReque
 			etag = s
 		}
 	}
-	opName, err := p.Service.DeleteDatabaseDef(ctx, nr.AccountID, db, etag)
+	deleted, opName, err := p.Service.DeleteDatabaseDef(ctx, nr.AccountID, db, etag)
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(map[string]any{"name": opName, "done": true}), nil
+	return provider.OK(lroResponse(opName, "google.firestore.admin.v1.Database", databaseMap(deleted))), nil
 }
 
 // ─── Field wire mapping ───────────────────────────────────────────────────────

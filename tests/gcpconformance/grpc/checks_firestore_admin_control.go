@@ -28,7 +28,7 @@ func firestoreAdminControlChecks() []Check {
 		{Service: "firestoreadmin", RPC: "GetDatabase", KeyField: "database name/uid", Run: checkFsAdminGetDatabase},
 		{Service: "firestoreadmin", RPC: "ListDatabases", KeyField: "created database present + (default)", Run: checkFsAdminListDatabases},
 		{Service: "firestoreadmin", RPC: "UpdateDatabase", KeyField: "concurrency_mode updated under mask", Run: checkFsAdminUpdateDatabase},
-		{Service: "firestoreadmin", RPC: "DeleteDatabase", KeyField: "database absent after delete", Run: checkFsAdminDeleteDatabase},
+		{Service: "firestoreadmin", RPC: "DeleteDatabase", KeyField: "operation response carries database; absent after delete", Run: checkFsAdminDeleteDatabase},
 		{Service: "firestoreadmin", RPC: "UpdateField", Method: "UpdateField", KeyField: "operation done=true; index_config", Run: checkFsAdminUpdateField},
 		{Service: "firestoreadmin", RPC: "GetField", Method: "GetField", KeyField: "index_config round-trip", Run: checkFsAdminGetField},
 		{Service: "firestoreadmin", RPC: "ListFields", Method: "ListFields", KeyField: "field present under wildcard group", Run: checkFsAdminListFields},
@@ -204,8 +204,20 @@ func checkFsAdminDeleteDatabase(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("GetDatabase: %w", err)
 	}
-	if _, err := stub.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: name, Etag: cur.GetEtag()}); err != nil {
+	delOp, err := stub.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: name, Etag: cur.GetEtag()})
+	if err != nil {
 		return fmt.Errorf("DeleteDatabase: %w", err)
+	}
+	// operation_info declares response_type "Database": the terminal operation
+	// must carry the soft-deleted database (a client's Operation.Wait errors on
+	// an empty typed response).
+	deleted := &adminpb.Database{}
+	if err := delOp.GetResponse().UnmarshalTo(deleted); err != nil {
+		return fmt.Errorf("DeleteDatabase response: %w", err)
+	}
+	if deleted.GetName() != name || deleted.GetDeleteTime() == nil {
+		return fmt.Errorf("DeleteDatabase response name=%q delete_time=%v, want the soft-deleted database",
+			deleted.GetName(), deleted.GetDeleteTime())
 	}
 	if _, err := stub.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: name}); status.Code(err) != codes.NotFound {
 		return fmt.Errorf("GetDatabase after delete = %v, want NotFound", err)

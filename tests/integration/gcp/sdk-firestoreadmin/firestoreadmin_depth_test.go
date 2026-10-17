@@ -30,15 +30,13 @@
 //     so the suite asserts the read-only contract — an empty list and
 //     NOT_FOUND on get/delete — rather than inventing a create path.
 //
-// One real-GCP divergence found while closing the cells is recorded as DC19 in
-// the wave plan rather than pinned here: the terminal DeleteDatabase operation
-// carries no response body, while the proto's operation_info declares
-// response_type "Database" and the official client's DeleteDatabaseOperation.Wait
-// therefore errors on the empty result. The delete lifecycle is asserted through
-// the operation's terminal state and the resource's absence instead. A second
-// divergence is recorded as DC20 (a maskless UpdateDatabase is rejected with
-// INVALID_ARGUMENT though AIP-134 requires an omitted mask to mean "all fields")
-// and is likewise not asserted here.
+// The terminal DeleteDatabase operation carries the soft-deleted Database (the
+// proto's operation_info declares response_type "Database"), so the suite waits
+// on it through the official client's DeleteDatabaseOperation.Wait and asserts
+// the returned record, then the resource's absence. A separate divergence is
+// recorded as DC20 (a maskless UpdateDatabase is rejected with INVALID_ARGUMENT
+// though AIP-134 requires an omitted mask to mean "all fields") and is likewise
+// not asserted here.
 //
 // The concurrency cases run under -race (the module's integration step adds it);
 // asserting a contention property in a binary without the race detector is a
@@ -97,13 +95,17 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, adminpb.Database_PESSIMISTIC, updated.GetConcurrencyMode())
 
-		// Delete returns a terminal operation. It is not waited on: the emulator
-		// does not populate the operation's typed response (DC19), so the
-		// lifecycle is asserted from the terminal state plus the absence.
+		// Delete returns a terminal operation carrying the soft-deleted
+		// database (operation_info response_type "Database"), so the typed
+		// Wait resolves instead of failing on an empty result.
 		delOp, err := c.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: databaseName(id)})
 		require.NoError(t, err)
 		require.True(t, delOp.Done(), "the control plane is synchronous: the operation is already terminal")
 		require.NotEmpty(t, delOp.Name())
+		deleted, err := delOp.Wait(ctx)
+		require.NoError(t, err)
+		require.Equal(t, databaseName(id), deleted.GetName())
+		require.NotNil(t, deleted.GetDeleteTime(), "the operation response is the soft-deleted database")
 		testdepth.AssertError(t, getDatabaseErr(ctx, c, id), testdepth.SpecNotFound())
 	})
 
