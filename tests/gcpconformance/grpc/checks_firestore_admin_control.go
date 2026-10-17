@@ -28,7 +28,7 @@ func firestoreAdminControlChecks() []Check {
 		{Service: "firestoreadmin", RPC: "GetDatabase", KeyField: "database name/uid", Run: checkFsAdminGetDatabase},
 		{Service: "firestoreadmin", RPC: "ListDatabases", KeyField: "created database present + (default)", Run: checkFsAdminListDatabases},
 		{Service: "firestoreadmin", RPC: "UpdateDatabase", KeyField: "concurrency_mode updated under mask + omitted mask applies populated fields", Run: checkFsAdminUpdateDatabase},
-		{Service: "firestoreadmin", RPC: "DeleteDatabase", KeyField: "operation response carries database; absent after delete", Run: checkFsAdminDeleteDatabase},
+		{Service: "firestoreadmin", RPC: "DeleteDatabase", KeyField: "stale etag -> FailedPrecondition; operation response carries database; absent after delete", Run: checkFsAdminDeleteDatabase},
 		{Service: "firestoreadmin", RPC: "UpdateField", Method: "UpdateField", KeyField: "operation done=true; index_config", Run: checkFsAdminUpdateField},
 		{Service: "firestoreadmin", RPC: "GetField", Method: "GetField", KeyField: "index_config round-trip", Run: checkFsAdminGetField},
 		{Service: "firestoreadmin", RPC: "ListFields", Method: "ListFields", KeyField: "field present under wildcard group", Run: checkFsAdminListFields},
@@ -218,6 +218,19 @@ func checkFsAdminDeleteDatabase(ctx context.Context, cfg Config) error {
 	cur, err := stub.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: name})
 	if err != nil {
 		return fmt.Errorf("GetDatabase: %w", err)
+	}
+	// DeleteDatabaseRequest.etag documents that a mismatch blocks the deletion
+	// with FAILED_PRECONDITION (not an update's ABORTED), so a stale token must
+	// leave the database in place.
+	if _, err := stub.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: name, Etag: "stale-etag"}); status.Code(err) != codes.FailedPrecondition {
+		return fmt.Errorf("DeleteDatabase(stale etag) code = %v, want FailedPrecondition", status.Code(err))
+	}
+	unchanged, err := stub.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: name})
+	if err != nil {
+		return fmt.Errorf("GetDatabase after stale-etag delete: %w", err)
+	}
+	if unchanged.GetEtag() != cur.GetEtag() {
+		return fmt.Errorf("stale-etag delete changed the database etag %q -> %q", cur.GetEtag(), unchanged.GetEtag())
 	}
 	delOp, err := stub.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: name, Etag: cur.GetEtag()})
 	if err != nil {

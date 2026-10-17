@@ -2,14 +2,35 @@ package firestore
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"jaiscloud/internal/gcp/gcperr"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
 
 func newAdminService() *Service { return newService(nil, store.NewMemoryResourceStore()) }
+
+// assertDeleteEtagPrecondition asserts the documented etag-mismatch failure of
+// projects.databases.delete: FAILED_PRECONDITION on HTTP 400. It is
+// deliberately not the AIP-154 ABORTED an update answers.
+func assertDeleteEtagPrecondition(t *testing.T, err error) {
+	t.Helper()
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *model.ProviderError, got %T: %v", err, err)
+	}
+	if pe.Code != "FailedPrecondition" || pe.HTTPStatus != 400 {
+		t.Fatalf("stale-etag delete = %s/%d (%v), want FailedPrecondition/400", pe.Code, pe.HTTPStatus, err)
+	}
+	// The wire status both transports resolve (REST envelope, gRPC code).
+	if name, httpStatus := gcperr.Resolve(pe); name != gcperr.FailedPrecondition || httpStatus != 400 {
+		t.Fatalf("stale-etag delete resolves to %s/%d, want FAILED_PRECONDITION/400", name, httpStatus)
+	}
+}
 
 func TestDatabaseCRUD(t *testing.T) {
 	ctx := context.Background()
@@ -89,9 +110,27 @@ func TestDatabaseUpdateEtagAndDelete(t *testing.T) {
 		t.Error("etag not rotated on update")
 	}
 
+	// created.Etag was superseded by the update above, so it is genuinely
+	// stale (not just an arbitrary non-matching token).
 	if _, _, err := p.UpdateDatabaseDef(ctx, "proj", "db01",
-		databaseDef{ConcurrencyMode: "OPTIMISTIC"}, []string{"concurrency_mode"}, "stale"); err == nil {
+		databaseDef{ConcurrencyMode: "OPTIMISTIC"}, []string{"concurrency_mode"}, created.Etag); err == nil {
 		t.Error("stale etag accepted, want Aborted")
+	} else {
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "Aborted" || pe.HTTPStatus != 409 {
+			t.Errorf("stale etag on update = %v, want Aborted/409 (AIP-154)", err)
+		}
+	}
+
+	// A stale etag blocks the delete with the proto's documented
+	// FAILED_PRECONDITION, and the database is left intact.
+	if _, _, err := p.DeleteDatabaseDef(ctx, "proj", "db01", created.Etag); err == nil {
+		t.Error("stale etag accepted by DeleteDatabaseDef, want FailedPrecondition")
+	} else {
+		assertDeleteEtagPrecondition(t, err)
+	}
+	if got, err := p.GetDatabase(ctx, "proj", "db01"); err != nil || got.Etag != updated.Etag {
+		t.Errorf("stale-etag delete changed the database: etag %q (err %v), want %q", got.Etag, err, updated.Etag)
 	}
 
 	// An omitted update_mask is an implied mask of the populated fields

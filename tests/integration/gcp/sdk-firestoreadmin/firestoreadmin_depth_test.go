@@ -430,6 +430,8 @@ func TestSDKFirestoreAdminErrors(t *testing.T) {
 
 	ucDB := unique("dupuc")
 	createDatabase(t, c, ucDB)
+	etagDB := unique("etagdb")
+	createDatabase(t, c, etagDB)
 	createdCreds, err := c.CreateUserCreds(ctx, &adminpb.CreateUserCredsRequest{
 		Parent:      databaseName(ucDB),
 		UserCredsId: unique("uc"),
@@ -533,6 +535,19 @@ func TestSDKFirestoreAdminErrors(t *testing.T) {
 			},
 		},
 		{
+			Name: "DeleteDatabaseWithStaleEtagIsFailedPrecondition",
+			Want: testdepth.SpecPreconditionFailed(),
+			Run: func() error {
+				// DeleteDatabaseRequest.etag documents that a mismatch blocks
+				// the deletion with FAILED_PRECONDITION (not an update's
+				// ABORTED), so nothing may be deleted.
+				_, err := c.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{
+					Name: databaseName(etagDB), Etag: "stale-etag",
+				})
+				return err
+			},
+		},
+		{
 			Name: "GetMissingUserCredsIsNotFound",
 			Want: testdepth.SpecNotFound(),
 			Run: func() error {
@@ -558,6 +573,10 @@ func TestSDKFirestoreAdminErrors(t *testing.T) {
 			},
 		},
 	})
+
+	// The blocked delete left the database intact.
+	_, err = c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: databaseName(etagDB)})
+	require.NoError(t, err, "a stale-etag delete must not delete the database")
 }
 
 // leafID returns the final segment of a resource name (the userCreds id).
