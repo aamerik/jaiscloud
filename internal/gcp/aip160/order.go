@@ -61,6 +61,10 @@ func foldOrderName(s string) string {
 	return strings.ToLower(strings.ReplaceAll(s, "_", ""))
 }
 
+// Tie returns an item's tiebreak key (the resource id/name). It is the order
+// applied when no orderBy field is given, and the key paging.Page sorts by.
+func (s OrderSpec[T]) Tie(item T) string { return s.tie(item) }
+
 // Order is a parsed orderBy. An empty key list is the surface's default order:
 // the tiebreak key ascending (for these services, the resource id/name).
 type Order[T any] struct {

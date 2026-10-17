@@ -19,7 +19,6 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	grpcutil "jaiscloud/internal/gcp/grpc"
-	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
 	kmscore "jaiscloud/internal/gcp/service/kms"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
@@ -44,6 +43,17 @@ func NewService(core *kmscore.Service, defaultProj string) *Service {
 
 func mapError(err error) error { return grpcutil.GRPCStatus(err) }
 
+// kmsListQuery renders the documented ListXRequest filter/orderBy/page fields
+// into the core's ListQuery.
+func kmsListQuery(filter, orderBy string, pageSize int32, pageToken string) kmscore.ListQuery {
+	return kmscore.ListQuery{
+		Filter:    filter,
+		OrderBy:   orderBy,
+		PageSize:  int(pageSize),
+		PageToken: pageToken,
+	}
+}
+
 // splitLocationParent resolves project + location from a ListKeyRings /
 // CreateKeyRing parent. A bare location id falls back to the metadata-derived
 // project.
@@ -65,11 +75,7 @@ func (s *Service) ListKeyRings(ctx context.Context, req *kmspb.ListKeyRingsReque
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid parent resource name", 400))
 	}
-	krs, err := s.core.ListKeyRings(ctx, project, loc)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	page, next, err := paging.Page(krs, func(kr kmsstore.KeyRing) string { return kr.ID }, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	page, next, total, err := s.core.PageKeyRings(ctx, project, loc, kmsListQuery(req.GetFilter(), req.GetOrderBy(), req.GetPageSize(), req.GetPageToken()))
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -77,7 +83,7 @@ func (s *Service) ListKeyRings(ctx context.Context, req *kmspb.ListKeyRingsReque
 	for _, kr := range page {
 		out = append(out, keyRingToProto(project, loc, kr))
 	}
-	return &kmspb.ListKeyRingsResponse{KeyRings: out, NextPageToken: next, TotalSize: int32(len(krs))}, nil
+	return &kmspb.ListKeyRingsResponse{KeyRings: out, NextPageToken: next, TotalSize: int32(total)}, nil
 }
 
 func (s *Service) CreateKeyRing(ctx context.Context, req *kmspb.CreateKeyRingRequest) (*kmspb.KeyRing, error) {
@@ -120,11 +126,7 @@ func (s *Service) ListCryptoKeys(ctx context.Context, req *kmspb.ListCryptoKeysR
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid parent resource name", 400))
 	}
-	keys, err := s.core.ListCryptoKeys(ctx, project, loc, kr)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	page, next, err := paging.Page(keys, func(k kmsstore.CryptoKey) string { return k.ID }, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	page, next, total, err := s.core.PageCryptoKeys(ctx, project, loc, kr, kmsListQuery(req.GetFilter(), req.GetOrderBy(), req.GetPageSize(), req.GetPageToken()))
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -132,7 +134,7 @@ func (s *Service) ListCryptoKeys(ctx context.Context, req *kmspb.ListCryptoKeysR
 	for _, k := range page {
 		out = append(out, cryptoKeyToProto(project, k, s.core.PrimaryVersion(ctx, project, k)))
 	}
-	return &kmspb.ListCryptoKeysResponse{CryptoKeys: out, NextPageToken: next, TotalSize: int32(len(keys))}, nil
+	return &kmspb.ListCryptoKeysResponse{CryptoKeys: out, NextPageToken: next, TotalSize: int32(total)}, nil
 }
 
 func (s *Service) CreateCryptoKey(ctx context.Context, req *kmspb.CreateCryptoKeyRequest) (*kmspb.CryptoKey, error) {
@@ -261,11 +263,7 @@ func (s *Service) ListCryptoKeyVersions(ctx context.Context, req *kmspb.ListCryp
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid parent resource name", 400))
 	}
-	versions, err := s.core.ListVersions(ctx, project, loc, kr, key)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	page, next, err := paging.Page(versions, func(v kmsstore.Version) string { return v.Version }, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	page, next, total, err := s.core.PageVersions(ctx, project, loc, kr, key, kmsListQuery(req.GetFilter(), req.GetOrderBy(), req.GetPageSize(), req.GetPageToken()))
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -273,7 +271,7 @@ func (s *Service) ListCryptoKeyVersions(ctx context.Context, req *kmspb.ListCryp
 	for _, v := range page {
 		out = append(out, versionToProto(project, loc, kr, key, v))
 	}
-	return &kmspb.ListCryptoKeyVersionsResponse{CryptoKeyVersions: out, NextPageToken: next, TotalSize: int32(len(versions))}, nil
+	return &kmspb.ListCryptoKeyVersionsResponse{CryptoKeyVersions: out, NextPageToken: next, TotalSize: int32(total)}, nil
 }
 
 func (s *Service) GetCryptoKeyVersion(ctx context.Context, req *kmspb.GetCryptoKeyVersionRequest) (*kmspb.CryptoKeyVersion, error) {

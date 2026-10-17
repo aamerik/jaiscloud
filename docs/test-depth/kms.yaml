@@ -18,7 +18,7 @@ classes:
   p4:
     state: present
     suites: [sdk-rest]
-    note: "pageSize/pageToken paging over key rings and a key's crypto-key versions; the documented list filter/orderBy are ignored (DC14)"
+    note: "pageSize/pageToken paging over key rings and a key's crypto-key versions, composed with the documented name/name desc orderBy and the name/labels/state filter (DC14)"
   p5:
     state: present
     suites: [sdk-rest]

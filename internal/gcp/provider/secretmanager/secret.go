@@ -15,6 +15,7 @@ import (
 	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
+	secretmanagersvc "jaiscloud/internal/gcp/service/secretmanager"
 	"jaiscloud/internal/gcp/store/kms"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	"jaiscloud/internal/gcp/timestamp"
@@ -284,7 +285,12 @@ func (p *Provider) List(ctx context.Context, nr *model.NormalizedRequest) (*mode
 	if err != nil {
 		return nil, err
 	}
-	page, next, err := paging.Page(secrets, secretListKey, nr.Params)
+	filter, _ := nr.Params["filter"].(string)
+	matched, applied, err := secretmanagersvc.FilterSecrets(nr.AccountID, filter, secrets)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := paging.Page(matched, secretListKey, nr.Params)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +299,14 @@ func (p *Provider) List(ctx context.Context, nr *model.NormalizedRequest) (*mode
 	for _, s := range page {
 		items = append(items, secretToMap(fromStoreSecret(nr, s)))
 	}
-	resp := map[string]any{"secrets": items, "totalSize": len(secrets)}
+	// Secret Manager does not report a total count once a filter is applied
+	// ("If filter is set in a list request, the response does not indicate the
+	// total result count").
+	total := len(secrets)
+	if applied {
+		total = 0
+	}
+	resp := map[string]any{"secrets": items, "totalSize": total}
 	if next != "" {
 		resp["nextPageToken"] = next
 	}
@@ -705,7 +718,12 @@ func (p *Provider) ListVersions(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	page, next, err := paging.Page(versions, func(v secretmanagerstore.Version) string { return v.VersionID }, nr.Params)
+	filter, _ := nr.Params["filter"].(string)
+	matched, applied, err := secretmanagersvc.FilterVersions(nr.AccountID, secret, filter, versions)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := paging.Page(matched, func(v secretmanagerstore.Version) string { return v.VersionID }, nr.Params)
 	if err != nil {
 		return nil, err
 	}
@@ -713,7 +731,11 @@ func (p *Provider) ListVersions(ctx context.Context, nr *model.NormalizedRequest
 	for _, v := range page {
 		items = append(items, versionToMap(fromStoreVersion(nr, v)))
 	}
-	resp := map[string]any{"versions": items, "totalSize": len(versions)}
+	total := len(versions)
+	if applied {
+		total = 0
+	}
+	resp := map[string]any{"versions": items, "totalSize": total}
 	if next != "" {
 		resp["nextPageToken"] = next
 	}
