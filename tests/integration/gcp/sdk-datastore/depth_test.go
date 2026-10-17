@@ -12,16 +12,15 @@
 //   - an incomplete Lookup key ("Key path is incomplete") and a negative query
 //     offset are INVALID_ARGUMENT;
 //   - a commit insert on a key that already exists is ALREADY_EXISTS;
+//   - an update mutation on an entity that does not exist is NOT_FOUND;
 //   - a transactional commit whose read-set was modified concurrently is
 //     ABORTED (the no-lost-update guarantee the p2 suite pins, asserted here
 //     through the same envelope catalogue).
 //
-// An update mutation on a missing entity is deliberately NOT asserted: real
-// Datastore reports NOT_FOUND ("the request attempted to update an entity that
-// does not exist"), but the emulator maps the store's ErrEntityNotFound to
-// FAILED_PRECONDITION/400 (internal/gcp/service/datastore/core.go, mapStoreError),
-// so asserting the current envelope would cement a parity divergence. The gap is
-// recorded as DC18 in the depth-closure wave plan rather than pinned here.
+// The update-missing negatives (DC18) cover both commit paths: the
+// non-transactional one and the transactional one. (That a transactional miss
+// also terminates the transaction handle is asserted at the core level in
+// internal/gcp/service/datastore/txn_test.go.)
 package datastore_test
 
 import (
@@ -113,6 +112,39 @@ func TestDatastoreDepthErrors(t *testing.T) {
 					ProjectId: project,
 					Mode:      datastorepb.CommitRequest_NON_TRANSACTIONAL,
 					Mutations: []*datastorepb.Mutation{{Operation: &datastorepb.Mutation_Insert{Insert: depthEntity(existing, 2)}}},
+				})
+				return err
+			},
+		},
+		{
+			Name: "UpdateMissingEntityIsNotFound",
+			Want: testdepth.SpecNotFound(),
+			Run: func() error {
+				_, err := c.Commit(ctx, &datastorepb.CommitRequest{
+					ProjectId: project,
+					Mode:      datastorepb.CommitRequest_NON_TRANSACTIONAL,
+					Mutations: []*datastorepb.Mutation{{
+						Operation: &datastorepb.Mutation_Update{Update: depthEntity(depthKey(project, "deptherrmissing-"+uniqueName("ds")), 1)},
+					}},
+				})
+				return err
+			},
+		},
+		{
+			Name: "TransactionalUpdateMissingEntityIsNotFound",
+			Want: testdepth.SpecNotFound(),
+			Run: func() error {
+				begin, err := c.BeginTransaction(ctx, &datastorepb.BeginTransactionRequest{ProjectId: project})
+				if err != nil {
+					return err
+				}
+				_, err = c.Commit(ctx, &datastorepb.CommitRequest{
+					ProjectId:           project,
+					Mode:                datastorepb.CommitRequest_TRANSACTIONAL,
+					TransactionSelector: &datastorepb.CommitRequest_Transaction{Transaction: begin.GetTransaction()},
+					Mutations: []*datastorepb.Mutation{{
+						Operation: &datastorepb.Mutation_Update{Update: depthEntity(depthKey(project, "deptherrmissing-"+uniqueName("ds")), 1)},
+					}},
 				})
 				return err
 			},

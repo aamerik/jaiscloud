@@ -395,8 +395,9 @@ func TestRESTTransactionCommitAndRollback(t *testing.T) {
 }
 
 // TestRESTUpdateMissingReturnsEnvelope locks the core/adapter error contract:
-// an Update for a missing entity surfaces as FAILED_PRECONDITION with the
-// canonical HTTP 400 (never 404, which would contradict the status name).
+// an Update for a missing entity surfaces as the documented NOT_FOUND with the
+// canonical HTTP 404 (real Datastore: "the request attempted to update an
+// entity that does not exist").
 func TestRESTUpdateMissingReturnsEnvelope(t *testing.T) {
 	c, p := newTestProvider(t)
 	_, err := call(t, c, p, "test", "commit", map[string]any{
@@ -410,8 +411,8 @@ func TestRESTUpdateMissingReturnsEnvelope(t *testing.T) {
 	if !ok {
 		t.Fatalf("err = %v (%T), want *model.ProviderError", err, err)
 	}
-	if perr.HTTPStatus != 400 || perr.Code != "FailedPrecondition" {
-		t.Fatalf("err = %+v, want 400/FailedPrecondition", perr)
+	if perr.HTTPStatus != 404 || perr.Code != "NotFound" {
+		t.Fatalf("err = %+v, want 404/NotFound", perr)
 	}
 }
 

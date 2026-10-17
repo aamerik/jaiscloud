@@ -35,6 +35,7 @@ func TestErrorConstructorsCodeAndStatus(t *testing.T) {
 		{"invalidArgument", invalidArgument("m"), "InvalidArgument", 400},
 		{"failedPrecondition", failedPrecondition("m", 412), "FailedPrecondition", 412},
 		{"alreadyExists", alreadyExists("m"), "AlreadyExists", 409},
+		{"notFound", notFound("m"), "NotFound", 404},
 		{"aborted", aborted("m"), "Aborted", 409},
 	}
 	for _, tc := range cases {
@@ -64,7 +65,7 @@ func TestMapStoreErrorMapsEverySentinel(t *testing.T) {
 		{"aborted", dsstore.ErrAborted, "Aborted", 409},
 		{"conflict", dsstore.ErrConflict, "FailedPrecondition", 400},
 		{"entityExists", dsstore.ErrEntityExists, "AlreadyExists", 409},
-		{"entityNotFound", dsstore.ErrEntityNotFound, "FailedPrecondition", 400},
+		{"entityNotFound", dsstore.ErrEntityNotFound, "NotFound", 404},
 		{"invalidKey", dsstore.ErrInvalidKey, "InvalidArgument", 400},
 	}
 	for _, tc := range cases {

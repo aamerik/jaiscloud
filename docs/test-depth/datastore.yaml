@@ -14,7 +14,7 @@ classes:
   p3:
     state: present
     suites: [sdk-datastore]
-    note: "the generated client's typed error envelope on the documented negatives: an incomplete lookup key and a negative query offset are INVALID_ARGUMENT, an insert on an existing key is ALREADY_EXISTS, and a read-write transaction whose read-set was modified concurrently is ABORTED. An update of a missing entity is not asserted: real Datastore reports NOT_FOUND but the emulator returns FAILED_PRECONDITION/400, a divergence recorded as DC18"
+    note: "the generated client's typed error envelope on the documented negatives: an incomplete lookup key and a negative query offset are INVALID_ARGUMENT, an insert on an existing key is ALREADY_EXISTS, an update of a missing entity is NOT_FOUND (both commit paths; DC18), and a read-write transaction whose read-set was modified concurrently is ABORTED"
   p4:
     state: present
     suites: [sdk-datastore]

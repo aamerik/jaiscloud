@@ -125,14 +125,15 @@ func TestCommitInsertUpsertUpdateDelete(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 
-	// update on missing fails with FailedPrecondition.
+	// update on missing fails with NotFound ("the request attempted to update an
+	// entity that does not exist" — Firestore in Datastore mode error table).
 	if _, err := client.Commit(ctx, &datastorepb.CommitRequest{
 		ProjectId: "test",
 		Mutations: []*datastorepb.Mutation{{
 			Operation: &datastorepb.Mutation_Update{Update: entity(nameKey("Task", "missing"), map[string]*datastorepb.Value{})},
 		}},
-	}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("update missing err = %v, want FailedPrecondition", err)
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("update missing err = %v, want NotFound", err)
 	}
 
 	// upsert.
