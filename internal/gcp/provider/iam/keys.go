@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,13 +21,6 @@ import (
 // keys (RSA key pairs backing signBlob/signJwt). The key store is shared with
 // the IAM Credentials (iamcredentials) core via internal/gcp/serviceaccount.
 const rtServiceAccountKey = serviceaccount.ResourceType
-
-// keyOrigin / keyType classify a key created through the API: a user-provided,
-// user-managed key (as opposed to Google-managed/system-managed).
-const (
-	keyOrigin = serviceaccount.KeyOrigin
-	keyType   = serviceaccount.KeyType
-)
 
 // serviceAccountKeyMeta is the stored representation of a service-account key.
 // It aliases the shared type so keys and signing are not duplicated between the
@@ -49,30 +43,118 @@ func parseKeyName(name string) (email, keyID string) {
 	return "", ""
 }
 
-// keyToMap renders a service-account key as its GCP response object (no
-// privateKeyData — that is returned only on create).
+// nonExpiringKeyTime is the validBeforeTime the API reports for a key that does
+// not expire: user-managed keys never do, and the emulator's Google-managed
+// key pair is not rotated either.
+const nonExpiringKeyTime = "9999-12-31T23:59:59Z"
+
+// keyBaseMap renders the ServiceAccountKey fields every method returns.
 //
 // The key id is not a top-level field of the Discovery ServiceAccountKey schema
 // — it is the trailing segment of `name`, and that is the only place real GCP
 // exposes it. The emulator must not invent a separate `keyId` field to match a
 // sibling emulator's internal model.
-func keyToMap(nr *model.NormalizedRequest, m serviceAccountKeyMeta) map[string]any {
+func keyBaseMap(nr *model.NormalizedRequest, m serviceAccountKeyMeta) map[string]any {
 	out := map[string]any{
-		"name":           nr.ResourceID("service-account", m.Email) + "/keys/" + m.KeyID,
-		"privateKeyType": "TYPE_GOOGLE_CREDENTIALS_FILE",
-		"keyAlgorithm":   m.Algorithm,
-		"keyOrigin":      keyOrigin,
-		"keyType":        keyType,
-		"validAfterTime": m.ValidAfter,
-		"disabled":       m.Disabled,
+		"name":            nr.ResourceID("service-account", m.Email) + "/keys/" + m.KeyID,
+		"keyAlgorithm":    m.Algorithm,
+		"keyOrigin":       m.Origin(),
+		"keyType":         m.Type(),
+		"validAfterTime":  m.ValidAfter,
+		"validBeforeTime": nonExpiringKeyTime,
+		"disabled":        m.Disabled,
 	}
 	if m.DisableTime != "" {
 		out["disableTime"] = m.DisableTime
 	}
+	return out
+}
+
+// keyListMap renders a ListServiceAccountKeysResponse item. Discovery scopes
+// privateKeyType to keys.create and publicKeyData to keys.get, so list carries
+// neither.
+func keyListMap(nr *model.NormalizedRequest, m serviceAccountKeyMeta) map[string]any {
+	return keyBaseMap(nr, m)
+}
+
+// keyGetMap renders a keys.get resource: publicKeyData is populated there (and
+// only there) from the stored private key's public half.
+func keyGetMap(nr *model.NormalizedRequest, m serviceAccountKeyMeta) map[string]any {
+	out := keyBaseMap(nr, m)
 	if pub, ok := m.PublicKeyData(); ok {
 		out["publicKeyData"] = pub
 	}
 	return out
+}
+
+// keyCreateMap renders a keys.create resource: privateKeyType and
+// privateKeyData are returned only by create (never by get or list).
+func keyCreateMap(nr *model.NormalizedRequest, m serviceAccountKeyMeta, privateKeyData string) map[string]any {
+	out := keyBaseMap(nr, m)
+	out["privateKeyType"] = "TYPE_GOOGLE_CREDENTIALS_FILE"
+	out["privateKeyData"] = privateKeyData
+	return out
+}
+
+// keyTypeFilter reads the documented repeated `keyTypes` query parameter
+// (projects.serviceAccounts.keys.list). The shared query decode
+// (adapter.queryToParams) keeps only the first value, so the repeated form the
+// official clients send — gcloud's --managed-by and the Go client's
+// urlParams_.SetMulti — is read from the raw request; Params is the fallback for
+// callers without one (the console UI). Comma-joined values are accepted because
+// Google's REST transcoding accepts both spellings.
+//
+// The Discovery document states that duplicate key types are not allowed and
+// that KEY_TYPE_UNSPECIFIED "will immediately result in an error", so both (and
+// any unknown value) are INVALID_ARGUMENT rather than being silently ignored.
+func keyTypeFilter(nr *model.NormalizedRequest) ([]string, error) {
+	var raw []string
+	if nr.Raw != nil {
+		raw = nr.Raw.URL.Query()["keyTypes"]
+	}
+	if len(raw) == 0 {
+		if v, ok := nr.Params["keyTypes"].(string); ok && v != "" {
+			raw = []string{v}
+		}
+	}
+	var types []string
+	seen := map[string]bool{}
+	for _, v := range raw {
+		for _, part := range strings.Split(v, ",") {
+			t := strings.TrimSpace(part)
+			if t == "" {
+				continue
+			}
+			if t == "KEY_TYPE_UNSPECIFIED" {
+				return nil, model.NewProviderError("InvalidArgument",
+					"keyTypes must not be KEY_TYPE_UNSPECIFIED", 400)
+			}
+			if t != "USER_MANAGED" && t != "SYSTEM_MANAGED" {
+				return nil, model.NewProviderError("InvalidArgument",
+					"invalid keyTypes value "+strconv.Quote(t)+": must be USER_MANAGED or SYSTEM_MANAGED", 400)
+			}
+			if seen[t] {
+				return nil, model.NewProviderError("InvalidArgument",
+					"duplicate keyTypes value "+strconv.Quote(t)+": duplicate key types are not allowed", 400)
+			}
+			seen[t] = true
+			types = append(types, t)
+		}
+	}
+	return types, nil
+}
+
+// matchesKeyType reports whether a key's type passes the keyTypes filter.
+func matchesKeyType(keyType string, filter []string) bool {
+	if len(filter) == 0 {
+		return true
+	}
+	for _, t := range filter {
+		if t == keyType {
+			return true
+		}
+	}
+	return false
 }
 
 // createKey generates an RSA-2048 key pair and persists it.
@@ -123,13 +205,18 @@ func (p *Provider) ServiceAccountKeyCreate(ctx context.Context, nr *model.Normal
 		"token_uri":       "https://oauth2.googleapis.com/token",
 		"universe_domain": "googleapis.com",
 	})
-	resp := keyToMap(nr, *m)
-	resp["privateKeyData"] = base64.StdEncoding.EncodeToString(creds)
+	resp := keyCreateMap(nr, *m, base64.StdEncoding.EncodeToString(creds))
 	return provider.OK(resp), nil
 }
 
 func (p *Provider) ServiceAccountKeyList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
+	if err != nil {
+		return nil, err
+	}
+	// Request validation precedes the resource lookup, as it does on real GCP: a
+	// bad keyTypes value is 400 even when the service account is also missing.
+	keyTypes, err := keyTypeFilter(nr)
 	if err != nil {
 		return nil, err
 	}
@@ -144,8 +231,8 @@ func (p *Provider) ServiceAccountKeyList(ctx context.Context, nr *model.Normaliz
 	items := make([]any, 0)
 	for _, e := range entries {
 		var m serviceAccountKeyMeta
-		if json.Unmarshal(e.Data, &m) == nil && m.Email == email {
-			items = append(items, keyToMap(nr, m))
+		if json.Unmarshal(e.Data, &m) == nil && m.Email == email && matchesKeyType(m.Type(), keyTypes) {
+			items = append(items, keyListMap(nr, m))
 		}
 	}
 	return provider.OK(map[string]any{"keys": items}), nil
@@ -161,7 +248,7 @@ func (p *Provider) ServiceAccountKeyGet(ctx context.Context, nr *model.Normalize
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(keyToMap(nr, *m)), nil
+	return provider.OK(keyGetMap(nr, *m)), nil
 }
 
 func (p *Provider) ServiceAccountKeyDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -203,7 +290,7 @@ func (p *Provider) setKeyDisabled(ctx context.Context, nr *model.NormalizedReque
 	}); err != nil {
 		return nil, err
 	}
-	return provider.OK(keyToMap(nr, *m)), nil
+	return provider.OK(keyListMap(nr, *m)), nil
 }
 
 // ServiceAccountKeyDisable implements projects.serviceAccounts.keys.disable.
