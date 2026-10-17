@@ -218,7 +218,10 @@ func (s *Service) ListAcls(ctx context.Context, project, location, clusterID str
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(acls, func(a mkstore.Acl) string { return a.Name }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(acls, func(a mkstore.Acl) string { return a.Name }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

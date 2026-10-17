@@ -203,9 +203,15 @@ func decodeTxnParam(nr *model.NormalizedRequest) ([]byte, error) {
 }
 
 // pageFromNR extracts cursor-pagination inputs from the request query params.
-func pageFromNR(nr *model.NormalizedRequest) pageParams {
+// A negative pageSize is InvalidArgument (AIP-158), so the error is returned
+// rather than folded into the default.
+func pageFromNR(nr *model.NormalizedRequest) (pageParams, error) {
 	token, _ := nr.Params["pageToken"].(string)
-	return pageParams{size: paging.PageSize(nr.Params), token: token}
+	size, err := paging.PageSize(nr.Params)
+	if err != nil {
+		return pageParams{}, err
+	}
+	return pageParams{size: size, token: token}, nil
 }
 
 // boolParam reads a boolean request parameter, accepting the string forms the
@@ -774,7 +780,11 @@ func (p *Provider) ListDocuments(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
-	docs, nextToken, err := p.Service.ListDocuments(ctx, nr.AccountID, database, path, txn, maskFieldPaths(nr), boolParam(nr, "showMissing"), pageFromNR(nr))
+	page, err := pageFromNR(nr)
+	if err != nil {
+		return nil, err
+	}
+	docs, nextToken, err := p.Service.ListDocuments(ctx, nr.AccountID, database, path, txn, maskFieldPaths(nr), boolParam(nr, "showMissing"), page)
 	if err != nil {
 		return nil, err
 	}
@@ -796,7 +806,11 @@ func (p *Provider) ListCollectionIds(ctx context.Context, nr *model.NormalizedRe
 	if err != nil {
 		return nil, err
 	}
-	ids, nextToken, err := p.Service.ListCollectionIds(ctx, nr.AccountID, database, path, pageFromNR(nr))
+	page, err := pageFromNR(nr)
+	if err != nil {
+		return nil, err
+	}
+	ids, nextToken, err := p.Service.ListCollectionIds(ctx, nr.AccountID, database, path, page)
 	if err != nil {
 		return nil, err
 	}
@@ -1073,7 +1087,11 @@ func (p *Provider) ListIndexes(ctx context.Context, nr *model.NormalizedRequest)
 	}
 	filter, _ := nr.Params["filter"].(string)
 
-	idxs, nextToken, err := p.Service.ListIndexes(ctx, nr.AccountID, database, cg, filter, pageFromNR(nr))
+	page, err := pageFromNR(nr)
+	if err != nil {
+		return nil, err
+	}
+	idxs, nextToken, err := p.Service.ListIndexes(ctx, nr.AccountID, database, cg, filter, page)
 	if err != nil {
 		return nil, err
 	}

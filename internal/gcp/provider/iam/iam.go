@@ -176,7 +176,10 @@ func (p *Provider) List(ctx context.Context, nr *model.NormalizedRequest) (*mode
 	if err != nil {
 		return nil, err
 	}
-	page, nextToken := paging.Apply(entries, nr.Params)
+	page, nextToken, err := paging.Apply(entries, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, e := range page {
 		var m serviceAccountMeta

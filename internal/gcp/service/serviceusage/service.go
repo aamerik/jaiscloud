@@ -203,8 +203,10 @@ func (s *Service) ListAPIs(ctx context.Context, project string, filter StateFilt
 		}
 		apis = append(apis, buildAPI(project, e.ID, st))
 	}
-	// The API contract is: pageSize defaults to 50 and cannot exceed 200.
-	if pageSize <= 0 {
+	// The API contract is: pageSize defaults to 50 and cannot exceed 200. A
+	// negative value is not "unset" — AIP-158 requires INVALID_ARGUMENT, so it
+	// is left for paging.Page to reject rather than folded into the default.
+	if pageSize == 0 {
 		pageSize = defaultPageSize
 	}
 	if pageSize > maxPageSize {
@@ -214,7 +216,10 @@ func (s *Service) ListAPIs(ctx context.Context, project string, filter StateFilt
 	if pageToken != "" {
 		params["pageToken"] = pageToken
 	}
-	page, next := paging.Page(apis, func(a API) string { return a.Name }, params)
+	page, next, err := paging.Page(apis, func(a API) string { return a.Name }, params)
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 
@@ -515,7 +520,10 @@ func (s *Service) ListOperations(ctx context.Context, project string, pageSize i
 	if pageToken != "" {
 		params["pageToken"] = pageToken
 	}
-	page, next := paging.Page(ops, func(op Operation) string { return op.Name }, params)
+	page, next, err := paging.Page(ops, func(op Operation) string { return op.Name }, params)
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

@@ -105,7 +105,10 @@ func (s *Service) ListFunctions(ctx context.Context, project, location string, p
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(fns, func(f functionsstore.Function) string { return f.ID }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(fns, func(f functionsstore.Function) string { return f.ID }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

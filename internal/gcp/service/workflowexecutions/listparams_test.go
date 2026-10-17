@@ -182,7 +182,7 @@ func TestExecutionPageSize(t *testing.T) {
 		want int
 	}{
 		{0, ViewBasic, 100},
-		{-5, ViewBasic, 100},
+		{-5, ViewBasic, -5}, // negative passes through for the shared pager to reject
 		{50, ViewBasic, 50},
 		{5000, ViewBasic, 1000},
 		{5000, ViewFull, 100},

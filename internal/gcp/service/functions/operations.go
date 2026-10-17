@@ -138,7 +138,10 @@ func (s *Service) ListOperations(ctx context.Context, project, location string, 
 			matched = append(matched, op)
 		}
 	}
-	page, next := paging.Page(matched, func(op Operation) string { return op.ID }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(matched, func(op Operation) string { return op.ID }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

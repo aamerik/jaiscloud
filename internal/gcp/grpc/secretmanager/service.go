@@ -117,8 +117,11 @@ func (s *Service) ListSecrets(ctx context.Context, req *secretmanagerpb.ListSecr
 	if err != nil {
 		return nil, mapError(err)
 	}
-	page, next := paging.Page(secrets, func(sec secretmanagerstore.Secret) string { return sec.ID },
+	page, next, err := paging.Page(secrets, func(sec secretmanagerstore.Secret) string { return sec.ID },
 		map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	if err != nil {
+		return nil, mapError(err)
+	}
 	out := make([]*secretmanagerpb.Secret, 0, len(page))
 	for _, sec := range page {
 		out = append(out, secretToProto(project, sec))
@@ -388,8 +391,11 @@ func (s *Service) ListSecretVersions(ctx context.Context, req *secretmanagerpb.L
 	if err != nil {
 		return nil, mapError(err)
 	}
-	page, next := paging.Page(versions, func(v secretmanagerstore.Version) string { return v.VersionID },
+	page, next, err := paging.Page(versions, func(v secretmanagerstore.Version) string { return v.VersionID },
 		map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	if err != nil {
+		return nil, mapError(err)
+	}
 	out := make([]*secretmanagerpb.SecretVersion, 0, len(page))
 	for _, v := range page {
 		out = append(out, versionToProto(project, v))

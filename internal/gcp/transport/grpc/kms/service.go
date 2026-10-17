@@ -69,7 +69,10 @@ func (s *Service) ListKeyRings(ctx context.Context, req *kmspb.ListKeyRingsReque
 	if err != nil {
 		return nil, mapError(err)
 	}
-	page, next := paging.Page(krs, func(kr kmsstore.KeyRing) string { return kr.ID }, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	page, next, err := paging.Page(krs, func(kr kmsstore.KeyRing) string { return kr.ID }, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	if err != nil {
+		return nil, mapError(err)
+	}
 	out := make([]*kmspb.KeyRing, 0, len(page))
 	for _, kr := range page {
 		out = append(out, keyRingToProto(project, loc, kr))
@@ -121,7 +124,10 @@ func (s *Service) ListCryptoKeys(ctx context.Context, req *kmspb.ListCryptoKeysR
 	if err != nil {
 		return nil, mapError(err)
 	}
-	page, next := paging.Page(keys, func(k kmsstore.CryptoKey) string { return k.ID }, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	page, next, err := paging.Page(keys, func(k kmsstore.CryptoKey) string { return k.ID }, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	if err != nil {
+		return nil, mapError(err)
+	}
 	out := make([]*kmspb.CryptoKey, 0, len(page))
 	for _, k := range page {
 		out = append(out, cryptoKeyToProto(project, k, s.core.PrimaryVersion(ctx, project, k)))
@@ -259,7 +265,10 @@ func (s *Service) ListCryptoKeyVersions(ctx context.Context, req *kmspb.ListCryp
 	if err != nil {
 		return nil, mapError(err)
 	}
-	page, next := paging.Page(versions, func(v kmsstore.Version) string { return v.Version }, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	page, next, err := paging.Page(versions, func(v kmsstore.Version) string { return v.Version }, map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
+	if err != nil {
+		return nil, mapError(err)
+	}
 	out := make([]*kmspb.CryptoKeyVersion, 0, len(page))
 	for _, v := range page {
 		out = append(out, versionToProto(project, loc, kr, key, v))

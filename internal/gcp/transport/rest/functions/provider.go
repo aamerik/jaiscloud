@@ -336,7 +336,10 @@ func (p *Provider) GetLocation(_ context.Context, nr *model.NormalizedRequest) (
 }
 
 func (p *Provider) ListLocations(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	page, next := p.core.ListLocations(p.project(nr), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	page, next, err := p.core.ListLocations(p.project(nr), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, l := range page {
 		items = append(items, l)

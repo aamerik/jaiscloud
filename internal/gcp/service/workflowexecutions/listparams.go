@@ -253,7 +253,7 @@ func executionPageSize(n int, view View) int {
 		maxSize = 100
 	}
 	switch {
-	case n <= 0:
+	case n == 0:
 		return 100
 	case n > maxSize:
 		return maxSize

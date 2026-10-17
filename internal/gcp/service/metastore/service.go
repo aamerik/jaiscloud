@@ -93,10 +93,13 @@ func NewService(s metastorestore.Store, opts ...Option) *Service {
 // Reset wipes the store.
 func (s *Service) Reset(ctx context.Context) { s.store.Reset(ctx) }
 
-// pageParams builds the shared cursor-pagination parameter map.
+// pageParams builds the shared cursor-pagination parameter map. A non-zero
+// pageSize is forwarded as-is — including a negative value, which the shared
+// pager rejects with INVALID_ARGUMENT (AIP-158) rather than coercing to the
+// default; zero means "unset" and takes the default.
 func pageParams(pageSize int, pageToken string) map[string]any {
 	params := map[string]any{}
-	if pageSize > 0 {
+	if pageSize != 0 {
 		params["pageSize"] = pageSize
 	}
 	if pageToken != "" {
@@ -230,7 +233,10 @@ func (s *Service) ListServices(ctx context.Context, project, location string, pa
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(services, func(svc metastorestore.Service) string { return svc.Name }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(services, func(svc metastorestore.Service) string { return svc.Name }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 
@@ -372,7 +378,10 @@ func (s *Service) ListBackups(ctx context.Context, project, location, serviceID 
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(backups, func(b metastorestore.Backup) string { return b.Name }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(backups, func(b metastorestore.Backup) string { return b.Name }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 
@@ -451,7 +460,10 @@ func (s *Service) ListMetadataImports(ctx context.Context, project, location, se
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(imports, func(mi metastorestore.MetadataImport) string { return mi.Name }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(imports, func(mi metastorestore.MetadataImport) string { return mi.Name }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 
@@ -507,7 +519,10 @@ func (s *Service) ListOperations(ctx context.Context, project, location string, 
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(ops, func(op metastorestore.Operation) string { return op.ID }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(ops, func(op metastorestore.Operation) string { return op.ID }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	for i := range page {
 		page[i] = s.settle(page[i])
 	}

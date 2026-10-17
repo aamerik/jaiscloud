@@ -217,3 +217,42 @@ func TestInvocationCodecRoundTrip(t *testing.T) {
 		t.Errorf("Encode = %d %q", status, outBody)
 	}
 }
+
+// TestListNegativePageSizeRejected pins the shared paging contract on Cloud
+// Run's REST list surfaces: a negative pageSize is INVALID_ARGUMENT.
+func TestListNegativePageSizeRejected(t *testing.T) {
+	ctx := context.Background()
+	p := testProvider()
+	body := map[string]any{"template": map[string]any{"containers": []any{
+		map[string]any{"image": "nginx:latest", "ports": []any{map[string]any{"containerPort": float64(80)}}},
+	}}}
+	if _, err := p.CreateService(ctx, req("CreateService", map[string]any{"serviceId": "svc", "body": body})); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	cases := []struct {
+		name string
+		call func() (*model.ProviderResponse, error)
+	}{
+		{"ListServices", func() (*model.ProviderResponse, error) {
+			return p.ListServices(ctx, req("ListServices", map[string]any{"pageSize": "-1"}))
+		}},
+		{"ListRevisions", func() (*model.ProviderResponse, error) {
+			return p.ListRevisions(ctx, req("ListRevisions", map[string]any{"pageSize": "-1", "service": "svc"}))
+		}},
+	}
+	for _, tc := range cases {
+		_, err := tc.call()
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "InvalidArgument" {
+			t.Errorf("%s(pageSize=-1) = %v, want InvalidArgument", tc.name, err)
+		}
+	}
+
+	// run.projects.locations.operations.list documents "If not set or set to
+	// less than or equal to 0, the default page size is 100" — a documented
+	// exception to the reject-negative rule, so a negative size takes the
+	// default rather than raising InvalidArgument.
+	if _, err := p.ListOperations(ctx, req("ListOperations", map[string]any{"pageSize": "-1"})); err != nil {
+		t.Errorf("ListOperations(pageSize=-1) = %v, want nil (documented default)", err)
+	}
+}

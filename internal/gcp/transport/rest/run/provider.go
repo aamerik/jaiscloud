@@ -71,7 +71,10 @@ func (p *Provider) ListServices(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(svcs, func(s runstore.Service) string { return s.ID }, nr.Params)
+	page, next, err := paging.Page(svcs, func(s runstore.Service) string { return s.ID }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, s := range page {
 		items = append(items, core.ServiceJSON(s))
@@ -132,7 +135,10 @@ func (p *Provider) ListRevisions(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(revs, func(r runstore.Revision) string { return r.ID }, nr.Params)
+	page, next, err := paging.Page(revs, func(r runstore.Revision) string { return r.ID }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, r := range page {
 		items = append(items, core.RevisionJSON(r))
@@ -175,7 +181,17 @@ func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	page, next := paging.Page(ops, func(o runstore.Operation) string { return o.ID }, nr.Params)
+	// run.projects.locations.operations.list documents "If not set or set to
+	// less than or equal to 0, the default page size is 100" — a documented
+	// exception to AIP-158's reject-negative rule, so a non-positive size is
+	// cleared to the default rather than raising InvalidArgument.
+	if intFrom(nr.Params["pageSize"]) < 0 {
+		nr.Params["pageSize"] = 0
+	}
+	page, next, err := paging.Page(ops, func(o runstore.Operation) string { return o.ID }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, op := range page {
 		items = append(items, core.OperationJSON(op))

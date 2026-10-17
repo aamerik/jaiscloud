@@ -244,7 +244,10 @@ func (p *Provider) TopicList(ctx context.Context, nr *model.NormalizedRequest) (
 	if err != nil {
 		return nil, err
 	}
-	page, nextToken := paging.Apply(entries, nr.Params)
+	page, nextToken, err := paging.Apply(entries, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, e := range page {
 		var m map[string]any
@@ -704,7 +707,10 @@ func (p *Provider) SubscriptionList(ctx context.Context, nr *model.NormalizedReq
 	if err != nil {
 		return nil, err
 	}
-	page, nextToken := paging.Apply(entries, nr.Params)
+	page, nextToken, err := paging.Apply(entries, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, e := range page {
 		var m map[string]any

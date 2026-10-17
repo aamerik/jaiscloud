@@ -1,8 +1,10 @@
 package paging
 
 import (
+	"errors"
 	"testing"
 
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
 
@@ -13,7 +15,10 @@ func TestPagePagination(t *testing.T) {
 	}
 
 	// Page 1 of size 2.
-	page, next := Apply(entries, map[string]any{"pageSize": "2"})
+	page, next, err := Apply(entries, map[string]any{"pageSize": "2"})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
 	if len(page) != 2 || page[0].ID != "a" || page[1].ID != "b" {
 		t.Fatalf("page 1 = %+v", page)
 	}
@@ -22,7 +27,10 @@ func TestPagePagination(t *testing.T) {
 	}
 
 	// Page 2.
-	page, next = Apply(entries, map[string]any{"pageSize": "2", "pageToken": next})
+	page, next, err = Apply(entries, map[string]any{"pageSize": "2", "pageToken": next})
+	if err != nil {
+		t.Fatalf("Apply page 2: %v", err)
+	}
 	if len(page) != 2 || page[0].ID != "c" || page[1].ID != "d" {
 		t.Fatalf("page 2 = %+v", page)
 	}
@@ -31,7 +39,10 @@ func TestPagePagination(t *testing.T) {
 	}
 
 	// Page 3 (final).
-	page, next = Apply(entries, map[string]any{"pageSize": "2", "pageToken": next})
+	page, next, err = Apply(entries, map[string]any{"pageSize": "2", "pageToken": next})
+	if err != nil {
+		t.Fatalf("Apply page 3: %v", err)
+	}
 	if len(page) != 1 || page[0].ID != "e" {
 		t.Fatalf("page 3 = %+v", page)
 	}
@@ -42,7 +53,10 @@ func TestPagePagination(t *testing.T) {
 
 func TestPageGeneric(t *testing.T) {
 	items := []string{"z", "a", "m"}
-	page, next := Page(items, func(s string) string { return s }, map[string]any{"pageSize": "2"})
+	page, next, err := Page(items, func(s string) string { return s }, map[string]any{"pageSize": "2"})
+	if err != nil {
+		t.Fatalf("Page: %v", err)
+	}
 	if len(page) != 2 || page[0] != "a" || page[1] != "m" {
 		t.Fatalf("generic page = %v", page)
 	}
@@ -60,15 +74,24 @@ func TestPageOrderedPagination(t *testing.T) {
 	cursor := func(s string) string { return s }
 	after := func(s, tok string) bool { return s < tok }
 
-	page, next := PageOrdered(items, map[string]any{"pageSize": "2"}, cursor, after)
+	page, next, err := PageOrdered(items, map[string]any{"pageSize": "2"}, cursor, after)
+	if err != nil {
+		t.Fatalf("PageOrdered page 1: %v", err)
+	}
 	if len(page) != 2 || page[0] != "e" || page[1] != "d" || next == "" {
 		t.Fatalf("page 1 = %v, next=%q", page, next)
 	}
-	page, next = PageOrdered(items, map[string]any{"pageSize": "2", "pageToken": next}, cursor, after)
+	page, next, err = PageOrdered(items, map[string]any{"pageSize": "2", "pageToken": next}, cursor, after)
+	if err != nil {
+		t.Fatalf("PageOrdered page 2: %v", err)
+	}
 	if len(page) != 2 || page[0] != "c" || page[1] != "b" || next == "" {
 		t.Fatalf("page 2 = %v, next=%q", page, next)
 	}
-	page, next = PageOrdered(items, map[string]any{"pageSize": "2", "pageToken": next}, cursor, after)
+	page, next, err = PageOrdered(items, map[string]any{"pageSize": "2", "pageToken": next}, cursor, after)
+	if err != nil {
+		t.Fatalf("PageOrdered page 3: %v", err)
+	}
 	if len(page) != 1 || page[0] != "a" || next != "" {
 		t.Fatalf("page 3 = %v, next=%q", page, next)
 	}
@@ -76,17 +99,72 @@ func TestPageOrderedPagination(t *testing.T) {
 	// Resuming from a token whose origin item is absent still returns exactly
 	// the following items (no repeats, no skips).
 	cursorToken := encodeCursor("c")
-	page, _ = PageOrdered([]string{"e", "d", "b", "a"}, map[string]any{"pageSize": "2", "pageToken": cursorToken}, cursor, after)
+	page, _, err = PageOrdered([]string{"e", "d", "b", "a"}, map[string]any{"pageSize": "2", "pageToken": cursorToken}, cursor, after)
+	if err != nil {
+		t.Fatalf("PageOrdered resume: %v", err)
+	}
 	if len(page) != 2 || page[0] != "b" || page[1] != "a" {
 		t.Fatalf("resume after a deleted origin = %v", page)
 	}
 }
 
 func TestPageSizeFallback(t *testing.T) {
-	if got := PageSize(map[string]any{"pageSize": "0"}); got != 1000 {
-		t.Errorf("expected default 1000 for non-positive size, got %d", got)
+	for _, params := range []map[string]any{
+		{"pageSize": "0"},
+		{"pageSize": 0},
+		{"pageSize": float64(0)},
+		{}, // absent
+		{"pageSize": "not-a-number"},
+	} {
+		got, err := PageSize(params)
+		if err != nil {
+			t.Errorf("PageSize(%v) error = %v, want nil", params, err)
+			continue
+		}
+		if got != defaultPageSize {
+			t.Errorf("PageSize(%v) = %d, want default %d", params, got, defaultPageSize)
+		}
 	}
-	if got := PageSize(map[string]any{"pageSize": "7"}); got != 7 {
-		t.Errorf("expected 7, got %d", got)
+	for _, params := range []map[string]any{
+		{"pageSize": "7"},
+		{"pageSize": 7},
+		{"pageSize": float64(7)},
+	} {
+		got, err := PageSize(params)
+		if err != nil || got != 7 {
+			t.Errorf("PageSize(%v) = %d, %v; want 7, nil", params, got, err)
+		}
+	}
+}
+
+// TestPageSizeNegativeRejected pins AIP-158: a negative pageSize is
+// INVALID_ARGUMENT rather than a silent fall-back to the default.
+func TestPageSizeNegativeRejected(t *testing.T) {
+	for _, params := range []map[string]any{
+		{"pageSize": "-1"},
+		{"pageSize": -1},
+		{"pageSize": float64(-1)},
+		{"pageSize": float64(-0.5)}, // sign is checked before truncation
+	} {
+		_, err := PageSize(params)
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) {
+			t.Fatalf("PageSize(%v) error = %v, want a *model.ProviderError", params, err)
+		}
+		if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("PageSize(%v) = %+v, want InvalidArgument/400", params, perr)
+		}
+	}
+
+	// The page entry points surface it too, and must not return a page.
+	items := []string{"a", "b"}
+	if page, next, err := Page(items, func(s string) string { return s }, map[string]any{"pageSize": "-1"}); err == nil || page != nil || next != "" {
+		t.Errorf("Page(negative) = %v, %q, %v; want nil, empty, error", page, next, err)
+	}
+	if page, next, err := PageOrdered(items, map[string]any{"pageSize": -1}, func(s string) string { return s }, func(s, tok string) bool { return s > tok }); err == nil || page != nil || next != "" {
+		t.Errorf("PageOrdered(negative) = %v, %q, %v; want nil, empty, error", page, next, err)
+	}
+	if page, next, err := Apply([]store.ResourceEntry{{ID: "a"}}, map[string]any{"pageSize": "-1"}); err == nil || page != nil || next != "" {
+		t.Errorf("Apply(negative) = %v, %q, %v; want nil, empty, error", page, next, err)
 	}
 }

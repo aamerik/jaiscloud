@@ -159,10 +159,13 @@ func labelsFromConfig(raw json.RawMessage) map[string]string {
 // field directly).
 func BodyEtag(body map[string]any) string { return bodyString(body, "etag") }
 
-// pageParams builds the shared cursor-pagination parameter map.
+// pageParams builds the shared cursor-pagination parameter map. A non-zero
+// pageSize is forwarded as-is — including a negative value, which the shared
+// pager rejects with INVALID_ARGUMENT (AIP-158) rather than coercing to the
+// default; zero means "unset" and takes the default.
 func pageParams(pageSize int, pageToken string) map[string]any {
 	params := map[string]any{}
-	if pageSize > 0 {
+	if pageSize != 0 {
 		params["pageSize"] = pageSize
 	}
 	if pageToken != "" {
@@ -672,8 +675,11 @@ func (s *Service) ListTriggers(ctx context.Context, project, location, filter, o
 	}
 	// The page cursor is applied after the filter and in the caller's order, so
 	// paginating a filtered/ordered list never resumes in a different one.
-	page, next := paging.PageOrdered(orderTriggers(filtered, order), pageParams(pageSize, pageToken),
+	page, next, err := paging.PageOrdered(orderTriggers(filtered, order), pageParams(pageSize, pageToken),
 		order.cursor, order.afterCursor)
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 
@@ -868,7 +874,10 @@ func (s *Service) ListChannels(ctx context.Context, project, location, orderBy s
 		return nil, "", err
 	}
 	order.Sort(channels)
-	page, next := paging.PageOrdered(channels, pageParams(pageSize, pageToken), order.Cursor, order.AfterCursor)
+	page, next, err := paging.PageOrdered(channels, pageParams(pageSize, pageToken), order.Cursor, order.AfterCursor)
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

@@ -76,14 +76,14 @@ func (s *Service) ListWorkflowTemplates(ctx context.Context, project, region str
 	if region == "" {
 		return nil, "", invalidArgument("missing region")
 	}
-	if err := validatePageSize(pageSize); err != nil {
-		return nil, "", err
-	}
 	all, err := s.store.ListWorkflowTemplates(ctx, project, region)
 	if err != nil {
 		return nil, "", err
 	}
-	page, next := paging.Page(all, func(t dpstore.WorkflowTemplate) string { return t.TemplateID }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(all, func(t dpstore.WorkflowTemplate) string { return t.TemplateID }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 

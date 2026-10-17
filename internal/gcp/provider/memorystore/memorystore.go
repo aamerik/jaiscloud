@@ -196,7 +196,10 @@ func (p *Provider) ListInstances(ctx context.Context, nr *model.NormalizedReques
 			instances = append(instances, inst)
 		}
 	}
-	page, next := paging.Page(instances, func(i Instance) string { return i.ID }, nr.Params)
+	page, next, err := paging.Page(instances, func(i Instance) string { return i.ID }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, inst := range page {
 		items = append(items, toMap(inst))
@@ -534,7 +537,10 @@ func (p *Provider) ListLocations(ctx context.Context, nr *model.NormalizedReques
 			DisplayName: r,
 		})
 	}
-	page, next := paging.Page(locations, func(l Location) string { return l.LocationID }, nr.Params)
+	page, next, err := paging.Page(locations, func(l Location) string { return l.LocationID }, nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]any, 0, len(page))
 	for _, l := range page {
 		items = append(items, toMap(l))

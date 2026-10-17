@@ -551,7 +551,10 @@ func (s *Service) ListAdvanced(ctx context.Context, project string, k Kind, loca
 	// The page cursor is applied after the filter and in the caller's order, so
 	// paginating a filtered/ordered list never resumes in a different one.
 	order.Sort(filtered)
-	page, next := paging.PageOrdered(filtered, pageParams(pageSize, pageToken), order.Cursor, order.AfterCursor)
+	page, next, err := paging.PageOrdered(filtered, pageParams(pageSize, pageToken), order.Cursor, order.AfterCursor)
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 
@@ -660,7 +663,10 @@ func (s *Service) ListMessageBusEnrollments(ctx context.Context, project, locati
 			names = append(names, EnrollmentKind.Name(project, location, r.ID))
 		}
 	}
-	page, next := paging.Page(names, func(n string) string { return n }, pageParams(pageSize, pageToken))
+	page, next, err := paging.Page(names, func(n string) string { return n }, pageParams(pageSize, pageToken))
+	if err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
 }
 
