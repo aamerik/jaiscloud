@@ -6,13 +6,11 @@ package kms
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 	"hash/crc32"
 	"strconv"
 	"strings"
 	"time"
 
-	"jaiscloud/internal/gcp/paging"
 	kmscore "jaiscloud/internal/gcp/service/kms"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/gcp/timestamp"
@@ -112,11 +110,7 @@ func (p *Provider) KeyRingCreate(ctx context.Context, nr *model.NormalizedReques
 
 func (p *Provider) KeyRingList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	loc, _ := nr.Params["location"].(string)
-	krs, err := p.core.ListKeyRings(ctx, nr.AccountID, loc)
-	if err != nil {
-		return nil, err
-	}
-	page, next, err := paging.Page(krs, func(kr kmsstore.KeyRing) string { return kr.ID }, nr.Params)
+	page, next, total, err := p.core.PageKeyRings(ctx, nr.AccountID, loc, listQueryFromParams(nr.Params))
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +121,7 @@ func (p *Provider) KeyRingList(ctx context.Context, nr *model.NormalizedRequest)
 			"createTime": timestamp.Canonical(kr.CreateTime),
 		})
 	}
-	resp := map[string]any{"keyRings": items, "totalSize": len(krs)}
+	resp := map[string]any{"keyRings": items, "totalSize": total}
 	if next != "" {
 		resp["nextPageToken"] = next
 	}
@@ -220,11 +214,7 @@ func (p *Provider) CryptoKeyList(ctx context.Context, nr *model.NormalizedReques
 	if loc == "" || kr == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing location/keyRing", 400)
 	}
-	keys, err := p.core.ListCryptoKeys(ctx, nr.AccountID, loc, kr)
-	if err != nil {
-		return nil, err
-	}
-	page, next, err := paging.Page(keys, func(k kmsstore.CryptoKey) string { return k.ID }, nr.Params)
+	page, next, total, err := p.core.PageCryptoKeys(ctx, nr.AccountID, loc, kr, listQueryFromParams(nr.Params))
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +222,7 @@ func (p *Provider) CryptoKeyList(ctx context.Context, nr *model.NormalizedReques
 	for _, k := range page {
 		items = append(items, cryptoKeyMap(nr, k, p.core.PrimaryVersion(ctx, nr.AccountID, k)))
 	}
-	resp := map[string]any{"cryptoKeys": items, "totalSize": len(keys)}
+	resp := map[string]any{"cryptoKeys": items, "totalSize": total}
 	if next != "" {
 		resp["nextPageToken"] = next
 	}
@@ -473,11 +463,7 @@ func (p *Provider) CryptoKeyVersionList(ctx context.Context, nr *model.Normalize
 		return nil, err
 	}
 	loc, kr, key := parseCryptoKeyFromParent(name)
-	versions, err := p.core.ListVersions(ctx, nr.AccountID, loc, kr, key)
-	if err != nil {
-		return nil, err
-	}
-	page, next, err := paging.Page(versions, func(v kmsstore.Version) string { return versionPageKey(v) }, nr.Params)
+	page, next, total, err := p.core.PageVersions(ctx, nr.AccountID, loc, kr, key, listQueryFromParams(nr.Params))
 	if err != nil {
 		return nil, err
 	}
@@ -485,7 +471,7 @@ func (p *Provider) CryptoKeyVersionList(ctx context.Context, nr *model.Normalize
 	for _, v := range page {
 		items = append(items, versionMap(nr, loc, kr, key, v))
 	}
-	resp := map[string]any{"cryptoKeyVersions": items, "totalSize": len(versions)}
+	resp := map[string]any{"cryptoKeyVersions": items, "totalSize": total}
 	if next != "" {
 		resp["nextPageToken"] = next
 	}
@@ -1098,12 +1084,22 @@ func durationString(d time.Duration) string {
 	return strconv.FormatInt(int64(d/time.Second), 10) + "s"
 }
 
-func versionPageKey(v kmsstore.Version) string {
-	n, err := strconv.ParseInt(v.Version, 10, 64)
-	if err != nil {
-		return v.Version
+// listQueryFromParams reads the documented filter/orderBy/pageSize/pageToken
+// query parameters the KMS list handlers forward to the core.
+func listQueryFromParams(params map[string]any) kmscore.ListQuery {
+	filter, _ := params["filter"].(string)
+	orderBy, _ := params["orderBy"].(string)
+	pageSize := 0
+	switch v := params["pageSize"].(type) {
+	case string:
+		pageSize, _ = strconv.Atoi(v)
+	case int:
+		pageSize = v
+	case float64:
+		pageSize = int(v)
 	}
-	return fmt.Sprintf("%020d", n)
+	pageToken, _ := params["pageToken"].(string)
+	return kmscore.ListQuery{Filter: filter, OrderBy: orderBy, PageSize: pageSize, PageToken: pageToken}
 }
 
 // parseKeyRing parses a name's location/keyRing pair, tolerating a full

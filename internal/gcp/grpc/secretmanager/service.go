@@ -23,6 +23,7 @@ import (
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/resource"
+	secretmanagersvc "jaiscloud/internal/gcp/service/secretmanager"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	"jaiscloud/internal/gcp/timestamp"
@@ -117,7 +118,11 @@ func (s *Service) ListSecrets(ctx context.Context, req *secretmanagerpb.ListSecr
 	if err != nil {
 		return nil, mapError(err)
 	}
-	page, next, err := paging.Page(secrets, func(sec secretmanagerstore.Secret) string { return sec.ID },
+	matched, applied, err := secretmanagersvc.FilterSecrets(project, req.GetFilter(), secrets)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	page, next, err := paging.Page(matched, func(sec secretmanagerstore.Secret) string { return sec.ID },
 		map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
 	if err != nil {
 		return nil, mapError(err)
@@ -126,10 +131,15 @@ func (s *Service) ListSecrets(ctx context.Context, req *secretmanagerpb.ListSecr
 	for _, sec := range page {
 		out = append(out, secretToProto(project, sec))
 	}
+	// No total count is reported once a filter is applied.
+	total := len(secrets)
+	if applied {
+		total = 0
+	}
 	return &secretmanagerpb.ListSecretsResponse{
 		Secrets:       out,
 		NextPageToken: next,
-		TotalSize:     int32(len(secrets)),
+		TotalSize:     int32(total),
 	}, nil
 }
 
@@ -391,7 +401,11 @@ func (s *Service) ListSecretVersions(ctx context.Context, req *secretmanagerpb.L
 	if err != nil {
 		return nil, mapError(err)
 	}
-	page, next, err := paging.Page(versions, func(v secretmanagerstore.Version) string { return v.VersionID },
+	matched, applied, err := secretmanagersvc.FilterVersions(project, id, req.GetFilter(), versions)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	page, next, err := paging.Page(matched, func(v secretmanagerstore.Version) string { return v.VersionID },
 		map[string]any{"pageSize": int(req.GetPageSize()), "pageToken": req.GetPageToken()})
 	if err != nil {
 		return nil, mapError(err)
@@ -400,10 +414,14 @@ func (s *Service) ListSecretVersions(ctx context.Context, req *secretmanagerpb.L
 	for _, v := range page {
 		out = append(out, versionToProto(project, v))
 	}
+	total := len(versions)
+	if applied {
+		total = 0
+	}
 	return &secretmanagerpb.ListSecretVersionsResponse{
 		Versions:      out,
 		NextPageToken: next,
-		TotalSize:     int32(len(versions)),
+		TotalSize:     int32(total),
 	}, nil
 }
 

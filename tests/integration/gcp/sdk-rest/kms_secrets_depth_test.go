@@ -34,6 +34,8 @@ package sdkrest_test
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -89,6 +91,12 @@ func walkKeyRingNames(t *testing.T, svc *cloudkms.Service, cfg testdepth.Paging[
 			if req.PageToken != "" {
 				call = call.PageToken(req.PageToken)
 			}
+			if req.Filter != "" {
+				call = call.Filter(req.Filter)
+			}
+			if req.OrderBy != "" {
+				call = call.OrderBy(req.OrderBy)
+			}
 			resp, err := call.Do()
 			if err != nil {
 				return testdepth.Page[*cloudkms.KeyRing]{}, err
@@ -111,6 +119,12 @@ func walkVersionNames(t *testing.T, svc *cloudkms.Service, key string, cfg testd
 			}
 			if req.PageToken != "" {
 				call = call.PageToken(req.PageToken)
+			}
+			if req.Filter != "" {
+				call = call.Filter(req.Filter)
+			}
+			if req.OrderBy != "" {
+				call = call.OrderBy(req.OrderBy)
 			}
 			resp, err := call.Do()
 			if err != nil {
@@ -135,6 +149,9 @@ func walkSecretNames(t *testing.T, svc *secretmanager.Service, cfg testdepth.Pag
 			if req.PageToken != "" {
 				call = call.PageToken(req.PageToken)
 			}
+			if req.Filter != "" {
+				call = call.Filter(req.Filter)
+			}
 			resp, err := call.Do()
 			if err != nil {
 				return testdepth.Page[*secretmanager.Secret]{}, err
@@ -157,6 +174,9 @@ func walkSecretVersionNames(t *testing.T, svc *secretmanager.Service, secret str
 			}
 			if req.PageToken != "" {
 				call = call.PageToken(req.PageToken)
+			}
+			if req.Filter != "" {
+				call = call.Filter(req.Filter)
 			}
 			resp, err := call.Do()
 			if err != nil {
@@ -230,6 +250,111 @@ func TestSDKKMSDepthListing(t *testing.T) {
 		Expect:               versionNames,
 	})
 	require.Subset(t, gotVersions, versionNames, "the paged version walk must return every version")
+}
+
+// TestSDKKMSListFilterOrderBy closes the DC14 remainder of the kms p4 cell: the
+// documented `filter` and `orderBy` on keyRings.list and cryptoKeyVersions.list
+// must reach the cursor walk rather than being silently ignored. The filter is
+// asserted by only ever walking rings carrying a unique marker substring (the
+// kit's Include rejects anything outside it), and the composed filter+orderBy
+// walk pins filter, order and the page cursor together (the kit's
+// OrderAscendingName checks the order across a page boundary).
+func TestSDKKMSListFilterOrderBy(t *testing.T) {
+	ctx := context.Background()
+	svc, err := cloudkms.NewService(ctx, opts()...)
+	require.NoError(t, err)
+
+	// Five marker rings walked through a name-substring filter at page size 2.
+	// The marker is unique to this run, so a walk over a shared emulator that
+	// already holds other runs' rings still returns exactly this run's five.
+	const rings = 5
+	marker := unique("depth-fo")
+	want := make([]string, 0, rings)
+	for i := 0; i < rings; i++ {
+		kr, err := svc.Projects.Locations.KeyRings.Create(kmsParent, &cloudkms.KeyRing{}).KeyRingId(fmt.Sprintf("%s-%d", marker, i)).Do()
+		require.NoError(t, err)
+		want = append(want, kr.Name)
+	}
+	// A decoy ring the filter must exclude.
+	createKeyRing(t, svc)
+
+	// filter + orderBy + paging composed: exactly the marker rings, ascending,
+	// across the page boundary.
+	sorted := append([]string(nil), want...)
+	sort.Strings(sorted)
+	got := walkKeyRingNames(t, svc, testdepth.Paging[*cloudkms.KeyRing]{
+		Name:                 func(kr *cloudkms.KeyRing) string { return kr.Name },
+		PageSize:             2,
+		Filter:               `name:"` + marker + `"`,
+		OrderBy:              "name",
+		Order:                testdepth.OrderAscendingName,
+		RequireNonEmptyPages: true,
+		Expect:               want,
+		Include:              func(kr *cloudkms.KeyRing) bool { return strings.Contains(kr.Name, marker) },
+	})
+	require.Equal(t, sorted, got, "the filtered, name-ordered key-ring walk returns exactly the marker rings in order")
+
+	// orderBy name desc: every ring in the location, descending, across pages.
+	all := walkKeyRingNames(t, svc, testdepth.Paging[*cloudkms.KeyRing]{
+		Name:                 func(kr *cloudkms.KeyRing) string { return kr.Name },
+		PageSize:             2,
+		OrderBy:              "name desc",
+		RequireNonEmptyPages: true,
+	})
+	require.GreaterOrEqual(t, len(all), rings)
+	require.Truef(t, sort.SliceIsSorted(all, func(i, j int) bool { return all[i] > all[j] }),
+		"orderBy name desc must return the key rings in descending name order: %v", all)
+
+	// cryptoKeyVersions.list: the name orderBy is numeric by version number,
+	// descending, across pages.
+	keyName := createCryptoKey(t, svc, want[0])
+	for i := 0; i < 4; i++ { // version 1 already exists
+		_, err := svc.Projects.Locations.KeyRings.CryptoKeys.CryptoKeyVersions.Create(keyName, &cloudkms.CryptoKeyVersion{}).Do()
+		require.NoError(t, err)
+	}
+	versionsDesc := walkVersionNames(t, svc, keyName, testdepth.Paging[*cloudkms.CryptoKeyVersion]{
+		Name:     func(v *cloudkms.CryptoKeyVersion) string { return v.Name },
+		PageSize: 2,
+		OrderBy:  "name desc",
+	})
+	wantVersions := []string{
+		keyName + "/cryptoKeyVersions/5",
+		keyName + "/cryptoKeyVersions/4",
+		keyName + "/cryptoKeyVersions/3",
+		keyName + "/cryptoKeyVersions/2",
+		keyName + "/cryptoKeyVersions/1",
+	}
+	require.Equal(t, wantVersions, versionsDesc, "orderBy name desc must return the versions in numeric descending order")
+}
+
+// TestSDKSecretManagerListFilter closes the DC14 remainder of the secretmanager
+// p4 cell: secrets.list must apply the documented `filter`, not return the whole
+// collection.
+func TestSDKSecretManagerListFilter(t *testing.T) {
+	ctx := context.Background()
+	svc, err := secretmanager.NewService(ctx, opts()...)
+	require.NoError(t, err)
+
+	marker := unique("depth-sm")
+	want := make([]string, 0, 4)
+	for i := 0; i < 4; i++ {
+		s, err := svc.Projects.Secrets.Create("projects/proj", &secretmanager.Secret{
+			Replication: &secretmanager.Replication{Automatic: &secretmanager.Automatic{}},
+		}).SecretId(fmt.Sprintf("%s-%d", marker, i)).Do()
+		require.NoError(t, err)
+		want = append(want, s.Name)
+	}
+	createSecret(t, svc) // decoy
+
+	got := walkSecretNames(t, svc, testdepth.Paging[*secretmanager.Secret]{
+		Name:                 func(s *secretmanager.Secret) string { return s.Name },
+		PageSize:             2,
+		Filter:               `name:"` + marker + `"`,
+		RequireNonEmptyPages: true,
+		Expect:               want,
+		Include:              func(s *secretmanager.Secret) bool { return strings.Contains(s.Name, marker) },
+	})
+	require.ElementsMatch(t, want, got, "the filtered secret walk returns exactly the marker secrets")
 }
 
 // TestSDKKMSDepthConcurrency is kms p2: concurrent mutations of a crypto key
