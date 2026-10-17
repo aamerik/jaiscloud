@@ -362,8 +362,12 @@ func (s *Service) ListDatabases(ctx context.Context, project string, showDeleted
 // The read-check-write runs inside the store's atomic UpsertAtomic so two
 // concurrent updates cannot lose one another.
 func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, patch databaseDef, mask []string, etag string) (databaseDef, string, error) {
+	// An omitted update_mask is an implied mask of every populated field
+	// (AIP-134): neither the proto nor the Discovery document marks
+	// UpdateDatabaseRequest.update_mask REQUIRED, so a maskless patch is the
+	// documented implied-mask form and must not be rejected.
 	if len(mask) == 0 {
-		return databaseDef{}, "", gcpInvalidArgument("update_mask is required")
+		mask = []string{"*"}
 	}
 	if db == "" {
 		return databaseDef{}, "", gcpInvalidArgument("database name is required")

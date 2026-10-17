@@ -94,12 +94,24 @@ func TestDatabaseUpdateEtagAndDelete(t *testing.T) {
 		t.Error("stale etag accepted, want Aborted")
 	}
 
-	// Empty mask is rejected.
-	if _, _, err := p.UpdateDatabaseDef(ctx, "proj", "db01", databaseDef{}, nil, ""); err == nil {
-		t.Error("empty update_mask accepted")
+	// An omitted update_mask is an implied mask of the populated fields
+	// (AIP-134): the patch applies and fields absent from it are untouched.
+	implied, _, err := p.UpdateDatabaseDef(ctx, "proj", "db01",
+		databaseDef{ConcurrencyMode: "OPTIMISTIC"}, nil, updated.Etag)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseDef(omitted mask): %v", err)
+	}
+	if implied.ConcurrencyMode != "OPTIMISTIC" {
+		t.Errorf("omitted mask did not apply concurrency_mode: %+v", implied)
+	}
+	if implied.DeleteProtectionState != "DELETE_PROTECTION_ENABLED" {
+		t.Errorf("omitted mask cleared an unpopulated field: %+v", implied)
+	}
+	if implied.Etag == updated.Etag {
+		t.Error("etag not rotated on maskless update")
 	}
 
-	deleted, _, err := p.DeleteDatabaseDef(ctx, "proj", "db01", updated.Etag)
+	deleted, _, err := p.DeleteDatabaseDef(ctx, "proj", "db01", implied.Etag)
 	if err != nil {
 		t.Fatalf("DeleteDatabaseDef: %v", err)
 	}

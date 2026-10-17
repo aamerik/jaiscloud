@@ -78,6 +78,22 @@ func TestRESTDatabaseLifecycle(t *testing.T) {
 		t.Errorf("concurrencyMode = %v, want PESSIMISTIC", uin["concurrencyMode"])
 	}
 
+	// An omitted updateMask is an implied mask of the populated fields
+	// (AIP-134), so a maskless patch is accepted.
+	implied, err := p.UpdateDatabase(ctx, adminNR("databases/test-db", map[string]any{
+		"body": map[string]any{"appEngineIntegrationMode": "DISABLED"},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateDatabase(no updateMask): %v", err)
+	}
+	iin, _ := implied.Data["response"].(map[string]any)
+	if iin["appEngineIntegrationMode"] != "DISABLED" {
+		t.Errorf("appEngineIntegrationMode = %v, want DISABLED", iin["appEngineIntegrationMode"])
+	}
+	if iin["concurrencyMode"] != "PESSIMISTIC" {
+		t.Errorf("maskless patch changed an unpopulated field: concurrencyMode = %v", iin["concurrencyMode"])
+	}
+
 	// delete returns a terminal operation carrying the soft-deleted database
 	// (operation_info response_type "Database").
 	del, err := p.DeleteDatabase(ctx, adminNR("databases/test-db", nil))
