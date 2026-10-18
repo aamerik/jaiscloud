@@ -1015,7 +1015,7 @@
       "rpc": "BatchWrite",
       "method": "BatchWrite",
       "status": "pass",
-      "key_field": "write_results[] + OK statuses"
+      "key_field": "write_results[] + OK statuses + empty-mask no-op"
     },
     {
       "service": "firestore",
