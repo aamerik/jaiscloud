@@ -14,21 +14,22 @@ import (
 
 func newAdminService() *Service { return newService(nil, store.NewMemoryResourceStore()) }
 
-// assertDeleteEtagPrecondition asserts the documented etag-mismatch failure of
-// projects.databases.delete: FAILED_PRECONDITION on HTTP 400. It is
-// deliberately not the AIP-154 ABORTED an update answers.
-func assertDeleteEtagPrecondition(t *testing.T, err error) {
+// assertDeletePrecondition asserts the failure projects.databases.delete
+// answers for a blocked delete (FAILED_PRECONDITION on HTTP 400) — whether the
+// block is a stale etag or enabled delete protection. It is deliberately not
+// the AIP-154 ABORTED an update answers.
+func assertDeletePrecondition(t *testing.T, err error, what string) {
 	t.Helper()
 	var pe *model.ProviderError
 	if !errors.As(err, &pe) {
 		t.Fatalf("expected *model.ProviderError, got %T: %v", err, err)
 	}
 	if pe.Code != "FailedPrecondition" || pe.HTTPStatus != 400 {
-		t.Fatalf("stale-etag delete = %s/%d (%v), want FailedPrecondition/400", pe.Code, pe.HTTPStatus, err)
+		t.Fatalf("%s delete = %s/%d (%v), want FailedPrecondition/400", what, pe.Code, pe.HTTPStatus, err)
 	}
 	// The wire status both transports resolve (REST envelope, gRPC code).
 	if name, httpStatus := gcperr.Resolve(pe); name != gcperr.FailedPrecondition || httpStatus != 400 {
-		t.Fatalf("stale-etag delete resolves to %s/%d, want FAILED_PRECONDITION/400", name, httpStatus)
+		t.Fatalf("%s delete resolves to %s/%d, want FAILED_PRECONDITION/400", what, name, httpStatus)
 	}
 }
 
@@ -45,6 +46,10 @@ func TestDatabaseCRUD(t *testing.T) {
 	}
 	if created.Type != "FIRESTORE_NATIVE" || created.ConcurrencyMode != "OPTIMISTIC" {
 		t.Errorf("defaults = type %q concurrency %q", created.Type, created.ConcurrencyMode)
+	}
+	// Delete protection is documented as disabled by default.
+	if created.DeleteProtectionState != deleteProtectionDisabled {
+		t.Errorf("default delete protection = %q, want %q", created.DeleteProtectionState, deleteProtectionDisabled)
 	}
 	if !strings.Contains(op, "/operations/") {
 		t.Errorf("operation name = %q, want /operations/", op)
@@ -98,12 +103,12 @@ func TestDatabaseUpdateEtagAndDelete(t *testing.T) {
 	}
 
 	updated, _, err := p.UpdateDatabaseDef(ctx, "proj", "db01",
-		databaseDef{ConcurrencyMode: "PESSIMISTIC", DeleteProtectionState: "DELETE_PROTECTION_ENABLED"},
+		databaseDef{ConcurrencyMode: "PESSIMISTIC", DeleteProtectionState: deleteProtectionEnabled},
 		[]string{"concurrency_mode", "delete_protection_state"}, created.Etag)
 	if err != nil {
 		t.Fatalf("UpdateDatabaseDef: %v", err)
 	}
-	if updated.ConcurrencyMode != "PESSIMISTIC" || updated.DeleteProtectionState != "DELETE_PROTECTION_ENABLED" {
+	if updated.ConcurrencyMode != "PESSIMISTIC" || updated.DeleteProtectionState != deleteProtectionEnabled {
 		t.Errorf("update = %+v", updated)
 	}
 	if updated.Etag == created.Etag {
@@ -127,7 +132,7 @@ func TestDatabaseUpdateEtagAndDelete(t *testing.T) {
 	if _, _, err := p.DeleteDatabaseDef(ctx, "proj", "db01", created.Etag); err == nil {
 		t.Error("stale etag accepted by DeleteDatabaseDef, want FailedPrecondition")
 	} else {
-		assertDeleteEtagPrecondition(t, err)
+		assertDeletePrecondition(t, err, "stale-etag")
 	}
 	if got, err := p.GetDatabase(ctx, "proj", "db01"); err != nil || got.Etag != updated.Etag {
 		t.Errorf("stale-etag delete changed the database: etag %q (err %v), want %q", got.Etag, err, updated.Etag)
@@ -143,14 +148,41 @@ func TestDatabaseUpdateEtagAndDelete(t *testing.T) {
 	if implied.ConcurrencyMode != "OPTIMISTIC" {
 		t.Errorf("omitted mask did not apply concurrency_mode: %+v", implied)
 	}
-	if implied.DeleteProtectionState != "DELETE_PROTECTION_ENABLED" {
+	if implied.DeleteProtectionState != deleteProtectionEnabled {
 		t.Errorf("omitted mask cleared an unpopulated field: %+v", implied)
 	}
 	if implied.Etag == updated.Etag {
 		t.Error("etag not rotated on maskless update")
 	}
 
-	deleted, _, err := p.DeleteDatabaseDef(ctx, "proj", "db01", implied.Etag)
+	// Delete protection survived the maskless patch and now blocks the delete
+	// (Firestore: "You cannot delete a database with delete protection enabled
+	// until you disable delete protection"), leaving the record intact.
+	if _, _, err := p.DeleteDatabaseDef(ctx, "proj", "db01", implied.Etag); err == nil {
+		t.Error("delete succeeded with delete protection enabled, want FailedPrecondition")
+	} else {
+		assertDeletePrecondition(t, err, "delete-protected")
+	}
+	kept, err := p.GetDatabase(ctx, "proj", "db01")
+	if err != nil || kept.Deleted {
+		t.Errorf("blocked delete changed the database: %+v (err %v)", kept, err)
+	} else if kept.Etag != implied.Etag {
+		t.Errorf("blocked delete rotated the etag %q -> %q", implied.Etag, kept.Etag)
+	}
+
+	// Disabling delete protection then admits the delete. An explicit
+	// DELETE_PROTECTION_STATE_UNSPECIFIED is documented as equivalent to
+	// disabled, so it must normalize rather than persist verbatim.
+	unprotected, _, err := p.UpdateDatabaseDef(ctx, "proj", "db01",
+		databaseDef{DeleteProtectionState: deleteProtectionUnspecified}, []string{"delete_protection_state"}, implied.Etag)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseDef(disable delete protection): %v", err)
+	}
+	if unprotected.DeleteProtectionState != deleteProtectionDisabled {
+		t.Fatalf("delete protection = %q, want %q", unprotected.DeleteProtectionState, deleteProtectionDisabled)
+	}
+
+	deleted, _, err := p.DeleteDatabaseDef(ctx, "proj", "db01", unprotected.Etag)
 	if err != nil {
 		t.Fatalf("DeleteDatabaseDef: %v", err)
 	}
@@ -239,6 +271,44 @@ func TestFieldUpdateGetList(t *testing.T) {
 	byTTL, _, err := p.ListFields(ctx, "proj", "(default)", "-", "ttlConfig:*", NewPageParams(0, ""))
 	if err != nil || len(byTTL) != 1 || !strings.HasSuffix(byTTL[0].Name, "/region") {
 		t.Errorf("ListFields ttlConfig:* = %+v err=%v", byTTL, err)
+	}
+}
+
+func TestDatabaseDeleteProtectionDefaults(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+
+	// Create defaults the field to the documented default.
+	created, _, err := p.CreateDatabaseDef(ctx, "proj", "defdb", databaseDef{})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	if created.DeleteProtectionState != deleteProtectionDisabled {
+		t.Errorf("create default = %q, want %q", created.DeleteProtectionState, deleteProtectionDisabled)
+	}
+
+	// An explicit DELETE_PROTECTION_STATE_UNSPECIFIED is documented as
+	// equivalent to disabled, not stored verbatim.
+	unspec, _, err := p.CreateDatabaseDef(ctx, "proj", "unspecdb", databaseDef{DeleteProtectionState: deleteProtectionUnspecified})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef(unspecified): %v", err)
+	}
+	if unspec.DeleteProtectionState != deleteProtectionDisabled {
+		t.Errorf("unspecified create = %q, want %q", unspec.DeleteProtectionState, deleteProtectionDisabled)
+	}
+
+	// A record persisted before the default existed (no field on disk) reads
+	// back as the documented default rather than as an unknown state.
+	legacy := databaseDef{Name: databaseName("proj", "legacydb"), Uid: "legacy", Etag: "legacy-etag"}
+	if err := p.putResource(ctx, "proj", rtDatabase, databaseRel("legacydb"), legacy, true); err != nil {
+		t.Fatalf("putResource(legacy): %v", err)
+	}
+	got, err := p.GetDatabase(ctx, "proj", "legacydb")
+	if err != nil {
+		t.Fatalf("GetDatabase(legacy): %v", err)
+	}
+	if got.DeleteProtectionState != deleteProtectionDisabled {
+		t.Errorf("legacy record read back = %q, want %q", got.DeleteProtectionState, deleteProtectionDisabled)
 	}
 }
 
