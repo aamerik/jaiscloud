@@ -35,7 +35,9 @@
 // on it through the official client's DeleteDatabaseOperation.Wait and asserts
 // the returned record, then the resource's absence. A maskless UpdateDatabase
 // (AIP-134's implied mask of the populated fields) is asserted in the lifecycle's
-// Databases case — DC20.
+// Databases case — DC20 — and the same implied-mask form is asserted for
+// UpdateField and UpdateBackupSchedule (dotted through the official client),
+// which must apply every populated field including the recurrence oneof — DC36.
 //
 // The concurrency cases run under -race (the module's integration step adds it);
 // asserting a contention property in a binary without the race detector is a
@@ -53,6 +55,7 @@ import (
 	adminpb "cloud.google.com/go/firestore/apiv1/admin/adminpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
+	"google.golang.org/genproto/googleapis/type/dayofweek"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	testdepth "jaiscloud-gcp-testdepth"
@@ -177,6 +180,25 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, fields, 1)
 		require.Equal(t, name, fields[0].GetName())
+
+		// A nil UpdateMask is the implied mask of the populated fields
+		// (AIP-134): both configs apply with no mask, instead of INVALID_ARGUMENT.
+		op, err = c.UpdateField(ctx, &adminpb.UpdateFieldRequest{
+			Field: &adminpb.Field{
+				Name:        name,
+				IndexConfig: &adminpb.Field_IndexConfig{UsesAncestorConfig: true, AncestorField: cg},
+				TtlConfig: &adminpb.Field_TtlConfig{
+					State:            adminpb.Field_TtlConfig_ACTIVE,
+					ExpirationOffset: durationpb.New(2 * time.Hour),
+				},
+			},
+		})
+		require.NoError(t, err)
+		field, err = op.Wait(ctx)
+		require.NoError(t, err)
+		require.Equal(t, adminpb.Field_TtlConfig_ACTIVE, field.GetTtlConfig().GetState())
+		require.Equal(t, 2*time.Hour, field.GetTtlConfig().GetExpirationOffset().AsDuration())
+		require.True(t, field.GetIndexConfig().GetUsesAncestorConfig(), "the implied mask must carry index_config too")
 	})
 
 	t.Run("BackupSchedules", func(t *testing.T) {
@@ -216,6 +238,21 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, 14*24*time.Hour, updated.GetRetention().AsDuration())
+
+		// A nil UpdateMask applies every populated field — retention and the
+		// recurrence oneof, which the old `*` arm silently dropped.
+		updated, err = c.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
+			BackupSchedule: &adminpb.BackupSchedule{
+				Name:      created.GetName(),
+				Retention: durationpb.New(21 * 24 * time.Hour),
+				Recurrence: &adminpb.BackupSchedule_WeeklyRecurrence{
+					WeeklyRecurrence: &adminpb.WeeklyRecurrence{Day: dayofweek.DayOfWeek_WEDNESDAY},
+				},
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 21*24*time.Hour, updated.GetRetention().AsDuration())
+		require.Equal(t, dayofweek.DayOfWeek_WEDNESDAY, updated.GetWeeklyRecurrence().GetDay())
 
 		err = c.DeleteBackupSchedule(ctx, &adminpb.DeleteBackupScheduleRequest{Name: created.GetName()})
 		require.NoError(t, err)

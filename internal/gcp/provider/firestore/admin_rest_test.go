@@ -245,6 +245,27 @@ func TestRESTBackupScheduleLifecycle(t *testing.T) {
 		t.Errorf("retention after update = %v, want 7200s", upd.Data["retention"])
 	}
 
+	// An omitted updateMask is the implied mask of the populated fields
+	// (AIP-134): the PATCH applies the retention *and* the recurrence oneof,
+	// which the old `*` arm silently dropped.
+	maskless, err := p.UpdateBackupSchedule(ctx, adminNR("databases/(default)/backupSchedules/1", map[string]any{
+		"body": map[string]any{
+			"retention":        "10800s",
+			"weeklyRecurrence": map[string]any{"day": "WEDNESDAY"},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateBackupSchedule(maskless): %v", err)
+	}
+	if maskless.Data["retention"] != "10800s" {
+		t.Errorf("maskless retention = %v, want 10800s", maskless.Data["retention"])
+	}
+	// WEDNESDAY differs from the create's MONDAY, so the recurrence can only
+	// come from the maskless patch (not from the stored record).
+	if wr, _ := maskless.Data["weeklyRecurrence"].(map[string]any); wr["day"] != "WEDNESDAY" {
+		t.Errorf("maskless weeklyRecurrence = %v, want WEDNESDAY", maskless.Data["weeklyRecurrence"])
+	}
+
 	if _, err := p.DeleteBackupSchedule(ctx, adminNR("databases/(default)/backupSchedules/1", nil)); err != nil {
 		t.Fatalf("DeleteBackupSchedule: %v", err)
 	}
@@ -364,6 +385,26 @@ func TestRESTFieldUpdateAndGet(t *testing.T) {
 	}
 	if fields, _ := list.Data["fields"].([]any); len(fields) != 1 {
 		t.Errorf("ListFields len = %d, want 1", len(fields))
+	}
+
+	// An omitted updateMask is the implied mask of the populated fields
+	// (AIP-134): the PATCH applies both configs with no query parameter, and
+	// the widened `*` arm carries ttl_config as well as index_config.
+	maskless, err := p.UpdateField(ctx, adminNR("databases/(default)/collectionGroups/cg/fields/f", map[string]any{
+		"body": map[string]any{
+			"indexConfig": map[string]any{"usesAncestorConfig": true, "ancestorField": "cg"},
+			"ttlConfig":   map[string]any{"state": "ACTIVE", "expirationOffset": "7200s"},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateField(maskless): %v", err)
+	}
+	respObj, _ = maskless.Data["response"].(map[string]any)
+	if mic, _ := respObj["indexConfig"].(map[string]any); mic["ancestorField"] != "cg" {
+		t.Errorf("maskless indexConfig = %v, want ancestorField cg", respObj["indexConfig"])
+	}
+	if tc, _ := respObj["ttlConfig"].(map[string]any); tc["state"] != "ACTIVE" || tc["expirationOffset"] != "7200s" {
+		t.Errorf("maskless ttlConfig = %v, want ACTIVE/7200s", respObj["ttlConfig"])
 	}
 }
 

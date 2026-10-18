@@ -391,18 +391,30 @@ func (s *Service) ListDatabases(ctx context.Context, project string, showDeleted
 	return out, nil
 }
 
+// impliedMask applies AIP-134's omitted-field-mask rule: a request that carries
+// no update_mask has an implied mask of every populated field. Neither the
+// Firestore admin request protos nor the Discovery document marks any
+// Update*Request.update_mask REQUIRED, so a maskless patch must apply the
+// populated fields instead of being rejected.
+//
+// This is populated-field semantics, not the full replacement AIP-134 assigns to
+// an explicit `*`: the same `*` arm serves both forms here (an explicit `*`
+// keeps unpopulated fields) because the transports do not yet distinguish an
+// omitted mask from a present-but-empty one (DC37). An explicit `*` meaning
+// replacement is recorded as DC50.
+func impliedMask(mask []string) []string {
+	if len(mask) == 0 {
+		return []string{"*"}
+	}
+	return mask
+}
+
 // UpdateDatabaseDef applies patch to the database record under mask (field
 // paths, or "*" for all), honoring an optional etag for optimistic concurrency.
 // The read-check-write runs inside the store's atomic UpsertAtomic so two
 // concurrent updates cannot lose one another.
 func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, patch databaseDef, mask []string, etag string) (databaseDef, string, error) {
-	// An omitted update_mask is an implied mask of every populated field
-	// (AIP-134): neither the proto nor the Discovery document marks
-	// UpdateDatabaseRequest.update_mask REQUIRED, so a maskless patch is the
-	// documented implied-mask form and must not be rejected.
-	if len(mask) == 0 {
-		mask = []string{"*"}
-	}
+	mask = impliedMask(mask)
 	if db == "" {
 		return databaseDef{}, "", gcpInvalidArgument("database name is required")
 	}
@@ -643,9 +655,8 @@ func (s *Service) UpdateFieldDef(ctx context.Context, project, db, cg, fieldPath
 	if fieldPath == "" {
 		return fieldDef{}, "", gcpInvalidArgument("field path is required")
 	}
-	if len(mask) == 0 {
-		return fieldDef{}, "", gcpInvalidArgument("update_mask is required")
-	}
+	// An omitted mask is the implied mask of every populated field (AIP-134).
+	mask = impliedMask(mask)
 	cur := fieldDef{Name: fieldName(project, db, cg, fieldPath)}
 	var existing fieldDef
 	if err := s.getResource(ctx, project, rtField, fieldRel(db, cg, fieldPath), &existing); err == nil {
@@ -666,7 +677,16 @@ func (s *Service) UpdateFieldDef(ctx context.Context, project, db, cg, fieldPath
 // applyFieldMask copies one Field configuration by proto field path.
 func applyFieldMask(cur *fieldDef, path string, patch fieldDef) {
 	switch path {
-	case "*", "index_config":
+	case "*":
+		// The `*` arm is the populated-field mask: it must carry both configs,
+		// not only index_config.
+		if patch.IndexConfig != nil {
+			cur.IndexConfig = patch.IndexConfig
+		}
+		if patch.TtlConfig != nil {
+			cur.TtlConfig = patch.TtlConfig
+		}
+	case "index_config":
 		if patch.IndexConfig != nil {
 			cur.IndexConfig = patch.IndexConfig
 		}
@@ -847,16 +867,29 @@ func (s *Service) ListBackupSchedules(ctx context.Context, project, db string) (
 
 // UpdateBackupScheduleDef applies patch to a backup schedule under mask.
 func (s *Service) UpdateBackupScheduleDef(ctx context.Context, project, db, id string, patch backupScheduleDef, mask []string) (backupScheduleDef, error) {
-	if len(mask) == 0 {
-		return backupScheduleDef{}, gcpInvalidArgument("update_mask is required")
-	}
+	// An omitted mask is the implied mask of every populated field (AIP-134),
+	// exactly as UpdateFieldDef documents above.
+	mask = impliedMask(mask)
 	cur, err := s.GetBackupSchedule(ctx, project, db, id)
 	if err != nil {
 		return backupScheduleDef{}, err
 	}
 	for _, path := range mask {
 		switch path {
-		case "*", "retention":
+		case "*":
+			// Every populated field, including both halves of the recurrence
+			// oneof — a maskless patch carrying a weekly recurrence must not be
+			// silently dropped.
+			if patch.Retention > 0 {
+				cur.Retention = patch.Retention
+			}
+			switch patch.Recurrence {
+			case "DAILY":
+				cur.Recurrence, cur.DayOfWeek = "DAILY", 0
+			case "WEEKLY":
+				cur.Recurrence, cur.DayOfWeek = "WEEKLY", patch.DayOfWeek
+			}
+		case "retention":
 			if patch.Retention > 0 {
 				cur.Retention = patch.Retention
 			}

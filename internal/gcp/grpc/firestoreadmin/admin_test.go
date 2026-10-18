@@ -8,6 +8,7 @@ import (
 	adminpb "cloud.google.com/go/firestore/apiv1/admin/adminpb"
 	"jaiscloud/internal/store"
 
+	"google.golang.org/genproto/googleapis/type/dayofweek"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -268,6 +269,37 @@ func TestFieldAdminRoundTrip(t *testing.T) {
 	if len(list.GetFields()) != 1 {
 		t.Fatalf("ListFields len = %d, want 1", len(list.GetFields()))
 	}
+
+	// A nil UpdateMask is the implied mask of every populated field (AIP-134,
+	// the same contract UpdateDatabase honours since DC20): the maskless patch
+	// applies both configs instead of answering INVALID_ARGUMENT.
+	op, err = client.UpdateField(ctx, &adminpb.UpdateFieldRequest{
+		Field: &adminpb.Field{
+			Name: name,
+			IndexConfig: &adminpb.Field_IndexConfig{
+				UsesAncestorConfig: true,
+				AncestorField:      "cities",
+			},
+			TtlConfig: &adminpb.Field_TtlConfig{
+				State:            adminpb.Field_TtlConfig_ACTIVE,
+				ExpirationOffset: durationpb.New(2 * time.Hour),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateField(maskless): %v", err)
+	}
+	maskless := &adminpb.Field{}
+	if err := op.GetResponse().UnmarshalTo(maskless); err != nil {
+		t.Fatalf("UpdateField(maskless) response: %v", err)
+	}
+	if maskless.GetTtlConfig().GetState() != adminpb.Field_TtlConfig_ACTIVE ||
+		maskless.GetTtlConfig().GetExpirationOffset().AsDuration() != 2*time.Hour {
+		t.Errorf("maskless ttl_config = %+v", maskless.GetTtlConfig())
+	}
+	if maskless.GetIndexConfig().GetAncestorField() != "cities" {
+		t.Errorf("maskless patch dropped index_config = %+v", maskless.GetIndexConfig())
+	}
 }
 
 func TestUserCredsAdminRoundTrip(t *testing.T) {
@@ -368,6 +400,27 @@ func TestBackupScheduleAdminRoundTrip(t *testing.T) {
 	})
 	if err != nil || upd.GetRetention().AsDuration() != 14*24*time.Hour {
 		t.Fatalf("UpdateBackupSchedule = %+v err=%v", upd, err)
+	}
+
+	// A nil UpdateMask applies every populated field — both the retention and
+	// the recurrence oneof, which the old `*` arm silently dropped.
+	upd, err = client.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
+		BackupSchedule: &adminpb.BackupSchedule{
+			Name:      schedName,
+			Retention: durationpb.New(21 * 24 * time.Hour),
+			Recurrence: &adminpb.BackupSchedule_WeeklyRecurrence{
+				WeeklyRecurrence: &adminpb.WeeklyRecurrence{Day: dayofweek.DayOfWeek_WEDNESDAY},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBackupSchedule(maskless): %v", err)
+	}
+	if upd.GetRetention().AsDuration() != 21*24*time.Hour {
+		t.Errorf("maskless retention = %v, want 21d", upd.GetRetention())
+	}
+	if upd.GetWeeklyRecurrence().GetDay() != dayofweek.DayOfWeek_WEDNESDAY {
+		t.Errorf("maskless recurrence = %+v, want weekly Wednesday", upd.GetRecurrence())
 	}
 
 	if _, err := client.DeleteBackupSchedule(ctx, &adminpb.DeleteBackupScheduleRequest{Name: schedName}); err != nil {

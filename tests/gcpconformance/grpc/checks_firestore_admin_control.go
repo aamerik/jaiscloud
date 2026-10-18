@@ -13,6 +13,7 @@ import (
 	"time"
 
 	adminpb "cloud.google.com/go/firestore/apiv1/admin/adminpb"
+	"google.golang.org/genproto/googleapis/type/dayofweek"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -29,7 +30,7 @@ func firestoreAdminControlChecks() []Check {
 		{Service: "firestoreadmin", RPC: "ListDatabases", KeyField: "created database present + (default)", Run: checkFsAdminListDatabases},
 		{Service: "firestoreadmin", RPC: "UpdateDatabase", KeyField: "concurrency_mode updated under mask + omitted mask applies populated fields", Run: checkFsAdminUpdateDatabase},
 		{Service: "firestoreadmin", RPC: "DeleteDatabase", KeyField: "stale etag -> FailedPrecondition; delete protection -> FailedPrecondition; operation response carries database; absent after delete", Run: checkFsAdminDeleteDatabase},
-		{Service: "firestoreadmin", RPC: "UpdateField", Method: "UpdateField", KeyField: "operation done=true; index_config", Run: checkFsAdminUpdateField},
+		{Service: "firestoreadmin", RPC: "UpdateField", Method: "UpdateField", KeyField: "operation done=true; index_config under mask + index_config/ttl_config under an omitted mask", Run: checkFsAdminUpdateField},
 		{Service: "firestoreadmin", RPC: "GetField", Method: "GetField", KeyField: "index_config round-trip", Run: checkFsAdminGetField},
 		{Service: "firestoreadmin", RPC: "ListFields", Method: "ListFields", KeyField: "field present under wildcard group", Run: checkFsAdminListFields},
 		{Service: "firestoreadmin", RPC: "CreateUserCreds", Method: "CreateUserCreds", KeyField: "secure_password returned once", Run: checkFsAdminCreateUserCreds},
@@ -42,7 +43,7 @@ func firestoreAdminControlChecks() []Check {
 		{Service: "firestoreadmin", RPC: "CreateBackupSchedule", Method: "CreateBackupSchedule", KeyField: "schedule name/retention", Run: checkFsAdminCreateBackupSchedule},
 		{Service: "firestoreadmin", RPC: "GetBackupSchedule", Method: "GetBackupSchedule", KeyField: "retention round-trip", Run: checkFsAdminGetBackupSchedule},
 		{Service: "firestoreadmin", RPC: "ListBackupSchedules", Method: "ListBackupSchedules", KeyField: "schedule present", Run: checkFsAdminListBackupSchedules},
-		{Service: "firestoreadmin", RPC: "UpdateBackupSchedule", Method: "UpdateBackupSchedule", KeyField: "retention updated under mask", Run: checkFsAdminUpdateBackupSchedule},
+		{Service: "firestoreadmin", RPC: "UpdateBackupSchedule", Method: "UpdateBackupSchedule", KeyField: "retention under mask + retention/recurrence under an omitted mask", Run: checkFsAdminUpdateBackupSchedule},
 		{Service: "firestoreadmin", RPC: "DeleteBackupSchedule", Method: "DeleteBackupSchedule", KeyField: "schedule absent after delete", Run: checkFsAdminDeleteBackupSchedule},
 		{Service: "firestoreadmin", RPC: "ListBackups", Method: "ListBackups", KeyField: "empty list (no create path)", Run: checkFsAdminListBackups},
 		{Service: "firestoreadmin", RPC: "GetBackup", Method: "GetBackup", KeyField: "missing backup -> NotFound", Run: checkFsAdminGetBackupMissing},
@@ -326,6 +327,33 @@ func checkFsAdminUpdateField(ctx context.Context, cfg Config) error {
 	if field.GetName() != fsAdminFieldName(cfg) || !field.GetIndexConfig().GetUsesAncestorConfig() {
 		return fmt.Errorf("UpdateField = %+v", field)
 	}
+
+	// A nil UpdateMask is the implied mask of the populated fields (AIP-134):
+	// both configs must apply, including ttl_config (the old `*` arm dropped it).
+	op, err = stub.UpdateField(ctx, &adminpb.UpdateFieldRequest{
+		Field: &adminpb.Field{
+			Name:        fsAdminFieldName(cfg),
+			IndexConfig: &adminpb.Field_IndexConfig{UsesAncestorConfig: true, AncestorField: fsAdminFieldCG(cfg)},
+			TtlConfig: &adminpb.Field_TtlConfig{
+				State:            adminpb.Field_TtlConfig_ACTIVE,
+				ExpirationOffset: durationpb.New(2 * time.Hour),
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateField (omitted mask): %w", err)
+	}
+	field = &adminpb.Field{}
+	if err := op.GetResponse().UnmarshalTo(field); err != nil {
+		return fmt.Errorf("UpdateField (omitted mask) response: %w", err)
+	}
+	if field.GetTtlConfig().GetState() != adminpb.Field_TtlConfig_ACTIVE ||
+		field.GetTtlConfig().GetExpirationOffset().AsDuration() != 2*time.Hour {
+		return fmt.Errorf("UpdateField (omitted mask) ttl_config = %+v", field.GetTtlConfig())
+	}
+	if !field.GetIndexConfig().GetUsesAncestorConfig() {
+		return fmt.Errorf("UpdateField (omitted mask) dropped index_config = %+v", field.GetIndexConfig())
+	}
 	return nil
 }
 
@@ -580,6 +608,27 @@ func checkFsAdminUpdateBackupSchedule(ctx context.Context, cfg Config) error {
 	}
 	if got.GetRetention().AsDuration() != 14*24*time.Hour {
 		return fmt.Errorf("UpdateBackupSchedule retention = %v, want 14d", got.GetRetention())
+	}
+
+	// A nil UpdateMask applies every populated field — retention and the
+	// recurrence oneof, which the old `*` arm silently dropped.
+	got, err = stub.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
+		BackupSchedule: &adminpb.BackupSchedule{
+			Name:      fsAdminScheduleName(cfg),
+			Retention: durationpb.New(21 * 24 * time.Hour),
+			Recurrence: &adminpb.BackupSchedule_WeeklyRecurrence{
+				WeeklyRecurrence: &adminpb.WeeklyRecurrence{Day: dayofweek.DayOfWeek_WEDNESDAY},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateBackupSchedule (omitted mask): %w", err)
+	}
+	if got.GetRetention().AsDuration() != 21*24*time.Hour {
+		return fmt.Errorf("UpdateBackupSchedule (omitted mask) retention = %v, want 21d", got.GetRetention())
+	}
+	if got.GetWeeklyRecurrence().GetDay() != dayofweek.DayOfWeek_WEDNESDAY {
+		return fmt.Errorf("UpdateBackupSchedule (omitted mask) recurrence = %+v, want weekly Wednesday", got.GetRecurrence())
 	}
 	return nil
 }
