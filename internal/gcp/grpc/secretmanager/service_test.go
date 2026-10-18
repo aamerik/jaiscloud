@@ -517,16 +517,18 @@ func TestManagedRotationGRPC(t *testing.T) {
 // secret without CMEK must omit the nested message entirely (as real GCP does),
 // so both transports render the same shape.
 func TestSecretManagerCMEKReplication(t *testing.T) {
-	client, _, cleanup := secretTestService(t)
+	client, kmsStore, cleanup := secretTestServiceWithKMS(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	const (
 		name  = "projects/test/secrets/cmek-secret"
-		key1  = "projects/test/locations/global/keyRings/kr/cryptoKeys/key-one"
-		key2  = "projects/test/locations/global/keyRings/kr/cryptoKeys/key-two"
 		plain = "projects/test/secrets/plain-secret"
 	)
+	// Real GCP resolves the key when the secret is created, so the fixture must
+	// exist (DC58); the emulator used to accept the name and fail at AddVersion.
+	key1, _ := newGRPCTestKey(t, kmsStore, "test", "global", "kr", "key-one")
+	key2, _ := newGRPCTestKey(t, kmsStore, "test", "global", "kr", "key-two")
 	cme := func(key string) *secretmanagerpb.Replication {
 		return &secretmanagerpb.Replication{
 			Replication: &secretmanagerpb.Replication_Automatic_{

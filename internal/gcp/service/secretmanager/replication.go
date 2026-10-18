@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"jaiscloud/internal/gcp/crypto"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	"jaiscloud/internal/model"
 )
@@ -71,6 +72,9 @@ func ValidateReplication(r *secretmanagerstore.Replication) error {
 		if rep.Location == "" {
 			return invalidReplication("replication.userManaged.replicas[%d].location is required", i)
 		}
+		if !validReplicaLoc(rep.Location) {
+			return invalidReplication("replication.userManaged.replicas[%d].location %q is not a supported location", i, rep.Location)
+		}
 		if seen[rep.Location] {
 			return invalidReplication("replication.userManaged.replicas contains duplicate location %q", rep.Location)
 		}
@@ -88,6 +92,26 @@ func ValidateReplication(r *secretmanagerstore.Replication) error {
 		}
 		if location != rep.Location {
 			return invalidReplication("replication.userManaged.replicas[%d].customerManagedEncryption.kmsKeyName must reside in replica location %q, got %q", i, rep.Location, location)
+		}
+	}
+	return nil
+}
+
+// ValidateReplicationKeys validates a replication policy's shape and resolves
+// every Cloud KMS key it names. Real GCP answers at create/patch time when a
+// CMEK key is missing (INVALID_ARGUMENT) or cannot encrypt because its primary
+// version is disabled/destroyed (FAILED_PRECONDITION); without this, the
+// emulator accepted the policy and only failed later at AddSecretVersion. The
+// key is resolved per replica for a user-managed policy, so a policy that names
+// two keys fails on either one. Cross-project keys are accepted: Secret Manager
+// explicitly supports storing secrets and keys in separate projects.
+func ValidateReplicationKeys(ctx context.Context, enc crypto.EnvelopeEncryptor, account string, r *secretmanagerstore.Replication) error {
+	if err := ValidateReplication(r); err != nil {
+		return err
+	}
+	for _, binding := range r.CMEKBindings() {
+		if err := enc.ValidateKey(ctx, account, binding.KmsKeyName); err != nil {
+			return err
 		}
 	}
 	return nil

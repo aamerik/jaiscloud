@@ -17,9 +17,11 @@ package sdkrest_test
 import (
 	"context"
 	"encoding/json"
+	"path"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	cloudkms "google.golang.org/api/cloudkms/v1"
 	"google.golang.org/api/googleapi"
 	secretmanager "google.golang.org/api/secretmanager/v1"
 )
@@ -96,32 +98,90 @@ func TestSDKSecretManagerUserManagedReplication(t *testing.T) {
 	require.Nil(t, version.ReplicationStatus.UserManaged.Replicas[0].CustomerManagedEncryption, "no CMEK status")
 
 	// Only the CMEK configuration is mutable; the key it names is echoed back and
-	// moves the etag. The key is not resolved at create (a known emulator gap,
-	// DC58 — real GCP rejects a missing key there), and no further version is
-	// added, which is what would resolve it.
-	key := func(location, id string) string {
-		return "projects/proj/locations/" + location + "/keyRings/kr/cryptoKeys/" + id
+	// moves the etag. Create/patch resolve the key (DC58), so the fixture keys
+	// must exist in Cloud KMS, as they must in real GCP.
+	ringID := unique("repl")
+	centralRingID := unique("repl-central")
+	kmsSvc, err := cloudkms.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	keyVersions := map[string]string{} // key name → its primary CryptoKeyVersion name
+	createRing := func(location, ring string) {
+		_, err := kmsSvc.Projects.Locations.KeyRings.Create("projects/proj/locations/"+location, &cloudkms.KeyRing{}).
+			KeyRingId(ring).Do()
+		require.NoError(t, err, "create key ring in %s", location)
+	}
+	createKey := func(location, ring, id string) {
+		ck, err := kmsSvc.Projects.Locations.KeyRings.CryptoKeys.Create(
+			"projects/proj/locations/"+location+"/keyRings/"+ring, &cloudkms.CryptoKey{Purpose: "ENCRYPT_DECRYPT"}).
+			CryptoKeyId(id).Do()
+		require.NoError(t, err, "create crypto key %s", id)
+		// Secret Manager spells the status `.../cryptoKeys/{key}/versions/{n}`,
+		// not Cloud KMS's `.../cryptoKeyVersions/{n}` (Discovery
+		// CustomerManagedEncryptionStatus), so keep the number only.
+		keyVersions[ck.Name] = path.Base(ck.Primary.Name)
+	}
+	createRing("us-east1", ringID)
+	createKey("us-east1", ringID, "k1")
+	createKey("us-east1", ringID, "k2")
+	createRing("us-central1", centralRingID)
+	createKey("us-central1", centralRingID, "k-central")
+	key := func(location, ring, id string) string {
+		return "projects/proj/locations/" + location + "/keyRings/" + ring + "/cryptoKeys/" + id
 	}
 	withKey := func(id string) *secretmanager.Replication {
 		return userManaged(&secretmanager.Replica{
 			Location:                  "us-east1",
-			CustomerManagedEncryption: &secretmanager.CustomerManagedEncryption{KmsKeyName: key("us-east1", id)},
+			CustomerManagedEncryption: &secretmanager.CustomerManagedEncryption{KmsKeyName: key("us-east1", ringID, id)},
 		}, &secretmanager.Replica{Location: "us-central1"})
 	}
 	cmekSecret, err := svc.Projects.Secrets.Create("projects/proj", &secretmanager.Secret{
 		Replication: withKey("k1"),
 	}).SecretId(unique("um-cmek")).Do()
 	require.NoError(t, err)
-	require.Equal(t, key("us-east1", "k1"),
+	require.Equal(t, key("us-east1", ringID, "k1"),
 		cmekSecret.Replication.UserManaged.Replicas[0].CustomerManagedEncryption.KmsKeyName)
 
 	patched, err := svc.Projects.Secrets.Patch(cmekSecret.Name, &secretmanager.Secret{
 		Replication: withKey("k2"),
 	}).UpdateMask("replication").Do()
 	require.NoError(t, err, "patching a replica's CMEK key is the supported policy update")
-	require.Equal(t, key("us-east1", "k2"),
+	require.Equal(t, key("us-east1", ringID, "k2"),
 		patched.Replication.UserManaged.Replicas[0].CustomerManagedEncryption.KmsKeyName)
 	require.NotEqual(t, cmekSecret.Etag, patched.Etag, "a replica key change must change the secret etag")
+
+	// A version of a user-managed secret whose replicas name different CMEK
+	// keys reports each replica's own CryptoKeyVersion (DC57) — the primary
+	// wrap's on us-east1, the other replica's on us-central1 — through the
+	// official client, and the single payload ciphertext stays readable.
+	perReplica := userManaged(
+		&secretmanager.Replica{
+			Location:                  "us-east1",
+			CustomerManagedEncryption: &secretmanager.CustomerManagedEncryption{KmsKeyName: key("us-east1", ringID, "k2")},
+		},
+		&secretmanager.Replica{
+			Location:                  "us-central1",
+			CustomerManagedEncryption: &secretmanager.CustomerManagedEncryption{KmsKeyName: key("us-central1", centralRingID, "k-central")},
+		},
+	)
+	multi, err := svc.Projects.Secrets.Create("projects/proj", &secretmanager.Secret{
+		Replication: perReplica,
+	}).SecretId(unique("um-multi")).Do()
+	require.NoError(t, err)
+	multiVersion, err := svc.Projects.Secrets.AddVersion(multi.Name, &secretmanager.AddSecretVersionRequest{
+		Payload: &secretmanager.SecretPayload{Data: "aGVsbG8="},
+	}).Do()
+	require.NoError(t, err)
+	statuses := multiVersion.ReplicationStatus.UserManaged.Replicas
+	require.Len(t, statuses, 2)
+	require.Equal(t, "us-east1", statuses[0].Location)
+	require.Equal(t, key("us-east1", ringID, "k2")+"/versions/"+keyVersions[key("us-east1", ringID, "k2")],
+		statuses[0].CustomerManagedEncryption.KmsKeyVersionName)
+	require.Equal(t, "us-central1", statuses[1].Location)
+	require.Equal(t, key("us-central1", centralRingID, "k-central")+"/versions/"+keyVersions[key("us-central1", centralRingID, "k-central")],
+		statuses[1].CustomerManagedEncryption.KmsKeyVersionName)
+	accessed, err := svc.Projects.Secrets.Versions.Access(multiVersion.Name).Do()
+	require.NoError(t, err)
+	require.Equal(t, "aGVsbG8=", accessed.Payload.Data)
 
 	// The arm and the replica locations are immutable.
 	_, err = svc.Projects.Secrets.Patch(cmekSecret.Name, &secretmanager.Secret{
@@ -140,7 +200,7 @@ func TestSDKSecretManagerUserManagedReplication(t *testing.T) {
 	// The rejected updates left the policy as the client set it.
 	final, err := svc.Projects.Secrets.Get(cmekSecret.Name).Do()
 	require.NoError(t, err)
-	require.Equal(t, key("us-east1", "k2"),
+	require.Equal(t, key("us-east1", ringID, "k2"),
 		final.Replication.UserManaged.Replicas[0].CustomerManagedEncryption.KmsKeyName)
 	require.Equal(t, "us-central1", final.Replication.UserManaged.Replicas[1].Location)
 }

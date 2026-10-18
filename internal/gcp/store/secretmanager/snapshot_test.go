@@ -11,7 +11,8 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	s := NewMemoryStore()
 	s.CreateSecret(ctx, "proj", "a", Secret{ID: "a", Labels: map[string]string{"k": "v"}, KmsKeyName: "ck"})
 	s.CreateVersion(ctx, "proj", Version{SecretID: "a", VersionID: "1", State: "ENABLED", Data: "aGk=",
-		KmsKeyName: "ck", WrappedDEK: []byte("1:ciphertext")})
+		KmsKeyName: "ck", WrappedDEK: []byte("1:ciphertext"),
+		ReplicaDEKs: []ReplicaDEK{{Location: "us-east1", KmsKeyName: "ck-east", WrappedDEK: []byte("2:east")}}})
 
 	var buf bytes.Buffer
 	if err := s.Snapshot(ctx, &buf); err != nil {
@@ -28,5 +29,8 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	v, err := dst.GetVersion(ctx, "proj", "a", "1")
 	if err != nil || v.Data != "aGk=" || v.KmsKeyName != "ck" || string(v.WrappedDEK) != "1:ciphertext" {
 		t.Fatalf("restored version wrong: %+v / %v", v, err)
+	}
+	if len(v.ReplicaDEKs) != 1 || v.ReplicaDEKs[0].Location != "us-east1" || string(v.ReplicaDEKs[0].WrappedDEK) != "2:east" {
+		t.Fatalf("restored replica DEKs wrong: %+v / %v", v.ReplicaDEKs, err)
 	}
 }

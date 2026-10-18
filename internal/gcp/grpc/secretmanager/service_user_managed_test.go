@@ -194,3 +194,127 @@ func TestSecretManagerUserManagedReplication(t *testing.T) {
 		}
 	}
 }
+
+// TestSecretManagerPerReplicaDEKsGRPC covers DC57 on the gRPC surface: a
+// version added to a user-managed secret whose replicas name different CMEK
+// keys reports each replica's own CryptoKeyVersion (the emulator used to wrap
+// only under the first replica's key), and the payload stays readable.
+func TestSecretManagerPerReplicaDEKsGRPC(t *testing.T) {
+	client, ks, cleanup := secretTestServiceWithKMS(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const (
+		name    = "projects/test/secrets/per-replica"
+		east    = "us-east1"
+		central = "us-central1"
+	)
+	keyEast, versionEast := newGRPCTestKey(t, ks, "test", east, "kr", "key-east")
+	keyCentral, versionCentral := newGRPCTestKey(t, ks, "test", central, "kr", "key-central")
+
+	if _, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/test", SecretId: "per-replica",
+		Secret: &secretmanagerpb.Secret{Replication: &secretmanagerpb.Replication{
+			Replication: &secretmanagerpb.Replication_UserManaged_{
+				UserManaged: &secretmanagerpb.Replication_UserManaged{
+					Replicas: []*secretmanagerpb.Replication_UserManaged_Replica{
+						{Location: east, CustomerManagedEncryption: &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: keyEast}},
+						{Location: central, CustomerManagedEncryption: &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: keyCentral}},
+						{Location: "us-west1"},
+					},
+				},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+
+	added, err := client.AddSecretVersion(ctx, &secretmanagerpb.AddSecretVersionRequest{
+		Parent: name, Payload: &secretmanagerpb.SecretPayload{Data: []byte("payload")},
+	})
+	if err != nil {
+		t.Fatalf("AddSecretVersion: %v", err)
+	}
+	replicas := added.GetReplicationStatus().GetUserManaged().GetReplicas()
+	if len(replicas) != 3 {
+		t.Fatalf("replicationStatus replicas = %v, want 3", replicas)
+	}
+	if got, want := replicas[0].GetCustomerManagedEncryption().GetKmsKeyVersionName(), keyEast+"/versions/"+versionEast; got != want {
+		t.Fatalf("%s kmsKeyVersionName = %q, want %q", east, got, want)
+	}
+	if got, want := replicas[1].GetCustomerManagedEncryption().GetKmsKeyVersionName(), keyCentral+"/versions/"+versionCentral; got != want {
+		t.Fatalf("%s kmsKeyVersionName = %q, want %q", central, got, want)
+	}
+	if replicas[2].GetCustomerManagedEncryption() != nil {
+		t.Fatalf("Google-managed replica status = %v, want none", replicas[2].GetCustomerManagedEncryption())
+	}
+
+	accessed, err := client.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{Name: added.GetName()})
+	if err != nil {
+		t.Fatalf("AccessSecretVersion: %v", err)
+	}
+	if string(accessed.GetPayload().GetData()) != "payload" {
+		t.Fatalf("payload = %q, want %q", accessed.GetPayload().GetData(), "payload")
+	}
+}
+
+// TestSecretManagerCreateValidateCMEKGRPC covers DC58 on the gRPC surface:
+// CreateSecret/UpdateSecret resolve every CMEK key, so a missing key answers
+// InvalidArgument and a disabled primary version FailedPrecondition at the
+// secret write, not only at AddSecretVersion.
+func TestSecretManagerCreateValidateCMEKGRPC(t *testing.T) {
+	client, ks, cleanup := secretTestServiceWithKMS(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	globalKey, _ := newGRPCTestKey(t, ks, "test", "global", "kr", "global-key")
+	disabledKey, _ := newGRPCTestKey(t, ks, "test", "global", "kr", "disabled-key")
+	disabled, err := ks.GetCryptoKey(ctx, "test", "global", "kr", "disabled-key")
+	if err != nil {
+		t.Fatalf("GetCryptoKey: %v", err)
+	}
+	if err := ks.UpdateVersionState(ctx, "test", "global", "kr", "disabled-key", disabled.PrimaryVersion, "DISABLED"); err != nil {
+		t.Fatalf("disable key version: %v", err)
+	}
+
+	auto := func(key string) *secretmanagerpb.Secret {
+		return &secretmanagerpb.Secret{Replication: &secretmanagerpb.Replication{
+			Replication: &secretmanagerpb.Replication_Automatic_{
+				Automatic: &secretmanagerpb.Replication_Automatic{
+					CustomerManagedEncryption: &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: key},
+				},
+			},
+		}}
+	}
+
+	missing := "projects/test/locations/global/keyRings/kr/cryptoKeys/nope"
+	if _, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/test", SecretId: "missing-key", Secret: auto(missing),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("create with a missing key = %v, want InvalidArgument", err)
+	}
+	if _, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/test", SecretId: "disabled-key", Secret: auto(disabledKey),
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("create with a disabled key = %v, want FailedPrecondition", err)
+	}
+
+	if _, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent: "projects/test", SecretId: "ok", Secret: auto(globalKey),
+	}); err != nil {
+		t.Fatalf("create with a valid key: %v", err)
+	}
+	if _, err := client.UpdateSecret(ctx, &secretmanagerpb.UpdateSecretRequest{
+		Secret:     &secretmanagerpb.Secret{Name: "projects/test/secrets/ok", Replication: auto(missing).Replication},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"replication"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("patch to a missing key = %v, want InvalidArgument", err)
+	}
+	got, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: "projects/test/secrets/ok"})
+	if err != nil {
+		t.Fatalf("GetSecret: %v", err)
+	}
+	if key := got.GetReplication().GetAutomatic().GetCustomerManagedEncryption().GetKmsKeyName(); key != globalKey {
+		t.Fatalf("stored key after rejected patch = %q, want %q", key, globalKey)
+	}
+}

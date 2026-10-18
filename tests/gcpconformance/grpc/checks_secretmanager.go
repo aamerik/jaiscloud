@@ -102,11 +102,28 @@ func checkSecretCMEKReplication(ctx context.Context, cfg Config) error {
 
 	id := cfg.ResourceName("gcpc-grpc-secret-cmek")
 	name := secretProject(cfg) + "/secrets/" + id
-	// The key only has to be a well-formed CryptoKey name in `global`:
-	// CreateSecret stores the policy without resolving the key (the emulator
-	// does not validate key existence at create; recorded as DC58) and never
-	// wraps until a version is added, which this probe does not do.
-	key := secretProject(cfg) + "/locations/global/keyRings/gcpc-cmek/cryptoKeys/gcpc-cmek-key"
+	// CreateSecret resolves the CMEK key (DC58), so the key must exist. The
+	// probe does not add a version, so nothing is wrapped.
+	kmsClient, err := newKMSClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new kms client: %w", err)
+	}
+	defer kmsClient.Close()
+	ringID := cfg.ResourceName("gcpc-cmek")
+	if _, err := kmsClient.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{
+		Parent: kmsParent(cfg), KeyRingId: ringID, KeyRing: &kmspb.KeyRing{},
+	}); err != nil {
+		return fmt.Errorf("CreateKeyRing: %w", err)
+	}
+	createdKey, err := kmsClient.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
+		Parent:      kmsParent(cfg) + "/keyRings/" + ringID,
+		CryptoKeyId: "gcpc-cmek-key",
+		CryptoKey:   &kmspb.CryptoKey{Purpose: kmspb.CryptoKey_ENCRYPT_DECRYPT},
+	})
+	if err != nil {
+		return fmt.Errorf("CreateCryptoKey: %w", err)
+	}
+	key := createdKey.GetName()
 
 	created, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
 		Parent:   secretProject(cfg),
@@ -158,8 +175,29 @@ func checkSecretUserManagedReplication(ctx context.Context, cfg Config) error {
 
 	id := cfg.ResourceName("gcpc-grpc-secret-um")
 	name := secretProject(cfg) + "/secrets/" + id
+	// CreateSecret resolves the replica CMEK key (DC58), so create it first.
+	ringID := cfg.ResourceName("gcpc-um")
+	keyID := cfg.ResourceName("gcpc-um-key")
+	kmsClient, err := newKMSClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new kms client: %w", err)
+	}
+	defer kmsClient.Close()
+	keyParent := fmt.Sprintf("projects/%s/locations/us-east1", cfg.Project)
+	if _, err := kmsClient.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{
+		Parent: keyParent, KeyRingId: ringID, KeyRing: &kmspb.KeyRing{},
+	}); err != nil {
+		return fmt.Errorf("CreateKeyRing: %w", err)
+	}
+	if _, err := kmsClient.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
+		Parent:      keyParent + "/keyRings/" + ringID,
+		CryptoKeyId: keyID,
+		CryptoKey:   &kmspb.CryptoKey{Purpose: kmspb.CryptoKey_ENCRYPT_DECRYPT},
+	}); err != nil {
+		return fmt.Errorf("CreateCryptoKey: %w", err)
+	}
 	key := func(location string) string {
-		return secretProject(cfg) + "/locations/" + location + "/keyRings/gcpc-um/cryptoKeys/gcpc-um-key"
+		return fmt.Sprintf("projects/%s/locations/%s/keyRings/%s/cryptoKeys/%s", cfg.Project, location, ringID, keyID)
 	}
 	replicas := []*secretmanagerpb.Replication_UserManaged_Replica{
 		{Location: "us-east1", CustomerManagedEncryption: &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: key("us-east1")}},

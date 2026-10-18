@@ -4,8 +4,16 @@ import (
 	"strings"
 	"testing"
 
+	"jaiscloud/internal/gcp/store/kms"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 )
+
+// versionedDEK builds a wrapped-DEK blob tagged with a CryptoKeyVersion, the
+// shape the encryptor stores.
+func versionedDEK(t *testing.T, version string) []byte {
+	t.Helper()
+	return kms.EncodeVersionedCiphertext(version, []byte("ciphertext"))
+}
 
 func cme(key string) *secretmanagerstore.CustomerManagedEncryption {
 	if key == "" {
@@ -74,6 +82,8 @@ func TestValidateReplication(t *testing.T) {
 		{"automatic cmek not a crypto key name", auto("not-a-key"), "is not a Cloud KMS CryptoKey name"},
 		{"user-managed with no replicas", userManaged(), "cannot be empty"},
 		{"replica without location", userManaged(replica("", "")), "location is required"},
+		{"replica in an unknown location", userManaged(replica("us-east-1", "")), "is not a supported location"},
+		{"replica in global", userManaged(replica("global", "")), "is not a supported location"},
 		{"duplicate location", userManaged(replica("us-east1", ""), replica("us-east1", usEastKey)), "duplicate location"},
 		{
 			"replica cmek without key",
@@ -200,30 +210,77 @@ func TestReplicationWrapKey(t *testing.T) {
 }
 
 // TestVersionReplicaStatuses pins the per-replica status: every location is
-// reported, and only the replica whose key wrapped the version carries a
-// CryptoKeyVersion name.
+// reported, and every CMEK replica carries the CryptoKeyVersion that wrapped
+// its own copy of the DEK (DC57). A legacy version with no per-replica wraps
+// falls back to naming the primary wrap's location only.
 func TestVersionReplicaStatuses(t *testing.T) {
 	const (
 		usEastKey    = "projects/p/locations/us-east1/keyRings/kr/cryptoKeys/k"
 		usCentralKey = "projects/p/locations/us-central1/keyRings/kr/cryptoKeys/k"
-		keyVersion   = usEastKey + "/versions/7"
 	)
+	usEastWrapped := versionedDEK(t, "7")
+	usCentralWrapped := versionedDEK(t, "3")
 	repl := userManaged(replica("us-east1", usEastKey), replica("us-central1", usCentralKey), replica("us-west1", ""))
 
-	if got := VersionReplicaStatuses(usEastKey, keyVersion, auto("")); got != nil {
+	if got := VersionReplicaStatuses(VersionWrap{KmsKeyName: usEastKey, WrappedDEK: usEastWrapped}, auto("")); got != nil {
 		t.Fatalf("automatic policy statuses = %#v, want nil", got)
 	}
-	got := VersionReplicaStatuses(usEastKey, keyVersion, repl)
+
+	// A version that recorded one wrap per CMEK replica: both CMEK replicas
+	// report their own key version, the Google-managed replica reports none.
+	got := VersionReplicaStatuses(VersionWrap{
+		KmsKeyName: usEastKey, WrappedDEK: usEastWrapped,
+		ReplicaDEKs: []secretmanagerstore.ReplicaDEK{
+			{Location: "us-east1", KmsKeyName: usEastKey, WrappedDEK: usEastWrapped},
+			{Location: "us-central1", KmsKeyName: usCentralKey, WrappedDEK: usCentralWrapped},
+		},
+	}, repl)
 	if len(got) != 3 {
 		t.Fatalf("statuses = %#v, want 3 replicas", got)
 	}
-	if got[0].Location != "us-east1" || got[0].KmsKeyVersionName != keyVersion {
-		t.Errorf("us-east1 status = %#v, want the wrapping key version", got[0])
+	if got[0].Location != "us-east1" || got[0].KmsKeyVersionName != usEastKey+"/versions/7" {
+		t.Errorf("us-east1 status = %#v, want the us-east1 key version", got[0])
 	}
-	// Only the replica in the wrapping key's location carries the status: the
-	// payload was wrapped in us-east1, so us-central1 and us-west1 report their
-	// location alone.
-	if got[1].KmsKeyVersionName != "" || got[2].KmsKeyVersionName != "" {
-		t.Errorf("non-wrapping-location replicas = %#v, want no kmsKeyVersionName", got[1:])
+	if got[1].Location != "us-central1" || got[1].KmsKeyVersionName != usCentralKey+"/versions/3" {
+		t.Errorf("us-central1 status = %#v, want the us-central1 key version", got[1])
+	}
+	if got[2].KmsKeyVersionName != "" {
+		t.Errorf("Google-managed replica status = %#v, want no kmsKeyVersionName", got[2])
+	}
+
+	// A version written before per-replica wraps existed: only the replica in
+	// the primary wrap's location carries a status.
+	legacy := VersionReplicaStatuses(VersionWrap{KmsKeyName: usCentralKey, WrappedDEK: usCentralWrapped}, repl)
+	if legacy[0].KmsKeyVersionName != "" || legacy[1].KmsKeyVersionName != usCentralKey+"/versions/3" || legacy[2].KmsKeyVersionName != "" {
+		t.Errorf("legacy statuses = %#v, want only us-central1", legacy)
+	}
+}
+
+// TestReplicationCMEKBindings pins the per-replica key bindings a version is
+// wrapped under: the automatic arm is one global binding, a user-managed policy
+// yields one binding per CMEK replica in replica order.
+func TestReplicationCMEKBindings(t *testing.T) {
+	const (
+		globalKey    = "projects/p/locations/global/keyRings/kr/cryptoKeys/k"
+		usEastKey    = "projects/p/locations/us-east1/keyRings/kr/cryptoKeys/k"
+		usCentralKey = "projects/p/locations/us-central1/keyRings/kr/cryptoKeys/k"
+	)
+	if got := (*secretmanagerstore.Replication)(nil).CMEKBindings(); got != nil {
+		t.Errorf("nil policy bindings = %#v, want nil", got)
+	}
+	if got := auto("").CMEKBindings(); got != nil {
+		t.Errorf("automatic without cmek bindings = %#v, want nil", got)
+	}
+	if got := auto(globalKey).CMEKBindings(); len(got) != 1 || got[0].Location != "global" || got[0].KmsKeyName != globalKey {
+		t.Errorf("automatic bindings = %#v, want one global binding", got)
+	}
+	got := userManaged(replica("us-east1", usEastKey), replica("us-central1", ""), replica("us-west1", "")).CMEKBindings()
+	if len(got) != 1 || got[0].Location != "us-east1" || got[0].KmsKeyName != usEastKey {
+		t.Errorf("user-managed bindings = %#v, want the us-east1 binding", got)
+	}
+	// CMEK replicas that are not first are still bound.
+	got = userManaged(replica("us-east1", ""), replica("us-central1", usCentralKey)).CMEKBindings()
+	if len(got) != 1 || got[0].Location != "us-central1" || got[0].KmsKeyName != usCentralKey {
+		t.Errorf("user-managed non-first bindings = %#v, want the us-central1 binding", got)
 	}
 }
