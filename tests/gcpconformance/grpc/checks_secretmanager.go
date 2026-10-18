@@ -21,6 +21,7 @@ func secretManagerChecks() []Check {
 		{Service: "secretmanager", RPC: "CreateSecret", KeyField: "success", Run: checkSecretCreate},
 		{Service: "secretmanager", RPC: "GetSecret", KeyField: "name", Run: checkSecretGet},
 		{Service: "secretmanager", RPC: "GetSecret", KeyField: "replication.automatic.customerManagedEncryption.kmsKeyName", Run: checkSecretCMEKReplication},
+		{Service: "secretmanager", RPC: "GetSecret", KeyField: "replication.userManaged.replicas[].location", Run: checkSecretUserManagedReplication},
 		{Service: "secretmanager", RPC: "AddSecretVersion", KeyField: "replicationStatus.automatic.customerManagedEncryption.kmsKeyVersionName", Run: checkSecretVersionCMEKStatus},
 		{Service: "secretmanager", RPC: "ListSecrets", KeyField: "secrets[].name", Run: checkSecretList},
 		{Service: "secretmanager", RPC: "AddSecretVersion", KeyField: "name", Run: checkSecretAddVersion},
@@ -101,9 +102,10 @@ func checkSecretCMEKReplication(ctx context.Context, cfg Config) error {
 
 	id := cfg.ResourceName("gcpc-grpc-secret-cmek")
 	name := secretProject(cfg) + "/secrets/" + id
-	// The key only has to be a well-formed CryptoKey name: CreateSecret stores
-	// the policy and never wraps until a version is added, which this probe
-	// deliberately does not do.
+	// The key only has to be a well-formed CryptoKey name in `global`:
+	// CreateSecret stores the policy without resolving the key (the emulator
+	// does not validate key existence at create; recorded as DC58) and never
+	// wraps until a version is added, which this probe does not do.
 	key := secretProject(cfg) + "/locations/global/keyRings/gcpc-cmek/cryptoKeys/gcpc-cmek-key"
 
 	created, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
@@ -137,6 +139,78 @@ func checkSecretCMEKReplication(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("GetSecret CMEK = %q, want %q", gotKey, key)
 	}
 	return nil
+}
+
+// checkSecretUserManagedReplication asserts that a Secret created with a
+// user-managed replication policy reads back exactly that policy through the
+// official client — the oneof arm, every replica location and the per-replica
+// CMEK key (DC45) — instead of the rewritten automatic policy the emulator used
+// to return. The keys only have to be well-formed CryptoKey names in the
+// replica's location: CreateSecret stores the policy without resolving them (the
+// emulator does not validate key existence at create; recorded as DC58) and
+// never wraps until a version is added, which this probe does not do.
+func checkSecretUserManagedReplication(ctx context.Context, cfg Config) error {
+	client, err := newSecretClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := cfg.ResourceName("gcpc-grpc-secret-um")
+	name := secretProject(cfg) + "/secrets/" + id
+	key := func(location string) string {
+		return secretProject(cfg) + "/locations/" + location + "/keyRings/gcpc-um/cryptoKeys/gcpc-um-key"
+	}
+	replicas := []*secretmanagerpb.Replication_UserManaged_Replica{
+		{Location: "us-east1", CustomerManagedEncryption: &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: key("us-east1")}},
+		{Location: "us-central1"},
+	}
+
+	created, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent:   secretProject(cfg),
+		SecretId: id,
+		Secret: &secretmanagerpb.Secret{
+			Replication: &secretmanagerpb.Replication{
+				Replication: &secretmanagerpb.Replication_UserManaged_{
+					UserManaged: &secretmanagerpb.Replication_UserManaged{Replicas: replicas},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = client.DeleteSecret(context.Background(), &secretmanagerpb.DeleteSecretRequest{Name: name})
+	}()
+
+	verify := func(what string, sec *secretmanagerpb.Secret) error {
+		if auto := sec.GetReplication().GetAutomatic(); auto != nil {
+			return fmt.Errorf("%s returned the automatic arm, want userManaged", what)
+		}
+		got := sec.GetReplication().GetUserManaged().GetReplicas()
+		if len(got) != len(replicas) {
+			return fmt.Errorf("%s returned %d replicas, want %d", what, len(got), len(replicas))
+		}
+		for i, rep := range got {
+			if rep.GetLocation() != replicas[i].GetLocation() {
+				return fmt.Errorf("%s replica %d location = %q, want %q", what, i, rep.GetLocation(), replicas[i].GetLocation())
+			}
+			wantKey := replicas[i].GetCustomerManagedEncryption().GetKmsKeyName()
+			if gotKey := rep.GetCustomerManagedEncryption().GetKmsKeyName(); gotKey != wantKey {
+				return fmt.Errorf("%s replica %d CMEK = %q, want %q", what, i, gotKey, wantKey)
+			}
+		}
+		return nil
+	}
+	if err := verify("CreateSecret", created); err != nil {
+		return err
+	}
+	got, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: name})
+	if err != nil {
+		return err
+	}
+	return verify("GetSecret", got)
 }
 
 // checkSecretVersionCMEKStatus asserts that a version added to a CMEK secret

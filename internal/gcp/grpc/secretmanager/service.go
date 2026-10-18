@@ -175,7 +175,14 @@ func (s *Service) CreateSecret(ctx context.Context, req *secretmanagerpb.CreateS
 				sec.VersionAliases[k] = int(v)
 			}
 		}
-		sec.KmsKeyName = kmsKeyNameFromSecret(proto)
+		replication, err := replicationFromSecret(proto)
+		if err != nil {
+			return nil, mapError(err)
+		}
+		if err := secretmanagersvc.ValidateReplication(replication); err != nil {
+			return nil, mapError(err)
+		}
+		sec.SetReplication(replication)
 	}
 
 	if err := s.secrets.CreateSecret(ctx, project, id, sec); err != nil {
@@ -221,6 +228,13 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 	}
 	selected := func(name string) bool { return applyAll || fields[name] }
 
+	// Parse the incoming replication policy once: it is request data, not store
+	// state, so it must not be re-derived inside the (retried) atomic mutate.
+	incomingReplication, err := replicationFromSecret(proto)
+	if err != nil {
+		return nil, mapError(err)
+	}
+
 	// UpdateSecretAtomic reads, merges, and writes under one lock, so a
 	// concurrent AddVersion's NextVersion() counter advance can't land
 	// between our read and our write and get silently rolled back by it.
@@ -261,8 +275,17 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 			}
 		}
 		if selected("replication") {
-			if kmsKeyName := kmsKeyNameFromSecret(proto); kmsKeyName != "" {
-				cur.KmsKeyName = kmsKeyName
+			// The stored value is the raw policy (nil for a record written
+			// before it was modelled), so a replication update adopts the arm
+			// the client sends instead of conflicting with a reconstructed one.
+			merged, err := secretmanagersvc.MergeReplication(cur.Replication, incomingReplication)
+			if err != nil {
+				return secretmanagerstore.Secret{}, err
+			}
+			// A nil merge result means the request carried no policy: leave the
+			// record (including a legacy record's key) untouched.
+			if merged != nil {
+				cur.SetReplication(merged)
 			}
 		}
 		return cur, nil
@@ -313,7 +336,11 @@ func (s *Service) AddSecretVersion(ctx context.Context, req *secretmanagerpb.Add
 		return nil, mapSecretErr(err)
 	}
 
-	rawDEK, wrappedDEK, err := s.encryptor.Wrap(ctx, project, sec.KmsKeyName)
+	// The wrap key is derived from the policy, never read off the denormalised
+	// KmsKeyName mirror: a stale mirror must not wrap a version with
+	// Google-managed encryption while the policy claims CMEK.
+	wrapKey := sec.ReplicationPolicy().WrapKey()
+	rawDEK, wrappedDEK, err := s.encryptor.Wrap(ctx, project, wrapKey)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -325,12 +352,12 @@ func (s *Service) AddSecretVersion(ctx context.Context, req *secretmanagerpb.Add
 	stv := secretmanagerstore.Version{
 		SecretID: id, VersionID: version, State: "ENABLED",
 		CreateTime: clock.Now(), Data: base64.StdEncoding.EncodeToString(encrypted),
-		KmsKeyName: sec.KmsKeyName, WrappedDEK: wrappedDEK,
+		KmsKeyName: wrapKey, WrappedDEK: wrappedDEK,
 	}
 	if err := s.secrets.CreateVersion(ctx, project, stv); err != nil {
 		return nil, mapError(err)
 	}
-	return versionToProto(project, stv), nil
+	return versionToProto(project, stv, sec.ReplicationPolicy()), nil
 }
 
 func (s *Service) AccessSecretVersion(ctx context.Context, req *secretmanagerpb.AccessSecretVersionRequest) (*secretmanagerpb.AccessSecretVersionResponse, error) {
@@ -381,7 +408,11 @@ func (s *Service) GetSecretVersion(ctx context.Context, req *secretmanagerpb.Get
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
-	return versionToProto(project, v), nil
+	repl, err := secretmanagersvc.ParentReplication(ctx, s.secrets, project, secret)
+	if err != nil {
+		return nil, mapSecretErr(err)
+	}
+	return versionToProto(project, v, repl), nil
 }
 
 // resolveVersion resolves the "latest" version alias to the highest existing
@@ -417,6 +448,10 @@ func (s *Service) ListSecretVersions(ctx context.Context, req *secretmanagerpb.L
 	if err != nil {
 		return nil, mapError(err)
 	}
+	parentReplication, err := secretmanagersvc.ParentReplication(ctx, s.secrets, project, id)
+	if err != nil {
+		return nil, mapSecretErr(err)
+	}
 	matched, applied, err := secretmanagersvc.FilterVersions(project, id, req.GetFilter(), versions)
 	if err != nil {
 		return nil, mapError(err)
@@ -428,7 +463,7 @@ func (s *Service) ListSecretVersions(ctx context.Context, req *secretmanagerpb.L
 	}
 	out := make([]*secretmanagerpb.SecretVersion, 0, len(page))
 	for _, v := range page {
-		out = append(out, versionToProto(project, v))
+		out = append(out, versionToProto(project, v, parentReplication))
 	}
 	total := len(versions)
 	if applied {
@@ -484,7 +519,11 @@ func (s *Service) setVersionState(ctx context.Context, name, state, etag string)
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
-	return versionToProto(project, v), nil
+	repl, err := secretmanagersvc.ParentReplication(ctx, s.secrets, project, secret)
+	if err != nil {
+		return nil, mapSecretErr(err)
+	}
+	return versionToProto(project, v, repl), nil
 }
 
 // ─── Cloud SQL managed rotation ──────────────────────────────────────────────
@@ -577,7 +616,11 @@ func (s *Service) appendManagedVersion(ctx context.Context, project, id string, 
 	if err != nil {
 		return nil, mapSecretErr(err)
 	}
-	rawDEK, wrappedDEK, err := s.encryptor.Wrap(ctx, project, sec.KmsKeyName)
+	// The wrap key is derived from the policy, never read off the denormalised
+	// KmsKeyName mirror: a stale mirror must not wrap a version with
+	// Google-managed encryption while the policy claims CMEK.
+	wrapKey := sec.ReplicationPolicy().WrapKey()
+	rawDEK, wrappedDEK, err := s.encryptor.Wrap(ctx, project, wrapKey)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -613,12 +656,12 @@ func (s *Service) appendManagedVersion(ctx context.Context, project, id string, 
 	stv := secretmanagerstore.Version{
 		SecretID: id, VersionID: strconv.Itoa(ver), State: "ENABLED",
 		CreateTime: clock.Now(), Data: base64.StdEncoding.EncodeToString(encrypted),
-		KmsKeyName: sec.KmsKeyName, WrappedDEK: wrappedDEK,
+		KmsKeyName: wrapKey, WrappedDEK: wrappedDEK,
 	}
 	if err := s.secrets.CreateVersion(ctx, project, stv); err != nil {
 		return nil, mapError(err)
 	}
-	return versionToProto(project, stv), nil
+	return versionToProto(project, stv, sec.ReplicationPolicy()), nil
 }
 
 // maybeRotate advances a secret's rotation schedule when it is due: it creates
@@ -726,12 +769,8 @@ func secretToProto(project string, s secretmanagerstore.Secret) *secretmanagerpb
 		Name: secretName(project, s.ID),
 		// etag is the shared Secret Manager etag (see service/secretmanager):
 		// stable across reads, different after any metadata mutation.
-		Etag: secretmanagersvc.SecretEtag(secretName(project, s.ID), s),
-		Replication: &secretmanagerpb.Replication{
-			Replication: &secretmanagerpb.Replication_Automatic_{
-				Automatic: automaticReplicationToProto(s.KmsKeyName),
-			},
-		},
+		Etag:        secretmanagersvc.SecretEtag(secretName(project, s.ID), s),
+		Replication: replicationToProto(s.ReplicationPolicy()),
 	}
 	if !s.CreateTime.IsZero() {
 		out.CreateTime = timestamp.Proto(s.CreateTime)
@@ -754,7 +793,7 @@ func secretToProto(project string, s secretmanagerstore.Secret) *secretmanagerpb
 	return out
 }
 
-func versionToProto(project string, v secretmanagerstore.Version) *secretmanagerpb.SecretVersion {
+func versionToProto(project string, v secretmanagerstore.Version, repl *secretmanagerstore.Replication) *secretmanagerpb.SecretVersion {
 	name := versionName(project, v.SecretID, v.VersionID)
 	out := &secretmanagerpb.SecretVersion{
 		Name:  name,
@@ -766,10 +805,9 @@ func versionToProto(project string, v secretmanagerstore.Version) *secretmanager
 		// Mirror the REST provider's versionToMap: real Secret Manager marks
 		// version responses as carrying a client-specified payload checksum.
 		ClientSpecifiedPayloadChecksum: true,
-		// The version reports the CMEK status of its own payload: the exact
-		// CryptoKeyVersion that wrapped it, when a customer-managed key was
-		// used (DC44).
-		ReplicationStatus: versionReplicationStatusToProto(v),
+		// The version reports the CMEK status of its own payload under the
+		// parent secret's replication arm (DC44/DC45).
+		ReplicationStatus: versionReplicationStatusToProto(v, repl),
 	}
 	if !v.CreateTime.IsZero() {
 		out.CreateTime = timestamp.Proto(v.CreateTime)
@@ -781,13 +819,34 @@ func versionToProto(project string, v secretmanagerstore.Version) *secretmanager
 }
 
 // versionReplicationStatusToProto renders the SecretVersion's replication
-// status. Real GCP always sets the automatic arm for an automatic-replication
-// secret and nests customerManagedEncryption (the CryptoKeyVersion that wrapped
-// this version) only when CMEK was used; sibling to the REST provider's
+// status. For an automatic policy real GCP always sets the automatic arm and
+// nests customerManagedEncryption (the CryptoKeyVersion that wrapped this
+// version) only when CMEK was used; for a user-managed policy it reports one
+// status per replica of the parent secret, with the CMEK status on the replica
+// whose key wrapped the payload. Sibling to the REST provider's
 // versionReplicationStatusToMap.
-func versionReplicationStatusToProto(v secretmanagerstore.Version) *secretmanagerpb.ReplicationStatus {
+func versionReplicationStatusToProto(v secretmanagerstore.Version, repl *secretmanagerstore.Replication) *secretmanagerpb.ReplicationStatus {
+	keyVersion := secretmanagersvc.KmsKeyVersionName(v.KmsKeyName, v.WrappedDEK)
+	if repl != nil && repl.UserManaged != nil {
+		statuses := secretmanagersvc.VersionReplicaStatuses(v.KmsKeyName, keyVersion, repl)
+		replicas := make([]*secretmanagerpb.ReplicationStatus_UserManagedStatus_ReplicaStatus, 0, len(statuses))
+		for _, st := range statuses {
+			rep := &secretmanagerpb.ReplicationStatus_UserManagedStatus_ReplicaStatus{Location: st.Location}
+			if st.KmsKeyVersionName != "" {
+				rep.CustomerManagedEncryption = &secretmanagerpb.CustomerManagedEncryptionStatus{
+					KmsKeyVersionName: st.KmsKeyVersionName,
+				}
+			}
+			replicas = append(replicas, rep)
+		}
+		return &secretmanagerpb.ReplicationStatus{
+			ReplicationStatus: &secretmanagerpb.ReplicationStatus_UserManaged{
+				UserManaged: &secretmanagerpb.ReplicationStatus_UserManagedStatus{Replicas: replicas},
+			},
+		}
+	}
 	auto := &secretmanagerpb.ReplicationStatus_AutomaticStatus{}
-	if keyVersion := secretmanagersvc.KmsKeyVersionName(v.KmsKeyName, v.WrappedDEK); keyVersion != "" {
+	if keyVersion != "" {
 		auto.CustomerManagedEncryption = &secretmanagerpb.CustomerManagedEncryptionStatus{
 			KmsKeyVersionName: keyVersion,
 		}
@@ -856,39 +915,76 @@ func managedStateToProto(state string) secretmanagerpb.Rotation_ManagedRotationS
 	return secretmanagerpb.Rotation_ManagedRotationStatus_STATE_UNSPECIFIED
 }
 
-// automaticReplicationToProto renders the automatic replication arm, echoing
-// the configured CMEK key when the secret has one. JaisCloud models automatic
-// replication only; the nested customerManagedEncryption object is omitted
-// (not sent empty) when no CMEK is configured, matching real GCP — this is the
-// gRPC mirror of the REST provider's replicationToMap.
-func automaticReplicationToProto(kmsKeyName string) *secretmanagerpb.Replication_Automatic {
-	auto := &secretmanagerpb.Replication_Automatic{}
-	if kmsKeyName != "" {
-		auto.CustomerManagedEncryption = &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: kmsKeyName}
+// replicationToProto renders the secret's replication policy — the oneof
+// exactly as the client set it (DC45). The nested customerManagedEncryption
+// object is omitted (not sent empty) when no CMEK is configured, matching real
+// GCP; this is the gRPC mirror of the REST provider's replicationToMap.
+func replicationToProto(repl *secretmanagerstore.Replication) *secretmanagerpb.Replication {
+	if repl != nil && repl.UserManaged != nil {
+		replicas := make([]*secretmanagerpb.Replication_UserManaged_Replica, 0, len(repl.UserManaged.Replicas))
+		for _, rep := range repl.UserManaged.Replicas {
+			pb := &secretmanagerpb.Replication_UserManaged_Replica{Location: rep.Location}
+			if cme := rep.CustomerManagedEncryption; cme != nil && cme.KmsKeyName != "" {
+				pb.CustomerManagedEncryption = &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: cme.KmsKeyName}
+			}
+			replicas = append(replicas, pb)
+		}
+		return &secretmanagerpb.Replication{
+			Replication: &secretmanagerpb.Replication_UserManaged_{
+				UserManaged: &secretmanagerpb.Replication_UserManaged{Replicas: replicas},
+			},
+		}
 	}
-	return auto
+	auto := &secretmanagerpb.Replication_Automatic{}
+	if repl != nil && repl.Automatic != nil {
+		if cme := repl.Automatic.CustomerManagedEncryption; cme != nil && cme.KmsKeyName != "" {
+			auto.CustomerManagedEncryption = &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: cme.KmsKeyName}
+		}
+	}
+	return &secretmanagerpb.Replication{
+		Replication: &secretmanagerpb.Replication_Automatic_{Automatic: auto},
+	}
 }
 
-// kmsKeyNameFromSecret extracts the CMEK key name from the secret's
-// replication policy (mirrors the REST provider's kmsKeyNameFromBody).
-func kmsKeyNameFromSecret(sec *secretmanagerpb.Secret) string {
+// replicationFromSecret parses the replication oneof out of an incoming Secret
+// (mirrors the REST provider's replicationFromBody). It returns (nil, nil) when
+// the request carries no replication policy; ValidateReplication checks the
+// shape. A nil proto is the caller's to reject.
+func replicationFromSecret(sec *secretmanagerpb.Secret) (*secretmanagerstore.Replication, error) {
 	repl := sec.GetReplication()
 	if repl == nil {
-		return ""
+		return nil, nil
 	}
+	out := &secretmanagerstore.Replication{}
 	if auto := repl.GetAutomatic(); auto != nil {
-		if cme := auto.GetCustomerManagedEncryption(); cme != nil {
-			return cme.GetKmsKeyName()
+		out.Automatic = &secretmanagerstore.AutomaticReplication{
+			CustomerManagedEncryption: customerManagedEncryptionFromProto(auto.GetCustomerManagedEncryption()),
 		}
 	}
 	if um := repl.GetUserManaged(); um != nil {
-		if reps := um.GetReplicas(); len(reps) > 0 {
-			if cme := reps[0].GetCustomerManagedEncryption(); cme != nil {
-				return cme.GetKmsKeyName()
-			}
+		umOut := &secretmanagerstore.UserManagedReplication{}
+		for _, rep := range um.GetReplicas() {
+			umOut.Replicas = append(umOut.Replicas, secretmanagerstore.Replica{
+				Location:                  rep.GetLocation(),
+				CustomerManagedEncryption: customerManagedEncryptionFromProto(rep.GetCustomerManagedEncryption()),
+			})
 		}
+		out.UserManaged = umOut
 	}
-	return ""
+	if out.Automatic == nil && out.UserManaged == nil {
+		return nil, model.NewProviderError("InvalidArgument", "replication must set exactly one of automatic or userManaged", 400)
+	}
+	return out, nil
+}
+
+// customerManagedEncryptionFromProto converts an optional CMEK message. The
+// proto's message presence is what distinguishes "no CMEK" (nil) from a CMEK
+// block with no key (which ValidateReplication rejects).
+func customerManagedEncryptionFromProto(cme *secretmanagerpb.CustomerManagedEncryption) *secretmanagerstore.CustomerManagedEncryption {
+	if cme == nil {
+		return nil
+	}
+	return &secretmanagerstore.CustomerManagedEncryption{KmsKeyName: cme.GetKmsKeyName()}
 }
 
 // crc32cOf returns the CRC32C-Castagnoli checksum of the payload as an int64

@@ -125,9 +125,18 @@ check "Secret Manager version ENABLED" \
   "$ENDPOINT/v1/projects/$PROJECT/secrets/jaiscloud-tf-secret/versions/1" '"state":"ENABLED"'
 # DC31: the provider computes replication[0].auto[0].customer_managed_encryption[0].kms_key_name
 # from the Secret response, so an empty automatic policy makes it read back empty.
+# The key is the global ring's: automatic replication only accepts global keys.
 check "Secret Manager CMEK key echoed" \
   "$ENDPOINT/v1/projects/$PROJECT/secrets/jaiscloud-tf-secret-cmek" \
   '"customerManagedEncryption"' \
+  "\"kmsKeyName\":\"projects/$PROJECT/locations/global/keyRings/jaiscloud-tf-keyring-global/cryptoKeys/jaiscloud-tf-key-global\""
+# DC45: a user-managed replication policy reads back verbatim (both replica
+# locations and the per-replica CMEK key), not rewritten as automatic.
+check "Secret Manager user-managed replication echoed" \
+  "$ENDPOINT/v1/projects/$PROJECT/secrets/jaiscloud-tf-secret-user-managed" \
+  '"userManaged"' \
+  "\"location\":\"$REGION\"" \
+  '"location":"us-east1"' \
   "\"kmsKeyName\":\"projects/$PROJECT/locations/$REGION/keyRings/jaiscloud-tf-keyring/cryptoKeys/jaiscloud-tf-key\""
 check "KMS key ring created" \
   "$ENDPOINT/v1/projects/$PROJECT/locations/$REGION/keyRings/jaiscloud-tf-keyring" \

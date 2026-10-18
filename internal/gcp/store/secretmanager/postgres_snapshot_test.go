@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -39,10 +40,21 @@ func TestPostgresStoreSnapshotPreservesCMEK(t *testing.T) {
 
 	const key = "projects/proj/locations/global/keyRings/r/cryptoKeys/k"
 	created := time.Now().UTC().Truncate(time.Microsecond)
+	userManaged := &Replication{UserManaged: &UserManagedReplication{Replicas: []Replica{
+		{Location: "us-east1", CustomerManagedEncryption: &CustomerManagedEncryption{
+			KmsKeyName: "projects/proj/locations/us-east1/keyRings/r/cryptoKeys/k",
+		}},
+		{Location: "us-central1"},
+	}}}
+	umSecret := Secret{ID: "um", CreateTime: created, NextVer: 1}
+	umSecret.SetReplication(userManaged)
 	if err := s.CreateSecret(ctx, "proj", "s", Secret{
 		ID: "s", CreateTime: created, NextVer: 2, KmsKeyName: key,
 	}); err != nil {
 		t.Fatalf("create secret: %v", err)
+	}
+	if err := s.CreateSecret(ctx, "proj", "um", umSecret); err != nil {
+		t.Fatalf("create user-managed secret: %v", err)
 	}
 	wrapped := []byte("1:ciphertext")
 	if err := s.CreateVersion(ctx, "proj", Version{
@@ -66,6 +78,16 @@ func TestPostgresStoreSnapshotPreservesCMEK(t *testing.T) {
 	}
 	if sec.KmsKeyName != key {
 		t.Fatalf("secret kms_key_name = %q, want %q", sec.KmsKeyName, key)
+	}
+	restoredUM, err := s.GetSecret(ctx, "proj", "um")
+	if err != nil {
+		t.Fatalf("get user-managed secret after restore: %v", err)
+	}
+	if !reflect.DeepEqual(restoredUM.Replication, userManaged) {
+		t.Fatalf("restored replication = %#v, want %#v", restoredUM.Replication, userManaged)
+	}
+	if restoredUM.KmsKeyName != userManaged.WrapKey() {
+		t.Fatalf("restored effective key = %q, want %q", restoredUM.KmsKeyName, userManaged.WrapKey())
 	}
 	v, err := s.GetVersion(ctx, "proj", "s", "1")
 	if err != nil {
