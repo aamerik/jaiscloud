@@ -72,29 +72,52 @@ type CustomerManagedEncryption struct {
 	KmsKeyName string `json:"kmsKeyName"`
 }
 
-// WrapKey returns the Cloud KMS key a version added now is wrapped with: the
-// automatic arm's key, or the first user-managed replica's. The emulator keeps
-// one wrapped DEK per version, so a user-managed policy whose replicas name
-// different keys wraps with the first of them; the version's replicationStatus
-// still reports the binding per replica (see service/secretmanager).
-func (r *Replication) WrapKey() string {
+// CMEKBinding is one replica location bound to the Cloud KMS key that encrypts
+// that replica's copy of a version. Automatic replication is a single binding
+// whose location is "global" (the CMEK guide requires a global key there); a
+// user-managed policy has one per replica that names a key.
+type CMEKBinding struct {
+	Location   string
+	KmsKeyName string
+}
+
+// CMEKBindings returns the Cloud KMS keys a version added under this policy is
+// wrapped with, one per replica that uses CMEK, in replica order. The
+// automatic arm contributes at most one "global" binding; replicas without
+// customerManagedEncryption are Google-managed and contribute none.
+func (r *Replication) CMEKBindings() []CMEKBinding {
 	if r == nil {
-		return ""
+		return nil
 	}
 	if r.Automatic != nil {
-		if cme := r.Automatic.CustomerManagedEncryption; cme != nil {
-			return cme.KmsKeyName
+		if cme := r.Automatic.CustomerManagedEncryption; cme != nil && cme.KmsKeyName != "" {
+			return []CMEKBinding{{Location: "global", KmsKeyName: cme.KmsKeyName}}
 		}
-		return ""
+		return nil
 	}
 	if r.UserManaged != nil {
+		out := make([]CMEKBinding, 0, len(r.UserManaged.Replicas))
 		for _, rep := range r.UserManaged.Replicas {
-			if cme := rep.CustomerManagedEncryption; cme != nil {
-				return cme.KmsKeyName
+			if cme := rep.CustomerManagedEncryption; cme != nil && cme.KmsKeyName != "" {
+				out = append(out, CMEKBinding{Location: rep.Location, KmsKeyName: cme.KmsKeyName})
 			}
 		}
+		return out
 	}
-	return ""
+	return nil
+}
+
+// WrapKey returns the Cloud KMS key a version added now is wrapped with: the
+// automatic arm's key, or the first user-managed replica's. It is the legacy
+// single-key view kept for callers that only need one key; new versions record
+// one wrap per binding (CMEKBindings / Version.ReplicaDEKs) so every CMEK
+// replica can report its own CryptoKeyVersion.
+func (r *Replication) WrapKey() string {
+	bindings := r.CMEKBindings()
+	if len(bindings) == 0 {
+		return ""
+	}
+	return bindings[0].KmsKeyName
 }
 
 // GeneratePassword returns a fresh random password for Cloud SQL managed
@@ -159,8 +182,26 @@ type Version struct {
 	// DestroyTime is set only when State is DESTROYED (output-only in the API).
 	DestroyTime time.Time
 	Data        string // base64 payload
-	KmsKeyName  string
-	WrappedDEK  []byte
+	// KmsKeyName/WrappedDEK are the version's primary wrap: the first CMEK
+	// binding (automatic arm or first user-managed replica). Access uses them to
+	// unwrap the single payload ciphertext. Empty/nil for Google-managed
+	// encryption.
+	KmsKeyName string
+	WrappedDEK []byte
+	// ReplicaDEKs holds one wrapped copy of the same DEK per user-managed
+	// replica that uses CMEK, so every replica can report its own
+	// CryptoKeyVersion. Empty for automatic replication (the primary wrap is
+	// the only one) and for records written before it was modelled.
+	ReplicaDEKs []ReplicaDEK `json:"replicaDeks,omitempty"`
+}
+
+// ReplicaDEK is one replica's wrapped copy of a version's DEK: the replica
+// location, the Cloud KMS CryptoKey that wrapped it, and the wrapped blob (the
+// blob itself tags the CryptoKeyVersion that encrypted it).
+type ReplicaDEK struct {
+	Location   string `json:"location"`
+	KmsKeyName string `json:"kmsKeyName"`
+	WrappedDEK []byte `json:"wrappedDek"`
 }
 
 // Store is the Secret Manager store.

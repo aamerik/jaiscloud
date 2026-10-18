@@ -15,10 +15,11 @@ import (
 )
 
 // TestPostgresStoreSnapshotPreservesCMEK verifies that a secret version's
-// per-version CMEK state (kms_key_name + wrapped_dek) survives a Postgres
-// Snapshot/Restore round trip. Without the wrapped DEK the version cannot be
-// decrypted, and without both fields it would report no
-// replicationStatus.customerManagedEncryption (DC44) after a restore.
+// per-version CMEK state (kms_key_name + wrapped_dek + replica_deks) survives a
+// Postgres Snapshot/Restore round trip. Without the wrapped DEK the version
+// cannot be decrypted, and without them it would report no
+// replicationStatus.customerManagedEncryption (DC44) or only one replica's key
+// version (DC57) after a restore.
 func TestPostgresStoreSnapshotPreservesCMEK(t *testing.T) {
 	dsn := os.Getenv("JAISCLOUD_DSN")
 	if dsn == "" {
@@ -57,9 +58,13 @@ func TestPostgresStoreSnapshotPreservesCMEK(t *testing.T) {
 		t.Fatalf("create user-managed secret: %v", err)
 	}
 	wrapped := []byte("1:ciphertext")
+	replicaDEKs := []ReplicaDEK{
+		{Location: "us-east1", KmsKeyName: "projects/proj/locations/us-east1/keyRings/r/cryptoKeys/k", WrappedDEK: []byte("3:east")},
+		{Location: "us-central1", KmsKeyName: "projects/proj/locations/us-central1/keyRings/r/cryptoKeys/k", WrappedDEK: []byte("5:central")},
+	}
 	if err := s.CreateVersion(ctx, "proj", Version{
 		SecretID: "s", VersionID: "1", State: "ENABLED", CreateTime: created,
-		Data: "aGk=", KmsKeyName: key, WrappedDEK: wrapped,
+		Data: "aGk=", KmsKeyName: key, WrappedDEK: wrapped, ReplicaDEKs: replicaDEKs,
 	}); err != nil {
 		t.Fatalf("create version: %v", err)
 	}
@@ -98,6 +103,9 @@ func TestPostgresStoreSnapshotPreservesCMEK(t *testing.T) {
 	}
 	if !bytes.Equal(v.WrappedDEK, wrapped) {
 		t.Fatalf("version wrapped_dek = %q, want %q", v.WrappedDEK, wrapped)
+	}
+	if !reflect.DeepEqual(v.ReplicaDEKs, replicaDEKs) {
+		t.Fatalf("version replica_deks = %#v, want %#v", v.ReplicaDEKs, replicaDEKs)
 	}
 	if v.Data != "aGk=" {
 		t.Fatalf("version data = %q, want %q", v.Data, "aGk=")

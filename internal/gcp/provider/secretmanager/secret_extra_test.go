@@ -286,8 +286,11 @@ func TestSecretIamPolicy(t *testing.T) {
 }
 
 // TestSecretRotationAndAliases verifies GCP-native rotation + version aliases
-// (no AWS version stages): they persist round-trip, and a due rotation creates
-// a new version and advances nextRotationTime.
+// (no AWS version stages): they persist round-trip, and a due rotation advances
+// nextRotationTime without creating a version. Real Secret Manager's rotation
+// schedule only publishes a SECRET_ROTATE notification; adding the version is
+// the subscriber's job (DC56), so an automatic reschedule must never fabricate
+// one — the emulator used to add an empty, unencrypted version here.
 func TestSecretRotationAndAliases(t *testing.T) {
 	ctx := context.Background()
 	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
@@ -333,9 +336,16 @@ func TestSecretRotationAndAliases(t *testing.T) {
 		t.Error("expected nextRotationTime to advance after rotation")
 	}
 
-	// A rotated empty version 2 now exists.
-	if _, err := p.secrets.GetVersion(ctx, "proj", "s", "2"); err != nil {
-		t.Fatalf("expected rotated version 2, got %v", err)
+	// Rotation did not add a version: the secret still has only version 1.
+	versions, err := p.secrets.ListVersions(ctx, "proj", "s")
+	if err != nil {
+		t.Fatalf("list versions: %v", err)
+	}
+	if len(versions) != 1 || versions[0].VersionID != "1" {
+		t.Fatalf("versions after rotation = %#v, want only version 1", versions)
+	}
+	if _, err := p.secrets.GetVersion(ctx, "proj", "s", "2"); err == nil {
+		t.Fatal("rotation created a version 2, want notification-only rotation")
 	}
 }
 

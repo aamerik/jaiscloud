@@ -7,7 +7,6 @@ package secretmanager
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"hash/crc32"
 	"strconv"
@@ -24,7 +23,6 @@ import (
 	"jaiscloud/internal/gcp/policy"
 	"jaiscloud/internal/gcp/resource"
 	secretmanagersvc "jaiscloud/internal/gcp/service/secretmanager"
-	kmsstore "jaiscloud/internal/gcp/store/kms"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
 	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
@@ -179,7 +177,7 @@ func (s *Service) CreateSecret(ctx context.Context, req *secretmanagerpb.CreateS
 		if err != nil {
 			return nil, mapError(err)
 		}
-		if err := secretmanagersvc.ValidateReplication(replication); err != nil {
+		if err := secretmanagersvc.ValidateReplicationKeys(ctx, s.encryptor, project, replication); err != nil {
 			return nil, mapError(err)
 		}
 		sec.SetReplication(replication)
@@ -233,6 +231,11 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 	incomingReplication, err := replicationFromSecret(proto)
 	if err != nil {
 		return nil, mapError(err)
+	}
+	if incomingReplication != nil && selected("replication") {
+		if err := secretmanagersvc.ValidateReplicationKeys(ctx, s.encryptor, project, incomingReplication); err != nil {
+			return nil, mapError(err)
+		}
 	}
 
 	// UpdateSecretAtomic reads, merges, and writes under one lock, so a
@@ -336,23 +339,21 @@ func (s *Service) AddSecretVersion(ctx context.Context, req *secretmanagerpb.Add
 		return nil, mapSecretErr(err)
 	}
 
-	// The wrap key is derived from the policy, never read off the denormalised
-	// KmsKeyName mirror: a stale mirror must not wrap a version with
-	// Google-managed encryption while the policy claims CMEK.
-	wrapKey := sec.ReplicationPolicy().WrapKey()
-	rawDEK, wrappedDEK, err := s.encryptor.Wrap(ctx, project, wrapKey)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	encrypted, err := kmsstore.EncryptData(rawDEK, data, nil)
+	// The wrap keys are derived from the policy, never read off the
+	// denormalised KmsKeyName mirror: a stale mirror must not wrap a version
+	// with Google-managed encryption while the policy claims CMEK, and a
+	// user-managed policy must wrap the same DEK under every replica's key
+	// (DC57).
+	wrap, err := secretmanagersvc.EncryptPayload(ctx, s.encryptor, project, sec.ReplicationPolicy(), data)
 	if err != nil {
 		return nil, mapError(err)
 	}
 
 	stv := secretmanagerstore.Version{
 		SecretID: id, VersionID: version, State: "ENABLED",
-		CreateTime: clock.Now(), Data: base64.StdEncoding.EncodeToString(encrypted),
-		KmsKeyName: wrapKey, WrappedDEK: wrappedDEK,
+		CreateTime: clock.Now(), Data: wrap.Data,
+		KmsKeyName: wrap.KmsKeyName, WrappedDEK: wrap.WrappedDEK,
+		ReplicaDEKs: wrap.ReplicaDEKs,
 	}
 	if err := s.secrets.CreateVersion(ctx, project, stv); err != nil {
 		return nil, mapError(err)
@@ -616,15 +617,10 @@ func (s *Service) appendManagedVersion(ctx context.Context, project, id string, 
 	if err != nil {
 		return nil, mapSecretErr(err)
 	}
-	// The wrap key is derived from the policy, never read off the denormalised
-	// KmsKeyName mirror: a stale mirror must not wrap a version with
-	// Google-managed encryption while the policy claims CMEK.
-	wrapKey := sec.ReplicationPolicy().WrapKey()
-	rawDEK, wrappedDEK, err := s.encryptor.Wrap(ctx, project, wrapKey)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	encrypted, err := kmsstore.EncryptData(rawDEK, data, nil)
+	// The wrap keys are derived from the policy, never read off the
+	// denormalised KmsKeyName mirror (and one DEK is wrapped per CMEK binding
+	// for a user-managed policy, DC57).
+	wrap, err := secretmanagersvc.EncryptPayload(ctx, s.encryptor, project, sec.ReplicationPolicy(), data)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -655,8 +651,9 @@ func (s *Service) appendManagedVersion(ctx context.Context, project, id string, 
 	}
 	stv := secretmanagerstore.Version{
 		SecretID: id, VersionID: strconv.Itoa(ver), State: "ENABLED",
-		CreateTime: clock.Now(), Data: base64.StdEncoding.EncodeToString(encrypted),
-		KmsKeyName: wrapKey, WrappedDEK: wrappedDEK,
+		CreateTime: clock.Now(), Data: wrap.Data,
+		KmsKeyName: wrap.KmsKeyName, WrappedDEK: wrap.WrappedDEK,
+		ReplicaDEKs: wrap.ReplicaDEKs,
 	}
 	if err := s.secrets.CreateVersion(ctx, project, stv); err != nil {
 		return nil, mapError(err)
@@ -664,10 +661,14 @@ func (s *Service) appendManagedVersion(ctx context.Context, project, id string, 
 	return versionToProto(project, stv, sec.ReplicationPolicy()), nil
 }
 
-// maybeRotate advances a secret's rotation schedule when it is due: it creates
-// an empty version and advances nextRotationTime by rotationPeriod. This is
-// GCP's automatic-rotation behavior, evaluated lazily on read (mirrors the
-// REST provider).
+// maybeRotate advances a secret's rotation schedule when it is due: it moves
+// nextRotationTime forward by rotationPeriod. Real Secret Manager's rotation
+// schedule is notification-only — it publishes a SECRET_ROTATE message to the
+// secret's Pub/Sub topics and reschedules the next one; it never creates a
+// SecretVersion (only *managed* rotation adds versions, see RotateSecret). The
+// emulator evaluates the schedule lazily on read (mirrors the REST provider),
+// and does not deliver the notification yet (the `topics` field is unmodelled,
+// recorded as DC64).
 func (s *Service) maybeRotate(ctx context.Context, account, id string, sec secretmanagerstore.Secret) secretmanagerstore.Secret {
 	if sec.Rotation == nil || sec.Rotation.NextRotationTime == "" {
 		return sec
@@ -676,12 +677,11 @@ func (s *Service) maybeRotate(ctx context.Context, account, id string, sec secre
 	if err != nil || clock.Now().Before(next) {
 		return sec
 	}
-	// Everything that matters — whether rotation is STILL due, the schedule
-	// advance and the version-counter allocation — is re-done from a fresh read
-	// inside UpdateSecretAtomic's locked section (mirroring the REST provider),
-	// so a concurrent Update/AddVersion/maybeRotate cannot interleave. The
-	// caller's snapshot is used only for the cheap up-front due check above.
-	var allocated int
+	// Everything that matters — whether rotation is STILL due and the schedule
+	// advance — is re-done from a fresh read inside UpdateSecretAtomic's locked
+	// section (mirroring the REST provider), so a concurrent Update/AddVersion/
+	// maybeRotate cannot interleave. The caller's snapshot is used only for the
+	// cheap up-front due check above.
 	updated, err := s.secrets.UpdateSecretAtomic(ctx, account, id, func(cur secretmanagerstore.Secret) (secretmanagerstore.Secret, error) {
 		if cur.Rotation == nil || cur.Rotation.NextRotationTime == "" {
 			return secretmanagerstore.Secret{}, errSkipRotation
@@ -697,8 +697,6 @@ func (s *Service) maybeRotate(ctx context.Context, account, id string, sec secre
 				cur.Rotation = &rotation
 			}
 		}
-		allocated = cur.NextVer
-		cur.NextVer++
 		return cur, nil
 	})
 	if err != nil {
@@ -710,9 +708,6 @@ func (s *Service) maybeRotate(ctx context.Context, account, id string, sec secre
 		}
 		return sec
 	}
-	_ = s.secrets.CreateVersion(ctx, account, secretmanagerstore.Version{
-		SecretID: id, VersionID: strconv.Itoa(allocated), State: "ENABLED", CreateTime: clock.Now(),
-	})
 	return updated
 }
 
@@ -828,7 +823,7 @@ func versionToProto(project string, v secretmanagerstore.Version, repl *secretma
 func versionReplicationStatusToProto(v secretmanagerstore.Version, repl *secretmanagerstore.Replication) *secretmanagerpb.ReplicationStatus {
 	keyVersion := secretmanagersvc.KmsKeyVersionName(v.KmsKeyName, v.WrappedDEK)
 	if repl != nil && repl.UserManaged != nil {
-		statuses := secretmanagersvc.VersionReplicaStatuses(v.KmsKeyName, keyVersion, repl)
+		statuses := secretmanagersvc.VersionReplicaStatuses(secretmanagersvc.WrapOf(v), repl)
 		replicas := make([]*secretmanagerpb.ReplicationStatus_UserManagedStatus_ReplicaStatus, 0, len(statuses))
 		for _, st := range statuses {
 			rep := &secretmanagerpb.ReplicationStatus_UserManagedStatus_ReplicaStatus{Location: st.Location}
@@ -993,19 +988,11 @@ func crc32cOf(data []byte) int64 {
 	return int64(crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli)))
 }
 
-// decryptVersion decrypts a stored version's envelope-encrypted payload with
-// the same Unwrap/DecryptData path AccessSecretVersion uses. Version.Data is
-// base64-encoded ciphertext wrapped with the secret's CMEK.
+// decryptVersion unwraps a stored version's envelope-encrypted payload, falling
+// back to another replica's wrap when the primary one's key is unavailable (a
+// user-managed version carries one wrap per CMEK replica, DC57).
 func (s *Service) decryptVersion(ctx context.Context, project string, v secretmanagerstore.Version) ([]byte, error) {
-	encrypted, err := base64.StdEncoding.DecodeString(v.Data)
-	if err != nil {
-		return nil, err
-	}
-	rawDEK, err := s.encryptor.Unwrap(ctx, project, v.KmsKeyName, v.WrappedDEK)
-	if err != nil {
-		return nil, err
-	}
-	return kmsstore.DecryptData(rawDEK, encrypted, nil)
+	return secretmanagersvc.DecryptVersion(ctx, s.encryptor, project, v)
 }
 
 func protoPolicyToBody(p *iampb.Policy) map[string]any {

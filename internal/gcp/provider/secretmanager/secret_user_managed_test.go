@@ -2,11 +2,13 @@ package secretmanager
 
 import (
 	"context"
+	"encoding/base64"
 	"testing"
 
 	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/store/kms"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
 
@@ -411,9 +413,12 @@ func TestSecretManagerLegacyReplicationRendering(t *testing.T) {
 func TestSecretManagerReplicationUpdateMask(t *testing.T) {
 	ctx := context.Background()
 	secrets := secretmanagerstore.NewMemoryStore()
-	p := New(secrets, store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
+	kmsStore := kms.NewMemoryStore()
+	p := New(secrets, store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kmsStore))
 
-	const key = "projects/proj/locations/global/keyRings/kr/cryptoKeys/k"
+	// Create/patch resolve the CMEK key (DC58), so the fixture must exist.
+	key, _ := newTestKey(t, kmsStore, "proj", "global", "kr", "k")
+	key2, _ := newTestKey(t, kmsStore, "proj", "global", "kr", "k2")
 	created, err := p.Create(ctx, newNR(map[string]any{
 		"secretId": "masked",
 		"body": map[string]any{"replication": map[string]any{"automatic": map[string]any{
@@ -451,7 +456,7 @@ func TestSecretManagerReplicationUpdateMask(t *testing.T) {
 		"name":       "secrets/masked",
 		"updateMask": "replication.automatic.customerManagedEncryption.kmsKeyName",
 		"body": map[string]any{"replication": map[string]any{"automatic": map[string]any{
-			"customerManagedEncryption": map[string]any{"kmsKeyName": "projects/proj/locations/global/keyRings/kr/cryptoKeys/k2"},
+			"customerManagedEncryption": map[string]any{"kmsKeyName": key2},
 		}}},
 	})); err != nil {
 		t.Fatalf("nested replication patch: %v", err)
@@ -460,7 +465,7 @@ func TestSecretManagerReplicationUpdateMask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get after nested replication patch: %v", err)
 	}
-	if cmek := cmekFromSecretMap(t, got.Data); cmek != "projects/proj/locations/global/keyRings/kr/cryptoKeys/k2" {
+	if cmek := cmekFromSecretMap(t, got.Data); cmek != key2 {
 		t.Fatalf("cmek after the nested replication patch = %q", cmek)
 	}
 
@@ -478,5 +483,208 @@ func TestSecretManagerReplicationUpdateMask(t *testing.T) {
 	}
 	if cmek := cmekFromSecretMap(t, got.Data); cmek != "" {
 		t.Fatalf("cmek after the documented disable form = %q, want empty", cmek)
+	}
+}
+
+// TestSecretManagerPerReplicaDEKs covers DC57: a user-managed secret whose
+// replicas name different CMEK keys wraps a new version's DEK once per replica,
+// so every CMEK replica reports its own CryptoKeyVersion (the emulator used to
+// wrap only under the first replica's key), and the single payload ciphertext
+// still decrypts through any of the wraps.
+func TestSecretManagerPerReplicaDEKs(t *testing.T) {
+	ctx := context.Background()
+	ks := kms.NewMemoryStore()
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(ks))
+
+	const project = "proj"
+	keyEast, versionEast := newTestKey(t, ks, project, "us-east1", "kr-east", "key-east")
+	keyCentral, versionCentral := newTestKey(t, ks, project, "us-central1", "kr-central", "key-central")
+
+	replication := func() map[string]any {
+		return map[string]any{"replication": map[string]any{"userManaged": map[string]any{
+			"replicas": []any{
+				map[string]any{"location": "us-east1", "customerManagedEncryption": map[string]any{"kmsKeyName": keyEast}},
+				map[string]any{"location": "us-central1", "customerManagedEncryption": map[string]any{"kmsKeyName": keyCentral}},
+				map[string]any{"location": "us-west1"},
+			},
+		}}}
+	}
+	if _, err := p.Create(ctx, newNR(map[string]any{"secretId": "per-replica", "body": replication()})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	const payload = "aGVsbG8=" // "hello"
+	added, err := p.AddVersion(ctx, newNR(map[string]any{
+		"name": "secrets/per-replica",
+		"body": map[string]any{"payload": map[string]any{"data": payload}},
+	}))
+	if err != nil {
+		t.Fatalf("add version: %v", err)
+	}
+	wantEast := keyEast + "/versions/" + versionEast
+	wantCentral := keyCentral + "/versions/" + versionCentral
+	if keys := replicaStatusKeys(t, added.Data); len(keys) != 3 || keys[0] != wantEast || keys[1] != wantCentral || keys[2] != "" {
+		t.Fatalf("replica status = %#v, want [%q %q \"\"]", keys, wantEast, wantCentral)
+	}
+
+	// One payload ciphertext, one wrapped DEK per CMEK replica: both wraps
+	// unwrap the same DEK, which decrypts the stored payload.
+	stored, err := p.secrets.GetVersion(ctx, project, "per-replica", "1")
+	if err != nil {
+		t.Fatalf("get stored version: %v", err)
+	}
+	if len(stored.ReplicaDEKs) != 2 {
+		t.Fatalf("stored replica wraps = %#v, want one per CMEK replica", stored.ReplicaDEKs)
+	}
+	ciphertext, err := base64.StdEncoding.DecodeString(stored.Data)
+	if err != nil {
+		t.Fatalf("stored payload is not base64: %v", err)
+	}
+	var dek []byte
+	for i, wrap := range stored.ReplicaDEKs {
+		rawDEK, err := p.encryptor.Unwrap(ctx, project, wrap.KmsKeyName, wrap.WrappedDEK)
+		if err != nil {
+			t.Fatalf("unwrap replica %d: %v", i, err)
+		}
+		if i == 0 {
+			dek = rawDEK
+		} else if string(rawDEK) != string(dek) {
+			t.Fatalf("replica %d unwrapped a different DEK", i)
+		}
+		plain, err := kms.DecryptData(rawDEK, ciphertext, nil)
+		if err != nil || string(plain) != "hello" {
+			t.Fatalf("replica %d decrypt = %q, %v", i, plain, err)
+		}
+	}
+
+	// The REST access path unwraps through the primary wrap and returns the
+	// plaintext.
+	accessed, err := p.Access(ctx, newNR(map[string]any{"name": "secrets/per-replica/versions/1"}))
+	if err != nil {
+		t.Fatalf("access: %v", err)
+	}
+	if got := accessed.Data["payload"].(map[string]any)["data"]; got != payload {
+		t.Fatalf("access payload = %q, want %q", got, payload)
+	}
+
+	// The per-replica status is per-version: rotating one key's primary only
+	// changes the versions added afterwards, and only that replica's status.
+	rotatedVersion, err := ks.CreateVersion(ctx, project, "us-east1", "kr-east", "key-east", kms.Version{State: "ENABLED"})
+	if err != nil {
+		t.Fatalf("create rotated key version: %v", err)
+	}
+	if err := ks.UpdatePrimaryVersion(ctx, project, "us-east1", "kr-east", "key-east", rotatedVersion); err != nil {
+		t.Fatalf("set primary: %v", err)
+	}
+	second, err := p.AddVersion(ctx, newNR(map[string]any{
+		"name": "secrets/per-replica",
+		"body": map[string]any{"payload": map[string]any{"data": payload}},
+	}))
+	if err != nil {
+		t.Fatalf("add version after key rotation: %v", err)
+	}
+	if keys := replicaStatusKeys(t, second.Data); keys[0] != keyEast+"/versions/"+rotatedVersion || keys[1] != wantCentral {
+		t.Fatalf("status after key rotation = %#v, want [%q %q]", keys, keyEast+"/versions/"+rotatedVersion, wantCentral)
+	}
+	first, err := p.GetVersion(ctx, newNR(map[string]any{"name": "secrets/per-replica/versions/1"}))
+	if err != nil {
+		t.Fatalf("get version 1 after rotation: %v", err)
+	}
+	if keys := replicaStatusKeys(t, first.Data); keys[0] != wantEast || keys[1] != wantCentral {
+		t.Fatalf("version 1 status after key rotation = %#v, want its original wraps", keys)
+	}
+
+	// If the primary replica's key version becomes unavailable, the emulator
+	// (which has no request routing) still serves the payload through another
+	// replica's wrap rather than stranding it. This is a deliberate leniency:
+	// real GCP routes the request to one replica, so the affected one would
+	// fail.
+	if err := ks.UpdateVersionState(ctx, project, "us-east1", "kr-east", "key-east", versionEast, "DISABLED"); err != nil {
+		t.Fatalf("disable the primary wrap's key version: %v", err)
+	}
+	accessed, err = p.Access(ctx, newNR(map[string]any{"name": "secrets/per-replica/versions/1"}))
+	if err != nil {
+		t.Fatalf("access with the primary replica key disabled: %v", err)
+	}
+	if got := accessed.Data["payload"].(map[string]any)["data"]; got != payload {
+		t.Fatalf("access payload via the fallback replica = %q, want %q", got, payload)
+	}
+}
+
+// TestSecretManagerCreateValidateCMEK covers DC58 on the REST provider: create
+// and patch resolve every CMEK key the policy names, so a missing key is
+// INVALID_ARGUMENT and a disabled primary version is FAILED_PRECONDITION at the
+// secret write instead of only at AddSecretVersion. An unsupported replica
+// location is rejected too.
+func TestSecretManagerCreateValidateCMEK(t *testing.T) {
+	ctx := context.Background()
+	ks := kms.NewMemoryStore()
+	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(ks))
+
+	globalKey, _ := newTestKey(t, ks, "proj", "global", "kr", "global-key")
+	disabledKey, _ := newTestKey(t, ks, "proj", "global", "kr", "disabled-key")
+	disabledCryptoKey, err := ks.GetCryptoKey(ctx, "proj", "global", "kr", "disabled-key")
+	if err != nil {
+		t.Fatalf("get disabled key: %v", err)
+	}
+	if err := ks.UpdateVersionState(ctx, "proj", "global", "kr", "disabled-key", disabledCryptoKey.PrimaryVersion, "DISABLED"); err != nil {
+		t.Fatalf("disable key version: %v", err)
+	}
+
+	auto := func(key string) map[string]any {
+		body := map[string]any{"replication": map[string]any{"automatic": map[string]any{}}}
+		if key != "" {
+			body["replication"].(map[string]any)["automatic"].(map[string]any)["customerManagedEncryption"] = map[string]any{"kmsKeyName": key}
+		}
+		return body
+	}
+
+	// A missing key: INVALID_ARGUMENT at create.
+	missing := "projects/proj/locations/global/keyRings/kr/cryptoKeys/nope"
+	_, err = p.Create(ctx, newNR(map[string]any{"secretId": "missing-key", "body": auto(missing)}))
+	if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 400 || pe.Code != "InvalidArgument" {
+		t.Fatalf("create with a missing key = %v, want INVALID_ARGUMENT/400", err)
+	}
+	if _, err := p.secrets.GetSecret(ctx, "proj", "missing-key"); err == nil {
+		t.Fatal("secret was created despite the invalid key")
+	}
+
+	// A disabled primary version: FAILED_PRECONDITION at create.
+	_, err = p.Create(ctx, newNR(map[string]any{"secretId": "disabled-key", "body": auto(disabledKey)}))
+	if pe, ok := err.(*model.ProviderError); !ok || pe.HTTPStatus != 400 || pe.Status != "FAILED_PRECONDITION" {
+		t.Fatalf("create with a disabled key = %v, want FAILED_PRECONDITION/400", err)
+	}
+
+	// An unsupported replica location is a shape error, before any key lookup.
+	_, err = p.Create(ctx, newNR(map[string]any{"secretId": "bad-location", "body": map[string]any{
+		"replication": map[string]any{"userManaged": map[string]any{"replicas": []any{
+			map[string]any{"location": "us-east-1"},
+		}}},
+	}}))
+	if errStatus(err) != 400 {
+		t.Fatalf("create with an unknown replica location = %v, want 400", err)
+	}
+
+	// A valid key still creates, and a patch to a missing/disabled key is
+	// refused, leaving the stored policy intact.
+	if _, err := p.Create(ctx, newNR(map[string]any{"secretId": "ok", "body": auto(globalKey)})); err != nil {
+		t.Fatalf("create with a valid key: %v", err)
+	}
+	if _, err := p.Update(ctx, newNR(map[string]any{
+		"name": "secrets/ok", "updateMask": "replication", "body": auto(missing),
+	})); errStatus(err) != 400 {
+		t.Fatalf("patch to a missing key = %v, want 400", err)
+	}
+	if _, err := p.Update(ctx, newNR(map[string]any{
+		"name": "secrets/ok", "updateMask": "replication", "body": auto(disabledKey),
+	})); errStatus(err) != 400 {
+		t.Fatalf("patch to a disabled key = %v, want 400", err)
+	}
+	stored, err := p.secrets.GetSecret(ctx, "proj", "ok")
+	if err != nil {
+		t.Fatalf("get secret after rejected patches: %v", err)
+	}
+	if got := stored.ReplicationPolicy().WrapKey(); got != globalKey {
+		t.Fatalf("stored key after rejected patches = %q, want %q", got, globalKey)
 	}
 }

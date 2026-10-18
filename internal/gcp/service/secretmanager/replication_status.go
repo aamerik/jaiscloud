@@ -26,32 +26,52 @@ type ReplicaStatus struct {
 	KmsKeyVersionName string
 }
 
+// VersionWrap is the version-side wrap data a replication status is rendered
+// from: the primary wrap (KmsKeyName/WrappedDEK, what Access unwraps with) and
+// the per-replica wraps a user-managed policy records (ReplicaDEKs). Both
+// transports build it from the stored version, so REST and gRPC cannot disagree
+// about which CryptoKeyVersion a replica reports.
+type VersionWrap struct {
+	KmsKeyName  string
+	WrappedDEK  []byte
+	ReplicaDEKs []secretmanagerstore.ReplicaDEK
+}
+
+// WrapOf returns v's wrap data.
+func WrapOf(v secretmanagerstore.Version) VersionWrap {
+	return VersionWrap{KmsKeyName: v.KmsKeyName, WrappedDEK: v.WrappedDEK, ReplicaDEKs: v.ReplicaDEKs}
+}
+
 // VersionReplicaStatuses renders the per-replica status of a version whose parent
 // secret uses user-managed replication, or nil when the policy is automatic
 // (the automatic arm is rendered instead). Every replica location is reported;
-// the replica in the location of the key that wrapped this version carries the
-// kmsKeyVersionName (kmsKeyVersionName is the name KmsKeyVersionName derived
-// from the version's own wrap). Like real GCP, that status is per-version: it
+// a replica whose key wrapped this version's DEK carries the exact
+// kmsKeyVersionName that did. Like real GCP, that status is per-version: it
 // keeps naming the key that actually wrapped the payload even after the
 // policy's CMEK key is updated, which only affects versions added afterwards.
 //
-// The emulator stores one wrapped DEK per version, wrapped with the policy's
-// first CMEK key (Replication.WrapKey), so a policy whose replicas name
-// different keys cannot report a per-replica status for the others. That
-// residual is recorded in the DC10 wave plan rather than fabricated here: a
-// CryptoKeyVersion name under a key that never wrapped the payload would be a
-// lie a client could act on.
-func VersionReplicaStatuses(kmsKeyName, kmsKeyVersionName string, repl *secretmanagerstore.Replication) []ReplicaStatus {
+// A version written before per-replica wraps were recorded (no ReplicaDEKs)
+// falls back to the single-wrap answer: the replica in the location of the
+// version's primary wrap reports it, the others report none. New versions
+// record one wrap per CMEK replica, so every CMEK replica reports its own key
+// version (DC57).
+func VersionReplicaStatuses(w VersionWrap, repl *secretmanagerstore.Replication) []ReplicaStatus {
 	if repl == nil || repl.UserManaged == nil {
 		return nil
 	}
-	wrapLocation, hasWrapLocation := cryptoKeyLocation(kmsKeyName)
+	byLocation := make(map[string]secretmanagerstore.ReplicaDEK, len(w.ReplicaDEKs))
+	for _, dek := range w.ReplicaDEKs {
+		byLocation[dek.Location] = dek
+	}
+	wrapLocation, hasWrapLocation := cryptoKeyLocation(w.KmsKeyName)
 	replicas := repl.UserManaged.Replicas
 	out := make([]ReplicaStatus, 0, len(replicas))
 	for _, rep := range replicas {
 		status := ReplicaStatus{Location: rep.Location}
-		if hasWrapLocation && rep.Location == wrapLocation {
-			status.KmsKeyVersionName = kmsKeyVersionName
+		if dek, ok := byLocation[rep.Location]; ok {
+			status.KmsKeyVersionName = KmsKeyVersionName(dek.KmsKeyName, dek.WrappedDEK)
+		} else if len(w.ReplicaDEKs) == 0 && hasWrapLocation && rep.Location == wrapLocation {
+			status.KmsKeyVersionName = KmsKeyVersionName(w.KmsKeyName, w.WrappedDEK)
 		}
 		out = append(out, status)
 	}
@@ -65,7 +85,9 @@ func VersionReplicaStatuses(kmsKeyName, kmsKeyVersionName string, repl *secretma
 // CMEK is used).
 //
 // Note the Secret Manager spelling: `.../cryptoKeys/{key}/versions/{version}`,
-// not the Cloud KMS API's `.../cryptoKeyVersions/{version}`.
+// not the Cloud KMS API's `.../cryptoKeyVersions/{version}` (the Discovery
+// schema's CustomerManagedEncryptionStatus.kmsKeyVersionName documents the
+// former).
 func KmsKeyVersionName(kmsKeyName string, wrappedDEK []byte) string {
 	if kmsKeyName == "" || len(wrappedDEK) == 0 {
 		return ""

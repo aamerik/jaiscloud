@@ -235,20 +235,25 @@ func (s *PostgresStore) CreateVersion(ctx context.Context, projectID string, v V
 	if v.CreateTime.IsZero() {
 		v.CreateTime = clock.Now()
 	}
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-	`, projectID, v.SecretID, v.VersionID, v.State, v.CreateTime, nullableTime(v.DestroyTime), v.Data, v.KmsKeyName, v.WrappedDEK)
+	replicaDEKs, err := marshalReplicaDEKs(v.ReplicaDEKs)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek, replica_deks)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	`, projectID, v.SecretID, v.VersionID, v.State, v.CreateTime, nullableTime(v.DestroyTime), v.Data, v.KmsKeyName, v.WrappedDEK, replicaDEKs)
 	return err
 }
 
 func (s *PostgresStore) GetVersion(ctx context.Context, projectID, secretID, versionID string) (Version, error) {
 	var v Version
 	var destroyTime *time.Time
+	var replicaDEKs []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek
+		SELECT secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek, replica_deks
 		FROM jc_sm_versions WHERE project_id=$1 AND secret_id=$2 AND version_id=$3
-	`, projectID, secretID, versionID).Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK)
+	`, projectID, secretID, versionID).Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK, &replicaDEKs)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Version{}, ErrNoSuchVersion
 	}
@@ -258,12 +263,15 @@ func (s *PostgresStore) GetVersion(ctx context.Context, projectID, secretID, ver
 	if destroyTime != nil {
 		v.DestroyTime = *destroyTime
 	}
+	if err := decodeReplicaDEKs(replicaDEKs, &v); err != nil {
+		return Version{}, err
+	}
 	return v, nil
 }
 
 func (s *PostgresStore) ListVersions(ctx context.Context, projectID, secretID string) ([]Version, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek
+		SELECT secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek, replica_deks
 		FROM jc_sm_versions WHERE project_id=$1 AND secret_id=$2 ORDER BY version_id
 	`, projectID, secretID)
 	if err != nil {
@@ -274,11 +282,15 @@ func (s *PostgresStore) ListVersions(ctx context.Context, projectID, secretID st
 	for rows.Next() {
 		var v Version
 		var destroyTime *time.Time
-		if err := rows.Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK); err != nil {
+		var replicaDEKs []byte
+		if err := rows.Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK, &replicaDEKs); err != nil {
 			return nil, err
 		}
 		if destroyTime != nil {
 			v.DestroyTime = *destroyTime
+		}
+		if err := decodeReplicaDEKs(replicaDEKs, &v); err != nil {
+			return nil, err
 		}
 		result = append(result, v)
 	}
@@ -317,10 +329,11 @@ func (s *PostgresStore) updateVersionIfOnce(ctx context.Context, projectID, secr
 
 	var v Version
 	var destroyTime *time.Time
+	var replicaDEKs []byte
 	err = tx.QueryRow(ctx, `
-		SELECT secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek
+		SELECT secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek, replica_deks
 		FROM jc_sm_versions WHERE project_id=$1 AND secret_id=$2 AND version_id=$3 FOR UPDATE
-	`, projectID, secretID, versionID).Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK)
+	`, projectID, secretID, versionID).Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK, &replicaDEKs)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Version{}, ErrNoSuchVersion
 	}
@@ -329,6 +342,9 @@ func (s *PostgresStore) updateVersionIfOnce(ctx context.Context, projectID, secr
 	}
 	if destroyTime != nil {
 		v.DestroyTime = *destroyTime
+	}
+	if err := decodeReplicaDEKs(replicaDEKs, &v); err != nil {
+		return Version{}, err
 	}
 
 	next, err := mutate(v)
@@ -369,6 +385,30 @@ func (s *PostgresStore) NextVersion(ctx context.Context, projectID, secretID str
 func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_sm_versions`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_sm_secrets`)
+}
+
+// marshalReplicaDEKs encodes a version's per-replica wraps for the replica_deks
+// JSONB column, or nil (SQL NULL) when there are none.
+func marshalReplicaDEKs(deks []ReplicaDEK) (any, error) {
+	if len(deks) == 0 {
+		return nil, nil
+	}
+	b, err := json.Marshal(deks)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(b), nil
+}
+
+// decodeReplicaDEKs fills v.ReplicaDEKs from the replica_deks column (nil and
+// empty both mean "no per-replica wraps": an automatic-replication version or
+// one written before the column existed).
+func decodeReplicaDEKs(raw []byte, v *Version) error {
+	v.ReplicaDEKs = nil
+	if len(raw) == 0 {
+		return nil
+	}
+	return json.Unmarshal(raw, &v.ReplicaDEKs)
 }
 
 func nullableTime(t time.Time) any {
