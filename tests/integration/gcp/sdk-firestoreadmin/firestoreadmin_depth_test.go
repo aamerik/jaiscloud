@@ -38,6 +38,10 @@
 // Databases case — DC20 — and the same implied-mask form is asserted for
 // UpdateField and UpdateBackupSchedule (dotted through the official client),
 // which must apply every populated field including the recurrence oneof — DC36.
+// The ServerOwnedFields case pins database.proto's field ownership — DC38:
+// key_prefix/version_retention_period are OUTPUT_ONLY and database_edition is
+// IMMUTABLE, so a patch never stores them and the retention window is derived
+// from the PITR toggle.
 //
 // The concurrency cases run under -race (the module's integration step adds it);
 // asserting a contention property in a binary without the race detector is a
@@ -125,6 +129,47 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 		require.Equal(t, databaseName(id), deleted.GetName())
 		require.NotNil(t, deleted.GetDeleteTime(), "the operation response is the soft-deleted database")
 		testdepth.AssertError(t, getDatabaseErr(ctx, c, id), testdepth.SpecNotFound())
+	})
+
+	// database.proto marks key_prefix and version_retention_period OUTPUT_ONLY and
+	// database_edition IMMUTABLE (DC38): the official client can carry them in a
+	// patch, but the emulator must not store the output-only ones, the retention
+	// window is the PITR-derived one — 7 days enabled, 1 hour otherwise — and a
+	// change to the immutable edition is INVALID_ARGUMENT.
+	t.Run("ServerOwnedFields", func(t *testing.T) {
+		id := unique("owneddb")
+		created := createDatabase(t, c, id)
+		require.Equal(t, adminpb.Database_STANDARD, created.GetDatabaseEdition(),
+			"database.proto: STANDARD is the default when a create omits the edition")
+		require.Equal(t, time.Hour, created.GetVersionRetentionPeriod().AsDuration(),
+			"PITR is disabled by default, so retention is 1 hour")
+
+		enabledOp, err := c.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+			Database: &adminpb.Database{
+				Name:                          databaseName(id),
+				DatabaseEdition:               created.GetDatabaseEdition(),
+				KeyPrefix:                     "client-supplied",
+				VersionRetentionPeriod:        durationpb.New(30 * time.Minute),
+				PointInTimeRecoveryEnablement: adminpb.Database_POINT_IN_TIME_RECOVERY_ENABLED,
+			},
+		})
+		require.NoError(t, err)
+		enabled, err := enabledOp.Wait(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 7*24*time.Hour, enabled.GetVersionRetentionPeriod().AsDuration(),
+			"enabling PITR reports the documented 7-day window, not the request's")
+		require.Empty(t, enabled.GetKeyPrefix(), "key_prefix is OUTPUT_ONLY")
+		require.Equal(t, created.GetDatabaseEdition(), enabled.GetDatabaseEdition(),
+			"database_edition is IMMUTABLE and a resent value is preserved")
+
+		// A masked change to the IMMUTABLE edition is INVALID_ARGUMENT (AIP-203);
+		// the patch above resent the created value, which is accepted. The
+		// control plane rejects it up front, so the error arrives on the call.
+		_, err = c.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+			Database:   &adminpb.Database{Name: databaseName(id), DatabaseEdition: adminpb.Database_ENTERPRISE},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"database_edition"}},
+		})
+		testdepth.AssertError(t, err, testdepth.SpecInvalidArgument())
 	})
 
 	t.Run("DefaultDatabaseIsSynthesized", func(t *testing.T) {

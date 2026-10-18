@@ -215,6 +215,146 @@ func TestDatabaseUpdateEtagAndDelete(t *testing.T) {
 	}
 }
 
+// TestDatabaseServerOwnedFields pins database.proto's field ownership on both
+// write paths: key_prefix (OUTPUT_ONLY) and version_retention_period
+// (OUTPUT_ONLY) are never written by a patch, whatever the mask spells, and the
+// retention window is derived from the PITR toggle — 7 days enabled, 1 hour
+// otherwise — rather than from the request. database_edition is IMMUTABLE: a
+// masked write resending the current value is a no-op, while a change is
+// INVALID_ARGUMENT (AIP-203). Real GCP never accepts the retention window as
+// input.
+func TestDatabaseServerOwnedFields(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+
+	// Creation: database_edition is IMMUTABLE and therefore valid on create,
+	// while the OUTPUT_ONLY fields in the body are ignored.
+	created, _, err := p.CreateDatabaseDef(ctx, "proj", "server-owned", databaseDef{
+		LocationID:                    "nam5",
+		DatabaseEdition:               "ENTERPRISE",
+		KeyPrefix:                     "client-supplied",
+		VersionRetentionPeriod:        2 * time.Hour,
+		PointInTimeRecoveryEnablement: pitrEnabled,
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	if created.DatabaseEdition != "ENTERPRISE" {
+		t.Errorf("create dropped the immutable database_edition: %q", created.DatabaseEdition)
+	}
+	if created.KeyPrefix != "" {
+		t.Errorf("create stored the OUTPUT_ONLY key_prefix: %q", created.KeyPrefix)
+	}
+	if created.VersionRetentionPeriod != 7*24*time.Hour {
+		t.Errorf("create retention = %v, want 168h (PITR enabled)", created.VersionRetentionPeriod)
+	}
+
+	// An explicit `*` patch that carries the unchanged immutable edition plus
+	// changed OUTPUT_ONLY fields applies only the mutable ones; the retention
+	// window follows the effective PITR toggle (unchanged here), not the body.
+	starred, _, err := p.UpdateDatabaseDef(ctx, "proj", "server-owned", databaseDef{
+		ConcurrencyMode:        "PESSIMISTIC",
+		DatabaseEdition:        "ENTERPRISE",
+		KeyPrefix:              "client-supplied",
+		VersionRetentionPeriod: 30 * time.Minute,
+	}, []string{"*"}, true, created.Etag)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseDef(*): %v", err)
+	}
+	if starred.ConcurrencyMode != "PESSIMISTIC" {
+		t.Errorf("`*` patch dropped the mutable concurrency_mode: %q", starred.ConcurrencyMode)
+	}
+	if starred.DatabaseEdition != "ENTERPRISE" {
+		t.Errorf("`*` patch changed the immutable database_edition: %q", starred.DatabaseEdition)
+	}
+	if starred.KeyPrefix != "" {
+		t.Errorf("`*` patch wrote the OUTPUT_ONLY key_prefix: %q", starred.KeyPrefix)
+	}
+	if starred.VersionRetentionPeriod != 7*24*time.Hour {
+		t.Errorf("`*` patch retention = %v, want 168h (PITR still enabled)", starred.VersionRetentionPeriod)
+	}
+
+	// A masked write that would change the IMMUTABLE edition is INVALID_ARGUMENT
+	// (AIP-203), on the explicit path and on the implied `*` mask alike, and
+	// leaves the record untouched.
+	for _, masked := range [][]string{{"database_edition"}, {"*"}} {
+		_, _, err := p.UpdateDatabaseDef(ctx, "proj", "server-owned",
+			databaseDef{DatabaseEdition: "STANDARD"}, masked, true, starred.Etag)
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+			t.Errorf("UpdateDatabaseDef(%v) edition change = %v, want InvalidArgument/400", masked, err)
+		}
+	}
+	// A mask that does not name database_edition leaves the body value alone
+	// (AIP-134: only masked fields are applied).
+	unmasked, _, err := p.UpdateDatabaseDef(ctx, "proj", "server-owned",
+		databaseDef{DatabaseEdition: "STANDARD", ConcurrencyMode: "OPTIMISTIC"}, []string{"concurrency_mode"}, true, starred.Etag)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseDef(concurrency_mode) with an unmasked edition: %v", err)
+	}
+	if unmasked.DatabaseEdition != "ENTERPRISE" || unmasked.ConcurrencyMode != "OPTIMISTIC" {
+		t.Errorf("unmasked edition patch = edition %q concurrency %q, want ENTERPRISE/OPTIMISTIC", unmasked.DatabaseEdition, unmasked.ConcurrencyMode)
+	}
+
+	// A maskless patch (the common form) re-derives the window from the PITR
+	// toggle it sets: disabling PITR drops it back to 1 hour even though the body
+	// carries a longer window. The edition is resent unchanged, as a client that
+	// read the record would do.
+	maskless, _, err := p.UpdateDatabaseDef(ctx, "proj", "server-owned", databaseDef{
+		DatabaseEdition:               "ENTERPRISE",
+		PointInTimeRecoveryEnablement: pitrDisabled,
+		VersionRetentionPeriod:        12 * time.Hour,
+	}, nil, false, unmasked.Etag)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseDef(omitted mask): %v", err)
+	}
+	if maskless.VersionRetentionPeriod != time.Hour {
+		t.Errorf("maskless patch retention = %v, want 1h (PITR disabled)", maskless.VersionRetentionPeriod)
+	}
+
+	// A mask that names the OUTPUT_ONLY field writes nothing — including the
+	// previously unhandled `0s` value that the `> 0` guard silently dropped.
+	etag := maskless.Etag
+	for _, retained := range []time.Duration{0, 7 * 24 * time.Hour} {
+		got, _, err := p.UpdateDatabaseDef(ctx, "proj", "server-owned",
+			databaseDef{VersionRetentionPeriod: retained}, []string{"version_retention_period"}, true, etag)
+		if err != nil {
+			t.Fatalf("UpdateDatabaseDef(version_retention_period=%v): %v", retained, err)
+		}
+		if got.VersionRetentionPeriod != time.Hour {
+			t.Errorf("explicit retention patch (%v) stored %v, want the derived 1h", retained, got.VersionRetentionPeriod)
+		}
+		etag = got.Etag
+	}
+
+	// Read paths report the derived value as well.
+	read, err := p.GetDatabase(ctx, "proj", "server-owned")
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if read.VersionRetentionPeriod != time.Hour {
+		t.Errorf("GetDatabase retention = %v, want 1h", read.VersionRetentionPeriod)
+	}
+
+	// A record persisted by an older build may carry a client-supplied window;
+	// the read repairs it to the derived one.
+	if err := p.putResource(ctx, "proj", rtDatabase, databaseRel("legacy-db"), databaseDef{
+		Name:                          databaseName("proj", "legacy-db"),
+		Type:                          "FIRESTORE_NATIVE",
+		PointInTimeRecoveryEnablement: pitrEnabled,
+		VersionRetentionPeriod:        90 * time.Minute,
+	}, false); err != nil {
+		t.Fatalf("seed legacy database: %v", err)
+	}
+	legacy, err := p.GetDatabase(ctx, "proj", "legacy-db")
+	if err != nil {
+		t.Fatalf("GetDatabase(legacy): %v", err)
+	}
+	if legacy.VersionRetentionPeriod != 7*24*time.Hour {
+		t.Errorf("legacy record retention = %v, want the derived 168h", legacy.VersionRetentionPeriod)
+	}
+}
+
 func TestEmptyUpdateMaskIsNoop(t *testing.T) {
 	ctx := context.Background()
 	p := newAdminService()

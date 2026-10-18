@@ -2,6 +2,7 @@ package firestore
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -227,6 +228,97 @@ func TestRESTDatabaseLifecycle(t *testing.T) {
 	// data-plane verbs are rejected before dispatch (invalid path here).
 	if _, err := p.CreateDatabase(ctx, adminNR("databases/test-db", nil)); err == nil {
 		t.Error("CreateDatabase on a database resource succeeded, want InvalidArgument")
+	}
+}
+
+// TestRESTDatabaseServerOwnedFields pins the wire view of database.proto's field
+// ownership: a REST create/patch carrying key_prefix (OUTPUT_ONLY) or a changed
+// database_edition (IMMUTABLE) does not store them, and versionRetentionPeriod is
+// the PITR-derived window (7 days enabled, 1 hour otherwise), never the body's.
+func TestRESTDatabaseServerOwnedFields(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+
+	created, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "owned-db",
+		"body": map[string]any{
+			"locationId":                    "nam5",
+			"databaseEdition":               "ENTERPRISE",
+			"keyPrefix":                     "client-supplied",
+			"versionRetentionPeriod":        "7200s",
+			"pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_ENABLED",
+		},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	cresp, _ := created.Data["response"].(map[string]any)
+	if cresp["databaseEdition"] != "ENTERPRISE" {
+		t.Errorf("create databaseEdition = %v, want ENTERPRISE (IMMUTABLE is settable on create)", cresp["databaseEdition"])
+	}
+	if _, ok := cresp["keyPrefix"]; ok {
+		t.Errorf("create stored the OUTPUT_ONLY keyPrefix = %v", cresp["keyPrefix"])
+	}
+	if cresp["versionRetentionPeriod"] != "604800s" {
+		t.Errorf("create versionRetentionPeriod = %v, want 604800s (PITR enabled)", cresp["versionRetentionPeriod"])
+	}
+
+	// The documented maskless patch: server-owned fields in the body are still
+	// ignored, and disabling PITR re-derives the window to 1 hour. The immutable
+	// edition is resent unchanged, as a client that read the record would do.
+	upd, err := p.UpdateDatabase(ctx, adminNR("databases/owned-db", map[string]any{
+		"body": map[string]any{
+			"databaseEdition":               "ENTERPRISE",
+			"keyPrefix":                     "client-supplied",
+			"versionRetentionPeriod":        "1800s",
+			"pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+		},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateDatabase(no updateMask): %v", err)
+	}
+	uresp, _ := upd.Data["response"].(map[string]any)
+	if uresp["databaseEdition"] != "ENTERPRISE" {
+		t.Errorf("patch changed the IMMUTABLE databaseEdition = %v", uresp["databaseEdition"])
+	}
+	if _, ok := uresp["keyPrefix"]; ok {
+		t.Errorf("patch wrote the OUTPUT_ONLY keyPrefix = %v", uresp["keyPrefix"])
+	}
+	if uresp["versionRetentionPeriod"] != "3600s" {
+		t.Errorf("patch versionRetentionPeriod = %v, want 3600s (PITR disabled)", uresp["versionRetentionPeriod"])
+	}
+
+	// An explicit mask naming the OUTPUT_ONLY fields writes neither of them
+	// (AIP-161), including the camelCase spellings the REST mask uses.
+	explicit, err := p.UpdateDatabase(ctx, adminNR("databases/owned-db", map[string]any{
+		"updateMask": "versionRetentionPeriod,keyPrefix",
+		"body": map[string]any{
+			"keyPrefix":              "client-supplied",
+			"versionRetentionPeriod": "604800s",
+		},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateDatabase(updateMask=versionRetentionPeriod,keyPrefix): %v", err)
+	}
+	xresp, _ := explicit.Data["response"].(map[string]any)
+	if _, ok := xresp["keyPrefix"]; ok {
+		t.Errorf("explicit mask wrote the OUTPUT_ONLY keyPrefix = %v", xresp["keyPrefix"])
+	}
+	if xresp["versionRetentionPeriod"] != "3600s" {
+		t.Errorf("explicit retention patch = %v, want the derived 3600s", xresp["versionRetentionPeriod"])
+	}
+
+	// A masked change to the IMMUTABLE edition is INVALID_ARGUMENT (AIP-203).
+	if _, err := p.UpdateDatabase(ctx, adminNR("databases/owned-db", map[string]any{
+		"updateMask": "databaseEdition",
+		"body":       map[string]any{"databaseEdition": "STANDARD"},
+	})); err == nil {
+		t.Error("UpdateDatabase(databaseEdition change) succeeded, want InvalidArgument")
+	} else {
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+			t.Errorf("databaseEdition change = %v, want InvalidArgument/400", err)
+		}
 	}
 }
 

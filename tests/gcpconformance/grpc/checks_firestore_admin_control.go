@@ -28,7 +28,7 @@ func firestoreAdminControlChecks() []Check {
 		{Service: "firestoreadmin", RPC: "CreateDatabase", KeyField: "operation done=true; database name", Run: checkFsAdminCreateDatabase},
 		{Service: "firestoreadmin", RPC: "GetDatabase", KeyField: "database name/uid", Run: checkFsAdminGetDatabase},
 		{Service: "firestoreadmin", RPC: "ListDatabases", KeyField: "created database present + (default)", Run: checkFsAdminListDatabases},
-		{Service: "firestoreadmin", RPC: "UpdateDatabase", KeyField: "concurrency_mode updated under mask + omitted mask applies populated fields + empty mask is a no-op", Run: checkFsAdminUpdateDatabase},
+		{Service: "firestoreadmin", RPC: "UpdateDatabase", KeyField: "concurrency_mode under mask + omitted mask applies populated fields + empty mask is a no-op + OUTPUT_ONLY fields ignored, retention derived from PITR, IMMUTABLE edition change rejected", Run: checkFsAdminUpdateDatabase},
 		{Service: "firestoreadmin", RPC: "DeleteDatabase", KeyField: "stale etag -> FailedPrecondition; delete protection -> FailedPrecondition; operation response carries database; absent after delete", Run: checkFsAdminDeleteDatabase},
 		{Service: "firestoreadmin", RPC: "UpdateField", Method: "UpdateField", KeyField: "operation done=true; index_config under mask + index_config/ttl_config under an omitted mask + empty mask is a no-op", Run: checkFsAdminUpdateField},
 		{Service: "firestoreadmin", RPC: "GetField", Method: "GetField", KeyField: "index_config round-trip", Run: checkFsAdminGetField},
@@ -224,6 +224,44 @@ func checkFsAdminUpdateDatabase(ctx context.Context, cfg Config) error {
 	}
 	if unchanged.GetEtag() != implied.GetEtag() {
 		return fmt.Errorf("UpdateDatabase(empty mask) rotated the etag %q -> %q", implied.GetEtag(), unchanged.GetEtag())
+	}
+	// database.proto marks key_prefix and version_retention_period OUTPUT_ONLY
+	// and database_edition IMMUTABLE: a patch that carries changed values must
+	// not store them, and the retention window is the PITR-derived one (7 days
+	// enabled, 1 hour otherwise), never the request's.
+	op, err = stub.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:                          name,
+			Etag:                          unchanged.GetEtag(),
+			KeyPrefix:                     "client-supplied",
+			DatabaseEdition:               adminpb.Database_STANDARD,
+			VersionRetentionPeriod:        durationpb.New(30 * time.Minute),
+			PointInTimeRecoveryEnablement: adminpb.Database_POINT_IN_TIME_RECOVERY_ENABLED,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateDatabase(server-owned fields): %w", err)
+	}
+	owned := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(owned); err != nil {
+		return fmt.Errorf("UpdateDatabase(server-owned fields) response: %w", err)
+	}
+	if owned.GetKeyPrefix() != "" {
+		return fmt.Errorf("UpdateDatabase stored the OUTPUT_ONLY key_prefix = %q", owned.GetKeyPrefix())
+	}
+	if owned.GetDatabaseEdition() != unchanged.GetDatabaseEdition() {
+		return fmt.Errorf("UpdateDatabase wrote the IMMUTABLE database_edition %v -> %v", unchanged.GetDatabaseEdition(), owned.GetDatabaseEdition())
+	}
+	if got := owned.GetVersionRetentionPeriod().AsDuration(); got != 7*24*time.Hour {
+		return fmt.Errorf("UpdateDatabase retention = %v, want 168h (PITR enabled)", got)
+	}
+	// A masked change to the IMMUTABLE edition is INVALID_ARGUMENT (AIP-203); the
+	// patch above resent the created value, which is accepted.
+	if _, err := stub.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database:   &adminpb.Database{Name: name, DatabaseEdition: adminpb.Database_ENTERPRISE},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"database_edition"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("UpdateDatabase(database_edition change) code = %v, want InvalidArgument", status.Code(err))
 	}
 	return nil
 }

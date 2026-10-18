@@ -1092,7 +1092,7 @@
       "rpc": "UpdateDatabase",
       "method": "UpdateDatabase",
       "status": "pass",
-      "key_field": "concurrency_mode updated under mask + omitted mask applies populated fields + empty mask is a no-op"
+      "key_field": "concurrency_mode under mask + omitted mask applies populated fields + empty mask is a no-op + OUTPUT_ONLY fields ignored, retention derived from PITR, IMMUTABLE edition change rejected"
     },
     {
       "service": "firestoreadmin",
