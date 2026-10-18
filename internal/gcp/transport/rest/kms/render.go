@@ -102,13 +102,23 @@ func importJobMap(ij kmscore.ImportJob) map[string]any {
 		"generateTime":    timestamp.Canonical(ij.GenerateTime),
 		"expireTime":      timestamp.Canonical(ij.ExpireTime),
 	}
+	// The wrapping public key is documented "Only returned if state is ACTIVE";
+	// the key material stays stored (and is only usable to import while ACTIVE,
+	// which ImportCryptoKeyVersion enforces), so an EXPIRED job renders none.
+	// publicKeyFormat carries no such condition — it echoes the format the
+	// caller asked for — so it is rendered for every state, which also keeps the
+	// publicKeyFormat list filter in agreement with the body (DC42).
 	switch {
 	case len(ij.PublicKeyRaw) > 0:
 		out["publicKeyFormat"] = publicKeyFormatForMethod(ij.ImportMethod)
-		out["publicKey"] = map[string]any{"data": base64.StdEncoding.EncodeToString(ij.PublicKeyRaw)}
+		if ij.State == "ACTIVE" {
+			out["publicKey"] = map[string]any{"data": base64.StdEncoding.EncodeToString(ij.PublicKeyRaw)}
+		}
 	case ij.PublicKeyPEM != "":
 		out["publicKeyFormat"] = "PEM"
-		out["publicKey"] = map[string]any{"pem": ij.PublicKeyPEM}
+		if ij.State == "ACTIVE" {
+			out["publicKey"] = map[string]any{"pem": ij.PublicKeyPEM}
+		}
 	}
 	return out
 }

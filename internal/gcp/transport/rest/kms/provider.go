@@ -904,8 +904,8 @@ func (p *Provider) ImportJobGet(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	_, loc, kr, id, ok := kmscore.SplitImportJobName(name)
-	if !ok {
+	loc, kr, id := parseImportJob(name)
+	if id == "" {
 		return nil, model.NewProviderError("InvalidRequest", "invalid resource name", 400)
 	}
 	ij, err := p.core.GetImportJob(ctx, nr.AccountID, loc, kr, id)
@@ -1164,6 +1164,22 @@ func parseVersion(name string) (loc, kr, key, version string) {
 
 func parseCryptoKeyFromParent(name string) (loc, kr, key string) {
 	return parseCryptoKey(strings.TrimSuffix(name, "/cryptoKeyVersions"))
+}
+
+// parseImportJob splits an import-job name that may or may not carry a
+// projects/{p} prefix into location/keyRing/job. The JSON codec strips the
+// project segment, so the project-relative form
+// (locations/{l}/keyRings/{kr}/importJobs/{id}) is what a client's GET produces.
+func parseImportJob(name string) (loc, kr, id string) {
+	if _, l, r, j, ok := kmscore.SplitImportJobName(name); ok {
+		return l, r, j
+	}
+	name = strings.TrimPrefix(strings.TrimPrefix(name, "/"), "locations/")
+	parts := strings.Split(name, "/")
+	if len(parts) >= 5 && parts[1] == "keyRings" && parts[3] == "importJobs" {
+		return parts[0], parts[2], parts[4]
+	}
+	return "", "", ""
 }
 
 // parseImportParent parses a cryptoKey parent from a ":import"-style call, whose

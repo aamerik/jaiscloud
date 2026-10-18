@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 558 | 116 |
+| rest | 559 | 115 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -697,7 +697,7 @@ _77 cell(s): ga=77 limited=0 preview=0 unsupported=0_
 | KMS.CryptoKeyVersionUpdate | rest | ga | no | — |
 | KMS.GenerateRandomBytes | rest | ga | yes | — |
 | KMS.ImportJobCreate | rest | ga | yes | — |
-| KMS.ImportJobGet | rest | ga | no | — |
+| KMS.ImportJobGet | rest | ga | yes | — |
 | KMS.ImportJobGetIamPolicy | rest | ga | yes | — |
 | KMS.ImportJobList | rest | ga | yes | — |
 | KMS.ImportJobSetIamPolicy | rest | ga | yes | — |

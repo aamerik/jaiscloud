@@ -129,11 +129,11 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 558
+        "rest": 559
       },
       "unverified": {
         "grpc": 21,
-        "rest": 116
+        "rest": 115
       }
     },
     "grpc_only_services": [
@@ -7731,12 +7731,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.importJobs.get",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.importJobs.get",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
