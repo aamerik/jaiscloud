@@ -77,6 +77,11 @@ type versionMeta struct {
 	CreateTime  string `json:"createTime"`
 	DestroyTime string `json:"destroyTime,omitempty"` // only when DESTROYED
 	Data        string `json:"data"`                  // base64 payload (encrypted at rest)
+	// KmsKeyVersionName is the full CryptoKeyVersion name (see
+	// secretmanagersvc.KmsKeyVersionName) reported back through
+	// replicationStatus.automatic.customerManagedEncryption; empty when the
+	// version has no customer-managed encryption.
+	KmsKeyVersionName string `json:"kmsKeyVersionName,omitempty"`
 }
 
 // resourceName returns the "name" path param, or a 400 when absent.
@@ -223,6 +228,10 @@ func fromStoreVersion(nr *model.NormalizedRequest, v secretmanagerstore.Version)
 		Name:  nr.ResourceID("secret", v.SecretID) + "/versions/" + v.VersionID,
 		State: v.State,
 		Data:  v.Data,
+		// The version's replicationStatus echoes the CryptoKeyVersion that
+		// actually wrapped it (DC44); it is per-version because the wrap is
+		// stored with the version.
+		KmsKeyVersionName: secretmanagersvc.KmsKeyVersionName(v.KmsKeyName, v.WrappedDEK),
 	}
 	if !v.CreateTime.IsZero() {
 		m.CreateTime = timestamp.Canonical(v.CreateTime)
@@ -528,21 +537,15 @@ func (p *Provider) AddVersion(ctx context.Context, nr *model.NormalizedRequest) 
 	}
 	encryptedPayloadBase64 := base64.StdEncoding.EncodeToString(encryptedPayloadBytes)
 
-	v := versionMeta{
-		Name:       nr.ResourceID("secret", id) + "/versions/" + version,
-		State:      "ENABLED",
-		CreateTime: timestamp.Canonical(clock.Now()),
-		Data:       encryptedPayloadBase64,
-	}
 	stv := secretmanagerstore.Version{
 		SecretID: id, VersionID: version, State: "ENABLED",
-		CreateTime: mustParse(v.CreateTime), Data: encryptedPayloadBase64,
+		CreateTime: clock.Now(), Data: encryptedPayloadBase64,
 		KmsKeyName: sec.KmsKeyName, WrappedDEK: wrappedDEK,
 	}
 	if err := p.secrets.CreateVersion(ctx, nr.AccountID, stv); err != nil {
 		return nil, err
 	}
-	return provider.OK(versionToMap(v)), nil
+	return provider.OK(versionToMap(fromStoreVersion(nr, stv))), nil
 }
 
 // ─── Cloud SQL managed rotation ──────────────────────────────────────────────
@@ -677,20 +680,15 @@ func (p *Provider) appendManagedVersion(ctx context.Context, nr *model.Normalize
 		}
 		return versionMeta{}, mapSecretErr(err)
 	}
-	v := versionMeta{
-		Name:       nr.ResourceID("secret", id) + "/versions/" + strconv.Itoa(ver),
-		State:      "ENABLED",
-		CreateTime: timestamp.Canonical(clock.Now()),
-		Data:       base64.StdEncoding.EncodeToString(encrypted),
-	}
-	if err := p.secrets.CreateVersion(ctx, nr.AccountID, secretmanagerstore.Version{
+	stv := secretmanagerstore.Version{
 		SecretID: id, VersionID: strconv.Itoa(ver), State: "ENABLED",
-		CreateTime: mustParse(v.CreateTime), Data: v.Data,
+		CreateTime: clock.Now(), Data: base64.StdEncoding.EncodeToString(encrypted),
 		KmsKeyName: sec.KmsKeyName, WrappedDEK: wrappedDEK,
-	}); err != nil {
+	}
+	if err := p.secrets.CreateVersion(ctx, nr.AccountID, stv); err != nil {
 		return versionMeta{}, err
 	}
-	return v, nil
+	return fromStoreVersion(nr, stv), nil
 }
 
 func (p *Provider) Access(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -933,11 +931,6 @@ func mapVersionErr(err error) error {
 	return err
 }
 
-func mustParse(s string) time.Time {
-	t, _ := time.Parse(time.RFC3339Nano, s)
-	return t
-}
-
 // crc32c returns the CRC32C-Castagnoli checksum of the base64-decoded data as
 // a decimal string (google.protobuf.Int64Value encoding).
 func crc32c(b64 string) string {
@@ -1015,8 +1008,10 @@ func versionToMap(v versionMeta) map[string]any {
 		"etag": secretmanagersvc.VersionEtag(v.Name, v.CreateTime, v.State),
 		// replicationStatus mirrors the parent secret's replication. JaisCloud
 		// only models automatic replication, which GCP renders as an empty
-		// automatic object.
-		"replicationStatus": map[string]any{"automatic": map[string]any{}},
+		// automatic object when the secret uses Google-managed encryption.
+		// When the version was wrapped with a CMEK, real GCP also reports the
+		// exact CryptoKeyVersion that wrapped this payload (DC44).
+		"replicationStatus": versionReplicationStatusToMap(v),
 		// clientSpecifiedPayloadChecksum is the only integrity field the real
 		// SecretVersion carries: the Discovery schema and the v1 proto both
 		// define it and nothing else (no `checksum` property). gcloud's
@@ -1028,4 +1023,16 @@ func versionToMap(v versionMeta) map[string]any {
 		out["destroyTime"] = v.DestroyTime
 	}
 	return out
+}
+
+// versionReplicationStatusToMap renders a SecretVersion's replicationStatus.
+// Real GCP populates automatic.customerManagedEncryption.kmsKeyVersionName only
+// when the version's payload was wrapped with a customer-managed key, and omits
+// the nested message otherwise; the automatic arm itself is always present.
+func versionReplicationStatusToMap(v versionMeta) map[string]any {
+	auto := map[string]any{}
+	if v.KmsKeyVersionName != "" {
+		auto["customerManagedEncryption"] = map[string]any{"kmsKeyVersionName": v.KmsKeyVersionName}
+	}
+	return map[string]any{"automatic": auto}
 }

@@ -440,6 +440,23 @@ func TestSecretManagerCMEKRoundTrip(t *testing.T) {
 	}
 	versionName := addResp.Data["name"].(string)
 
+	// The version reports the exact CryptoKeyVersion that wrapped its payload
+	// under replicationStatus.automatic.customerManagedEncryption
+	// (DC44). The wrapping version is the key's primary at wrap time.
+	wantKeyVersion := kmsKeyName + "/versions/" + version
+	if got := cmekVersionFromVersionMap(t, addResp.Data); got != wantKeyVersion {
+		t.Fatalf("AddVersion kmsKeyVersionName = %q, want %q", got, wantKeyVersion)
+	}
+	gotVersionNR := newNR(map[string]any{"name": versionName})
+	gotVersionNR.AccountID = projectID
+	gotVersion, err := p.GetVersion(ctx, gotVersionNR)
+	if err != nil {
+		t.Fatalf("get version: %v", err)
+	}
+	if got := cmekVersionFromVersionMap(t, gotVersion.Data); got != wantKeyVersion {
+		t.Fatalf("GetVersion kmsKeyVersionName = %q, want %q", got, wantKeyVersion)
+	}
+
 	// Access
 	accessNR := newNR(map[string]any{
 		"name": versionName,
@@ -508,6 +525,66 @@ func TestSecretManagerCMEKRoundTrip(t *testing.T) {
 	if got := cmekFromSecretMap(t, items[0].(map[string]any)); got != key2Name {
 		t.Fatalf("list replication CMEK = %q, want %q", got, key2Name)
 	}
+
+	// A version's status is per-version, not the secret's current policy: after
+	// patching to key2, a new version reports key2's wrapping version, while the
+	// first version (wrapped with key1) keeps the key version that actually
+	// wrapped it. Rotating key2's primary afterwards must likewise only affect
+	// versions added later — the stored wrap-time tag is what makes this exact.
+	addVersion := func(payload string) map[string]any {
+		t.Helper()
+		nr := newNR(map[string]any{
+			"name": "projects/" + projectID + "/secrets/cmek-secret",
+			"body": map[string]any{"payload": map[string]any{"data": payload}},
+		})
+		nr.AccountID = projectID
+		resp, err := p.AddVersion(ctx, nr)
+		if err != nil {
+			t.Fatalf("add version: %v", err)
+		}
+		return resp.Data
+	}
+
+	// key2 was created with version v2 as its primary (above).
+	second := addVersion("c2Vjb25k")
+	if got, want := cmekVersionFromVersionMap(t, second), key2Name+"/versions/"+v2; got != want {
+		t.Fatalf("version after patching to key2 kmsKeyVersionName = %q, want %q", got, want)
+	}
+
+	// Rotate key2's primary to a fresh version, then add another version.
+	rotated, err := kmsStore.CreateVersion(ctx, projectID, location, keyringID, key2ID, kms.Version{State: "ENABLED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := kmsStore.UpdatePrimaryVersion(ctx, projectID, location, keyringID, key2ID, rotated); err != nil {
+		t.Fatal(err)
+	}
+	third := addVersion("dGhpcmQ=")
+	if got, want := cmekVersionFromVersionMap(t, third), key2Name+"/versions/"+rotated; got != want {
+		t.Fatalf("version after primary rotation kmsKeyVersionName = %q, want %q", got, want)
+	}
+
+	// The earlier version still reports the CryptoKeyVersion that wrapped it,
+	// and the pre-patch version still reports key1's version.
+	secondName, _ := second["name"].(string)
+	nr2 := newNR(map[string]any{"name": secondName})
+	nr2.AccountID = projectID
+	stillSecond, err := p.GetVersion(ctx, nr2)
+	if err != nil {
+		t.Fatalf("get second version: %v", err)
+	}
+	if got, want := cmekVersionFromVersionMap(t, stillSecond.Data), key2Name+"/versions/"+v2; got != want {
+		t.Fatalf("second version after rotation kmsKeyVersionName = %q, want %q", got, want)
+	}
+	nr1 := newNR(map[string]any{"name": versionName})
+	nr1.AccountID = projectID
+	stillFirst, err := p.GetVersion(ctx, nr1)
+	if err != nil {
+		t.Fatalf("get first version: %v", err)
+	}
+	if got := cmekVersionFromVersionMap(t, stillFirst.Data); got != wantKeyVersion {
+		t.Fatalf("first version after patch kmsKeyVersionName = %q, want %q", got, wantKeyVersion)
+	}
 }
 
 // TestSecretReplicationWithoutCMEK pins the no-CMEK shape: the automatic arm is
@@ -535,6 +612,21 @@ func TestSecretReplicationWithoutCMEK(t *testing.T) {
 	if got := cmekFromSecretMap(t, resp.Data); got != "" {
 		t.Fatalf("CMEK = %q, want empty", got)
 	}
+
+	// A version of a Google-managed secret reports the automatic arm with no
+	// customerManagedEncryption, rather than an empty nested status object.
+	addNR := newNR(map[string]any{
+		"name": "projects/proj/secrets/plain-secret",
+		"body": map[string]any{"payload": map[string]any{"data": "aGk="}},
+	})
+	addNR.AccountID = "proj"
+	addResp, err := p.AddVersion(ctx, addNR)
+	if err != nil {
+		t.Fatalf("add version: %v", err)
+	}
+	if got := cmekVersionFromVersionMap(t, addResp.Data); got != "" {
+		t.Fatalf("version kmsKeyVersionName = %q, want empty", got)
+	}
 }
 
 // cmekFromSecretMap returns the CMEK key name from a rendered Secret, or "" when
@@ -558,6 +650,31 @@ func cmekFromSecretMap(t *testing.T, data map[string]any) string {
 		t.Fatalf("customerManagedEncryption = %#v, want an object", raw)
 	}
 	name, _ := cme["kmsKeyName"].(string)
+	return name
+}
+
+// cmekVersionFromVersionMap returns the kmsKeyVersionName from a rendered
+// SecretVersion's replicationStatus, or "" when the version carries no CMEK
+// status (the automatic arm with no customerManagedEncryption).
+func cmekVersionFromVersionMap(t *testing.T, data map[string]any) string {
+	t.Helper()
+	rs, ok := data["replicationStatus"].(map[string]any)
+	if !ok {
+		t.Fatalf("replicationStatus = %#v, want an object", data["replicationStatus"])
+	}
+	auto, ok := rs["automatic"].(map[string]any)
+	if !ok {
+		t.Fatalf("replicationStatus.automatic = %#v, want an object", rs["automatic"])
+	}
+	raw, present := auto["customerManagedEncryption"]
+	if !present {
+		return ""
+	}
+	cme, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("customerManagedEncryption = %#v, want an object", raw)
+	}
+	name, _ := cme["kmsKeyVersionName"].(string)
 	return name
 }
 
