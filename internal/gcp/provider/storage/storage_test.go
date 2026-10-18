@@ -419,11 +419,12 @@ func TestObjectsListMaxResultsCappedAt1000(t *testing.T) {
 }
 
 // TestObjectsListNegativeMaxResults pins the Discovery document's uint32
-// maxResults contract on the REST listings: a negative, fractional, signed or
-// out-of-uint32 value is a 400 (reason invalidParameter) on the plain,
-// delimiter and versions object listings and on buckets.list, instead of being
-// folded into the 1,000-item default; a bad value is validated before the
-// bucket lookup; and an explicit zero is a literal empty page (DC39).
+// maxResults contract on the REST listings: a negative, fractional, signed,
+// out-of-uint32 or explicitly empty value is a 400 (reason invalidParameter) on
+// the plain, delimiter and versions object listings and on buckets.list,
+// instead of being folded into the 1,000-item default; a bad value is validated
+// before the bucket lookup; and an explicit zero is a literal empty page (DC39,
+// empty value pinned with DC63).
 func TestObjectsListNegativeMaxResults(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()
@@ -452,9 +453,11 @@ func TestObjectsListNegativeMaxResults(t *testing.T) {
 		{"versions", map[string]any{"versions": "true"}},
 	}
 	// The Discovery document declares maxResults a uint32 with minimum 0, so a
-	// negative, fractional, signed or out-of-uint32 value is INVALID_ARGUMENT
-	// (400, reason invalidParameter).
-	for _, bad := range []string{"-1", "abc", "1.5", "+5", "4294967296"} {
+	// negative, fractional, signed, out-of-uint32 or explicitly empty value is
+	// INVALID_ARGUMENT (400, reason invalidParameter). GCS's JSON API rejects
+	// the empty binding on its own — the behaviour the shared resolvers adopt in
+	// DC63 — so this is also the consistency pin for the two surfaces.
+	for _, bad := range []string{"", "-1", "abc", "1.5", "+5", "4294967296"} {
 		for _, tc := range lists {
 			nr = bucketParams()
 			nr.Params["bucket"] = "bkt"

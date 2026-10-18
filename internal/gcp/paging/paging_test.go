@@ -125,6 +125,12 @@ func TestPageSizeFallback(t *testing.T) {
 			t.Errorf("PageSize(%v) = %d, want default %d", params, got, defaultPageSize)
 		}
 	}
+	// An explicitly empty pageSize is not "absent": the frontend binds "" and
+	// rejects it (DC63), so the shared resolver must not fall back to the
+	// default page.
+	if _, err := PageSize(map[string]any{"pageSize": ""}); err == nil {
+		t.Error(`PageSize(pageSize="") = nil error, want the int32 binding error`)
+	}
 	for _, params := range []map[string]any{
 		{"pageSize": "7"},
 		{"pageSize": 7},
@@ -140,10 +146,11 @@ func TestPageSizeFallback(t *testing.T) {
 // TestParseSizeRejectsNonInteger pins the int32 binding rule the bespoke REST
 // pagers previously skipped: a pageSize that is not an integer (or is outside
 // int32) is INVALID_ARGUMENT, never silently folded into "absent" — the same
-// answer real GCP's query binding gives.
+// answer real GCP's query binding gives. An explicitly empty value is rejected
+// the same way (DC63); only an absent parameter binds to zero.
 func TestParseSizeRejectsNonInteger(t *testing.T) {
 	for _, v := range []any{
-		"abc", "-0.5", "1.5", "1e3", " 5", "5 ",
+		"", "abc", "-0.5", "1.5", "1e3", " 5", "5 ",
 		float64(-0.5), float64(1.5),
 		"2147483648", "-2147483649",
 		float64(2147483648),
@@ -162,12 +169,20 @@ func TestParseSizeRejectsNonInteger(t *testing.T) {
 			t.Errorf("ParseSize(%#v) = %d, want 0 alongside the error", v, got)
 		}
 	}
+	// The empty query value echoes exactly as the client sent it.
+	if _, err := ParseSize(""); err == nil {
+		t.Error(`ParseSize("") = nil error, want the int32 binding error`)
+	} else {
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) || perr.Message != `Invalid value at 'page_size' (TYPE_INT32), ""` {
+			t.Errorf(`ParseSize("") = %v, want the frontend page_size binding message`, err)
+		}
+	}
 	for _, tc := range []struct {
 		v    any
 		want int
 	}{
 		{nil, 0},
-		{"", 0}, // an empty query value is treated as absent
 		{"7", 7},
 		{int(7), 7},
 		{int32(7), 7},
@@ -190,8 +205,9 @@ func TestParseSizeRejectsNonInteger(t *testing.T) {
 // real GCP's binding envelope for the parameter the client actually sent
 // ("Invalid value at 'max_results' (TYPE_INT32), \"abc\"" — the snake_case
 // proto field, the value re-quoted) instead of always naming pageSize (DC67).
+// An explicitly empty value is rejected by the same envelope (DC63).
 func TestParseSizeNamedParam(t *testing.T) {
-	for _, v := range []any{"abc", "1.5", "-0.5", "2147483648", 2147483648} {
+	for _, v := range []any{"", "abc", "1.5", "-0.5", "2147483648", 2147483648} {
 		_, err := ParseSizeNamed(v, "maxResults")
 		var perr *model.ProviderError
 		if !errors.As(err, &perr) {
@@ -213,7 +229,6 @@ func TestParseSizeNamedParam(t *testing.T) {
 		want int
 	}{
 		{nil, 0},
-		{"", 0},
 		{int32(7), 7},
 		{int64(7), 7},
 		{float64(7), 7},
@@ -231,10 +246,11 @@ func TestParseSizeNamedParam(t *testing.T) {
 // instances/operations lists declare for maxResults: a negative value is not a
 // valid binding, the rejection carries the frontend's uint32 envelope naming
 // the proto field, and a value above MaxInt32 is still a legal uint32 (the
-// caller's range policy then clamps it).
+// caller's range policy then clamps it). An explicitly empty value is rejected
+// too (DC63).
 func TestParseUintSizeNamed(t *testing.T) {
 	for _, v := range []any{
-		"abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5), float64(-1),
+		"", "abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5), float64(-1),
 		int64(-1), int32(-1),
 	} {
 		_, err := ParseUintSizeNamed(v, "maxResults")
@@ -255,7 +271,6 @@ func TestParseUintSizeNamed(t *testing.T) {
 		want int
 	}{
 		{nil, 0},
-		{"", 0},
 		{"0", 0},
 		{"500", 500},
 		{"2147483648", 2147483648}, // above int32, still a legal uint32
@@ -272,7 +287,8 @@ func TestParseUintSizeNamed(t *testing.T) {
 // TestMaxResultsUint32 pins the unsigned legacy resolver Compute Engine and
 // Cloud SQL's instances/operations lists use: a negative value is not a legal
 // binding, an absent value selects the caller's default, and a value above
-// int32 is still a legal uint32 (the caller's own ceiling then clamps it).
+// int32 is still a legal uint32 (the caller's own ceiling then clamps it). An
+// explicitly empty value is a binding error, not the default (DC63).
 func TestMaxResultsUint32(t *testing.T) {
 	keys := []string{"maxResults", "pageSize"}
 	for _, tc := range []struct {
@@ -281,7 +297,6 @@ func TestMaxResultsUint32(t *testing.T) {
 		want   int
 	}{
 		{"absent", nil, 500},
-		{"empty", map[string]any{"maxResults": ""}, 500},
 		{"zero", map[string]any{"maxResults": "0"}, 500},
 		{"value", map[string]any{"maxResults": "2"}, 2},
 		{"above int32", map[string]any{"maxResults": "3000000000"}, 3000000000},
@@ -294,22 +309,36 @@ func TestMaxResultsUint32(t *testing.T) {
 			t.Errorf("%s: MaxResultsUint32(%v) = %d, %v; want %d, nil", tc.label, tc.params, got, err, tc.want)
 		}
 	}
-	for _, v := range []any{"abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5)} {
+	for _, v := range []any{"", "abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5)} {
 		_, err := MaxResultsUint32(map[string]any{"maxResults": v}, keys, 500)
 		var perr *model.ProviderError
 		if !errors.As(err, &perr) || perr.Message != `Invalid value at 'max_results' (TYPE_UINT32), `+boundValueText(v) {
 			t.Errorf("MaxResultsUint32(maxResults=%#v) = %v, want the frontend uint32 binding error", v, err)
 		}
 	}
+	// An empty declared parameter does not fall through to a valid alias, and
+	// the alias's own empty value is the same binding rejection (DC63).
+	for _, tc := range []struct {
+		params map[string]any
+		want   string
+	}{
+		{map[string]any{"maxResults": "", "pageSize": "3"}, `Invalid value at 'max_results' (TYPE_UINT32), ""`},
+		{map[string]any{"pageSize": ""}, `Invalid value at 'page_size' (TYPE_UINT32), ""`},
+	} {
+		_, err := MaxResultsUint32(tc.params, keys, 500)
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) || perr.Message != tc.want {
+			t.Errorf("MaxResultsUint32(%v) = %v, want %q", tc.params, err, tc.want)
+		}
+	}
 }
 
 // TestBindMaxResults pins the parse half Cloud DNS applies before routing (DC62):
 // the int32 binding only, reporting the parameter and raw value so the caller
-// can apply its own range later. An unparseable value is the frontend's 400 even
-// when the parent resource is missing; absent, nil and explicitly empty all bind
-// to the zero value, which Resolve turns into the caller's default (DC63 keeps
-// empty as absent for now), and an empty maxResults still falls through to the
-// emulator's pageSize alias.
+// can apply its own range later. An unparseable value — an explicitly empty one
+// included (DC63) — is the frontend's 400 even when the parent resource is
+// missing; an absent or nil parameter is the zero binding, which Resolve turns
+// into the caller's default.
 func TestBindMaxResults(t *testing.T) {
 	keys := []string{"maxResults", "pageSize"}
 	for _, tc := range []struct {
@@ -320,14 +349,11 @@ func TestBindMaxResults(t *testing.T) {
 	}{
 		{"absent", nil, 0, ""},
 		{"nil value", map[string]any{"maxResults": nil}, 0, ""},
-		{"empty", map[string]any{"maxResults": ""}, 0, ""},
 		{"zero", map[string]any{"maxResults": "0"}, 0, "maxResults"},
 		{"negative", map[string]any{"maxResults": "-1"}, -1, "maxResults"},
 		{"value", map[string]any{"maxResults": "42"}, 42, "maxResults"},
 		{"alias", map[string]any{"pageSize": "7"}, 7, "pageSize"},
 		{"both", map[string]any{"maxResults": "2", "pageSize": "3"}, 2, "maxResults"},
-		// An empty declared parameter is absent, so the alias still applies.
-		{"empty then alias", map[string]any{"maxResults": "", "pageSize": "9"}, 9, "pageSize"},
 	} {
 		got, err := BindMaxResults(tc.params, keys)
 		if err != nil {
@@ -339,11 +365,27 @@ func TestBindMaxResults(t *testing.T) {
 				tc.label, tc.params, got.Size, got.Param, tc.size, tc.param)
 		}
 	}
-	for _, v := range []any{"abc", "1.5", "-0.5", "2147483648"} {
+	for _, v := range []any{"", "abc", "1.5", "-0.5", "2147483648"} {
 		_, err := BindMaxResults(map[string]any{"maxResults": v}, keys)
 		var perr *model.ProviderError
 		if !errors.As(err, &perr) || perr.Message != `Invalid value at 'max_results' (TYPE_INT32), `+boundValueText(v) {
 			t.Errorf("BindMaxResults(maxResults=%#v) = %v, want the frontend int32 binding error", v, err)
+		}
+	}
+	// An empty declared parameter is a binding error, not a fall-through to a
+	// valid alias (DC63); the alias itself is bound the same way, since the
+	// emulator cannot ignore it where real GCP ignores an unknown parameter.
+	for _, tc := range []struct {
+		params map[string]any
+		want   string
+	}{
+		{map[string]any{"maxResults": "", "pageSize": "9"}, `Invalid value at 'max_results' (TYPE_INT32), ""`},
+		{map[string]any{"pageSize": ""}, `Invalid value at 'page_size' (TYPE_INT32), ""`},
+	} {
+		_, err := BindMaxResults(tc.params, keys)
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) || perr.Message != tc.want {
+			t.Errorf("BindMaxResults(%v) = %v, want %q", tc.params, err, tc.want)
 		}
 	}
 	// A typed (non-query) value still echoes plainly rather than being re-quoted;
@@ -359,10 +401,11 @@ func TestBindMaxResults(t *testing.T) {
 	}
 }
 
-// TestMaxResultsBindingResolve pins the backend half: the caller's default for a
-// zero binding (absent or empty) and Cloud DNS's probed 1..1000 range, whose
-// rejection is the frontend's parameter-validation text naming the camelCase
-// query parameter (DC62).
+// TestMaxResultsBindingResolve pins the backend half: the caller's default for
+// the zero binding (an absent parameter) and Cloud DNS's probed 1..1000 range,
+// whose rejection is the frontend's parameter-validation text naming the
+// camelCase query parameter (DC62). An explicitly empty value never reaches
+// Resolve: BindMaxResults rejects it (DC63).
 func TestMaxResultsBindingResolve(t *testing.T) {
 	keys := []string{"maxResults", "pageSize"}
 	for _, tc := range []struct {
@@ -371,7 +414,6 @@ func TestMaxResultsBindingResolve(t *testing.T) {
 		want   int
 	}{
 		{"absent", nil, 100},
-		{"empty", map[string]any{"maxResults": ""}, 100},
 		{"lower bound", map[string]any{"maxResults": "1"}, 1},
 		{"upper bound", map[string]any{"maxResults": "1000"}, 1000},
 		{"value", map[string]any{"maxResults": "42"}, 42},

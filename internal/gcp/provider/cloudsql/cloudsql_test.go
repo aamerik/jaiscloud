@@ -555,10 +555,10 @@ func hasItemField(items []any, field, value string) bool {
 
 // TestListMaxResultsBinding pins Cloud SQL's maxResults query binding on the
 // two list methods whose Discovery document declares it: instances.list and
-// operations.list declare a uint32, so an unparseable value ("abc", "1.5"), a
-// negative one or one above uint32 is INVALID_ARGUMENT/400 with the binding
-// message, never a silent fall back to the default page. A value above int32 is
-// still a legal uint32.
+// operations.list declare a uint32, so an unparseable value ("abc", "1.5"), an
+// explicitly empty one (DC63), a negative one or one above uint32 is
+// INVALID_ARGUMENT/400 with the binding message, never a silent fall back to
+// the default page. A value above int32 is still a legal uint32.
 func TestListMaxResultsBinding(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider()
@@ -575,7 +575,7 @@ func TestListMaxResultsBinding(t *testing.T) {
 		}},
 	}
 	for _, h := range handlers {
-		for _, v := range []any{"abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5)} {
+		for _, v := range []any{"", "abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5)} {
 			_, err := h.call(map[string]any{"maxResults": v})
 			var perr *model.ProviderError
 			if !errors.As(err, &perr) {
@@ -606,9 +606,10 @@ func TestListMaxResultsBinding(t *testing.T) {
 // TestListEmulatorPaginationStaysLenient pins the methods whose Discovery
 // document declares neither maxResults nor pageToken (databases.list,
 // users.list, flags.list, tiers.list): pagination there is an emulator
-// extension, and real GCP ignores an unknown query parameter, so a malformed
-// value keeps selecting the default page instead of failing a request the real
-// API would accept.
+// extension, and real GCP ignores an unknown query parameter, so a malformed or
+// explicitly empty value keeps selecting the default page instead of failing a
+// request the real API would accept. (DC63's empty-is-invalid rule applies only
+// to the declared bindings above.)
 func TestListEmulatorPaginationStaysLenient(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider()
@@ -633,7 +634,7 @@ func TestListEmulatorPaginationStaysLenient(t *testing.T) {
 		}},
 	}
 	for _, h := range handlers {
-		for _, v := range []any{"abc", "1.5", "-1", float64(1.5)} {
+		for _, v := range []any{"", "abc", "1.5", "-1", float64(1.5)} {
 			if resp, err := h.call(map[string]any{"maxResults": v}); err != nil || resp == nil {
 				t.Errorf("%s(maxResults=%#v) = %v, %v; want the default page (extension stays lenient)", h.name, v, resp, err)
 			}

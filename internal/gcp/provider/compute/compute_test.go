@@ -796,14 +796,14 @@ func TestListParamsPageSizeDefaults(t *testing.T) {
 }
 
 // TestListParamsRejectsBadMaxResults pins the uint32 query binding Compute's
-// Discovery document declares for maxResults: an unparseable value, a fraction
-// or a negative one is INVALID_ARGUMENT, never a silent fall back to the 500
-// default page — the same answer real GCP's binding gives. The status and the
-// shape of the envelope match; Compute's frontend names the field
-// "header.max_results" where the shared resolver names "max_results", a
-// cosmetic difference recorded in DC68.
+// Discovery document declares for maxResults: an unparseable value, a fraction,
+// an explicitly empty one (DC63) or a negative one is INVALID_ARGUMENT, never a
+// silent fall back to the 500 default page — the same answer real GCP's binding
+// gives. The status and the shape of the envelope match; Compute's frontend
+// names the field "header.max_results" where the shared resolver names
+// "max_results", a cosmetic difference recorded in DC68.
 func TestListParamsRejectsBadMaxResults(t *testing.T) {
-	for _, v := range []any{"abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5), int64(-1)} {
+	for _, v := range []any{"", "abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5), int64(-1)} {
 		_, err := listParams(newNR(map[string]any{"maxResults": v}))
 		var perr *model.ProviderError
 		if !errors.As(err, &perr) {

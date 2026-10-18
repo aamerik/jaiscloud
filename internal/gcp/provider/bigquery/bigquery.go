@@ -418,12 +418,12 @@ func (p *Provider) jobSummaryMap(projectID string, j bqstore.Job) map[string]any
 
 // pagingParams translates BigQuery's maxResults/pageToken query parameters into
 // the shared paging helper's pageSize/pageToken shape (maxResults is BigQuery's
-// page-size parameter; paging.PageSize reads pageSize). maxResults is declared
-// `uint32`, not the int32 pageSize the other APIs use, so a legal value above
-// MaxInt32 is capped for the int-based pager instead of being handed to
-// PageSize's int32 binding (which would reject it). A non-integer is still
-// rejected by PageSize; the list handlers also validate maxResults up front
-// (nonNegativeIntParam).
+// page-size parameter; paging.PageSize reads pageSize). maxResults is validated
+// up front by maxResultsQueryParam — the uint32 binding, so its rejection names
+// `max_results` (DC63) — and a legal value above MaxInt32 is capped for the
+// int-based pager here instead of being handed to PageSize's int32 binding
+// (which would reject it). The `pageSize` arm is the emulator's own alias for
+// maxResults; it is bound as if declared, like the other bespoke pagers.
 func pagingParams(params map[string]any) map[string]any {
 	out := map[string]any{}
 	if v, ok := params["pageToken"]; ok {
@@ -439,9 +439,10 @@ func pagingParams(params map[string]any) map[string]any {
 
 // cappedMaxResults maps a legal BigQuery maxResults (uint32) onto the shared
 // pager's int without changing its meaning: anything above MaxInt32 is capped
-// there (the page can never exceed the available items anyway). Values the
-// uint32 binding would reject are passed through untouched so PageSize reports
-// the binding error.
+// there (the page can never exceed the available items anyway). The handlers
+// validate maxResults before calling pagingParams, so a value the uint32 binding
+// would reject never reaches the pager; the pass-through keeps this adapter
+// total if that ever changes.
 func cappedMaxResults(v any) any {
 	switch x := v.(type) {
 	case string:
@@ -506,7 +507,7 @@ func (p *Provider) GetDataset(ctx context.Context, nr *model.NormalizedRequest) 
 }
 
 func (p *Provider) ListDatasets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	if _, err := nonNegativeIntParam(nr, "maxResults"); err != nil {
+	if _, err := maxResultsQueryParam(nr); err != nil {
 		return nil, err
 	}
 	datasets, err := p.store.ListDatasets(ctx, projectOf(nr))
@@ -630,7 +631,7 @@ func (p *Provider) ListTables(ctx context.Context, nr *model.NormalizedRequest) 
 	if datasetID == "" {
 		return nil, invalidArgument("datasetId is required")
 	}
-	if _, err := nonNegativeIntParam(nr, "maxResults"); err != nil {
+	if _, err := maxResultsQueryParam(nr); err != nil {
 		return nil, err
 	}
 	tables, err := p.store.ListTables(ctx, projectOf(nr), datasetID)
@@ -988,7 +989,7 @@ func (p *Provider) ListRows(ctx context.Context, nr *model.NormalizedRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	if _, err := nonNegativeIntParam(nr, "maxResults"); err != nil {
+	if _, err := maxResultsQueryParam(nr); err != nil {
 		return nil, err
 	}
 	t, err := p.store.GetTable(ctx, projectOf(nr), datasetID, tableID)
@@ -1029,9 +1030,12 @@ func (p *Provider) ListRows(ctx context.Context, nr *model.NormalizedRequest) (*
 	return provider.OK(resp), nil
 }
 
-// nonNegativeIntParam parses an optional non-negative integer query parameter,
-// defaulting to 0 when absent. A non-numeric or negative value is
-// InvalidArgument (real GCP rejects a malformed uint32 rather than ignoring it).
+// nonNegativeIntParam parses an optional non-negative integer query parameter
+// that the Discovery document declares as a *string* (`startIndex` is
+// `format: uint64, type: string`), defaulting to 0 when absent. A non-numeric or
+// negative value is InvalidArgument (real GCP rejects a malformed unsigned
+// integer rather than ignoring it). `maxResults` is a uint32 integer binding and
+// goes through maxResultsQueryParam instead.
 func nonNegativeIntParam(nr *model.NormalizedRequest, key string) (int, error) {
 	raw := strParam(nr, key)
 	if raw == "" {
@@ -1042,6 +1046,21 @@ func nonNegativeIntParam(nr *model.NormalizedRequest, key string) (int, error) {
 		return 0, invalidArgument(key + " must be a non-negative integer")
 	}
 	return n, nil
+}
+
+// maxResultsQueryParam parses BigQuery's optional maxResults query parameter
+// with the uint32 binding its Discovery document declares on every method that
+// takes it (datasets/tables/tabledata/jobs.list and jobs.getQueryResults),
+// defaulting to 0 when absent. An unparseable, negative or explicitly empty
+// value is the frontend's binding INVALID_ARGUMENT — an empty value is not
+// "absent" (DC63) — and the rejection names `max_results`, the field the
+// parameter binds to, rather than the shared pager's internal pageSize alias.
+func maxResultsQueryParam(nr *model.NormalizedRequest) (int, error) {
+	v, ok := nr.Params["maxResults"]
+	if !ok || v == nil {
+		return 0, nil
+	}
+	return paging.ParseUintSizeNamed(v, "maxResults")
 }
 
 // --- Jobs ---
@@ -1355,7 +1374,7 @@ func (p *Provider) GetJob(ctx context.Context, nr *model.NormalizedRequest) (*mo
 }
 
 func (p *Provider) ListJobs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	if _, err := nonNegativeIntParam(nr, "maxResults"); err != nil {
+	if _, err := maxResultsQueryParam(nr); err != nil {
 		return nil, err
 	}
 	jobs, err := p.store.ListJobs(ctx, projectOf(nr))
@@ -1477,7 +1496,7 @@ func (p *Provider) GetQueryResults(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, err
 	}
-	maxResults, err := nonNegativeIntParam(nr, "maxResults")
+	maxResults, err := maxResultsQueryParam(nr)
 	if err != nil {
 		return nil, err
 	}

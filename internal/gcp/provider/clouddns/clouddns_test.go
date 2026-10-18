@@ -390,13 +390,13 @@ func isCode(err error, code string) bool {
 }
 
 // TestListMaxResultsBinding pins Cloud DNS's maxResults int32 query binding on
-// every paged listing: an unparseable value ("abc", "1.5"), a fraction or an
-// out-of-int32 one is INVALID_ARGUMENT/400 with real GCP's binding envelope
-// ("Invalid value at 'max_results' (TYPE_INT32), \"abc\""), never a silently
-// absent parameter served from the default 100, while a legal integer still
-// pages. Found in the DC41 review (DC55); the message was corrected in DC67.
-// The binding is resolved before the parent-zone lookup, so a bad maxResults
-// beats the missing-zone 404.
+// every paged listing: an unparseable value ("abc", "1.5"), a fraction, an
+// explicitly empty one (DC63) or an out-of-int32 one is INVALID_ARGUMENT/400
+// with real GCP's binding envelope ("Invalid value at 'max_results'
+// (TYPE_INT32), \"abc\""), never a silently absent parameter served from the
+// default 100, while a legal integer still pages. Found in the DC41 review
+// (DC55); the message was corrected in DC67. The binding is resolved before the
+// parent-zone lookup, so a bad maxResults beats the missing-zone 404.
 func TestListMaxResultsBinding(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider()
@@ -422,7 +422,7 @@ func TestListMaxResultsBinding(t *testing.T) {
 		}},
 	}
 	for _, h := range handlers {
-		for _, v := range []any{"abc", "1.5", "-0.5", "2147483648", float64(1.5)} {
+		for _, v := range []any{"", "abc", "1.5", "-0.5", "2147483648", float64(1.5)} {
 			_, err := h.call(map[string]any{"maxResults": v})
 			var perr *model.ProviderError
 			if !errors.As(err, &perr) {
@@ -480,6 +480,11 @@ func TestListMaxResultsBinding(t *testing.T) {
 	resp, err := p.ListResourceRecordSets(ctx, newNR(map[string]any{"managedZone": "missing", "maxResults": "abc"}))
 	if !isCode(err, "InvalidArgument") {
 		t.Errorf("ListResourceRecordSets(missing zone, maxResults=abc) = %v, %v; want InvalidArgument", resp, err)
+	}
+	// An explicitly empty value is the same frontend binding rejection, so it
+	// too precedes the missing-zone lookup (DC63).
+	if _, err := p.ListResourceRecordSets(ctx, newNR(map[string]any{"managedZone": "missing", "maxResults": ""})); !isCode(err, "InvalidArgument") {
+		t.Errorf("ListResourceRecordSets(missing zone, maxResults=) = %v, want InvalidArgument", err)
 	}
 	for _, h := range handlers[1:] { // the two lists with a parent zone
 		for _, v := range []string{"0", "-1", "1001"} {

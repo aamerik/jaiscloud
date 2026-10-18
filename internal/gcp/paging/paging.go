@@ -125,10 +125,12 @@ func PageSize(params map[string]any) (int, error) {
 // uint32 instead; see ParseUintSizeNamed). Unlike PageSize it applies no paging
 // policy: an absent value (nil) is 0, and the caller decides whether zero means
 // the default (PageSize) or the maximum (Size). A value the int32 binding would
-// reject — an unparseable string such as "abc", a fraction such as "1.5" or
-// "-0.5", or one outside int32 — is INVALID_ARGUMENT, never silently absent.
-// This is the entry point for a bespoke REST pager that parses its own pageSize
-// before handing the integer to paging.Size or to a transport-neutral core.
+// reject — an unparseable string such as "abc", an explicitly empty value
+// (`?pageSize=`, which the frontend binds as `""` and rejects), a fraction such
+// as "1.5" or "-0.5", or one outside int32 — is INVALID_ARGUMENT, never
+// silently absent. This is the entry point for a bespoke REST pager that parses
+// its own pageSize before handing the integer to paging.Size or to a
+// transport-neutral core.
 func ParseSize(v any) (int, error) {
 	return ParseSizeNamed(v, "pageSize")
 }
@@ -140,8 +142,9 @@ func ParseSize(v any) (int, error) {
 // sends for an unparseable query binding — "Invalid value at 'max_results'
 // (TYPE_INT32), \"abc\"" — naming the proto field the parameter binds to and
 // echoing the value exactly as the client sent it, so a client that echoes the
-// error reads the parameter it actually sent. An absent or empty value is 0;
-// the caller keeps its own zero/negative policy.
+// error reads the parameter it actually sent. An absent value (nil) is 0; the
+// caller keeps its own zero/negative policy. An explicitly empty query value is
+// rejected like any other unparseable binding (DC63).
 func ParseSizeNamed(v any, name string) (int, error) {
 	return parseBoundSize(v, name, true)
 }
@@ -157,8 +160,9 @@ func ParseUintSizeNamed(v any, name string) (int, error) {
 }
 
 // parseBoundSize implements the int32/uint32 query binding shared by the named
-// resolvers. An empty string is treated as absent (the behavior the lenient
-// parsers had); every other value the binding cannot represent is
+// resolvers. An absent parameter arrives as nil and binds to 0; any value the
+// binding cannot represent — an explicitly empty query value (`?pageSize=`)
+// included, which the frontend rejects with the binding envelope — is
 // INVALID_ARGUMENT.
 func parseBoundSize(v any, name string, signed bool) (int, error) {
 	min, max := int64(math.MinInt32), int64(math.MaxInt32)
@@ -178,9 +182,6 @@ func parseBoundSize(v any, name string, signed bool) (int, error) {
 	case nil:
 		return 0, nil
 	case string:
-		if x == "" {
-			return 0, nil
-		}
 		if signed {
 			n, err := strconv.ParseInt(x, 10, 32)
 			if err != nil {
@@ -348,7 +349,8 @@ func rangeBoundSize(name string, v any) error {
 // MaxResultsBinding is a legacy `maxResults` page-size parameter after the
 // query binding has been applied: Size is the parsed integer, and Param/Raw are
 // the key and the value the client sent. The zero value (Param == "") means the
-// parameter was absent, nil, or explicitly empty.
+// parameter was absent (or nil); an explicitly empty value is a binding error,
+// not an absent parameter (DC63).
 type MaxResultsBinding struct {
 	Size  int
 	Param string
@@ -364,18 +366,16 @@ type MaxResultsBinding struct {
 // parent lookup. Keys are read in order (so a caller can keep the emulator's
 // pageSize alias) and no default or range policy is applied here.
 //
-// An explicitly empty string is skipped, i.e. it keeps falling through to the
-// next key and finally to the caller's default. Real GCP rejects it (probed on
-// Cloud DNS, Cloud SQL, GCS and Pub/Sub), which is recorded as DC63 and is
-// deferred only until the console stops emitting an empty page-size parameter.
+// An explicitly empty value is NOT skipped: real GCP's frontend binds `""` and
+// rejects it, and the row that had deferred that rule (DC63) was settled by
+// direct probes (Cloud DNS, Cloud SQL, GCS and Pub/Sub all answer 400). The
+// emulator's `pageSize` alias is bound the same way when listed in keys, since
+// the emulator cannot ignore it the way real GCP ignores an unknown parameter.
 func BindMaxResults(params map[string]any, keys []string) (MaxResultsBinding, error) {
 	for _, k := range keys {
 		v, ok := params[k]
 		if !ok || v == nil {
 			continue
-		}
-		if s, ok := v.(string); ok && s == "" {
-			continue // DC63: empty stays absent for now.
 		}
 		n, err := ParseSizeNamed(v, k)
 		if err != nil {
@@ -387,7 +387,7 @@ func BindMaxResults(params map[string]any, keys []string) (MaxResultsBinding, er
 }
 
 // Resolve applies the caller's policy to a bound maxResults: def when the
-// parameter was absent or empty, and INVALID_ARGUMENT "Invalid value for
+// parameter was absent, and INVALID_ARGUMENT "Invalid value for
 // 'parameters.<param>': '<v>'" when the parsed value falls outside the list
 // backend's [lo, hi] range.
 func (b MaxResultsBinding) Resolve(def, lo, hi int) (int, error) {
@@ -402,12 +402,13 @@ func (b MaxResultsBinding) Resolve(def, lo, hi int) (int, error) {
 
 // MaxResultsUint32 resolves a maxResults parameter the Discovery document
 // declares unsigned (Compute Engine, Cloud SQL instances.list / operations.list)
-// to its caller's default when absent, nil, empty or zero. A negative value is
-// not a legal binding at all, so it is INVALID_ARGUMENT ("Invalid value at
-// 'max_results' (TYPE_UINT32), \"-1\""), and a value the binding cannot parse is
-// the same error rather than a silently absent parameter. Both callers clamp
-// above their own documented ceiling themselves (Compute's 0-500, Cloud SQL's
-// 1,000), which is why this resolver carries no range policy.
+// to its caller's default when absent, nil or zero. A negative value is not a
+// legal binding at all, so it is INVALID_ARGUMENT ("Invalid value at
+// 'max_results' (TYPE_UINT32), \"-1\""), and a value the binding cannot parse —
+// an explicitly empty one included — is the same error rather than a silently
+// absent parameter. Both callers clamp above their own documented ceiling
+// themselves (Compute's 0-500, Cloud SQL's 1,000), which is why this resolver
+// carries no range policy.
 func MaxResultsUint32(params map[string]any, keys []string, def int) (int, error) {
 	return maxResultsParam(params, keys, def, ParseUintSizeNamed)
 }
@@ -425,7 +426,9 @@ func maxResultsParam(params map[string]any, keys []string, def int, parse func(a
 		if n > 0 {
 			return n, nil
 		}
-		// An absent, empty, zero or negative value selects the default.
+		// A zero value (or a present nil) selects the default; an absent key is
+		// handled by the loop exit. The uint32 binding rejects a negative or
+		// empty value before it can reach this fallback.
 	}
 	return def, nil
 }

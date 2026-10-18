@@ -120,7 +120,10 @@ export const listEntries = (params: ListEntriesParams = {}) =>
   api.get<ListEntriesResponse>(`${BASE}/entries`, {
     filter: params.filter ?? '',
     orderBy: params.orderBy ?? '',
-    pageSize: params.pageSize ?? '',
+    // Never send an empty page size: the GCP query binding rejects
+    // `?pageSize=` (an explicitly empty int32), so an unset size must be
+    // omitted, not sent as ''.
+    ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
     pageToken: params.pageToken ?? '',
   })
 
