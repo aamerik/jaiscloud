@@ -58,6 +58,20 @@ func normalizeDeleteProtection(state string) string {
 	return state
 }
 
+// Database.pointInTimeRecoveryEnablement values that drive the OUTPUT_ONLY
+// version_retention_period (7 days enabled, 1 hour otherwise).
+const (
+	pitrEnabled  = "POINT_IN_TIME_RECOVERY_ENABLED"
+	pitrDisabled = "POINT_IN_TIME_RECOVERY_DISABLED"
+)
+
+// Database.databaseEdition values. STANDARD is the documented default when a
+// create omits the field ("This is the default setting if not specified").
+const (
+	databaseEditionUnspecified = "DATABASE_EDITION_UNSPECIFIED"
+	databaseEditionStandard    = "STANDARD"
+)
+
 // passwordAlphabet is the character set for a synthesized user-creds password.
 const passwordAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
@@ -286,6 +300,19 @@ func randomPassword() string {
 	return string(out)
 }
 
+// databaseRetentionPeriod returns the documented version-retention window for a
+// database. version_retention_period is OUTPUT_ONLY
+// (google/firestore/admin/v1/database.proto): real GCP derives it from the PITR
+// toggle — 7 days when PITR is enabled, 1 hour otherwise — and never accepts a
+// client-supplied value, so every write path recomputes it instead of storing
+// whatever a request body carried.
+func databaseRetentionPeriod(pitrEnablement string) time.Duration {
+	if pitrEnablement == pitrEnabled {
+		return 7 * 24 * time.Hour
+	}
+	return time.Hour
+}
+
 // synthesizeDefaultDatabase returns the implicit (default) database record for a
 // project. It is never stored unless updated or deleted.
 func synthesizeDefaultDatabase(project string) databaseDef {
@@ -294,9 +321,10 @@ func synthesizeDefaultDatabase(project string) databaseDef {
 		Uid:                           "default",
 		Type:                          "FIRESTORE_NATIVE",
 		ConcurrencyMode:               "OPTIMISTIC",
-		VersionRetentionPeriod:        time.Hour,
-		PointInTimeRecoveryEnablement: "POINT_IN_TIME_RECOVERY_DISABLED",
+		VersionRetentionPeriod:        databaseRetentionPeriod(pitrDisabled),
+		PointInTimeRecoveryEnablement: pitrDisabled,
 		DeleteProtectionState:         deleteProtectionDisabled,
+		DatabaseEdition:               databaseEditionStandard,
 	}
 }
 
@@ -329,9 +357,15 @@ func (s *Service) CreateDatabaseDef(ctx context.Context, project, dbID string, d
 	if db.ConcurrencyMode == "" {
 		db.ConcurrencyMode = "OPTIMISTIC"
 	}
-	if db.VersionRetentionPeriod == 0 {
-		db.VersionRetentionPeriod = time.Hour
+	if db.DatabaseEdition == "" || db.DatabaseEdition == databaseEditionUnspecified {
+		// database.proto: STANDARD "is the default setting if not specified".
+		db.DatabaseEdition = databaseEditionStandard
 	}
+	// version_retention_period is OUTPUT_ONLY: derive it from the requested PITR
+	// toggle rather than accepting the value in the create body. key_prefix is
+	// OUTPUT_ONLY as well, so a supplied value is not stored either.
+	db.VersionRetentionPeriod = databaseRetentionPeriod(db.PointInTimeRecoveryEnablement)
+	db.KeyPrefix = ""
 	db.DeleteProtectionState = normalizeDeleteProtection(db.DeleteProtectionState)
 	db.Etag = randomHex(16)
 	if err := s.putResource(ctx, project, rtDatabase, databaseRel(dbID), db, true); err != nil {
@@ -354,6 +388,10 @@ func (s *Service) GetDatabase(ctx context.Context, project, db string) (database
 			// A record persisted before the default existed reads back as
 			// unspecified; normalize the documented zero-value equivalence.
 			rec.DeleteProtectionState = normalizeDeleteProtection(rec.DeleteProtectionState)
+			// version_retention_period is OUTPUT_ONLY: always report the value
+			// derived from the stored PITR toggle (also repairs records written
+			// by an older build that stored a client-supplied value).
+			rec.VersionRetentionPeriod = databaseRetentionPeriod(rec.PointInTimeRecoveryEnablement)
 			return rec, nil
 		case !isNotFound(err):
 			return databaseDef{}, err
@@ -382,6 +420,7 @@ func (s *Service) ListDatabases(ctx context.Context, project string, showDeleted
 			continue
 		}
 		r.DeleteProtectionState = normalizeDeleteProtection(r.DeleteProtectionState)
+		r.VersionRetentionPeriod = databaseRetentionPeriod(r.PointInTimeRecoveryEnablement)
 		out = append(out, r)
 	}
 	if !haveDefault {
@@ -421,10 +460,24 @@ func impliedMask(mask []string, maskPresent bool) []string {
 // concurrent updates cannot lose one another. A present-but-empty mask is a
 // no-op: the record is returned unchanged (no etag/update_time rotation), while
 // an etag precondition still applies to the request.
+//
+// The server-owned fields follow their proto annotations: an OUTPUT_ONLY field
+// (key_prefix, version_retention_period) in the mask is ignored as AIP-161
+// requires, but a masked write that would *change* the IMMUTABLE database_edition
+// is INVALID_ARGUMENT (AIP-203); resending the current value is a no-op.
 func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, patch databaseDef, mask []string, maskPresent bool, etag string) (databaseDef, string, error) {
 	mask = impliedMask(mask, maskPresent)
 	if db == "" {
 		return databaseDef{}, "", gcpInvalidArgument("database name is required")
+	}
+	// An explicit mask only covers the fields it names, so a body value outside
+	// it is irrelevant (AIP-134); `*` covers every populated field.
+	editionMasked := false
+	for _, path := range mask {
+		if path == "*" || path == "database_edition" {
+			editionMasked = true
+			break
+		}
 	}
 	updated, err := s.mutateDatabase(ctx, project, db, func(cur databaseDef) (databaseDef, error) {
 		if etag != "" && etag != cur.Etag {
@@ -433,9 +486,16 @@ func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, pat
 		if len(mask) == 0 {
 			return cur, nil
 		}
+		if editionMasked && patch.DatabaseEdition != "" && patch.DatabaseEdition != cur.DatabaseEdition {
+			return databaseDef{}, gcpInvalidArgument("database_edition is immutable and cannot be changed")
+		}
 		for _, path := range mask {
 			applyDatabaseField(&cur, path, patch)
 		}
+		// version_retention_period is OUTPUT_ONLY and derived from the effective
+		// PITR toggle, never from the request: real GCP reports 7 days once PITR
+		// is enabled and 1 hour otherwise.
+		cur.VersionRetentionPeriod = databaseRetentionPeriod(cur.PointInTimeRecoveryEnablement)
 		cur.UpdateTime = clock.Now()
 		cur.Etag = randomHex(16)
 		cur.Deleted = false
@@ -497,11 +557,17 @@ func (s *Service) mutateDatabase(ctx context.Context, project, db string, mutate
 // applyDatabaseField copies one mutable Database field (by snake_case proto
 // field path) from patch into cur. Unknown paths are ignored so a mask carrying
 // a field the emulator does not model does not fail the update.
+//
+// The server-owned fields are deliberately absent: key_prefix and
+// version_retention_period are OUTPUT_ONLY and database_edition is IMMUTABLE
+// (database.proto), so a request that carries one never writes it. The
+// retention window is re-derived from the PITR toggle by the caller.
 func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 	switch path {
 	case "*":
 		// Apply the mutable fields only; the output-only fields (name, uid,
-		// create/update/delete time, etag) stay under the server's control.
+		// create/update/delete time, etag, key_prefix, version_retention_period)
+		// and the immutable database_edition stay under the server's control.
 		if patch.LocationID != "" {
 			cur.LocationID = patch.LocationID
 		}
@@ -520,15 +586,6 @@ func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 		if patch.DeleteProtectionState != "" {
 			cur.DeleteProtectionState = normalizeDeleteProtection(patch.DeleteProtectionState)
 		}
-		if patch.DatabaseEdition != "" {
-			cur.DatabaseEdition = patch.DatabaseEdition
-		}
-		if patch.KeyPrefix != "" {
-			cur.KeyPrefix = patch.KeyPrefix
-		}
-		if patch.VersionRetentionPeriod > 0 {
-			cur.VersionRetentionPeriod = patch.VersionRetentionPeriod
-		}
 	case "concurrency_mode":
 		cur.ConcurrencyMode = patch.ConcurrencyMode
 	case "app_engine_integration_mode":
@@ -541,14 +598,6 @@ func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 		cur.LocationID = patch.LocationID
 	case "type":
 		cur.Type = patch.Type
-	case "database_edition":
-		cur.DatabaseEdition = patch.DatabaseEdition
-	case "key_prefix":
-		cur.KeyPrefix = patch.KeyPrefix
-	case "version_retention_period":
-		if patch.VersionRetentionPeriod > 0 {
-			cur.VersionRetentionPeriod = patch.VersionRetentionPeriod
-		}
 	}
 }
 
@@ -578,6 +627,10 @@ func (s *Service) DeleteDatabaseDef(ctx context.Context, project, db, etag strin
 		cur.DeleteTime = clock.Now()
 		cur.UpdateTime = cur.DeleteTime
 		cur.Etag = randomHex(16)
+		// The soft-deleted record is the operation's response_type "Database",
+		// so it carries the same derived OUTPUT_ONLY retention window a read
+		// returns (a pre-fix persisted record may hold a client-supplied one).
+		cur.VersionRetentionPeriod = databaseRetentionPeriod(cur.PointInTimeRecoveryEnablement)
 		return cur, nil
 	})
 	if err != nil {

@@ -149,6 +149,102 @@ func TestDatabaseAdminRoundTrip(t *testing.T) {
 	}
 }
 
+// TestUpdateDatabaseServerOwnedFields pins database.proto's field ownership on
+// the gRPC surface: key_prefix (OUTPUT_ONLY) and database_edition (IMMUTABLE)
+// are never written by an update, and version_retention_period (OUTPUT_ONLY) is
+// the PITR-derived window (7 days enabled, 1 hour otherwise), not the request's.
+func TestUpdateDatabaseServerOwnedFields(t *testing.T) {
+	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
+	defer cleanup()
+	ctx := context.Background()
+
+	op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "owned-db",
+		Database: &adminpb.Database{
+			LocationId:                    "nam5",
+			DatabaseEdition:               adminpb.Database_ENTERPRISE,
+			KeyPrefix:                     "client-supplied",
+			VersionRetentionPeriod:        durationpb.New(2 * time.Hour),
+			PointInTimeRecoveryEnablement: adminpb.Database_POINT_IN_TIME_RECOVERY_ENABLED,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	created := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(created); err != nil {
+		t.Fatalf("CreateDatabase response unmarshal: %v", err)
+	}
+	if created.GetDatabaseEdition() != adminpb.Database_ENTERPRISE {
+		t.Errorf("create databaseEdition = %v, want ENTERPRISE", created.GetDatabaseEdition())
+	}
+	if created.GetKeyPrefix() != "" {
+		t.Errorf("create stored the OUTPUT_ONLY keyPrefix = %q", created.GetKeyPrefix())
+	}
+	if got := created.GetVersionRetentionPeriod().AsDuration(); got != 7*24*time.Hour {
+		t.Errorf("create retention = %v, want 168h (PITR enabled)", got)
+	}
+
+	// The maskless patch (AIP-134 implied mask) ignores the server-owned body
+	// fields and re-derives the window from the PITR toggle it sets. The
+	// immutable edition is resent unchanged, as a client that read the record
+	// would do.
+	updOp, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:                          created.GetName(),
+			DatabaseEdition:               adminpb.Database_ENTERPRISE,
+			KeyPrefix:                     "client-supplied",
+			VersionRetentionPeriod:        durationpb.New(30 * time.Minute),
+			PointInTimeRecoveryEnablement: adminpb.Database_POINT_IN_TIME_RECOVERY_DISABLED,
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabase(omitted mask): %v", err)
+	}
+	updated := &adminpb.Database{}
+	if err := updOp.GetResponse().UnmarshalTo(updated); err != nil {
+		t.Fatalf("UpdateDatabase response unmarshal: %v", err)
+	}
+	if updated.GetDatabaseEdition() != adminpb.Database_ENTERPRISE {
+		t.Errorf("patch changed the IMMUTABLE databaseEdition = %v", updated.GetDatabaseEdition())
+	}
+	if updated.GetKeyPrefix() != "" {
+		t.Errorf("patch wrote the OUTPUT_ONLY keyPrefix = %q", updated.GetKeyPrefix())
+	}
+	if got := updated.GetVersionRetentionPeriod().AsDuration(); got != time.Hour {
+		t.Errorf("patch retention = %v, want 1h (PITR disabled)", got)
+	}
+
+	// An explicit mask that names the OUTPUT_ONLY field writes nothing either.
+	explicitOp, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:                   created.GetName(),
+			VersionRetentionPeriod: durationpb.New(7 * 24 * time.Hour),
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"version_retention_period"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabase(version_retention_period): %v", err)
+	}
+	explicit := &adminpb.Database{}
+	if err := explicitOp.GetResponse().UnmarshalTo(explicit); err != nil {
+		t.Fatalf("UpdateDatabase response unmarshal: %v", err)
+	}
+	if got := explicit.GetVersionRetentionPeriod().AsDuration(); got != time.Hour {
+		t.Errorf("explicit retention patch stored %v, want the derived 1h", got)
+	}
+
+	// A masked change to the IMMUTABLE edition is INVALID_ARGUMENT (AIP-203);
+	// resending the current value above was accepted.
+	if _, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database:   &adminpb.Database{Name: created.GetName(), DatabaseEdition: adminpb.Database_STANDARD},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"database_edition"}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("database_edition change code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
 // TestDeleteDatabaseProtection verifies the documented delete-protection gate
 // on the gRPC surface: a delete of a protection-enabled database is
 // FAILED_PRECONDITION and leaves it in place until the protection is patched
