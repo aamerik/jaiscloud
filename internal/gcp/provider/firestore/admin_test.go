@@ -104,7 +104,7 @@ func TestDatabaseUpdateEtagAndDelete(t *testing.T) {
 
 	updated, _, err := p.UpdateDatabaseDef(ctx, "proj", "db01",
 		databaseDef{ConcurrencyMode: "PESSIMISTIC", DeleteProtectionState: deleteProtectionEnabled},
-		[]string{"concurrency_mode", "delete_protection_state"}, created.Etag)
+		[]string{"concurrency_mode", "delete_protection_state"}, true, created.Etag)
 	if err != nil {
 		t.Fatalf("UpdateDatabaseDef: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestDatabaseUpdateEtagAndDelete(t *testing.T) {
 	// created.Etag was superseded by the update above, so it is genuinely
 	// stale (not just an arbitrary non-matching token).
 	if _, _, err := p.UpdateDatabaseDef(ctx, "proj", "db01",
-		databaseDef{ConcurrencyMode: "OPTIMISTIC"}, []string{"concurrency_mode"}, created.Etag); err == nil {
+		databaseDef{ConcurrencyMode: "OPTIMISTIC"}, []string{"concurrency_mode"}, true, created.Etag); err == nil {
 		t.Error("stale etag accepted, want Aborted")
 	} else {
 		var pe *model.ProviderError
@@ -141,7 +141,7 @@ func TestDatabaseUpdateEtagAndDelete(t *testing.T) {
 	// An omitted update_mask is an implied mask of the populated fields
 	// (AIP-134): the patch applies and fields absent from it are untouched.
 	implied, _, err := p.UpdateDatabaseDef(ctx, "proj", "db01",
-		databaseDef{ConcurrencyMode: "OPTIMISTIC"}, nil, updated.Etag)
+		databaseDef{ConcurrencyMode: "OPTIMISTIC"}, nil, false, updated.Etag)
 	if err != nil {
 		t.Fatalf("UpdateDatabaseDef(omitted mask): %v", err)
 	}
@@ -174,7 +174,7 @@ func TestDatabaseUpdateEtagAndDelete(t *testing.T) {
 	// DELETE_PROTECTION_STATE_UNSPECIFIED is documented as equivalent to
 	// disabled, so it must normalize rather than persist verbatim.
 	unprotected, _, err := p.UpdateDatabaseDef(ctx, "proj", "db01",
-		databaseDef{DeleteProtectionState: deleteProtectionUnspecified}, []string{"delete_protection_state"}, implied.Etag)
+		databaseDef{DeleteProtectionState: deleteProtectionUnspecified}, []string{"delete_protection_state"}, true, implied.Etag)
 	if err != nil {
 		t.Fatalf("UpdateDatabaseDef(disable delete protection): %v", err)
 	}
@@ -215,13 +215,96 @@ func TestDatabaseUpdateEtagAndDelete(t *testing.T) {
 	}
 }
 
+func TestEmptyUpdateMaskIsNoop(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+
+	// Database: a present-but-empty mask is AIP-134's no-op — the record comes
+	// back unchanged and neither etag nor update_time rotates, even though the
+	// body carries a value. (An omitted mask still applies; see
+	// TestDatabaseUpdateEtagAndDelete.)
+	created, _, err := p.CreateDatabaseDef(ctx, "proj", "noopdb", databaseDef{})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	noop, _, err := p.UpdateDatabaseDef(ctx, "proj", "noopdb",
+		databaseDef{ConcurrencyMode: "PESSIMISTIC"}, nil, true, created.Etag)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseDef(empty mask): %v", err)
+	}
+	if noop.ConcurrencyMode != created.ConcurrencyMode {
+		t.Errorf("empty mask applied concurrency_mode = %q, want %q", noop.ConcurrencyMode, created.ConcurrencyMode)
+	}
+	if noop.Etag != created.Etag {
+		t.Errorf("empty mask rotated the etag %q -> %q", created.Etag, noop.Etag)
+	}
+	if !noop.UpdateTime.Equal(created.UpdateTime) {
+		t.Errorf("empty mask rotated update_time %v -> %v", created.UpdateTime, noop.UpdateTime)
+	}
+
+	// Field: the stored config is returned untouched and a no-op on a missing
+	// field creates nothing.
+	if _, _, err := p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "population",
+		fieldDef{TtlConfig: &fieldTtlConfig{State: "ACTIVE", ExpirationOffset: 2 * time.Hour}},
+		[]string{"ttl_config"}, true); err != nil {
+		t.Fatalf("UpdateFieldDef: %v", err)
+	}
+	fieldNoop, _, err := p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "population",
+		fieldDef{TtlConfig: &fieldTtlConfig{State: "ACTIVE", ExpirationOffset: 9 * time.Hour}}, nil, true)
+	if err != nil {
+		t.Fatalf("UpdateFieldDef(empty mask): %v", err)
+	}
+	if fieldNoop.TtlConfig == nil || fieldNoop.TtlConfig.ExpirationOffset != 2*time.Hour {
+		t.Errorf("empty mask applied ttl_config = %+v, want the stored 2h", fieldNoop.TtlConfig)
+	}
+	// A no-op on a missing field writes nothing and reports the miss rather
+	// than fabricating a field.
+	if _, _, err := p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "ghost",
+		fieldDef{TtlConfig: &fieldTtlConfig{State: "ACTIVE"}}, nil, true); !isNotFound(err) {
+		t.Errorf("UpdateFieldDef(empty mask, missing field) err = %v, want NotFound", err)
+	}
+	if _, err := p.GetField(ctx, "proj", "(default)", "cities", "ghost"); !isNotFound(err) {
+		t.Errorf("empty mask created a field: GetField err = %v, want NotFound", err)
+	}
+
+	// The no-op leaves the *stored* record untouched too, not only the response.
+	reloaded, err := p.GetDatabase(ctx, "proj", "noopdb")
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if reloaded.ConcurrencyMode != created.ConcurrencyMode || reloaded.Etag != created.Etag {
+		t.Errorf("empty mask changed the stored database = %+v", reloaded)
+	}
+	storedField, err := p.GetField(ctx, "proj", "(default)", "cities", "population")
+	if err != nil {
+		t.Fatalf("GetField: %v", err)
+	}
+	if storedField.TtlConfig == nil || storedField.TtlConfig.ExpirationOffset != 2*time.Hour {
+		t.Errorf("empty mask changed the stored field = %+v", storedField)
+	}
+
+	// Backup schedule: retention and the recurrence oneof stay as stored.
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "1",
+		backupScheduleDef{Retention: 7 * 24 * time.Hour, Recurrence: "DAILY"}); err != nil {
+		t.Fatalf("CreateBackupScheduleDef: %v", err)
+	}
+	bsNoop, err := p.UpdateBackupScheduleDef(ctx, "proj", "(default)", "1",
+		backupScheduleDef{Retention: 14 * 24 * time.Hour, Recurrence: "WEEKLY", DayOfWeek: 1}, nil, true)
+	if err != nil {
+		t.Fatalf("UpdateBackupScheduleDef(empty mask): %v", err)
+	}
+	if bsNoop.Retention != 7*24*time.Hour || bsNoop.Recurrence != "DAILY" {
+		t.Errorf("empty mask applied the schedule = %+v, want the stored 7d daily", bsNoop)
+	}
+}
+
 func TestFieldUpdateGetList(t *testing.T) {
 	ctx := context.Background()
 	p := newAdminService()
 
 	_, op, err := p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "population",
 		fieldDef{IndexConfig: &fieldIndexConfig{UsesAncestorConfig: true, AncestorField: "cities"}},
-		[]string{"index_config"})
+		[]string{"index_config"}, true)
 	if err != nil {
 		t.Fatalf("UpdateFieldDef: %v", err)
 	}
@@ -239,7 +322,7 @@ func TestFieldUpdateGetList(t *testing.T) {
 
 	// A second field so pagination has something to page over.
 	if _, _, err := p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "region",
-		fieldDef{TtlConfig: &fieldTtlConfig{State: "ACTIVE", ExpirationOffset: time.Hour}}, []string{"ttl_config"}); err != nil {
+		fieldDef{TtlConfig: &fieldTtlConfig{State: "ACTIVE", ExpirationOffset: time.Hour}}, []string{"ttl_config"}, true); err != nil {
 		t.Fatalf("UpdateFieldDef(region): %v", err)
 	}
 
@@ -273,7 +356,7 @@ func TestFieldUpdateGetList(t *testing.T) {
 	// maskless patch applies what it carries instead of answering
 	// INVALID_ARGUMENT, leaving unpopulated configs untouched.
 	maskless, _, err := p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "score",
-		fieldDef{TtlConfig: &fieldTtlConfig{State: "ACTIVE", ExpirationOffset: 2 * time.Hour}}, nil)
+		fieldDef{TtlConfig: &fieldTtlConfig{State: "ACTIVE", ExpirationOffset: 2 * time.Hour}}, nil, false)
 	if err != nil {
 		t.Fatalf("maskless UpdateFieldDef: %v", err)
 	}
@@ -296,7 +379,7 @@ func TestFieldUpdateGetList(t *testing.T) {
 				Fields:     []indexField{{FieldPath: "score", Order: "ASCENDING"}},
 			}}},
 			TtlConfig: &fieldTtlConfig{State: "ACTIVE", ExpirationOffset: 3 * time.Hour},
-		}, nil)
+		}, nil, false)
 	if err != nil {
 		t.Fatalf("maskless UpdateFieldDef(both configs): %v", err)
 	}
@@ -434,7 +517,7 @@ func TestBackupScheduleLifecycle(t *testing.T) {
 	}
 
 	upd, err := p.UpdateBackupScheduleDef(ctx, "proj", "(default)", "1",
-		backupScheduleDef{Retention: 14 * 24 * time.Hour}, []string{"retention"})
+		backupScheduleDef{Retention: 14 * 24 * time.Hour}, []string{"retention"}, true)
 	if err != nil || upd.Retention != 14*24*time.Hour {
 		t.Fatalf("UpdateBackupScheduleDef = %+v err=%v", upd, err)
 	}
@@ -442,7 +525,7 @@ func TestBackupScheduleLifecycle(t *testing.T) {
 	// An omitted mask is the implied mask of every populated field: it must
 	// carry the retention *and* the recurrence oneof, not only `retention`.
 	maskless, err := p.UpdateBackupScheduleDef(ctx, "proj", "(default)", "1",
-		backupScheduleDef{Retention: 2 * 24 * time.Hour, Recurrence: "WEEKLY", DayOfWeek: 1}, nil)
+		backupScheduleDef{Retention: 2 * 24 * time.Hour, Recurrence: "WEEKLY", DayOfWeek: 1}, nil, false)
 	if err != nil {
 		t.Fatalf("maskless UpdateBackupScheduleDef: %v", err)
 	}

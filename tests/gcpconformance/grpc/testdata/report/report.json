@@ -1092,7 +1092,7 @@
       "rpc": "UpdateDatabase",
       "method": "UpdateDatabase",
       "status": "pass",
-      "key_field": "concurrency_mode updated under mask + omitted mask applies populated fields"
+      "key_field": "concurrency_mode updated under mask + omitted mask applies populated fields + empty mask is a no-op"
     },
     {
       "service": "firestoreadmin",
@@ -1106,7 +1106,7 @@
       "rpc": "UpdateField",
       "method": "UpdateField",
       "status": "pass",
-      "key_field": "operation done=true; index_config under mask + index_config/ttl_config under an omitted mask"
+      "key_field": "operation done=true; index_config under mask + index_config/ttl_config under an omitted mask + empty mask is a no-op"
     },
     {
       "service": "firestoreadmin",
@@ -1197,7 +1197,7 @@
       "rpc": "UpdateBackupSchedule",
       "method": "UpdateBackupSchedule",
       "status": "pass",
-      "key_field": "retention under mask + retention/recurrence under an omitted mask"
+      "key_field": "retention under mask + retention/recurrence under an omitted mask + empty mask is a no-op"
     },
     {
       "service": "firestoreadmin",

@@ -28,9 +28,9 @@ func firestoreAdminControlChecks() []Check {
 		{Service: "firestoreadmin", RPC: "CreateDatabase", KeyField: "operation done=true; database name", Run: checkFsAdminCreateDatabase},
 		{Service: "firestoreadmin", RPC: "GetDatabase", KeyField: "database name/uid", Run: checkFsAdminGetDatabase},
 		{Service: "firestoreadmin", RPC: "ListDatabases", KeyField: "created database present + (default)", Run: checkFsAdminListDatabases},
-		{Service: "firestoreadmin", RPC: "UpdateDatabase", KeyField: "concurrency_mode updated under mask + omitted mask applies populated fields", Run: checkFsAdminUpdateDatabase},
+		{Service: "firestoreadmin", RPC: "UpdateDatabase", KeyField: "concurrency_mode updated under mask + omitted mask applies populated fields + empty mask is a no-op", Run: checkFsAdminUpdateDatabase},
 		{Service: "firestoreadmin", RPC: "DeleteDatabase", KeyField: "stale etag -> FailedPrecondition; delete protection -> FailedPrecondition; operation response carries database; absent after delete", Run: checkFsAdminDeleteDatabase},
-		{Service: "firestoreadmin", RPC: "UpdateField", Method: "UpdateField", KeyField: "operation done=true; index_config under mask + index_config/ttl_config under an omitted mask", Run: checkFsAdminUpdateField},
+		{Service: "firestoreadmin", RPC: "UpdateField", Method: "UpdateField", KeyField: "operation done=true; index_config under mask + index_config/ttl_config under an omitted mask + empty mask is a no-op", Run: checkFsAdminUpdateField},
 		{Service: "firestoreadmin", RPC: "GetField", Method: "GetField", KeyField: "index_config round-trip", Run: checkFsAdminGetField},
 		{Service: "firestoreadmin", RPC: "ListFields", Method: "ListFields", KeyField: "field present under wildcard group", Run: checkFsAdminListFields},
 		{Service: "firestoreadmin", RPC: "CreateUserCreds", Method: "CreateUserCreds", KeyField: "secure_password returned once", Run: checkFsAdminCreateUserCreds},
@@ -43,7 +43,7 @@ func firestoreAdminControlChecks() []Check {
 		{Service: "firestoreadmin", RPC: "CreateBackupSchedule", Method: "CreateBackupSchedule", KeyField: "schedule name/retention", Run: checkFsAdminCreateBackupSchedule},
 		{Service: "firestoreadmin", RPC: "GetBackupSchedule", Method: "GetBackupSchedule", KeyField: "retention round-trip", Run: checkFsAdminGetBackupSchedule},
 		{Service: "firestoreadmin", RPC: "ListBackupSchedules", Method: "ListBackupSchedules", KeyField: "schedule present", Run: checkFsAdminListBackupSchedules},
-		{Service: "firestoreadmin", RPC: "UpdateBackupSchedule", Method: "UpdateBackupSchedule", KeyField: "retention under mask + retention/recurrence under an omitted mask", Run: checkFsAdminUpdateBackupSchedule},
+		{Service: "firestoreadmin", RPC: "UpdateBackupSchedule", Method: "UpdateBackupSchedule", KeyField: "retention under mask + retention/recurrence under an omitted mask + empty mask is a no-op", Run: checkFsAdminUpdateBackupSchedule},
 		{Service: "firestoreadmin", RPC: "DeleteBackupSchedule", Method: "DeleteBackupSchedule", KeyField: "schedule absent after delete", Run: checkFsAdminDeleteBackupSchedule},
 		{Service: "firestoreadmin", RPC: "ListBackups", Method: "ListBackups", KeyField: "empty list (no create path)", Run: checkFsAdminListBackups},
 		{Service: "firestoreadmin", RPC: "GetBackup", Method: "GetBackup", KeyField: "missing backup -> NotFound", Run: checkFsAdminGetBackupMissing},
@@ -206,6 +206,25 @@ func checkFsAdminUpdateDatabase(ctx context.Context, cfg Config) error {
 	if implied.GetConcurrencyMode() != adminpb.Database_OPTIMISTIC {
 		return fmt.Errorf("UpdateDatabase(omitted mask) concurrency = %v, want OPTIMISTIC", implied.GetConcurrencyMode())
 	}
+	// A present-but-empty mask is AIP-134's no-op — distinct from the nil mask
+	// above: the record must come back unchanged, with no etag rotation.
+	op, err = stub.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database:   &adminpb.Database{Name: name, Etag: implied.GetEtag(), ConcurrencyMode: adminpb.Database_PESSIMISTIC},
+		UpdateMask: &fieldmaskpb.FieldMask{},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateDatabase(empty mask): %w", err)
+	}
+	unchanged := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(unchanged); err != nil {
+		return fmt.Errorf("UpdateDatabase(empty mask) response: %w", err)
+	}
+	if unchanged.GetConcurrencyMode() != adminpb.Database_OPTIMISTIC {
+		return fmt.Errorf("UpdateDatabase(empty mask) applied concurrency = %v, want OPTIMISTIC", unchanged.GetConcurrencyMode())
+	}
+	if unchanged.GetEtag() != implied.GetEtag() {
+		return fmt.Errorf("UpdateDatabase(empty mask) rotated the etag %q -> %q", implied.GetEtag(), unchanged.GetEtag())
+	}
 	return nil
 }
 
@@ -353,6 +372,27 @@ func checkFsAdminUpdateField(ctx context.Context, cfg Config) error {
 	}
 	if !field.GetIndexConfig().GetUsesAncestorConfig() {
 		return fmt.Errorf("UpdateField (omitted mask) dropped index_config = %+v", field.GetIndexConfig())
+	}
+	// A present-but-empty mask is AIP-134's no-op: nothing is applied.
+	op, err = stub.UpdateField(ctx, &adminpb.UpdateFieldRequest{
+		Field: &adminpb.Field{
+			Name: fsAdminFieldName(cfg),
+			TtlConfig: &adminpb.Field_TtlConfig{
+				State:            adminpb.Field_TtlConfig_ACTIVE,
+				ExpirationOffset: durationpb.New(9 * time.Hour),
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateField(empty mask): %w", err)
+	}
+	field = &adminpb.Field{}
+	if err := op.GetResponse().UnmarshalTo(field); err != nil {
+		return fmt.Errorf("UpdateField(empty mask) response: %w", err)
+	}
+	if field.GetTtlConfig().GetExpirationOffset().AsDuration() != 2*time.Hour {
+		return fmt.Errorf("UpdateField(empty mask) applied ttl_config = %+v", field.GetTtlConfig())
 	}
 	return nil
 }
@@ -629,6 +669,27 @@ func checkFsAdminUpdateBackupSchedule(ctx context.Context, cfg Config) error {
 	}
 	if got.GetWeeklyRecurrence().GetDay() != dayofweek.DayOfWeek_WEDNESDAY {
 		return fmt.Errorf("UpdateBackupSchedule (omitted mask) recurrence = %+v, want weekly Wednesday", got.GetRecurrence())
+	}
+	// A present-but-empty mask is AIP-134's no-op: retention and the recurrence
+	// oneof stay as stored.
+	got, err = stub.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
+		BackupSchedule: &adminpb.BackupSchedule{
+			Name:      fsAdminScheduleName(cfg),
+			Retention: durationpb.New(28 * 24 * time.Hour),
+			Recurrence: &adminpb.BackupSchedule_WeeklyRecurrence{
+				WeeklyRecurrence: &adminpb.WeeklyRecurrence{Day: dayofweek.DayOfWeek_TUESDAY},
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateBackupSchedule(empty mask): %w", err)
+	}
+	if got.GetRetention().AsDuration() != 21*24*time.Hour {
+		return fmt.Errorf("UpdateBackupSchedule(empty mask) applied retention = %v, want 21d", got.GetRetention())
+	}
+	if got.GetWeeklyRecurrence().GetDay() != dayofweek.DayOfWeek_WEDNESDAY {
+		return fmt.Errorf("UpdateBackupSchedule(empty mask) applied recurrence = %+v, want weekly Wednesday", got.GetRecurrence())
 	}
 	return nil
 }

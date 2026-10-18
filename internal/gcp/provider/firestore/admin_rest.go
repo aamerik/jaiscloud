@@ -107,21 +107,53 @@ func splitDatabaseOperationPath(name string) (db, op string, isCollection, ok bo
 // ─── query/body helpers ───────────────────────────────────────────────────────
 
 // adminMask returns the update_mask field paths, normalized to the snake_case
-// proto paths the domain's apply*Mask functions key on. Google's HTTP
-// transcoding (and the conformance probe) send the FieldMask as a single
-// comma-separated `updateMask` query parameter using the JSON (lowerCamelCase)
-// field names; older clients use repeated `updateMask.fieldPaths`. Both forms
-// are accepted and converted.
-func adminMask(nr *model.NormalizedRequest) []string {
-	raw := splitMaskValue(strParam(nr, "updateMask"))
+// proto paths the domain's apply*Mask functions key on, plus whether the mask
+// was present at all. Google's HTTP transcoding (and the conformance probe)
+// send the FieldMask as a single comma-separated `updateMask` query parameter
+// using the JSON (lowerCamelCase) field names; older clients use repeated
+// `updateMask.fieldPaths`. Both forms are accepted and converted. An
+// `updateMask=` query parameter (or an empty `updateMask.fieldPaths`) counts as
+// present-but-empty, which the domain treats as AIP-134's no-op rather than as
+// the omitted mask.
+func adminMask(nr *model.NormalizedRequest) (mask []string, present bool) {
+	raw := splitMaskValue(firstParam(nr, "updateMask"))
 	if len(raw) == 0 {
 		raw = updateMaskPaths(nr)
+	}
+	if maskParamPresent(nr, "updateMask") || maskParamPresent(nr, "updateMask.fieldPaths") {
+		present = true
 	}
 	out := make([]string, 0, len(raw))
 	for _, p := range raw {
 		out = append(out, protoMaskPath(p))
 	}
-	return out
+	return out, present
+}
+
+// firstParam returns a query parameter's first value, preferring the parsed
+// request URL over the decoded Params map so the two agree on repeated and
+// empty values (mirroring queryFieldPaths).
+func firstParam(nr *model.NormalizedRequest, key string) string {
+	if nr.Raw != nil {
+		if vs := nr.Raw.URL.Query()[key]; len(vs) > 0 {
+			return vs[0]
+		}
+	}
+	s, _ := nr.Params[key].(string)
+	return s
+}
+
+// maskParamPresent reports whether a query parameter was supplied at all,
+// including with an empty value (`?updateMask=`).
+func maskParamPresent(nr *model.NormalizedRequest, key string) bool {
+	if _, ok := nr.Params[key]; ok {
+		return true
+	}
+	if nr.Raw != nil {
+		_, ok := nr.Raw.URL.Query()[key]
+		return ok
+	}
+	return false
 }
 
 // splitMaskValue splits a comma-separated updateMask query value.
@@ -375,7 +407,8 @@ func (p *Provider) UpdateDatabase(ctx context.Context, nr *model.NormalizedReque
 		return nil, model.NewProviderError("InvalidArgument", "invalid database resource name", 400)
 	}
 	patch := databaseFromREST(bodyMap(nr))
-	rec, opName, err := p.Service.UpdateDatabaseDef(ctx, nr.AccountID, db, patch, adminMask(nr), patch.Etag)
+	mask, maskPresent := adminMask(nr)
+	rec, opName, err := p.Service.UpdateDatabaseDef(ctx, nr.AccountID, db, patch, mask, maskPresent, patch.Etag)
 	if err != nil {
 		return nil, err
 	}
@@ -534,7 +567,8 @@ func (p *Provider) UpdateField(ctx context.Context, nr *model.NormalizedRequest)
 	if !ok || isCollection {
 		return nil, model.NewProviderError("InvalidArgument", "invalid field resource name", 400)
 	}
-	f, opName, err := p.Service.UpdateFieldDef(ctx, nr.AccountID, db, cg, fieldPath, fieldFromREST(bodyMap(nr)), adminMask(nr))
+	mask, maskPresent := adminMask(nr)
+	f, opName, err := p.Service.UpdateFieldDef(ctx, nr.AccountID, db, cg, fieldPath, fieldFromREST(bodyMap(nr)), mask, maskPresent)
 	if err != nil {
 		return nil, err
 	}
@@ -778,7 +812,8 @@ func (p *Provider) UpdateBackupSchedule(ctx context.Context, nr *model.Normalize
 	if !ok || isCollection {
 		return nil, model.NewProviderError("InvalidArgument", "invalid backup schedule resource name", 400)
 	}
-	bs, err := p.Service.UpdateBackupScheduleDef(ctx, nr.AccountID, db, id, backupScheduleFromREST(bodyMap(nr)), adminMask(nr))
+	mask, maskPresent := adminMask(nr)
+	bs, err := p.Service.UpdateBackupScheduleDef(ctx, nr.AccountID, db, id, backupScheduleFromREST(bodyMap(nr)), mask, maskPresent)
 	if err != nil {
 		return nil, err
 	}
