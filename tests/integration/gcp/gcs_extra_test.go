@@ -221,6 +221,53 @@ func TestGCSDelimiterPagination(t *testing.T) {
 	require.False(t, hasNext)
 }
 
+// TestGCSNegativeMaxResultsRejected pins the Discovery document's uint32
+// maxResults contract on the REST listings: a negative, fractional, signed or
+// out-of-uint32 value is 400 with reason invalidParameter, a bad value is
+// rejected before the bucket lookup, and an explicit zero is an empty page
+// (DC39).
+func TestGCSNegativeMaxResultsRejected(t *testing.T) {
+	resetState(t)
+	createBucket(t, "negmax-bucket")
+
+	resp, _ := do(t, "POST", "/upload/storage/v1/b/negmax-bucket/o?uploadType=media&name=a.txt",
+		[]byte("a"), map[string]string{"Content-Type": "text/plain"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	for _, bad := range []string{"-1", "abc", "1.5", "+5", "4294967296"} {
+		for _, path := range []string{
+			"/storage/v1/b/negmax-bucket/o?maxResults=" + bad,
+			"/storage/v1/b/negmax-bucket/o?delimiter=/&maxResults=" + bad,
+			"/storage/v1/b/negmax-bucket/o?versions=true&maxResults=" + bad,
+			"/storage/v1/b?maxResults=" + bad,
+		} {
+			resp, body := do(t, "GET", path, nil, nil)
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode, path)
+			obj := jsonMap(t, body)
+			errObj, ok := obj["error"].(map[string]any)
+			require.True(t, ok, path)
+			require.EqualValues(t, 400, errObj["code"], path)
+			errs, ok := errObj["errors"].([]any)
+			require.True(t, ok, path)
+			require.NotEmpty(t, errs, path)
+			first, ok := errs[0].(map[string]any)
+			require.True(t, ok, path)
+			require.Equal(t, "invalidParameter", first["reason"], path)
+		}
+	}
+
+	// A bad maxResults is validated before the bucket lookup (400, not 404).
+	resp, _ = do(t, "GET", "/storage/v1/b/missing-bucket/o?maxResults=-1", nil, nil)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	// An explicit zero is a literal empty page (real GCS), not the default.
+	_, body := do(t, "GET", "/storage/v1/b/negmax-bucket/o?maxResults=0", nil, nil)
+	page := jsonMap(t, body)
+	require.Empty(t, page["items"])
+	_, hasNext := page["nextPageToken"]
+	require.False(t, hasNext)
+}
+
 // TestGCSObjectACL exercises objectAccessControls list + insert over the wire.
 func TestGCSObjectACL(t *testing.T) {
 	resetState(t)

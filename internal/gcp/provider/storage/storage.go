@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -698,13 +699,12 @@ func mapToBucket(m map[string]any) bucketMeta {
 
 // paginateBuckets applies pageToken/maxResults cursor pagination over a
 // name-sorted bucket list.
-func paginateBuckets(buckets []map[string]any, params map[string]any) ([]map[string]any, string) {
+func paginateBuckets(buckets []map[string]any, params map[string]any, limit int) ([]map[string]any, string) {
 	sort.Slice(buckets, func(i, j int) bool {
 		ni, _ := buckets[i]["name"].(string)
 		nj, _ := buckets[j]["name"].(string)
 		return ni < nj
 	})
-	limit := maxResults(params)
 	start := 0
 	if tok, _ := params["pageToken"].(string); tok != "" {
 		if cursor := decodeCursor(tok); cursor != "" {
@@ -723,7 +723,9 @@ func paginateBuckets(buckets []map[string]any, params map[string]any) ([]map[str
 	}
 	page := buckets[start:end]
 	next := ""
-	if end < len(buckets) {
+	// An explicit maxResults=0 is an empty page with no continuation token
+	// (real GCS), and page is empty in that case.
+	if limit > 0 && end < len(buckets) {
 		n, _ := page[len(page)-1]["name"].(string)
 		next = encodeCursor(n)
 	}
@@ -734,11 +736,15 @@ func (p *Provider) BucketsList(ctx context.Context, nr *model.NormalizedRequest)
 	if err := requireBucketAdmin(nr); err != nil {
 		return nil, err
 	}
+	limit, err := maxResults(nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	buckets, err := p.objects.ListBuckets(ctx, nr.AccountID)
 	if err != nil {
 		return nil, err
 	}
-	page, nextToken := paginateBuckets(buckets, nr.Params)
+	page, nextToken := paginateBuckets(buckets, nr.Params, limit)
 	items := make([]any, 0, len(page))
 	for _, m := range page {
 		items = append(items, toBucketMap(nr, mapToBucket(m)))
@@ -1456,9 +1462,15 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 	if bucket == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing bucket", 400)
 	}
+	// Resolve the page size before touching the store, as real GCS validates
+	// query parameters before the resource lookup (a bad maxResults on a
+	// missing bucket answers 400, not 404).
+	limit, err := maxResults(nr.Params)
+	if err != nil {
+		return nil, err
+	}
 	versions, _ := nr.Params["versions"].(string)
 	var objs []gcs.ObjectMeta
-	var err error
 	if versions == "true" {
 		// ?versions=true lists every generation, including non-live ones.
 		objs, err = p.objects.ListObjectVersions(ctx, bucket)
@@ -1525,7 +1537,6 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 		}
 		sort.Slice(all, func(i, j int) bool { return all[i].name < all[j].name })
 
-		limit := maxResults(nr.Params)
 		start := 0
 		if tok, _ := nr.Params["pageToken"].(string); tok != "" {
 			if cursor := decodeCursor(tok); cursor != "" {
@@ -1540,7 +1551,7 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 		}
 		page := all[start:end]
 		next := ""
-		if end < len(all) {
+		if limit > 0 && end < len(all) {
 			next = encodeCursor(page[len(page)-1].name)
 		}
 
@@ -1579,7 +1590,6 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 	// name ascending, then generation descending, so its cursor must also carry
 	// the generation: a page boundary landing in the middle of a name's
 	// generations would otherwise skip every remaining generation of that name.
-	limit := maxResults(nr.Params)
 	start := 0
 	if tok, _ := nr.Params["pageToken"].(string); tok != "" {
 		if versions == "true" {
@@ -1613,7 +1623,7 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 	}
 	page := filtered[start:end]
 	next := ""
-	if end < len(filtered) {
+	if limit > 0 && end < len(filtered) {
 		if versions == "true" {
 			last := page[len(page)-1]
 			next = encodeVersionCursor(last.Name, last.Generation)
@@ -3757,18 +3767,54 @@ func decodeVersionCursor(token string) (versionCursor, bool) {
 	return c, true
 }
 
-func maxResults(params map[string]any) int {
-	if v, ok := params["maxResults"].(string); ok {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			// Real GCS caps the page at "this parameter or 1,000 items,
-			// whichever is smaller".
-			if n > 1000 {
-				return 1000
-			}
-			return n
+// maxResults resolves the REST objects.list/buckets.list page size. The
+// Discovery document declares it an integer with format uint32 and minimum 0
+// and says the service uses "this parameter or 1,000 items, whichever is
+// smaller". An absent parameter selects the 1,000-item default; an explicit
+// zero is a literal page size of 0 (real GCS answers an empty page, not the
+// default); a negative, non-integer or out-of-uint32 value is rejected with 400
+// (DC39).
+func maxResults(params map[string]any) (int, error) {
+	switch v := params["maxResults"].(type) {
+	case string:
+		// ParseUint applies the wire format: it rejects a sign prefix ("+5",
+		// "-0"), a fraction and anything above uint32.
+		n, err := strconv.ParseUint(v, 10, 32)
+		if err != nil {
+			return 0, invalidMaxResults()
 		}
+		return clampMaxResults(int(n)), nil
+	case int:
+		if v < 0 {
+			return 0, invalidMaxResults()
+		}
+		return clampMaxResults(v), nil
+	case float64:
+		// Check the range before truncating: int(-0.5) is 0, which would
+		// otherwise be mistaken for zero, and NaN is not a valid integer.
+		if math.IsNaN(v) || v < 0 || v > math.MaxUint32 {
+			return 0, invalidMaxResults()
+		}
+		return clampMaxResults(int(v)), nil
 	}
-	return 1000
+	return 1000, nil
+}
+
+// clampMaxResults applies the documented 1,000-item ceiling and keeps an
+// explicit zero (an empty page), which callers must not treat as "one page".
+func clampMaxResults(n int) int {
+	if n > 1000 {
+		return 1000
+	}
+	return n
+}
+
+func invalidMaxResults() error {
+	// GCS's JSON API reports a bad query parameter as reason "invalidParameter";
+	// the codec lets Data["reason"] override its canonical-code mapping
+	// (InvalidRequest would render as the body-level reason "invalid").
+	return model.NewProviderError("InvalidRequest", "maxResults must be a non-negative integer", 400).
+		WithData(map[string]any{"reason": "invalidParameter"})
 }
 
 // ─── IAM policy ───────────────────────────────────────────────────────────────

@@ -418,6 +418,125 @@ func TestObjectsListMaxResultsCappedAt1000(t *testing.T) {
 	}
 }
 
+// TestObjectsListNegativeMaxResults pins the Discovery document's uint32
+// maxResults contract on the REST listings: a negative, fractional, signed or
+// out-of-uint32 value is a 400 (reason invalidParameter) on the plain,
+// delimiter and versions object listings and on buckets.list, instead of being
+// folded into the 1,000-item default; a bad value is validated before the
+// bucket lookup; and an explicit zero is a literal empty page (DC39).
+func TestObjectsListNegativeMaxResults(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+
+	nr := bucketParams()
+	nr.Params["body"] = map[string]any{"name": "bkt"}
+	if _, err := p.BucketsInsert(ctx, nr); err != nil {
+		t.Fatalf("insert bucket: %v", err)
+	}
+	for _, name := range []string{"logs/a", "logs/b", "data/c"} {
+		nr = bucketParams()
+		nr.Params["bucket"] = "bkt"
+		nr.Params["object"] = name
+		nr.Params[wire.MediaKey] = []byte(name)
+		if _, err := p.ObjectsInsert(ctx, nr); err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+
+	lists := []struct {
+		name  string
+		extra map[string]any
+	}{
+		{"plain", nil},
+		{"delimiter", map[string]any{"delimiter": "/"}},
+		{"versions", map[string]any{"versions": "true"}},
+	}
+	// The Discovery document declares maxResults a uint32 with minimum 0, so a
+	// negative, fractional, signed or out-of-uint32 value is INVALID_ARGUMENT
+	// (400, reason invalidParameter).
+	for _, bad := range []string{"-1", "abc", "1.5", "+5", "4294967296"} {
+		for _, tc := range lists {
+			nr = bucketParams()
+			nr.Params["bucket"] = "bkt"
+			nr.Params["maxResults"] = bad
+			for k, v := range tc.extra {
+				nr.Params[k] = v
+			}
+			_, err := p.ObjectsList(ctx, nr)
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidRequest" || perr.HTTPStatus != 400 {
+				t.Fatalf("%s listing maxResults=%q: expected InvalidRequest/400, got %v", tc.name, bad, err)
+			}
+			if reason, _ := perr.Data["reason"].(string); reason != "invalidParameter" {
+				t.Fatalf("%s listing maxResults=%q: reason = %q, want invalidParameter", tc.name, bad, reason)
+			}
+		}
+
+		nr = bucketParams()
+		nr.Params["maxResults"] = bad
+		if _, err := p.BucketsList(ctx, nr); err == nil {
+			t.Fatalf("buckets.list maxResults=%q: expected an error, got nil", bad)
+		} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidRequest" || perr.HTTPStatus != 400 {
+			t.Fatalf("buckets.list maxResults=%q: expected InvalidRequest/400, got %v", bad, err)
+		}
+	}
+
+	// A bad maxResults is validated before the bucket lookup, as real GCS does
+	// (400 rather than 404 for a missing bucket).
+	nr = bucketParams()
+	nr.Params["bucket"] = "missing-bucket"
+	nr.Params["maxResults"] = "-1"
+	if _, err := p.ObjectsList(ctx, nr); err == nil {
+		t.Fatal("missing bucket + maxResults=-1: expected an error, got nil")
+	} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidRequest" {
+		t.Fatalf("missing bucket + maxResults=-1: expected InvalidRequest, got %v", err)
+	}
+
+	// An explicit zero is a literal empty page with no continuation token; an
+	// absent maxResults still selects the 1,000-item default.
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["maxResults"] = "0"
+	resp, err := p.ObjectsList(ctx, nr)
+	if err != nil {
+		t.Fatalf("maxResults=0: %v", err)
+	}
+	if items, _ := resp.Data["items"].([]any); len(items) != 0 {
+		t.Fatalf("maxResults=0: expected an empty page, got %d items", len(items))
+	}
+	if token, hasNext := resp.Data["nextPageToken"]; hasNext {
+		t.Fatalf("maxResults=0: expected no nextPageToken, got %v", token)
+	}
+	// The delimiter-grouped listing has its own pager arm; zero is empty there
+	// too, with neither items nor prefixes.
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	nr.Params["delimiter"] = "/"
+	nr.Params["maxResults"] = "0"
+	resp, err = p.ObjectsList(ctx, nr)
+	if err != nil {
+		t.Fatalf("delimiter maxResults=0: %v", err)
+	}
+	if items, _ := resp.Data["items"].([]any); len(items) != 0 {
+		t.Fatalf("delimiter maxResults=0: expected no items, got %d", len(items))
+	}
+	if prefixes, _ := resp.Data["prefixes"].([]any); len(prefixes) != 0 {
+		t.Fatalf("delimiter maxResults=0: expected no prefixes, got %d", len(prefixes))
+	}
+	if _, hasNext := resp.Data["nextPageToken"]; hasNext {
+		t.Fatal("delimiter maxResults=0: expected no nextPageToken")
+	}
+	nr = bucketParams()
+	nr.Params["bucket"] = "bkt"
+	resp, err = p.ObjectsList(ctx, nr)
+	if err != nil {
+		t.Fatalf("absent maxResults: %v", err)
+	}
+	if items, _ := resp.Data["items"].([]any); len(items) != 3 {
+		t.Fatalf("absent maxResults: expected all 3 objects, got %d", len(items))
+	}
+}
+
 func TestObjectsListPrefixFilter(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()
