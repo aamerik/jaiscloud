@@ -216,3 +216,38 @@ func TestUpdateSecret_PreservesAbsentFields(t *testing.T) {
 		t.Fatalf("absent rotation should not be sent: %+v", body)
 	}
 }
+
+// TestSecretFromMap_UserManagedCMEK covers the console's read of a
+// user-managed replication policy (DC45): the CMEK chip shows the first replica
+// that names a key, and a replica without one must not mask a later replica's.
+func TestSecretFromMap_UserManagedCMEK(t *testing.T) {
+	key := "projects/p/locations/us-east1/keyRings/kr/cryptoKeys/k"
+	mock := &mockProvider{resp: &model.ProviderResponse{
+		HTTPStatus: 200,
+		Data: map[string]any{
+			"name": "projects/p/secrets/um",
+			"replication": map[string]any{
+				"userManaged": map[string]any{
+					"replicas": []any{
+						map[string]any{"location": "us-central1"},
+						map[string]any{
+							"location":                  "us-east1",
+							"customerManagedEncryption": map[string]any{"kmsKeyName": key},
+						},
+					},
+				},
+			},
+		},
+	}}
+	w := do(t, mock, http.MethodGet, "/secrets/um", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var got Secret
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.KmsKeyName != key {
+		t.Fatalf("kmsKeyName = %q, want the second replica's key %q", got.KmsKeyName, key)
+	}
+}

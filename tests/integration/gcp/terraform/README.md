@@ -68,7 +68,12 @@ below, then `destroy` (also on exit via a trap, so failures still clean up):
 - IAM service account exists
 - Secret Manager secret exists with automatic replication; version 1 is
   `ENABLED`
-- KMS key ring + crypto key (`purpose: ENCRYPT_DECRYPT`) exist
+- Secret Manager CMEK secret reads back its `global`-location key under
+  `replication.automatic.customerManagedEncryption.kmsKeyName`, and the
+  user-managed secret reads back both replica locations and its per-replica
+  CMEK key verbatim (DC45)
+- KMS key ring + crypto key (`purpose: ENCRYPT_DECRYPT`) exist, plus the
+  `global` key ring/key the automatic-replication CMEK secret requires
 - Pub/Sub topic + subscription exist
 - Pub/Sub topic IAM keeps **both** member grants across the provider's
   `getIamPolicy -> merge -> setIamPolicy` flow (fresh-etag OCC)

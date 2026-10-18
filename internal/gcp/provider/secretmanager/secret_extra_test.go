@@ -778,7 +778,7 @@ func TestVersionMapEtagAndReplicationStatus(t *testing.T) {
 		Name:       "projects/p/secrets/s/versions/1",
 		State:      "ENABLED",
 		CreateTime: "2026-01-01T00:00:00Z",
-	})
+	}, nil)
 	if etag, _ := enabled["etag"].(string); etag == "" {
 		t.Fatalf("version map has no etag: %#v", enabled)
 	}
@@ -791,7 +791,7 @@ func TestVersionMapEtagAndReplicationStatus(t *testing.T) {
 		Name:       "projects/p/secrets/s/versions/1",
 		State:      "DISABLED",
 		CreateTime: "2026-01-01T00:00:00Z",
-	})
+	}, nil)
 	if enabled["etag"] == disabled["etag"] {
 		t.Errorf("etag should change with lifecycle state")
 	}

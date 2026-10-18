@@ -28,15 +28,19 @@ import (
 // secretEtagContent is the etag-bearing view of a Secret: every mutable
 // metadata field, plus the identity (name + createTime). NextVer and the
 // version list are deliberately excluded — GCP's Secret etag covers the Secret
-// object, not its versions.
+// object, not its versions. Replication is hashed through
+// Secret.ReplicationPolicy, so the oneof arm, the replica locations and the
+// per-replica CMEK keys are all covered (a replica key change is a metadata
+// mutation a caller must not be able to race), and a record upgraded from the
+// legacy key-only form keeps the same etag as its explicit equivalent.
 type secretEtagContent struct {
-	Name           string                       `json:"name"`
-	CreateTime     string                       `json:"createTime"`
-	Labels         map[string]string            `json:"labels,omitempty"`
-	Annotations    map[string]string            `json:"annotations,omitempty"`
-	Rotation       *secretmanagerstore.Rotation `json:"rotation,omitempty"`
-	VersionAliases map[string]int               `json:"versionAliases,omitempty"`
-	KmsKeyName     string                       `json:"kmsKeyName,omitempty"`
+	Name           string                          `json:"name"`
+	CreateTime     string                          `json:"createTime"`
+	Labels         map[string]string               `json:"labels,omitempty"`
+	Annotations    map[string]string               `json:"annotations,omitempty"`
+	Rotation       *secretmanagerstore.Rotation    `json:"rotation,omitempty"`
+	VersionAliases map[string]int                  `json:"versionAliases,omitempty"`
+	Replication    *secretmanagerstore.Replication `json:"replication,omitempty"`
 }
 
 // SecretEtag returns the current etag for a secret rendered under name.
@@ -48,7 +52,7 @@ func SecretEtag(name string, s secretmanagerstore.Secret) string {
 		Annotations:    s.Annotations,
 		Rotation:       s.Rotation,
 		VersionAliases: s.VersionAliases,
-		KmsKeyName:     s.KmsKeyName,
+		Replication:    s.ReplicationPolicy(),
 	}
 	b, _ := json.Marshal(content)
 	return policy.Etag(string(b))

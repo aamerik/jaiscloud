@@ -61,7 +61,8 @@ func secretFromMap(m map[string]any) Secret {
 	}
 }
 
-// kmsKeyNameFromMap pulls the CMEK name out of the nested replication object.
+// kmsKeyNameFromMap pulls the CMEK name out of the nested replication object:
+// the automatic arm's key, or the first user-managed replica that names one.
 func kmsKeyNameFromMap(m map[string]any) string {
 	repl := uihelper.MapAt(m, "replication")
 	if auto := uihelper.MapAt(repl, "automatic"); auto != nil {
@@ -70,10 +71,14 @@ func kmsKeyNameFromMap(m map[string]any) string {
 		}
 	}
 	if um := uihelper.MapAt(repl, "userManaged"); um != nil {
-		if reps := uihelper.AsSlice(um["replicas"]); len(reps) > 0 {
-			if r0, ok := reps[0].(map[string]any); ok {
-				if cmek := uihelper.MapAt(r0, "customerManagedEncryption"); cmek != nil {
-					return uihelper.Str(cmek, "kmsKeyName")
+		for _, item := range uihelper.AsSlice(um["replicas"]) {
+			r, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if cmek := uihelper.MapAt(r, "customerManagedEncryption"); cmek != nil {
+				if key := uihelper.Str(cmek, "kmsKeyName"); key != "" {
+					return key
 				}
 			}
 		}

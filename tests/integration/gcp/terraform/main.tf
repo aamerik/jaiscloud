@@ -51,7 +51,34 @@ resource "google_secret_manager_secret" "cmek" {
   replication {
     auto {
       customer_managed_encryption {
-        kms_key_name = google_kms_crypto_key.compat.id
+        # Automatic replication requires the CMEK key to reside in `global`
+        # (Secret Manager CMEK guide); a regional key is rejected by the API.
+        kms_key_name = google_kms_crypto_key.compat_global.id
+      }
+    }
+  }
+}
+
+# A user-managed replication policy: the secret lives in the listed replicas and
+# each replica may name its own CMEK key, which must reside in that replica's
+# location. Reading it back (the provider's computed `replication`) is the DC45
+# acceptance: the emulator must echo this policy, not rewrite it as automatic.
+resource "google_secret_manager_secret" "user_managed" {
+  secret_id = "jaiscloud-tf-secret-user-managed"
+  project   = var.project
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+
+        customer_managed_encryption {
+          kms_key_name = google_kms_crypto_key.compat.id
+        }
+      }
+
+      replicas {
+        location = "us-east1"
       }
     }
   }
@@ -74,6 +101,20 @@ resource "google_kms_key_ring" "compat" {
 resource "google_kms_crypto_key" "compat" {
   name     = "jaiscloud-tf-key"
   key_ring = google_kms_key_ring.compat.id
+  purpose  = "ENCRYPT_DECRYPT"
+}
+
+# A `global` key ring: Secret Manager's automatic replication only accepts CMEK
+# keys in the `global` location, so the CMEK secret above uses this key.
+resource "google_kms_key_ring" "compat_global" {
+  name     = "jaiscloud-tf-keyring-global"
+  location = "global"
+  project  = var.project
+}
+
+resource "google_kms_crypto_key" "compat_global" {
+  name     = "jaiscloud-tf-key-global"
+  key_ring = google_kms_key_ring.compat_global.id
   purpose  = "ENCRYPT_DECRYPT"
 }
 

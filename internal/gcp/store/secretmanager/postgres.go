@@ -34,15 +34,34 @@ func nullableJSON(v any) any {
 	return json.RawMessage(b)
 }
 
+// decodeSecretJSON fills the JSONB-backed fields of sec from the raw column
+// values every jc_sm_secrets SELECT returns.
+func decodeSecretJSON(sec *Secret, labels, annotations, rotation, aliases, replication []byte) {
+	json.Unmarshal(labels, &sec.Labels)
+	json.Unmarshal(annotations, &sec.Annotations)
+	if len(rotation) > 0 {
+		json.Unmarshal(rotation, &sec.Rotation)
+	}
+	if len(aliases) > 0 {
+		json.Unmarshal(aliases, &sec.VersionAliases)
+	}
+	sec.Replication = nil
+	if len(replication) > 0 {
+		json.Unmarshal(replication, &sec.Replication)
+	}
+}
+
+const secretColumns = `secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication`
+
 func (s *PostgresStore) CreateSecret(ctx context.Context, projectID, id string, sec Secret) error {
 	if sec.CreateTime.IsZero() {
 		sec.CreateTime = clock.Now()
 	}
 	labels, _ := json.Marshal(sec.Labels)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-	`, projectID, id, json.RawMessage(labels), sec.CreateTime, sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases), sec.KmsKeyName, nullableJSON(sec.Annotations))
+		INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	`, projectID, id, json.RawMessage(labels), sec.CreateTime, sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases), sec.KmsKeyName, nullableJSON(sec.Annotations), nullableJSON(sec.Replication))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -55,34 +74,25 @@ func (s *PostgresStore) CreateSecret(ctx context.Context, projectID, id string, 
 
 func (s *PostgresStore) GetSecret(ctx context.Context, projectID, id string) (Secret, error) {
 	var sec Secret
-	var labels, annotations, rotation, aliases []byte
-	err := s.pool.QueryRow(ctx, `
-		SELECT secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations
-		FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2
-	`, projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations)
+	var labels, annotations, rotation, aliases, replication []byte
+	err := s.pool.QueryRow(ctx, `SELECT `+secretColumns+` FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2`,
+		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Secret{}, ErrNoSuchSecret
 	}
 	if err != nil {
 		return Secret{}, err
 	}
-	json.Unmarshal(labels, &sec.Labels)
-	json.Unmarshal(annotations, &sec.Annotations)
-	if len(rotation) > 0 {
-		json.Unmarshal(rotation, &sec.Rotation)
-	}
-	if len(aliases) > 0 {
-		json.Unmarshal(aliases, &sec.VersionAliases)
-	}
+	decodeSecretJSON(&sec, labels, annotations, rotation, aliases, replication)
 	return sec, nil
 }
 
 func (s *PostgresStore) UpdateSecret(ctx context.Context, projectID, id string, sec Secret) error {
 	labels, _ := json.Marshal(sec.Labels)
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6, kms_key_name=$7, annotations=$8
+		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6, kms_key_name=$7, annotations=$8, replication=$9
 		WHERE project_id=$1 AND secret_id=$2
-	`, projectID, id, json.RawMessage(labels), sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases), sec.KmsKeyName, nullableJSON(sec.Annotations))
+	`, projectID, id, json.RawMessage(labels), sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases), sec.KmsKeyName, nullableJSON(sec.Annotations), nullableJSON(sec.Replication))
 	if err != nil {
 		return err
 	}
@@ -114,25 +124,16 @@ func (s *PostgresStore) updateSecretAtomicOnce(ctx context.Context, projectID, i
 	defer tx.Rollback(ctx)
 
 	var sec Secret
-	var labels, annotations, rotation, aliases []byte
-	err = tx.QueryRow(ctx, `
-		SELECT secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations
-		FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2 FOR UPDATE
-	`, projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations)
+	var labels, annotations, rotation, aliases, replication []byte
+	err = tx.QueryRow(ctx, `SELECT `+secretColumns+` FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2 FOR UPDATE`,
+		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Secret{}, ErrNoSuchSecret
 	}
 	if err != nil {
 		return Secret{}, err
 	}
-	json.Unmarshal(labels, &sec.Labels)
-	json.Unmarshal(annotations, &sec.Annotations)
-	if len(rotation) > 0 {
-		json.Unmarshal(rotation, &sec.Rotation)
-	}
-	if len(aliases) > 0 {
-		json.Unmarshal(aliases, &sec.VersionAliases)
-	}
+	decodeSecretJSON(&sec, labels, annotations, rotation, aliases, replication)
 
 	next, err := mutate(sec)
 	if err != nil {
@@ -141,9 +142,9 @@ func (s *PostgresStore) updateSecretAtomicOnce(ctx context.Context, projectID, i
 
 	newLabels, _ := json.Marshal(next.Labels)
 	if _, err := tx.Exec(ctx, `
-		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6, kms_key_name=$7, annotations=$8
+		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6, kms_key_name=$7, annotations=$8, replication=$9
 		WHERE project_id=$1 AND secret_id=$2
-	`, projectID, id, json.RawMessage(newLabels), next.NextVer, nullableJSON(next.Rotation), nullableJSON(next.VersionAliases), next.KmsKeyName, nullableJSON(next.Annotations)); err != nil {
+	`, projectID, id, json.RawMessage(newLabels), next.NextVer, nullableJSON(next.Rotation), nullableJSON(next.VersionAliases), next.KmsKeyName, nullableJSON(next.Annotations), nullableJSON(next.Replication)); err != nil {
 		return Secret{}, err
 	}
 
@@ -185,25 +186,16 @@ func (s *PostgresStore) deleteSecretIfOnce(ctx context.Context, projectID, id st
 	defer tx.Rollback(ctx)
 
 	var sec Secret
-	var labels, annotations, rotation, aliases []byte
-	err = tx.QueryRow(ctx, `
-		SELECT secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations
-		FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2 FOR UPDATE
-	`, projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations)
+	var labels, annotations, rotation, aliases, replication []byte
+	err = tx.QueryRow(ctx, `SELECT `+secretColumns+` FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2 FOR UPDATE`,
+		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNoSuchSecret
 	}
 	if err != nil {
 		return err
 	}
-	json.Unmarshal(labels, &sec.Labels)
-	json.Unmarshal(annotations, &sec.Annotations)
-	if len(rotation) > 0 {
-		json.Unmarshal(rotation, &sec.Rotation)
-	}
-	if len(aliases) > 0 {
-		json.Unmarshal(aliases, &sec.VersionAliases)
-	}
+	decodeSecretJSON(&sec, labels, annotations, rotation, aliases, replication)
 
 	if cond != nil {
 		if err := cond(sec); err != nil {
@@ -220,10 +212,7 @@ func (s *PostgresStore) deleteSecretIfOnce(ctx context.Context, projectID, id st
 }
 
 func (s *PostgresStore) ListSecrets(ctx context.Context, projectID string) ([]Secret, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations
-		FROM jc_sm_secrets WHERE project_id=$1 ORDER BY secret_id
-	`, projectID)
+	rows, err := s.pool.Query(ctx, `SELECT `+secretColumns+` FROM jc_sm_secrets WHERE project_id=$1 ORDER BY secret_id`, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -231,18 +220,11 @@ func (s *PostgresStore) ListSecrets(ctx context.Context, projectID string) ([]Se
 	var result []Secret
 	for rows.Next() {
 		var sec Secret
-		var labels, annotations, rotation, aliases []byte
-		if err := rows.Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations); err != nil {
+		var labels, annotations, rotation, aliases, replication []byte
+		if err := rows.Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication); err != nil {
 			return nil, err
 		}
-		json.Unmarshal(labels, &sec.Labels)
-		json.Unmarshal(annotations, &sec.Annotations)
-		if len(rotation) > 0 {
-			json.Unmarshal(rotation, &sec.Rotation)
-		}
-		if len(aliases) > 0 {
-			json.Unmarshal(aliases, &sec.VersionAliases)
-		}
+		decodeSecretJSON(&sec, labels, annotations, rotation, aliases, replication)
 		result = append(result, sec)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })

@@ -19,7 +19,7 @@ func TestSecretTimesMicrosecondTruncation(t *testing.T) {
 	}
 	v := versionToProto("proj", secretmanagerstore.Version{
 		SecretID: "s1", VersionID: "1", CreateTime: instant, DestroyTime: instant,
-	})
+	}, nil)
 	if got := v.GetCreateTime().AsTime(); !got.Equal(want) {
 		t.Fatalf("version.createTime = %v, want %v", got, want)
 	}

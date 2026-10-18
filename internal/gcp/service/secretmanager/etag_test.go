@@ -55,6 +55,11 @@ func TestSecretEtagStableAndSensitiveToMetadata(t *testing.T) {
 		func(s *secretmanagerstore.Secret) {
 			s.KmsKeyName = "projects/p/locations/global/keyRings/r/cryptoKeys/k"
 		},
+		func(s *secretmanagerstore.Secret) {
+			s.SetReplication(&secretmanagerstore.Replication{UserManaged: &secretmanagerstore.UserManagedReplication{
+				Replicas: []secretmanagerstore.Replica{{Location: "us-east1"}},
+			}})
+		},
 	}
 	for i, mutate := range changes {
 		next := baseSecret()
@@ -62,6 +67,35 @@ func TestSecretEtagStableAndSensitiveToMetadata(t *testing.T) {
 		if got := SecretEtag(name, next); got == base {
 			t.Errorf("mutation %d did not change the secret etag", i)
 		}
+	}
+
+	// A user-managed policy's per-replica CMEK key is metadata too: changing it
+	// (the one policy update real GCP supports) must move the etag.
+	um := func(key string) secretmanagerstore.Secret {
+		s := baseSecret()
+		s.SetReplication(&secretmanagerstore.Replication{UserManaged: &secretmanagerstore.UserManagedReplication{
+			Replicas: []secretmanagerstore.Replica{
+				{Location: "us-east1", CustomerManagedEncryption: &secretmanagerstore.CustomerManagedEncryption{KmsKeyName: key}},
+				{Location: "us-central1"},
+			},
+		}})
+		return s
+	}
+	k1 := "projects/p/locations/us-east1/keyRings/r/cryptoKeys/k"
+	k2 := "projects/p/locations/us-east1/keyRings/r/cryptoKeys/k2"
+	if SecretEtag(name, um(k1)) == SecretEtag(name, um(k2)) {
+		t.Error("a per-replica CMEK key change did not change the secret etag")
+	}
+
+	// A legacy record (only the key name) and its explicit automatic equivalent
+	// are the same visible object, so they share an etag: the upgrade a patch
+	// performs must not invalidate a caller's token.
+	if SecretEtag(name, baseSecret()) != SecretEtag(name, func() secretmanagerstore.Secret {
+		s := baseSecret()
+		s.Replication = &secretmanagerstore.Replication{Automatic: &secretmanagerstore.AutomaticReplication{}}
+		return s
+	}()) {
+		t.Error("legacy and explicit default policies should share an etag")
 	}
 	if got := SecretEtag("projects/other/secrets/s", baseSecret()); got == base {
 		t.Errorf("a different resource name must not share the etag")

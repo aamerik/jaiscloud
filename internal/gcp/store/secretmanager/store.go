@@ -40,6 +40,63 @@ type ManagedRotation struct {
 	Username   string `json:"username,omitempty"`
 }
 
+// Replication is a secret's replication policy — the `replication` oneof from
+// the API. Exactly one arm is set; a nil Replication on a stored record means
+// the policy predates it being modelled, and reads back as the automatic arm
+// (see Secret.ReplicationPolicy).
+type Replication struct {
+	Automatic   *AutomaticReplication   `json:"automatic,omitempty"`
+	UserManaged *UserManagedReplication `json:"userManaged,omitempty"`
+}
+
+// AutomaticReplication replicates the payload without restrictions.
+type AutomaticReplication struct {
+	CustomerManagedEncryption *CustomerManagedEncryption `json:"customerManagedEncryption,omitempty"`
+}
+
+// UserManagedReplication replicates the payload into the listed locations.
+type UserManagedReplication struct {
+	Replicas []Replica `json:"replicas"`
+}
+
+// Replica is one user-managed replication location. CustomerManagedEncryption
+// is per replica, and its key must reside in the replica's location.
+type Replica struct {
+	Location                  string                     `json:"location"`
+	CustomerManagedEncryption *CustomerManagedEncryption `json:"customerManagedEncryption,omitempty"`
+}
+
+// CustomerManagedEncryption names the Cloud KMS CryptoKey that encrypts new
+// versions. A nil pointer means Google-managed (default) encryption.
+type CustomerManagedEncryption struct {
+	KmsKeyName string `json:"kmsKeyName"`
+}
+
+// WrapKey returns the Cloud KMS key a version added now is wrapped with: the
+// automatic arm's key, or the first user-managed replica's. The emulator keeps
+// one wrapped DEK per version, so a user-managed policy whose replicas name
+// different keys wraps with the first of them; the version's replicationStatus
+// still reports the binding per replica (see service/secretmanager).
+func (r *Replication) WrapKey() string {
+	if r == nil {
+		return ""
+	}
+	if r.Automatic != nil {
+		if cme := r.Automatic.CustomerManagedEncryption; cme != nil {
+			return cme.KmsKeyName
+		}
+		return ""
+	}
+	if r.UserManaged != nil {
+		for _, rep := range r.UserManaged.Replicas {
+			if cme := rep.CustomerManagedEncryption; cme != nil {
+				return cme.KmsKeyName
+			}
+		}
+	}
+	return ""
+}
+
 // GeneratePassword returns a fresh random password for Cloud SQL managed
 // rotation. The API only specifies "a random password will be generated", so
 // the alphabet is an implementation detail: 24 CSPRNG bytes, base64-encoded
@@ -61,7 +118,36 @@ type Secret struct {
 	NextVer        int
 	Rotation       *Rotation      // nil when rotation is disabled
 	VersionAliases map[string]int // alias name → version number, nil when none
-	KmsKeyName     string
+	// Replication is the secret's replication policy. nil on records written
+	// before it was modelled (they carry only KmsKeyName); use
+	// ReplicationPolicy() to read it.
+	Replication *Replication `json:"replication,omitempty"`
+	// KmsKeyName is the effective wrapping key of new versions (the automatic
+	// arm's key or the first user-managed replica's). Kept alongside the policy
+	// because the version-wrap path and records written by older builds read
+	// it; it is never the source of truth for the wire shape.
+	KmsKeyName string
+}
+
+// ReplicationPolicy returns the secret's replication policy, reconstructing the
+// automatic arm for records written before the policy was modelled. It never
+// returns nil, so both transports render the same shape for every record.
+func (s Secret) ReplicationPolicy() *Replication {
+	if s.Replication != nil {
+		return s.Replication
+	}
+	auto := &AutomaticReplication{}
+	if s.KmsKeyName != "" {
+		auto.CustomerManagedEncryption = &CustomerManagedEncryption{KmsKeyName: s.KmsKeyName}
+	}
+	return &Replication{Automatic: auto}
+}
+
+// SetReplication records r as the secret's replication policy and derives the
+// effective wrapping key kept in KmsKeyName.
+func (s *Secret) SetReplication(r *Replication) {
+	s.Replication = r
+	s.KmsKeyName = r.WrapKey()
 }
 
 // Version is a Secret Manager secret version.
