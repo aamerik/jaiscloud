@@ -27,6 +27,16 @@ func newKey(t *testing.T, store *kms.MemoryStore, project, location, ring, id st
 	return "projects/" + project + "/locations/" + location + "/keyRings/" + ring + "/cryptoKeys/" + id
 }
 
+// keysVersion returns a key's primary CryptoKeyVersion number.
+func keysVersion(t *testing.T, store *kms.MemoryStore, project, location, ring, id string) string {
+	t.Helper()
+	ck, err := store.GetCryptoKey(context.Background(), project, location, ring, id)
+	if err != nil {
+		t.Fatalf("GetCryptoKey %s/%s: %v", location, id, err)
+	}
+	return ck.PrimaryVersion
+}
+
 // providerErr returns err as a *model.ProviderError, or nil.
 func providerErr(err error) *model.ProviderError {
 	var pe *model.ProviderError
@@ -173,5 +183,82 @@ func TestEncryptPayloadAutomaticAndServerDEK(t *testing.T) {
 	}
 	if plain.KmsKeyName != "" || plain.WrappedDEK != nil || len(plain.ReplicaDEKs) != 0 {
 		t.Errorf("server-DEK wrap = %#v, want no wraps", plain)
+	}
+}
+
+// TestDecryptVersion covers the access path the two transports share: the
+// primary wrap, the fallback to another replica's wrap when that key version is
+// unavailable, the error when no wrap works, and a corrupt payload.
+func TestDecryptVersion(t *testing.T) {
+	ctx := context.Background()
+	store := kms.NewMemoryStore()
+	enc := crypto.NewEnvelopeEncryptor(store)
+	usEastKey := newKey(t, store, "p", "us-east1", "kr", "k")
+	usCentralKey := newKey(t, store, "p", "us-central1", "kr", "k")
+	repl := userManaged(replica("us-east1", usEastKey), replica("us-central1", usCentralKey))
+
+	wrap, err := EncryptPayload(ctx, enc, "p", repl, []byte("payload"))
+	if err != nil {
+		t.Fatalf("EncryptPayload: %v", err)
+	}
+	version := secretmanagerstore.Version{
+		SecretID: "s", VersionID: "1", State: "ENABLED", Data: wrap.Data,
+		KmsKeyName: wrap.KmsKeyName, WrappedDEK: wrap.WrappedDEK, ReplicaDEKs: wrap.ReplicaDEKs,
+	}
+	plain, err := DecryptVersion(ctx, enc, "p", version)
+	if err != nil || string(plain) != "payload" {
+		t.Fatalf("DecryptVersion = %q, %v", plain, err)
+	}
+
+	// WrapOf carries the same wrap data the renderers use.
+	if got := WrapOf(version); got.KmsKeyName != version.KmsKeyName || len(got.ReplicaDEKs) != len(version.ReplicaDEKs) {
+		t.Fatalf("WrapOf = %#v, want the version's wraps", got)
+	}
+
+	// Disable the primary wrap's key version: the other replica's wrap still
+	// decrypts the single payload ciphertext.
+	primary := keysVersion(t, store, "p", "us-east1", "kr", "k")
+	if err := store.UpdateVersionState(ctx, "p", "us-east1", "kr", "k", primary, "DISABLED"); err != nil {
+		t.Fatalf("disable primary key version: %v", err)
+	}
+	plain, err = DecryptVersion(ctx, enc, "p", version)
+	if err != nil || string(plain) != "payload" {
+		t.Fatalf("DecryptVersion via the fallback replica = %q, %v", plain, err)
+	}
+
+	// With both key versions disabled no wrap works, and the primary error is
+	// returned.
+	central := keysVersion(t, store, "p", "us-central1", "kr", "k")
+	if err := store.UpdateVersionState(ctx, "p", "us-central1", "kr", "k", central, "DISABLED"); err != nil {
+		t.Fatalf("disable second key version: %v", err)
+	}
+	if _, err := DecryptVersion(ctx, enc, "p", version); providerErr(err) == nil {
+		t.Fatalf("DecryptVersion with every key disabled = %v, want an error", err)
+	}
+
+	// A corrupt payload is a decode error, not a panic.
+	bad := version
+	bad.Data = "not base64!"
+	if _, err := DecryptVersion(ctx, enc, "p", bad); err == nil {
+		t.Fatal("DecryptVersion accepted a corrupt payload")
+	}
+}
+
+// TestParentReplication covers the shared version-status parent lookup.
+func TestParentReplication(t *testing.T) {
+	ctx := context.Background()
+	secrets := secretmanagerstore.NewMemoryStore()
+	repl := userManaged(replica("us-east1", ""))
+	sec := secretmanagerstore.Secret{ID: "s"}
+	sec.SetReplication(repl)
+	if err := secrets.CreateSecret(ctx, "p", "s", sec); err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+	got, err := ParentReplication(ctx, secrets, "p", "s")
+	if err != nil || got.UserManaged == nil || got.UserManaged.Replicas[0].Location != "us-east1" {
+		t.Fatalf("ParentReplication = %#v, %v", got, err)
+	}
+	if _, err := ParentReplication(ctx, secrets, "p", "missing"); err == nil {
+		t.Fatal("ParentReplication accepted a missing secret")
 	}
 }
