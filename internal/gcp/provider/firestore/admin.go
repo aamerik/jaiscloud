@@ -38,6 +38,26 @@ const (
 // defaultDatabaseID is the implicit database every Firestore project has.
 const defaultDatabaseID = "(default)"
 
+// Database.deleteProtectionState values. Protection is disabled by default and
+// blocks projects.databases.delete while enabled. DELETE_PROTECTION_STATE_
+// UNSPECIFIED is documented as equivalent to disabled, so requests carrying it
+// are normalized rather than stored verbatim (the zero value must not read back
+// as "unknown" on the wire).
+const (
+	deleteProtectionDisabled    = "DELETE_PROTECTION_DISABLED"
+	deleteProtectionEnabled     = "DELETE_PROTECTION_ENABLED"
+	deleteProtectionUnspecified = "DELETE_PROTECTION_STATE_UNSPECIFIED"
+)
+
+// normalizeDeleteProtection maps the documented zero-value equivalence onto
+// DISABLED; every other value (including an unrecognized one) is left alone.
+func normalizeDeleteProtection(state string) string {
+	if state == "" || state == deleteProtectionUnspecified {
+		return deleteProtectionDisabled
+	}
+	return state
+}
+
 // passwordAlphabet is the character set for a synthesized user-creds password.
 const passwordAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
@@ -276,7 +296,7 @@ func synthesizeDefaultDatabase(project string) databaseDef {
 		ConcurrencyMode:               "OPTIMISTIC",
 		VersionRetentionPeriod:        time.Hour,
 		PointInTimeRecoveryEnablement: "POINT_IN_TIME_RECOVERY_DISABLED",
-		DeleteProtectionState:         "DELETE_PROTECTION_DISABLED",
+		DeleteProtectionState:         deleteProtectionDisabled,
 	}
 }
 
@@ -312,6 +332,7 @@ func (s *Service) CreateDatabaseDef(ctx context.Context, project, dbID string, d
 	if db.VersionRetentionPeriod == 0 {
 		db.VersionRetentionPeriod = time.Hour
 	}
+	db.DeleteProtectionState = normalizeDeleteProtection(db.DeleteProtectionState)
 	db.Etag = randomHex(16)
 	if err := s.putResource(ctx, project, rtDatabase, databaseRel(dbID), db, true); err != nil {
 		return databaseDef{}, "", err
@@ -330,6 +351,9 @@ func (s *Service) GetDatabase(ctx context.Context, project, db string) (database
 			if rec.Deleted {
 				return databaseDef{}, gcpNotFound("database")
 			}
+			// A record persisted before the default existed reads back as
+			// unspecified; normalize the documented zero-value equivalence.
+			rec.DeleteProtectionState = normalizeDeleteProtection(rec.DeleteProtectionState)
 			return rec, nil
 		case !isNotFound(err):
 			return databaseDef{}, err
@@ -357,6 +381,7 @@ func (s *Service) ListDatabases(ctx context.Context, project string, showDeleted
 		if r.Deleted && !showDeleted {
 			continue
 		}
+		r.DeleteProtectionState = normalizeDeleteProtection(r.DeleteProtectionState)
 		out = append(out, r)
 	}
 	if !haveDefault {
@@ -470,7 +495,7 @@ func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 			cur.PointInTimeRecoveryEnablement = patch.PointInTimeRecoveryEnablement
 		}
 		if patch.DeleteProtectionState != "" {
-			cur.DeleteProtectionState = patch.DeleteProtectionState
+			cur.DeleteProtectionState = normalizeDeleteProtection(patch.DeleteProtectionState)
 		}
 		if patch.DatabaseEdition != "" {
 			cur.DatabaseEdition = patch.DatabaseEdition
@@ -488,7 +513,7 @@ func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 	case "point_in_time_recovery_enablement":
 		cur.PointInTimeRecoveryEnablement = patch.PointInTimeRecoveryEnablement
 	case "delete_protection_state":
-		cur.DeleteProtectionState = patch.DeleteProtectionState
+		cur.DeleteProtectionState = normalizeDeleteProtection(patch.DeleteProtectionState)
 	case "location_id":
 		cur.LocationID = patch.LocationID
 	case "type":
@@ -513,10 +538,18 @@ func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 // DeleteDatabaseRequest.etag documents that a mismatch blocks the delete and
 // returns FAILED_PRECONDITION (the proto and the Discovery document both say
 // so), unlike an update's AIP-154 ABORTED.
+//
+// Delete protection is also a FAILED_PRECONDITION: Firestore documents that a
+// database with delete_protection_state DELETE_PROTECTION_ENABLED "cannot be
+// deleted ... until you disable delete protection", so the record is left
+// intact until the protection is patched off.
 func (s *Service) DeleteDatabaseDef(ctx context.Context, project, db, etag string) (databaseDef, string, error) {
 	deleted, err := s.mutateDatabase(ctx, project, db, func(cur databaseDef) (databaseDef, error) {
 		if etag != "" && etag != cur.Etag {
 			return databaseDef{}, gcpFailedPrecondition("etag mismatch: the database changed since the etag was read")
+		}
+		if cur.DeleteProtectionState == deleteProtectionEnabled {
+			return databaseDef{}, gcpFailedPrecondition("database has delete protection enabled: disable delete protection before deleting")
 		}
 		cur.Deleted = true
 		cur.DeleteTime = clock.Now()

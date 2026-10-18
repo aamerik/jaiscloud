@@ -28,7 +28,7 @@ func firestoreAdminControlChecks() []Check {
 		{Service: "firestoreadmin", RPC: "GetDatabase", KeyField: "database name/uid", Run: checkFsAdminGetDatabase},
 		{Service: "firestoreadmin", RPC: "ListDatabases", KeyField: "created database present + (default)", Run: checkFsAdminListDatabases},
 		{Service: "firestoreadmin", RPC: "UpdateDatabase", KeyField: "concurrency_mode updated under mask + omitted mask applies populated fields", Run: checkFsAdminUpdateDatabase},
-		{Service: "firestoreadmin", RPC: "DeleteDatabase", KeyField: "stale etag -> FailedPrecondition; operation response carries database; absent after delete", Run: checkFsAdminDeleteDatabase},
+		{Service: "firestoreadmin", RPC: "DeleteDatabase", KeyField: "stale etag -> FailedPrecondition; delete protection -> FailedPrecondition; operation response carries database; absent after delete", Run: checkFsAdminDeleteDatabase},
 		{Service: "firestoreadmin", RPC: "UpdateField", Method: "UpdateField", KeyField: "operation done=true; index_config", Run: checkFsAdminUpdateField},
 		{Service: "firestoreadmin", RPC: "GetField", Method: "GetField", KeyField: "index_config round-trip", Run: checkFsAdminGetField},
 		{Service: "firestoreadmin", RPC: "ListFields", Method: "ListFields", KeyField: "field present under wildcard group", Run: checkFsAdminListFields},
@@ -232,7 +232,52 @@ func checkFsAdminDeleteDatabase(ctx context.Context, cfg Config) error {
 	if unchanged.GetEtag() != cur.GetEtag() {
 		return fmt.Errorf("stale-etag delete changed the database etag %q -> %q", cur.GetEtag(), unchanged.GetEtag())
 	}
-	delOp, err := stub.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: name, Etag: cur.GetEtag()})
+	// Delete protection blocks the delete while enabled (Firestore: a database
+	// with delete protection enabled cannot be deleted until it is disabled).
+	protOp, err := stub.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:                  name,
+			Etag:                  cur.GetEtag(),
+			DeleteProtectionState: adminpb.Database_DELETE_PROTECTION_ENABLED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"delete_protection_state"}},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateDatabase(enable delete protection): %w", err)
+	}
+	protected := &adminpb.Database{}
+	if err := protOp.GetResponse().UnmarshalTo(protected); err != nil {
+		return fmt.Errorf("UpdateDatabase response: %w", err)
+	}
+	if _, err := stub.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: name, Etag: protected.GetEtag()}); status.Code(err) != codes.FailedPrecondition {
+		return fmt.Errorf("DeleteDatabase(delete protection) code = %v, want FailedPrecondition", status.Code(err))
+	}
+	kept, err := stub.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: name})
+	if err != nil {
+		return fmt.Errorf("GetDatabase after protected delete: %w", err)
+	}
+	if kept.GetDeleteProtectionState() != adminpb.Database_DELETE_PROTECTION_ENABLED {
+		return fmt.Errorf("protected delete changed the database state = %v", kept.GetDeleteProtectionState())
+	}
+	if kept.GetEtag() != protected.GetEtag() {
+		return fmt.Errorf("protected delete rotated the database etag %q -> %q", protected.GetEtag(), kept.GetEtag())
+	}
+	unprotOp, err := stub.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:                  name,
+			Etag:                  kept.GetEtag(),
+			DeleteProtectionState: adminpb.Database_DELETE_PROTECTION_DISABLED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"delete_protection_state"}},
+	})
+	if err != nil {
+		return fmt.Errorf("UpdateDatabase(disable delete protection): %w", err)
+	}
+	unprotected := &adminpb.Database{}
+	if err := unprotOp.GetResponse().UnmarshalTo(unprotected); err != nil {
+		return fmt.Errorf("UpdateDatabase response: %w", err)
+	}
+	delOp, err := stub.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: name, Etag: unprotected.GetEtag()})
 	if err != nil {
 		return fmt.Errorf("DeleteDatabase: %w", err)
 	}

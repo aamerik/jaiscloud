@@ -42,6 +42,10 @@ func TestDatabaseAdminRoundTrip(t *testing.T) {
 	if created.GetType() != adminpb.Database_FIRESTORE_NATIVE {
 		t.Errorf("created type = %v, want FIRESTORE_NATIVE", created.GetType())
 	}
+	// Delete protection is documented as disabled by default.
+	if created.GetDeleteProtectionState() != adminpb.Database_DELETE_PROTECTION_DISABLED {
+		t.Errorf("created delete protection = %v, want DELETE_PROTECTION_DISABLED", created.GetDeleteProtectionState())
+	}
 
 	got, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()})
 	if err != nil {
@@ -138,6 +142,82 @@ func TestDatabaseAdminRoundTrip(t *testing.T) {
 	}
 	if deleted.GetDeleteTime() == nil {
 		t.Error("deleted database response carries no deleteTime")
+	}
+	if _, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()}); status.Code(err) != codes.NotFound {
+		t.Errorf("GetDatabase after delete = %v, want NotFound", err)
+	}
+}
+
+// TestDeleteDatabaseProtection verifies the documented delete-protection gate
+// on the gRPC surface: a delete of a protection-enabled database is
+// FAILED_PRECONDITION and leaves it in place until the protection is patched
+// off.
+func TestDeleteDatabaseProtection(t *testing.T) {
+	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
+	defer cleanup()
+	ctx := context.Background()
+
+	op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "prot-db",
+		Database:   &adminpb.Database{LocationId: "nam5"},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	created := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(created); err != nil {
+		t.Fatalf("CreateDatabase response unmarshal: %v", err)
+	}
+
+	enableOp, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:                  created.GetName(),
+			DeleteProtectionState: adminpb.Database_DELETE_PROTECTION_ENABLED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"delete_protection_state"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabase(enable protection): %v", err)
+	}
+	enabled := &adminpb.Database{}
+	if err := enableOp.GetResponse().UnmarshalTo(enabled); err != nil {
+		t.Fatalf("UpdateDatabase response unmarshal: %v", err)
+	}
+	if enabled.GetDeleteProtectionState() != adminpb.Database_DELETE_PROTECTION_ENABLED {
+		t.Fatalf("delete protection = %v, want ENABLED", enabled.GetDeleteProtectionState())
+	}
+	if _, err := client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{
+		Name: created.GetName(), Etag: enabled.GetEtag(),
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("protected delete code = %v, want FailedPrecondition", status.Code(err))
+	}
+	kept, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()})
+	if err != nil {
+		t.Errorf("blocked delete removed the database: %v", err)
+	} else if kept.GetEtag() != enabled.GetEtag() {
+		t.Errorf("blocked delete rotated the etag %q -> %q", enabled.GetEtag(), kept.GetEtag())
+	}
+
+	disableOp, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:                  created.GetName(),
+			Etag:                  enabled.GetEtag(),
+			DeleteProtectionState: adminpb.Database_DELETE_PROTECTION_DISABLED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"delete_protection_state"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabase(disable protection): %v", err)
+	}
+	disabled := &adminpb.Database{}
+	if err := disableOp.GetResponse().UnmarshalTo(disabled); err != nil {
+		t.Fatalf("UpdateDatabase response unmarshal: %v", err)
+	}
+	if _, err := client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{
+		Name: created.GetName(), Etag: disabled.GetEtag(),
+	}); err != nil {
+		t.Fatalf("DeleteDatabase after disabling protection: %v", err)
 	}
 	if _, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()}); status.Code(err) != codes.NotFound {
 		t.Errorf("GetDatabase after delete = %v, want NotFound", err)

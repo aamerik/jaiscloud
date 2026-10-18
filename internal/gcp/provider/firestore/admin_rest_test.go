@@ -103,7 +103,7 @@ func TestRESTDatabaseLifecycle(t *testing.T) {
 	if _, err := p.DeleteDatabase(ctx, adminNR("databases/test-db", map[string]any{"etag": currentEtag + "-stale"})); err == nil {
 		t.Error("DeleteDatabase(stale etag) succeeded, want FailedPrecondition")
 	} else {
-		assertDeleteEtagPrecondition(t, err)
+		assertDeletePrecondition(t, err, "stale-etag")
 	}
 	if _, err := p.GetDatabase(ctx, adminNR("databases/test-db", nil)); err != nil {
 		t.Errorf("stale-etag delete removed the database: %v", err)
@@ -136,6 +136,64 @@ func TestRESTDatabaseLifecycle(t *testing.T) {
 	// data-plane verbs are rejected before dispatch (invalid path here).
 	if _, err := p.CreateDatabase(ctx, adminNR("databases/test-db", nil)); err == nil {
 		t.Error("CreateDatabase on a database resource succeeded, want InvalidArgument")
+	}
+}
+
+func TestRESTDeleteProtectionBlock(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+
+	created, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "prot-db",
+		"body":       map[string]any{"locationId": "nam5"},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	createResp, _ := created.Data["response"].(map[string]any)
+	if got := createResp["deleteProtectionState"]; got != deleteProtectionDisabled {
+		t.Fatalf("create deleteProtectionState = %v, want %s", got, deleteProtectionDisabled)
+	}
+
+	// Enabling protection through projects.databases.patch blocks the delete.
+	enabled, err := p.UpdateDatabase(ctx, adminNR("databases/prot-db", map[string]any{
+		"updateMask": "deleteProtectionState",
+		"body":       map[string]any{"deleteProtectionState": deleteProtectionEnabled},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateDatabase(enable protection): %v", err)
+	}
+	enabledResp, _ := enabled.Data["response"].(map[string]any)
+	if enabledResp["deleteProtectionState"] != deleteProtectionEnabled {
+		t.Fatalf("deleteProtectionState = %v, want %s", enabledResp["deleteProtectionState"], deleteProtectionEnabled)
+	}
+	etag, _ := enabledResp["etag"].(string)
+	if _, err := p.DeleteDatabase(ctx, adminNR("databases/prot-db", map[string]any{"etag": etag})); err == nil {
+		t.Error("DeleteDatabase succeeded with delete protection enabled, want FailedPrecondition")
+	} else {
+		assertDeletePrecondition(t, err, "delete-protected")
+	}
+	if kept, err := p.GetDatabase(ctx, adminNR("databases/prot-db", nil)); err != nil {
+		t.Errorf("blocked delete removed the database: %v", err)
+	} else if kept.Data["etag"] != etag {
+		t.Errorf("blocked delete rotated the etag %v -> %v", etag, kept.Data["etag"])
+	}
+
+	// Disabling protection admits the delete.
+	disabled, err := p.UpdateDatabase(ctx, adminNR("databases/prot-db", map[string]any{
+		"updateMask": "deleteProtectionState",
+		"body":       map[string]any{"deleteProtectionState": deleteProtectionDisabled},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateDatabase(disable protection): %v", err)
+	}
+	disabledResp, _ := disabled.Data["response"].(map[string]any)
+	etag, _ = disabledResp["etag"].(string)
+	if _, err := p.DeleteDatabase(ctx, adminNR("databases/prot-db", map[string]any{"etag": etag})); err != nil {
+		t.Fatalf("DeleteDatabase after disabling protection: %v", err)
+	}
+	if _, err := p.GetDatabase(ctx, adminNR("databases/prot-db", nil)); err == nil {
+		t.Error("GetDatabase after delete succeeded, want NotFound")
 	}
 }
 

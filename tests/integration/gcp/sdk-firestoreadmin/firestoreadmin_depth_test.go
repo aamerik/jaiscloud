@@ -71,6 +71,8 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 		require.Equal(t, adminpb.Database_FIRESTORE_NATIVE, created.GetType())
 		require.NotEmpty(t, created.GetUid())
 		require.NotEmpty(t, created.GetEtag())
+		require.Equal(t, adminpb.Database_DELETE_PROTECTION_DISABLED, created.GetDeleteProtectionState(),
+			"delete protection is documented as disabled by default")
 
 		got, err := c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: databaseName(id)})
 		require.NoError(t, err)
@@ -432,6 +434,18 @@ func TestSDKFirestoreAdminErrors(t *testing.T) {
 	createDatabase(t, c, ucDB)
 	etagDB := unique("etagdb")
 	createDatabase(t, c, etagDB)
+	protDB := unique("protdb")
+	createDatabase(t, c, protDB)
+	enableOp, err := c.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:                  databaseName(protDB),
+			DeleteProtectionState: adminpb.Database_DELETE_PROTECTION_ENABLED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"delete_protection_state"}},
+	})
+	require.NoError(t, err)
+	_, err = enableOp.Wait(ctx)
+	require.NoError(t, err)
 	createdCreds, err := c.CreateUserCreds(ctx, &adminpb.CreateUserCredsRequest{
 		Parent:      databaseName(ucDB),
 		UserCredsId: unique("uc"),
@@ -548,6 +562,16 @@ func TestSDKFirestoreAdminErrors(t *testing.T) {
 			},
 		},
 		{
+			Name: "DeleteDatabaseWithDeleteProtectionIsFailedPrecondition",
+			Want: testdepth.SpecPreconditionFailed(),
+			Run: func() error {
+				// Firestore: you cannot delete a database with delete
+				// protection enabled until you disable it.
+				_, err := c.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: databaseName(protDB)})
+				return err
+			},
+		},
+		{
 			Name: "GetMissingUserCredsIsNotFound",
 			Want: testdepth.SpecNotFound(),
 			Run: func() error {
@@ -577,6 +601,8 @@ func TestSDKFirestoreAdminErrors(t *testing.T) {
 	// The blocked delete left the database intact.
 	_, err = c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: databaseName(etagDB)})
 	require.NoError(t, err, "a stale-etag delete must not delete the database")
+	_, err = c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: databaseName(protDB)})
+	require.NoError(t, err, "a delete-protected delete must not delete the database")
 }
 
 // leafID returns the final segment of a resource name (the userCreds id).
