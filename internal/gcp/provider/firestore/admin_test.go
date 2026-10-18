@@ -258,11 +258,6 @@ func TestFieldUpdateGetList(t *testing.T) {
 		t.Errorf("ListFields page2 len=%d next=%q", len(page2), next2)
 	}
 
-	// Empty mask is rejected.
-	if _, _, err := p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "x", fieldDef{}, nil); err == nil {
-		t.Error("empty update_mask accepted")
-	}
-
 	// Documented filter expressions select by config, not by name substring.
 	byAncestor, _, err := p.ListFields(ctx, "proj", "(default)", "-", "indexConfig.usesAncestorConfig:true", NewPageParams(0, ""))
 	if err != nil || len(byAncestor) != 1 || !strings.HasSuffix(byAncestor[0].Name, "/population") {
@@ -271,6 +266,45 @@ func TestFieldUpdateGetList(t *testing.T) {
 	byTTL, _, err := p.ListFields(ctx, "proj", "(default)", "-", "ttlConfig:*", NewPageParams(0, ""))
 	if err != nil || len(byTTL) != 1 || !strings.HasSuffix(byTTL[0].Name, "/region") {
 		t.Errorf("ListFields ttlConfig:* = %+v err=%v", byTTL, err)
+	}
+
+	// An omitted update_mask is the implied mask of every populated field
+	// (AIP-134, the same contract UpdateDatabaseDef honours since DC20): a
+	// maskless patch applies what it carries instead of answering
+	// INVALID_ARGUMENT, leaving unpopulated configs untouched.
+	maskless, _, err := p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "score",
+		fieldDef{TtlConfig: &fieldTtlConfig{State: "ACTIVE", ExpirationOffset: 2 * time.Hour}}, nil)
+	if err != nil {
+		t.Fatalf("maskless UpdateFieldDef: %v", err)
+	}
+	if maskless.TtlConfig == nil || maskless.TtlConfig.State != "ACTIVE" || maskless.TtlConfig.ExpirationOffset != 2*time.Hour {
+		t.Errorf("maskless patch ttl_config = %+v", maskless.TtlConfig)
+	}
+	if maskless.IndexConfig != nil {
+		t.Errorf("maskless patch invented index_config = %+v", maskless.IndexConfig)
+	}
+
+	// The widened `*` arm carries both configs in one maskless patch.
+	// Assert on `expiration_offset` (an input field): `ttl_config.state` is
+	// OUTPUT_ONLY and derived by real GCP, so a maskless patch must not be
+	// pinned on a server-computed value.
+	both, _, err := p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "score",
+		fieldDef{
+			IndexConfig: &fieldIndexConfig{Indexes: []indexDef{{
+				Name:       "projects/proj/databases/(default)/collectionGroups/cities/indexes/ix1",
+				QueryScope: "COLLECTION",
+				Fields:     []indexField{{FieldPath: "score", Order: "ASCENDING"}},
+			}}},
+			TtlConfig: &fieldTtlConfig{State: "ACTIVE", ExpirationOffset: 3 * time.Hour},
+		}, nil)
+	if err != nil {
+		t.Fatalf("maskless UpdateFieldDef(both configs): %v", err)
+	}
+	if both.IndexConfig == nil || len(both.IndexConfig.Indexes) != 1 {
+		t.Errorf("maskless patch index_config = %+v", both.IndexConfig)
+	}
+	if both.TtlConfig == nil || both.TtlConfig.ExpirationOffset != 3*time.Hour {
+		t.Errorf("maskless patch ttl_config = %+v", both.TtlConfig)
 	}
 }
 
@@ -403,6 +437,17 @@ func TestBackupScheduleLifecycle(t *testing.T) {
 		backupScheduleDef{Retention: 14 * 24 * time.Hour}, []string{"retention"})
 	if err != nil || upd.Retention != 14*24*time.Hour {
 		t.Fatalf("UpdateBackupScheduleDef = %+v err=%v", upd, err)
+	}
+
+	// An omitted mask is the implied mask of every populated field: it must
+	// carry the retention *and* the recurrence oneof, not only `retention`.
+	maskless, err := p.UpdateBackupScheduleDef(ctx, "proj", "(default)", "1",
+		backupScheduleDef{Retention: 2 * 24 * time.Hour, Recurrence: "WEEKLY", DayOfWeek: 1}, nil)
+	if err != nil {
+		t.Fatalf("maskless UpdateBackupScheduleDef: %v", err)
+	}
+	if maskless.Retention != 2*24*time.Hour || maskless.Recurrence != "WEEKLY" || maskless.DayOfWeek != 1 {
+		t.Errorf("maskless update = %+v, want 2d weekly Monday", maskless)
 	}
 
 	list, err := p.ListBackupSchedules(ctx, "proj", "(default)")

@@ -1106,7 +1106,7 @@
       "rpc": "UpdateField",
       "method": "UpdateField",
       "status": "pass",
-      "key_field": "operation done=true; index_config"
+      "key_field": "operation done=true; index_config under mask + index_config/ttl_config under an omitted mask"
     },
     {
       "service": "firestoreadmin",
@@ -1197,7 +1197,7 @@
       "rpc": "UpdateBackupSchedule",
       "method": "UpdateBackupSchedule",
       "status": "pass",
-      "key_field": "retention updated under mask"
+      "key_field": "retention under mask + retention/recurrence under an omitted mask"
     },
     {
       "service": "firestoreadmin",
