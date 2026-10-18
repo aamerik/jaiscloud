@@ -225,6 +225,148 @@ func TestDeleteDatabaseProtection(t *testing.T) {
 	}
 }
 
+func TestEmptyUpdateMaskNoop(t *testing.T) {
+	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
+	defer cleanup()
+	ctx := context.Background()
+
+	// Database: a present-but-empty FieldMask is AIP-134's no-op, distinct from
+	// the nil mask the round-trip test pins as the implied mask. The record
+	// comes back unchanged, without rotating etag/update_time.
+	op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "noop-db",
+		Database:   &adminpb.Database{LocationId: "nam5"},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	created := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(created); err != nil {
+		t.Fatalf("CreateDatabase response unmarshal: %v", err)
+	}
+	updOp, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:            created.GetName(),
+			Etag:            created.GetEtag(),
+			ConcurrencyMode: adminpb.Database_PESSIMISTIC,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"concurrency_mode"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabase: %v", err)
+	}
+	updated := &adminpb.Database{}
+	if err := updOp.GetResponse().UnmarshalTo(updated); err != nil {
+		t.Fatalf("UpdateDatabase response unmarshal: %v", err)
+	}
+
+	noopOp, err := client.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+		Database: &adminpb.Database{
+			Name:            created.GetName(),
+			Etag:            updated.GetEtag(),
+			ConcurrencyMode: adminpb.Database_OPTIMISTIC,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{},
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabase(empty mask): %v", err)
+	}
+	noop := &adminpb.Database{}
+	if err := noopOp.GetResponse().UnmarshalTo(noop); err != nil {
+		t.Fatalf("UpdateDatabase(empty mask) response unmarshal: %v", err)
+	}
+	if noop.GetConcurrencyMode() != adminpb.Database_PESSIMISTIC {
+		t.Errorf("empty mask applied concurrency = %v, want PESSIMISTIC", noop.GetConcurrencyMode())
+	}
+	if noop.GetEtag() != updated.GetEtag() {
+		t.Errorf("empty mask rotated the etag %q -> %q", updated.GetEtag(), noop.GetEtag())
+	}
+	if !noop.GetUpdateTime().AsTime().Equal(updated.GetUpdateTime().AsTime()) {
+		t.Errorf("empty mask rotated update_time %v -> %v", updated.GetUpdateTime(), noop.GetUpdateTime())
+	}
+
+	// Field: nothing is written, and a no-op on a missing field creates nothing.
+	fieldName := "projects/proj/databases/(default)/collectionGroups/cities/fields/population"
+	if _, err := client.UpdateField(ctx, &adminpb.UpdateFieldRequest{
+		Field: &adminpb.Field{
+			Name: fieldName,
+			TtlConfig: &adminpb.Field_TtlConfig{
+				State:            adminpb.Field_TtlConfig_ACTIVE,
+				ExpirationOffset: durationpb.New(2 * time.Hour),
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"ttl_config"}},
+	}); err != nil {
+		t.Fatalf("UpdateField: %v", err)
+	}
+	fieldOp, err := client.UpdateField(ctx, &adminpb.UpdateFieldRequest{
+		Field: &adminpb.Field{
+			Name: fieldName,
+			TtlConfig: &adminpb.Field_TtlConfig{
+				State:            adminpb.Field_TtlConfig_ACTIVE,
+				ExpirationOffset: durationpb.New(9 * time.Hour),
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{},
+	})
+	if err != nil {
+		t.Fatalf("UpdateField(empty mask): %v", err)
+	}
+	field := &adminpb.Field{}
+	if err := fieldOp.GetResponse().UnmarshalTo(field); err != nil {
+		t.Fatalf("UpdateField(empty mask) response: %v", err)
+	}
+	if field.GetTtlConfig().GetExpirationOffset().AsDuration() != 2*time.Hour {
+		t.Errorf("empty mask applied ttl_config = %+v, want the stored 2h", field.GetTtlConfig())
+	}
+	ghost := "projects/proj/databases/(default)/collectionGroups/cities/fields/ghost"
+	if _, err := client.UpdateField(ctx, &adminpb.UpdateFieldRequest{
+		Field:      &adminpb.Field{Name: ghost, TtlConfig: &adminpb.Field_TtlConfig{State: adminpb.Field_TtlConfig_ACTIVE}},
+		UpdateMask: &fieldmaskpb.FieldMask{},
+	}); status.Code(err) != codes.NotFound {
+		t.Errorf("UpdateField(empty mask, missing field) code = %v, want NotFound", status.Code(err))
+	}
+	if _, err := client.GetField(ctx, &adminpb.GetFieldRequest{Name: ghost}); status.Code(err) != codes.NotFound {
+		t.Errorf("empty mask created a field: GetField code = %v, want NotFound", status.Code(err))
+	}
+
+	// Backup schedule: retention and the recurrence oneof stay as stored.
+	parent := "projects/proj/databases/(default)"
+	schedName := parent + "/backupSchedules/1"
+	if _, err := client.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{
+		Parent: parent,
+		BackupSchedule: &adminpb.BackupSchedule{
+			Name:      schedName,
+			Retention: durationpb.New(7 * 24 * time.Hour),
+			Recurrence: &adminpb.BackupSchedule_DailyRecurrence{
+				DailyRecurrence: &adminpb.DailyRecurrence{},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("CreateBackupSchedule: %v", err)
+	}
+	bs, err := client.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
+		BackupSchedule: &adminpb.BackupSchedule{
+			Name:      schedName,
+			Retention: durationpb.New(14 * 24 * time.Hour),
+			Recurrence: &adminpb.BackupSchedule_WeeklyRecurrence{
+				WeeklyRecurrence: &adminpb.WeeklyRecurrence{Day: dayofweek.DayOfWeek_MONDAY},
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBackupSchedule(empty mask): %v", err)
+	}
+	if bs.GetRetention().AsDuration() != 7*24*time.Hour {
+		t.Errorf("empty mask applied retention = %v, want 7d", bs.GetRetention())
+	}
+	if bs.GetWeeklyRecurrence() != nil || bs.GetDailyRecurrence() == nil {
+		t.Errorf("empty mask applied the recurrence = %+v, want daily", bs.GetRecurrence())
+	}
+}
+
 func TestFieldAdminRoundTrip(t *testing.T) {
 	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
 	defer cleanup()

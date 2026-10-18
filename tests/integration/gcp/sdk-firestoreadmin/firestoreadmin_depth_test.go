@@ -133,6 +133,95 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 		require.Equal(t, adminpb.Database_FIRESTORE_NATIVE, def.GetType())
 	})
 
+	// A present-but-empty update_mask is AIP-134's no-op, distinct from the
+	// omitted (nil) mask asserted above as the implied mask: the request must
+	// return the stored resource unmodified, without rotating etag/update_time,
+	// and must not create a resource for a missing field (DC37).
+	t.Run("EmptyUpdateMaskIsNoop", func(t *testing.T) {
+		id := unique("noopdb")
+		created := createDatabase(t, c, id)
+		updOp, err := c.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+			Database:   &adminpb.Database{Name: databaseName(id), ConcurrencyMode: adminpb.Database_PESSIMISTIC},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"concurrency_mode"}},
+		})
+		require.NoError(t, err)
+		updated, err := updOp.Wait(ctx)
+		require.NoError(t, err)
+		require.NotEqual(t, created.GetEtag(), updated.GetEtag())
+
+		noopOp, err := c.UpdateDatabase(ctx, &adminpb.UpdateDatabaseRequest{
+			Database:   &adminpb.Database{Name: databaseName(id), ConcurrencyMode: adminpb.Database_OPTIMISTIC},
+			UpdateMask: &fieldmaskpb.FieldMask{},
+		})
+		require.NoError(t, err)
+		noop, err := noopOp.Wait(ctx)
+		require.NoError(t, err)
+		require.Equal(t, adminpb.Database_PESSIMISTIC, noop.GetConcurrencyMode(),
+			"an empty mask must not apply the patch body")
+		require.Equal(t, updated.GetEtag(), noop.GetEtag(), "an empty mask must not rotate the etag")
+		require.Equal(t, updated.GetUpdateTime().AsTime(), noop.GetUpdateTime().AsTime(),
+			"an empty mask must not rotate update_time")
+
+		cg := unique("noopcg")
+		fname := fieldName("(default)", cg, "f")
+		fieldOp, err := c.UpdateField(ctx, &adminpb.UpdateFieldRequest{
+			Field: &adminpb.Field{Name: fname, TtlConfig: &adminpb.Field_TtlConfig{
+				State: adminpb.Field_TtlConfig_ACTIVE, ExpirationOffset: durationpb.New(2 * time.Hour),
+			}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"ttl_config"}},
+		})
+		require.NoError(t, err)
+		_, err = fieldOp.Wait(ctx)
+		require.NoError(t, err)
+		fieldOp, err = c.UpdateField(ctx, &adminpb.UpdateFieldRequest{
+			Field: &adminpb.Field{Name: fname, TtlConfig: &adminpb.Field_TtlConfig{
+				State: adminpb.Field_TtlConfig_ACTIVE, ExpirationOffset: durationpb.New(9 * time.Hour),
+			}},
+			UpdateMask: &fieldmaskpb.FieldMask{},
+		})
+		require.NoError(t, err)
+		field, err := fieldOp.Wait(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 2*time.Hour, field.GetTtlConfig().GetExpirationOffset().AsDuration(),
+			"an empty mask must leave the stored ttl_config alone")
+		ghost := fieldName("(default)", cg, "ghost")
+		_, err = c.UpdateField(ctx, &adminpb.UpdateFieldRequest{
+			Field:      &adminpb.Field{Name: ghost, TtlConfig: &adminpb.Field_TtlConfig{State: adminpb.Field_TtlConfig_ACTIVE}},
+			UpdateMask: &fieldmaskpb.FieldMask{},
+		})
+		testdepth.AssertError(t, err, testdepth.SpecNotFound())
+		_, err = c.GetField(ctx, &adminpb.GetFieldRequest{Name: ghost})
+		testdepth.AssertError(t, err, testdepth.SpecNotFound())
+
+		schedParent := databaseName("(default)")
+		schedName := schedParent + "/backupSchedules/noop"
+		_, err = c.CreateBackupSchedule(ctx, &adminpb.CreateBackupScheduleRequest{
+			Parent: schedParent,
+			BackupSchedule: &adminpb.BackupSchedule{
+				Name:       schedName,
+				Retention:  durationpb.New(7 * 24 * time.Hour),
+				Recurrence: &adminpb.BackupSchedule_DailyRecurrence{DailyRecurrence: &adminpb.DailyRecurrence{}},
+			},
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = c.DeleteBackupSchedule(context.Background(), &adminpb.DeleteBackupScheduleRequest{Name: schedName})
+		})
+		bs, err := c.UpdateBackupSchedule(ctx, &adminpb.UpdateBackupScheduleRequest{
+			BackupSchedule: &adminpb.BackupSchedule{
+				Name:      schedName,
+				Retention: durationpb.New(14 * 24 * time.Hour),
+				Recurrence: &adminpb.BackupSchedule_WeeklyRecurrence{
+					WeeklyRecurrence: &adminpb.WeeklyRecurrence{Day: dayofweek.DayOfWeek_MONDAY},
+				},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 7*24*time.Hour, bs.GetRetention().AsDuration(), "an empty mask must leave retention alone")
+		require.NotNil(t, bs.GetDailyRecurrence(), "an empty mask must leave the recurrence oneof alone")
+	})
+
 	t.Run("CompositeIndexes", func(t *testing.T) {
 		cg := unique("cg")
 		parent := collectionGroupParent("(default)", cg)

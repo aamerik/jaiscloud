@@ -247,8 +247,9 @@ func (s *Service) UpdateDatabase(ctx context.Context, req *adminpb.UpdateDatabas
 	if project == "" {
 		project = s.resolveProject(ctx)
 	}
+	// A present-but-empty mask is AIP-134's no-op; only a nil mask is omitted.
 	mask := req.GetUpdateMask().GetPaths()
-	db, opName, err := s.svc.UpdateDatabaseDef(ctx, project, database, databaseFromProto(req.GetDatabase()), mask, req.GetDatabase().GetEtag())
+	db, opName, err := s.svc.UpdateDatabaseDef(ctx, project, database, databaseFromProto(req.GetDatabase()), mask, req.GetUpdateMask() != nil, req.GetDatabase().GetEtag())
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -373,7 +374,7 @@ func (s *Service) UpdateField(ctx context.Context, req *adminpb.UpdateFieldReque
 		project = s.resolveProject(ctx)
 	}
 	field, opName, err := s.svc.UpdateFieldDef(ctx, project, database, cg, fieldPath,
-		fieldFromProto(req.GetField()), req.GetUpdateMask().GetPaths())
+		fieldFromProto(req.GetField()), req.GetUpdateMask().GetPaths(), req.GetUpdateMask() != nil)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -623,7 +624,7 @@ func (s *Service) UpdateBackupSchedule(ctx context.Context, req *adminpb.UpdateB
 	if project == "" {
 		project = s.resolveProject(ctx)
 	}
-	bs, err := s.svc.UpdateBackupScheduleDef(ctx, project, database, id, backupScheduleFromProto(req.GetBackupSchedule()), req.GetUpdateMask().GetPaths())
+	bs, err := s.svc.UpdateBackupScheduleDef(ctx, project, database, id, backupScheduleFromProto(req.GetBackupSchedule()), req.GetUpdateMask().GetPaths(), req.GetUpdateMask() != nil)
 	if err != nil {
 		return nil, mapError(err)
 	}

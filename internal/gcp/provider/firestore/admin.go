@@ -397,13 +397,19 @@ func (s *Service) ListDatabases(ctx context.Context, project string, showDeleted
 // Update*Request.update_mask REQUIRED, so a maskless patch must apply the
 // populated fields instead of being rejected.
 //
+// A *present-but-empty* mask is a different state: AIP-134 says the service
+// "should treat the request as a no-op and return the existing resource
+// unmodified". The transports distinguish the two (proto message presence /
+// REST query-parameter presence) and hand the distinction in as maskPresent;
+// an empty result here means the no-op, which the callers below honour by not
+// applying any field and not rotating etag/update_time.
+//
 // This is populated-field semantics, not the full replacement AIP-134 assigns to
-// an explicit `*`: the same `*` arm serves both forms here (an explicit `*`
-// keeps unpopulated fields) because the transports do not yet distinguish an
-// omitted mask from a present-but-empty one (DC37). An explicit `*` meaning
-// replacement is recorded as DC50.
-func impliedMask(mask []string) []string {
-	if len(mask) == 0 {
+// an explicit `*`: the `*` arm serves both the implied and the explicit mask
+// (an explicit `*` keeps unpopulated fields) because the transports cannot tell
+// them apart. An explicit `*` meaning replacement is recorded as DC50.
+func impliedMask(mask []string, maskPresent bool) []string {
+	if !maskPresent {
 		return []string{"*"}
 	}
 	return mask
@@ -412,15 +418,20 @@ func impliedMask(mask []string) []string {
 // UpdateDatabaseDef applies patch to the database record under mask (field
 // paths, or "*" for all), honoring an optional etag for optimistic concurrency.
 // The read-check-write runs inside the store's atomic UpsertAtomic so two
-// concurrent updates cannot lose one another.
-func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, patch databaseDef, mask []string, etag string) (databaseDef, string, error) {
-	mask = impliedMask(mask)
+// concurrent updates cannot lose one another. A present-but-empty mask is a
+// no-op: the record is returned unchanged (no etag/update_time rotation), while
+// an etag precondition still applies to the request.
+func (s *Service) UpdateDatabaseDef(ctx context.Context, project, db string, patch databaseDef, mask []string, maskPresent bool, etag string) (databaseDef, string, error) {
+	mask = impliedMask(mask, maskPresent)
 	if db == "" {
 		return databaseDef{}, "", gcpInvalidArgument("database name is required")
 	}
 	updated, err := s.mutateDatabase(ctx, project, db, func(cur databaseDef) (databaseDef, error) {
 		if etag != "" && etag != cur.Etag {
 			return databaseDef{}, gcpAborted("etag mismatch")
+		}
+		if len(mask) == 0 {
+			return cur, nil
 		}
 		for _, path := range mask {
 			applyDatabaseField(&cur, path, patch)
@@ -650,19 +661,31 @@ func fieldMatchesFilter(f fieldDef, filter string) bool {
 }
 
 // UpdateFieldDef creates or updates a field's index/ttl configuration under
-// mask, returning the stored field and the terminal operation name.
-func (s *Service) UpdateFieldDef(ctx context.Context, project, db, cg, fieldPath string, patch fieldDef, mask []string) (fieldDef, string, error) {
+// mask, returning the stored field and the terminal operation name. A
+// present-but-empty mask is a no-op and does not write the record.
+func (s *Service) UpdateFieldDef(ctx context.Context, project, db, cg, fieldPath string, patch fieldDef, mask []string, maskPresent bool) (fieldDef, string, error) {
 	if fieldPath == "" {
 		return fieldDef{}, "", gcpInvalidArgument("field path is required")
 	}
 	// An omitted mask is the implied mask of every populated field (AIP-134).
-	mask = impliedMask(mask)
+	mask = impliedMask(mask, maskPresent)
 	cur := fieldDef{Name: fieldName(project, db, cg, fieldPath)}
+	exists := false
 	var existing fieldDef
 	if err := s.getResource(ctx, project, rtField, fieldRel(db, cg, fieldPath), &existing); err == nil {
-		cur = existing
+		cur, exists = existing, true
 	} else if !isNotFound(err) {
 		return fieldDef{}, "", err
+	}
+	opName := databaseOperationName(project, db, randomHex(12))
+	if len(mask) == 0 {
+		// Present-but-empty mask: no-op (AIP-134), no write. A populated patch
+		// upserts a missing field, but a no-op cannot fabricate one: report the
+		// miss instead of returning a field that was never stored.
+		if !exists {
+			return fieldDef{}, "", gcpNotFound("field")
+		}
+		return cur, opName, nil
 	}
 	for _, path := range mask {
 		applyFieldMask(&cur, path, patch)
@@ -671,7 +694,7 @@ func (s *Service) UpdateFieldDef(ctx context.Context, project, db, cg, fieldPath
 	if err := s.putResource(ctx, project, rtField, fieldRel(db, cg, fieldPath), cur, false); err != nil {
 		return fieldDef{}, "", err
 	}
-	return cur, databaseOperationName(project, db, randomHex(12)), nil
+	return cur, opName, nil
 }
 
 // applyFieldMask copies one Field configuration by proto field path.
@@ -865,14 +888,19 @@ func (s *Service) ListBackupSchedules(ctx context.Context, project, db string) (
 	return bss, nil
 }
 
-// UpdateBackupScheduleDef applies patch to a backup schedule under mask.
-func (s *Service) UpdateBackupScheduleDef(ctx context.Context, project, db, id string, patch backupScheduleDef, mask []string) (backupScheduleDef, error) {
+// UpdateBackupScheduleDef applies patch to a backup schedule under mask. A
+// present-but-empty mask is a no-op and does not write the record.
+func (s *Service) UpdateBackupScheduleDef(ctx context.Context, project, db, id string, patch backupScheduleDef, mask []string, maskPresent bool) (backupScheduleDef, error) {
 	// An omitted mask is the implied mask of every populated field (AIP-134),
 	// exactly as UpdateFieldDef documents above.
-	mask = impliedMask(mask)
+	mask = impliedMask(mask, maskPresent)
 	cur, err := s.GetBackupSchedule(ctx, project, db, id)
 	if err != nil {
 		return backupScheduleDef{}, err
+	}
+	if len(mask) == 0 {
+		// Present-but-empty mask: no-op (AIP-134), no write.
+		return cur, nil
 	}
 	for _, path := range mask {
 		switch path {

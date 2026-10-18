@@ -2,6 +2,7 @@ package firestore
 
 import (
 	"context"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -17,6 +18,96 @@ func adminNR(name string, extra map[string]any) *model.NormalizedRequest {
 		params[k] = v
 	}
 	return &model.NormalizedRequest{AccountID: "proj", Params: params}
+}
+
+func TestRESTEmptyUpdateMaskNoop(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+
+	// An explicit empty updateMask= query parameter is AIP-134's no-op; only a
+	// missing parameter is the implied mask.
+	if _, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "noop-db",
+		"body":       map[string]any{"locationId": "nam5"},
+	})); err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	if _, err := p.UpdateDatabase(ctx, adminNR("databases/noop-db", map[string]any{
+		"updateMask": "concurrencyMode",
+		"body":       map[string]any{"concurrencyMode": "PESSIMISTIC"},
+	})); err != nil {
+		t.Fatalf("UpdateDatabase: %v", err)
+	}
+	before, err := p.GetDatabase(ctx, adminNR("databases/noop-db", nil))
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	noop, err := p.UpdateDatabase(ctx, adminNR("databases/noop-db", map[string]any{
+		"updateMask": "",
+		"body":       map[string]any{"concurrencyMode": "OPTIMISTIC"},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateDatabase(empty updateMask): %v", err)
+	}
+	resp, _ := noop.Data["response"].(map[string]any)
+	if resp["concurrencyMode"] != "PESSIMISTIC" {
+		t.Errorf("empty updateMask applied concurrencyMode = %v, want PESSIMISTIC", resp["concurrencyMode"])
+	}
+	if resp["etag"] != before.Data["etag"] {
+		t.Errorf("empty updateMask rotated the etag %v -> %v", before.Data["etag"], resp["etag"])
+	}
+
+	// Field: nothing is written either, and the terminal operation still
+	// returns the stored field.
+	if _, err := p.UpdateField(ctx, adminNR("databases/(default)/collectionGroups/cg/fields/f", map[string]any{
+		"updateMask": "ttlConfig",
+		"body":       map[string]any{"ttlConfig": map[string]any{"state": "ACTIVE", "expirationOffset": "3600s"}},
+	})); err != nil {
+		t.Fatalf("UpdateField: %v", err)
+	}
+	fieldNoop, err := p.UpdateField(ctx, adminNR("databases/(default)/collectionGroups/cg/fields/f", map[string]any{
+		"updateMask": "",
+		"body":       map[string]any{"ttlConfig": map[string]any{"state": "ACTIVE", "expirationOffset": "9000s"}},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateField(empty updateMask): %v", err)
+	}
+	fieldResp, _ := fieldNoop.Data["response"].(map[string]any)
+	if tc, _ := fieldResp["ttlConfig"].(map[string]any); tc["expirationOffset"] != "3600s" {
+		t.Errorf("empty updateMask applied ttlConfig = %v, want 3600s", fieldResp["ttlConfig"])
+	}
+
+	// Backup schedule: retention and recurrence stay as stored.
+	if _, err := p.CreateBackupSchedule(ctx, adminNR("databases/(default)/backupSchedules", map[string]any{
+		"backupScheduleId": "1",
+		"body":             map[string]any{"retention": "604800s", "dailyRecurrence": map[string]any{}},
+	})); err != nil {
+		t.Fatalf("CreateBackupSchedule: %v", err)
+	}
+	bsNoop, err := p.UpdateBackupSchedule(ctx, adminNR("databases/(default)/backupSchedules/1", map[string]any{
+		"updateMask": "",
+		"body": map[string]any{
+			"retention":        "1209600s",
+			"weeklyRecurrence": map[string]any{"day": "MONDAY"},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateBackupSchedule(empty updateMask): %v", err)
+	}
+	if bsNoop.Data["retention"] != "604800s" {
+		t.Errorf("empty updateMask applied retention = %v, want 604800s", bsNoop.Data["retention"])
+	}
+	if _, daily := bsNoop.Data["dailyRecurrence"]; !daily {
+		t.Errorf("empty updateMask cleared dailyRecurrence = %v", bsNoop.Data["recurrence"])
+	}
+	if _, weekly := bsNoop.Data["weeklyRecurrence"]; weekly {
+		t.Errorf("empty updateMask applied weeklyRecurrence = %v", bsNoop.Data["weeklyRecurrence"])
+	}
+
+	// updateTime is part of the no-op contract: it must not rotate.
+	if bsNoop.Data["updateTime"] == nil || bsNoop.Data["updateTime"] == "" {
+		t.Error("empty updateMask response carries no updateTime")
+	}
 }
 
 func TestRESTDatabaseLifecycle(t *testing.T) {
@@ -483,17 +574,38 @@ func TestRESTDatabaseOperations(t *testing.T) {
 
 func TestAdminMaskForms(t *testing.T) { // Plain csv updateMask is normalized to snake_case proto paths.
 	nr := adminNR("databases/db", map[string]any{"updateMask": "concurrencyMode,locationId"})
-	if got := adminMask(nr); len(got) != 2 || got[0] != "concurrency_mode" || got[1] != "location_id" {
-		t.Errorf("adminMask(plain) = %v", got)
+	if got, present := adminMask(nr); !present || len(got) != 2 || got[0] != "concurrency_mode" || got[1] != "location_id" {
+		t.Errorf("adminMask(plain) = %v present=%v", got, present)
 	}
 	// Repeated updateMask.fieldPaths (older clients).
 	nr = adminNR("databases/db", map[string]any{"updateMask.fieldPaths": "concurrencyMode"})
-	if got := adminMask(nr); len(got) != 1 || got[0] != "concurrency_mode" {
-		t.Errorf("adminMask(fieldPaths) = %v", got)
+	if got, present := adminMask(nr); !present || len(got) != 1 || got[0] != "concurrency_mode" {
+		t.Errorf("adminMask(fieldPaths) = %v present=%v", got, present)
 	}
 	// Nested JSON path and the wildcard.
 	nr = adminNR("databases/db", map[string]any{"updateMask": "indexConfig.indexes,*"})
-	if got := adminMask(nr); len(got) != 2 || got[0] != "index_config.indexes" || got[1] != "*" {
-		t.Errorf("adminMask(nested) = %v", got)
+	if got, present := adminMask(nr); !present || len(got) != 2 || got[0] != "index_config.indexes" || got[1] != "*" {
+		t.Errorf("adminMask(nested) = %v present=%v", got, present)
+	}
+	// An omitted mask is not present; an explicit `updateMask=` is present but
+	// empty — AIP-134's no-op, not the implied mask.
+	nr = adminNR("databases/db", nil)
+	if got, present := adminMask(nr); present || len(got) != 0 {
+		t.Errorf("adminMask(omitted) = %v present=%v, want absent", got, present)
+	}
+	nr = adminNR("databases/db", map[string]any{"updateMask": ""})
+	if got, present := adminMask(nr); !present || len(got) != 0 {
+		t.Errorf("adminMask(empty) = %v present=%v, want present-but-empty", got, present)
+	}
+	nr = adminNR("databases/db", map[string]any{"updateMask.fieldPaths": ""})
+	if _, present := adminMask(nr); !present {
+		t.Error("adminMask(empty fieldPaths) absent, want present-but-empty")
+	}
+	// A request whose query is only on Raw (no decoded Params) reads the value
+	// from the URL, not just its presence.
+	nr = &model.NormalizedRequest{AccountID: "proj", Params: map[string]any{},
+		Raw: httptest.NewRequest("PATCH", "/v1/projects/proj/databases/db?updateMask=concurrencyMode", nil)}
+	if got, present := adminMask(nr); !present || len(got) != 1 || got[0] != "concurrency_mode" {
+		t.Errorf("adminMask(raw) = %v present=%v", got, present)
 	}
 }
