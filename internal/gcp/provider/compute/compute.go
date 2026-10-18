@@ -307,7 +307,11 @@ func (p *Provider) InstancesList(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
-	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	params, err := listParams(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, params)
 	if err != nil {
 		return nil, err
 	}
@@ -353,9 +357,13 @@ func (p *Provider) InstancesAggregatedList(ctx context.Context, nr *model.Normal
 		}
 		flat = append(flat, scopedInstance{zone: e.Region, m: m})
 	}
+	params, err := listParams(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := paging.Page(flat, func(s scopedInstance) string {
 		return s.zone + "/" + stringField(s.m, "name")
-	}, listParams(nr))
+	}, params)
 	if err != nil {
 		return nil, err
 	}
@@ -542,7 +550,11 @@ func (p *Provider) DisksList(ctx context.Context, nr *model.NormalizedRequest) (
 	if err != nil {
 		return nil, err
 	}
-	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	params, err := listParams(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, params)
 	if err != nil {
 		return nil, err
 	}
@@ -649,7 +661,11 @@ func (p *Provider) NetworksList(ctx context.Context, nr *model.NormalizedRequest
 	if err != nil {
 		return nil, err
 	}
-	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	params, err := listParams(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, params)
 	if err != nil {
 		return nil, err
 	}
@@ -774,7 +790,11 @@ func (p *Provider) FirewallsList(ctx context.Context, nr *model.NormalizedReques
 	if err != nil {
 		return nil, err
 	}
-	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	params, err := listParams(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, params)
 	if err != nil {
 		return nil, err
 	}
@@ -896,7 +916,11 @@ func (p *Provider) SubnetworksList(ctx context.Context, nr *model.NormalizedRequ
 	if err != nil {
 		return nil, err
 	}
-	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	params, err := listParams(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, params)
 	if err != nil {
 		return nil, err
 	}
@@ -956,7 +980,11 @@ func (p *Provider) MachineTypesList(ctx context.Context, nr *model.NormalizedReq
 	if err != nil {
 		return nil, err
 	}
-	page, next, err := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	params, err := listParams(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, params)
 	if err != nil {
 		return nil, err
 	}
@@ -987,7 +1015,11 @@ func (p *Provider) ZonesList(ctx context.Context, nr *model.NormalizedRequest) (
 	if err != nil {
 		return nil, err
 	}
-	page, next, err := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	params, err := listParams(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1018,7 +1050,11 @@ func (p *Provider) RegionsList(ctx context.Context, nr *model.NormalizedRequest)
 	if err != nil {
 		return nil, err
 	}
-	page, next, err := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	params, err := listParams(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := paging.Page(objs, func(m map[string]any) string { return stringField(m, "name") }, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1053,7 +1089,11 @@ func (p *Provider) OperationsList(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, listParams(nr))
+	params, err := listParams(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := paging.Page(items, func(m map[string]any) string { return stringField(m, "name") }, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1295,49 +1335,39 @@ func scopeOf(nr *model.NormalizedRequest) string {
 // absent maxResults takes Compute Engine's documented default of 500 (the
 // shared helper's own default is 1000), and the documented 0-500 range is
 // enforced. Compute Engine has no pageSize parameter, so a stray one is
-// ignored.
-func listParams(nr *model.NormalizedRequest) map[string]any {
+// ignored. A value the Discovery document's uint32 binding cannot represent
+// ("abc", "1.5", a negative, a number above uint32) is INVALID_ARGUMENT instead
+// of a silently absent parameter.
+func listParams(nr *model.NormalizedRequest) (map[string]any, error) {
+	size, err := computePageSize(nr.Params["maxResults"])
+	if err != nil {
+		return nil, err
+	}
 	p := make(map[string]any, len(nr.Params)+1)
 	for k, v := range nr.Params {
 		p[k] = v
 	}
-	p["pageSize"] = computePageSize(nr.Params["maxResults"])
-	return p
+	p["pageSize"] = size
+	return p, nil
 }
 
 // computePageSize clamps Compute Engine's maxResults to its documented 0-500
-// range; an absent, zero or unparseable value takes the documented 500 default.
-// A negative value is passed through as-is so the shared cursor pager rejects it
-// with INVALID_ARGUMENT — the documented range is 0 to 500 inclusive.
-func computePageSize(v any) int {
-	n, ok := toInt(v)
-	if !ok || n == 0 {
-		return defaultComputePageSize
+// range; an absent or zero value takes the documented 500 default. A negative
+// value is rejected by the uint32 binding the Discovery document declares
+// (`maxResults` is an unsigned integer there), as is an unparseable or
+// out-of-uint32 one, rather than being folded into the default page.
+func computePageSize(v any) (int, error) {
+	n, err := paging.ParseUintSizeNamed(v, "maxResults")
+	if err != nil {
+		return 0, err
+	}
+	if n == 0 {
+		return defaultComputePageSize, nil
 	}
 	if n > maxComputePageSize {
-		return maxComputePageSize
+		return maxComputePageSize, nil
 	}
-	return n
-}
-
-// toInt parses a numeric query/body parameter supplied as a string, int, int64
-// or float64.
-func toInt(v any) (int, bool) {
-	switch t := v.(type) {
-	case string:
-		n, err := strconv.Atoi(strings.TrimSpace(t))
-		if err != nil {
-			return 0, false
-		}
-		return n, true
-	case int:
-		return t, true
-	case int64:
-		return int(t), true
-	case float64:
-		return int(t), true
-	}
-	return 0, false
+	return n, nil
 }
 
 // absLink builds an absolute selfLink/targetLink rooted at computeBasePath,

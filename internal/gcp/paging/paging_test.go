@@ -185,6 +185,136 @@ func TestParseSizeRejectsNonInteger(t *testing.T) {
 	}
 }
 
+// TestParseSizeNamedParam pins the named resolver the legacy `maxResults`
+// pagers use: the binding rule is the same int32 parse, but the rejection
+// message names the parameter the client actually sent, as the Google API
+// frontend does, instead of always saying "pageSize".
+func TestParseSizeNamedParam(t *testing.T) {
+	for _, v := range []any{"abc", "1.5", "-0.5", "2147483648", 2147483648} {
+		_, err := ParseSizeNamed(v, "maxResults")
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) {
+			t.Errorf("ParseSizeNamed(%#v) error = %v, want a *model.ProviderError", v, err)
+			continue
+		}
+		if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("ParseSizeNamed(%#v) = %+v, want InvalidArgument/400", v, perr)
+		}
+		if perr.Message != "Invalid value for int32 type: maxResults" {
+			t.Errorf("ParseSizeNamed(%#v) message = %q, want the named int32 binding message", v, perr.Message)
+		}
+	}
+	if n, err := ParseSizeNamed("7", "maxResults"); err != nil || n != 7 {
+		t.Errorf(`ParseSizeNamed("7", "maxResults") = %d, %v; want 7, nil`, n, err)
+	}
+	for _, tc := range []struct {
+		v    any
+		want int
+	}{
+		{nil, 0},
+		{"", 0},
+		{int32(7), 7},
+		{int64(7), 7},
+		{float64(7), 7},
+		{json.Number("7"), 7},
+		{"-3", -3}, // a legal int32; the caller keeps its non-positive policy
+	} {
+		got, err := ParseSizeNamed(tc.v, "maxResults")
+		if err != nil || got != tc.want {
+			t.Errorf("ParseSizeNamed(%#v) = %d, %v; want %d, nil", tc.v, got, err, tc.want)
+		}
+	}
+}
+
+// TestParseUintSizeNamed pins the uint32 binding Compute Engine and Cloud SQL's
+// instances/operations lists declare for maxResults: a negative value is not a
+// valid binding ("Invalid value for uint32 type"), the message names the
+// parameter, and a value above MaxInt32 is still a legal uint32 (the caller's
+// range policy then clamps it).
+func TestParseUintSizeNamed(t *testing.T) {
+	for _, v := range []any{
+		"abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5), float64(-1),
+		int64(-1), int32(-1),
+	} {
+		_, err := ParseUintSizeNamed(v, "maxResults")
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) {
+			t.Errorf("ParseUintSizeNamed(%#v) error = %v, want a *model.ProviderError", v, err)
+			continue
+		}
+		if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("ParseUintSizeNamed(%#v) = %+v, want InvalidArgument/400", v, perr)
+		}
+		if perr.Message != "Invalid value for uint32 type: maxResults" {
+			t.Errorf("ParseUintSizeNamed(%#v) message = %q, want the named uint32 binding message", v, perr.Message)
+		}
+	}
+	for _, tc := range []struct {
+		v    any
+		want int
+	}{
+		{nil, 0},
+		{"", 0},
+		{"0", 0},
+		{"500", 500},
+		{"2147483648", 2147483648}, // above int32, still a legal uint32
+		{"4294967295", 4294967295},
+		{int(3), 3},
+	} {
+		got, err := ParseUintSizeNamed(tc.v, "maxResults")
+		if err != nil || got != tc.want {
+			t.Errorf("ParseUintSizeNamed(%#v) = %d, %v; want %d, nil", tc.v, got, err, tc.want)
+		}
+	}
+}
+
+// TestMaxResultsParam pins the legacy maxResults resolver the bespoke pagers
+// share: it reads the declared parameter before the emulator's pageSize alias,
+// rejects a value the declared binding cannot parse (naming the parameter), and
+// falls back to the caller's default for an absent, empty, zero or non-positive
+// value — the legacy parameter documents no minimum, so a negative keeps the
+// default page rather than inventing an AIP-158 400.
+func TestMaxResultsParam(t *testing.T) {
+	keys := []string{"maxResults", "pageSize"}
+	for _, tc := range []struct {
+		label  string
+		params map[string]any
+		want   int
+	}{
+		{"absent", nil, 100},
+		{"empty", map[string]any{"maxResults": ""}, 100},
+		{"zero", map[string]any{"maxResults": "0"}, 100},
+		{"negative", map[string]any{"maxResults": "-1"}, 100},
+		{"value", map[string]any{"maxResults": "2"}, 2},
+		{"alias", map[string]any{"pageSize": "3"}, 3},
+		// maxResults wins over the alias, as it did before the binding check.
+		{"both", map[string]any{"maxResults": "2", "pageSize": "3"}, 2},
+	} {
+		got, err := MaxResultsInt32(tc.params, keys, 100)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: MaxResultsInt32(%v) = %d, %v; want %d, nil", tc.label, tc.params, got, err, tc.want)
+		}
+	}
+	for _, v := range []any{"abc", "1.5", "-0.5", "2147483648"} {
+		_, err := MaxResultsInt32(map[string]any{"maxResults": v}, keys, 100)
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) || perr.Message != "Invalid value for int32 type: maxResults" {
+			t.Errorf("MaxResultsInt32(maxResults=%#v) = %v, want the named int32 binding error", v, err)
+		}
+	}
+	// The unsigned form rejects a negative value as an illegal binding and
+	// accepts a value above int32.
+	if _, err := MaxResultsUint32(map[string]any{"maxResults": "-1"}, keys, 500); err == nil {
+		t.Error("MaxResultsUint32(maxResults=-1) = nil error, want the uint32 binding error")
+	}
+	if got, err := MaxResultsUint32(map[string]any{"maxResults": "3000000000"}, keys, 500); err != nil || got != 3000000000 {
+		t.Errorf("MaxResultsUint32(maxResults=3000000000) = %d, %v; want 3000000000, nil", got, err)
+	}
+	if got, err := MaxResultsUint32(nil, keys, 500); err != nil || got != 500 {
+		t.Errorf("MaxResultsUint32(absent) = %d, %v; want the 500 default", got, err)
+	}
+}
+
 // TestSizeFromBespokePager pins SizeFrom: the response to a raw query value
 // that a bespoke pager hands straight in — a non-integer is rejected, while
 // zero/absent selects the documented maximum and a negative value keeps the

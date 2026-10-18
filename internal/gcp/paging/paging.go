@@ -118,8 +118,9 @@ func PageSize(params map[string]any) (int, error) {
 	return normalizePageSize(n)
 }
 
-// ParseSize reads a raw pageSize value as an int32, the type every GCP Discovery
-// document declares for the parameter. Unlike PageSize it applies no paging
+// ParseSize reads a raw pageSize value as an int32, the type the GCP Discovery
+// documents declare for pageSize (a handful of legacy `maxResults` bindings are
+// uint32 instead; see ParseUintSizeNamed). Unlike PageSize it applies no paging
 // policy: an absent value (nil) is 0, and the caller decides whether zero means
 // the default (PageSize) or the maximum (Size). A value the int32 binding would
 // reject — an unparseable string such as "abc", a fraction such as "1.5" or
@@ -127,49 +128,96 @@ func PageSize(params map[string]any) (int, error) {
 // This is the entry point for a bespoke REST pager that parses its own pageSize
 // before handing the integer to paging.Size or to a transport-neutral core.
 func ParseSize(v any) (int, error) {
+	return ParseSizeNamed(v, "pageSize")
+}
+
+// ParseSizeNamed is ParseSize for a page-size parameter with another documented
+// name (`maxResults` on the legacy list APIs: Cloud DNS, Cloud SQL, Compute
+// Engine). The parse rule is the int32 query binding the Discovery document
+// declares, and the rejection message names the parameter exactly as the Google
+// API frontend does ("Invalid value for int32 type: maxResults"), so a client
+// that echoes the error reads the parameter it actually sent. An absent or
+// empty value is 0; the caller keeps its own zero/negative policy.
+func ParseSizeNamed(v any, name string) (int, error) {
+	return parseBoundSize(v, name, true)
+}
+
+// ParseUintSizeNamed is the uint32 form of the same binding. It is for the list
+// APIs whose Discovery document declares `maxResults` an unsigned integer
+// (Compute Engine and Cloud SQL's instances/operations lists), where a negative
+// value is not a valid binding at all — "Invalid value for uint32 type:
+// maxResults" — and a value above MaxInt32 is still a legal uint32. The caller
+// still owns the range policy (Compute's documented 0-500 clamp).
+func ParseUintSizeNamed(v any, name string) (int, error) {
+	return parseBoundSize(v, name, false)
+}
+
+// parseBoundSize implements the int32/uint32 query binding shared by the named
+// resolvers. An empty string is treated as absent (the behavior the lenient
+// parsers had); every other value the binding cannot represent is
+// INVALID_ARGUMENT.
+func parseBoundSize(v any, name string, signed bool) (int, error) {
+	min, max := int64(math.MinInt32), int64(math.MaxInt32)
+	kind := "int32"
+	if !signed {
+		min, max = 0, math.MaxUint32
+		kind = "uint32"
+	}
+	invalid := func() error { return invalidBoundSize(kind, name) }
+	check := func(n int64) (int, error) {
+		if n < min || n > max {
+			return 0, invalid()
+		}
+		return int(n), nil
+	}
 	switch x := v.(type) {
 	case nil:
 		return 0, nil
 	case string:
-		// An empty value (`?pageSize=`) has no integer to bind and is treated as
-		// absent, the behavior the lenient parsers had; every other non-integer
-		// form is rejected.
 		if x == "" {
 			return 0, nil
 		}
-		n, err := strconv.ParseInt(x, 10, 32)
-		if err != nil {
-			return 0, invalidPageSize()
+		if signed {
+			n, err := strconv.ParseInt(x, 10, 32)
+			if err != nil {
+				return 0, invalid()
+			}
+			return check(n)
 		}
-		return int(n), nil
+		n, err := strconv.ParseUint(x, 10, 32)
+		if err != nil {
+			return 0, invalid()
+		}
+		return check(int64(n))
 	case int:
-		if x < math.MinInt32 || x > math.MaxInt32 {
-			return 0, invalidPageSize()
-		}
-		return x, nil
+		return check(int64(x))
 	case int32:
-		return int(x), nil
+		return check(int64(x))
 	case int64:
-		if x < math.MinInt32 || x > math.MaxInt32 {
-			return 0, invalidPageSize()
-		}
-		return int(x), nil
+		return check(x)
 	case float64:
-		// A proto int32 binding rejects a fraction outright (never truncates);
-		// check that before the sign so "-0.5" is "invalid value", not
-		// "must not be negative", and "1.9" is not silently sent as 1.
-		if x != math.Trunc(x) || x < math.MinInt32 || x > math.MaxInt32 {
-			return 0, invalidPageSize()
+		// A proto int32/uint32 binding rejects a fraction outright (never
+		// truncates); check that before the range so "-0.5" is "invalid value",
+		// not "must not be negative", and "1.9" is not silently sent as 1.
+		if x != math.Trunc(x) || x < float64(min) || x > float64(max) {
+			return 0, invalid()
 		}
-		return int(x), nil
+		return check(int64(x))
 	case json.Number:
-		n, err := strconv.ParseInt(x.String(), 10, 32)
-		if err != nil {
-			return 0, invalidPageSize()
+		if signed {
+			n, err := strconv.ParseInt(x.String(), 10, 32)
+			if err != nil {
+				return 0, invalid()
+			}
+			return check(n)
 		}
-		return int(n), nil
+		n, err := strconv.ParseUint(x.String(), 10, 32)
+		if err != nil {
+			return 0, invalid()
+		}
+		return check(int64(n))
 	default:
-		return 0, invalidPageSize()
+		return 0, invalid()
 	}
 }
 
@@ -233,10 +281,52 @@ func negativePageSize() error {
 	return model.NewProviderError("InvalidArgument", "pageSize must not be negative", 400)
 }
 
-// invalidPageSize is the error real GCP's int32 query binding returns for a
-// value it cannot parse (the message the Google API frontend uses).
-func invalidPageSize() error {
-	return model.NewProviderError("InvalidArgument", "Invalid value for int32 type: pageSize", 400)
+// invalidBoundSize is the error real GCP's query binding returns for a value it
+// cannot parse (the message the Google API frontend uses); ParseSizeNamed and
+// ParseUintSizeNamed route through it so it reads
+// "Invalid value for int32 type: maxResults".
+func invalidBoundSize(kind, name string) error {
+	return model.NewProviderError("InvalidArgument", "Invalid value for "+kind+" type: "+name, 400)
+}
+
+// MaxResultsInt32 resolves a legacy maxResults page-size parameter declared as
+// an int32 in the service's Discovery document, reading keys in order (so a
+// caller can keep an alias) and falling back to def when none is present. A
+// value the int32 binding cannot parse is INVALID_ARGUMENT naming the parameter
+// ("Invalid value for int32 type: maxResults"), never a silently absent one. A
+// zero or negative value selects def: the legacy parameter documents no
+// minimum, so (unlike pageSize's AIP-158 rule) a non-positive value keeps the
+// lenient default-page behavior rather than inventing a 400 real GCP may not
+// send.
+func MaxResultsInt32(params map[string]any, keys []string, def int) (int, error) {
+	return maxResultsParam(params, keys, def, ParseSizeNamed)
+}
+
+// MaxResultsUint32 is MaxResultsInt32 for a maxResults parameter the Discovery
+// document declares unsigned (Compute Engine, Cloud SQL instances.list /
+// operations.list): a negative value is not a legal binding, so it is
+// INVALID_ARGUMENT ("Invalid value for uint32 type: maxResults") rather than a
+// default page.
+func MaxResultsUint32(params map[string]any, keys []string, def int) (int, error) {
+	return maxResultsParam(params, keys, def, ParseUintSizeNamed)
+}
+
+func maxResultsParam(params map[string]any, keys []string, def int, parse func(any, string) (int, error)) (int, error) {
+	for _, k := range keys {
+		v, ok := params[k]
+		if !ok {
+			continue
+		}
+		n, err := parse(v, k)
+		if err != nil {
+			return 0, err
+		}
+		if n > 0 {
+			return n, nil
+		}
+		// An absent, empty, zero or negative value selects the default.
+	}
+	return def, nil
 }
 
 func encodeCursor(id string) string {

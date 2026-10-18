@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
@@ -185,6 +186,10 @@ func (p *Provider) InstancesGet(ctx context.Context, nr *model.NormalizedRequest
 }
 
 func (p *Provider) InstancesList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	size, err := paging.MaxResultsUint32(nr.Params, maxResultsKeys, defaultMaxResults)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := p.resources.List(ctx, accountID(nr), store.GlobalRegion, rtInstance, "")
 	if err != nil {
 		return nil, err
@@ -196,7 +201,7 @@ func (p *Provider) InstancesList(ctx context.Context, nr *model.NormalizedReques
 			instances = append(instances, m)
 		}
 	}
-	page, next := paginate(instances, func(m map[string]any) string { return stringField(m, "name") }, nr.Params)
+	page, next := paginate(instances, func(m map[string]any) string { return stringField(m, "name") }, nr.Params, size)
 	items := make([]any, 0, len(page))
 	for _, m := range page {
 		items = append(items, m)
@@ -352,6 +357,7 @@ func (p *Provider) DatabasesGet(ctx context.Context, nr *model.NormalizedRequest
 }
 
 func (p *Provider) DatabasesList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	size := emulatorMaxResults(nr.Params, defaultMaxResults)
 	instance := strParam(nr, "instance")
 	if instance == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing instance", 400)
@@ -370,7 +376,7 @@ func (p *Provider) DatabasesList(ctx context.Context, nr *model.NormalizedReques
 			dbs = append(dbs, m)
 		}
 	}
-	page, next := paginate(dbs, func(m map[string]any) string { return stringField(m, "name") }, nr.Params)
+	page, next := paginate(dbs, func(m map[string]any) string { return stringField(m, "name") }, nr.Params, size)
 	items := make([]any, 0, len(page))
 	for _, m := range page {
 		items = append(items, m)
@@ -514,6 +520,7 @@ func (p *Provider) UsersGet(ctx context.Context, nr *model.NormalizedRequest) (*
 }
 
 func (p *Provider) UsersList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	size := emulatorMaxResults(nr.Params, defaultMaxResults)
 	instance := strParam(nr, "instance")
 	if instance == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing instance", 400)
@@ -525,7 +532,7 @@ func (p *Provider) UsersList(ctx context.Context, nr *model.NormalizedRequest) (
 	if err != nil {
 		return nil, err
 	}
-	page, next := paginate(users, func(m map[string]any) string { return stringField(m, "name") + "/" + stringField(m, "host") }, nr.Params)
+	page, next := paginate(users, func(m map[string]any) string { return stringField(m, "name") + "/" + stringField(m, "host") }, nr.Params, size)
 	items := make([]any, 0, len(page))
 	for _, m := range page {
 		items = append(items, m)
@@ -676,6 +683,10 @@ func (p *Provider) OperationsGet(ctx context.Context, nr *model.NormalizedReques
 }
 
 func (p *Provider) OperationsList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	size, err := paging.MaxResultsUint32(nr.Params, maxResultsKeys, defaultMaxResults)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := p.resources.List(ctx, accountID(nr), store.GlobalRegion, rtOperation, "")
 	if err != nil {
 		return nil, err
@@ -687,7 +698,7 @@ func (p *Provider) OperationsList(ctx context.Context, nr *model.NormalizedReque
 			ops = append(ops, m)
 		}
 	}
-	page, next := paginate(ops, func(m map[string]any) string { return stringField(m, "name") }, nr.Params)
+	page, next := paginate(ops, func(m map[string]any) string { return stringField(m, "name") }, nr.Params, size)
 	items := make([]any, 0, len(page))
 	for _, m := range page {
 		items = append(items, m)
@@ -755,7 +766,8 @@ func (p *Provider) ListFlags(_ context.Context, nr *model.NormalizedRequest) (*m
 		item["kind"] = "sql#flag"
 		flags = append(flags, item)
 	}
-	page, nextPageToken := paginate(flags, func(f map[string]any) string { return stringField(f, "name") }, nr.Params)
+	size := emulatorMaxResults(nr.Params, defaultMaxResults)
+	page, nextPageToken := paginate(flags, func(f map[string]any) string { return stringField(f, "name") }, nr.Params, size)
 	items := make([]any, 0, len(page))
 	for _, f := range page {
 		items = append(items, f)
@@ -812,7 +824,8 @@ func (p *Provider) ListTiers(_ context.Context, nr *model.NormalizedRequest) (*m
 			"DiskQuota": "3072",
 		})
 	}
-	page, nextPageToken := paginate(tiers, func(t map[string]any) string { return stringField(t, "tier") }, nr.Params)
+	size := emulatorMaxResults(nr.Params, defaultMaxResults)
+	page, nextPageToken := paginate(tiers, func(t map[string]any) string { return stringField(t, "tier") }, nr.Params, size)
 	items := make([]any, 0, len(page))
 	for _, t := range page {
 		items = append(items, t)
@@ -1060,12 +1073,23 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)[:n]
 }
 
+// defaultMaxResults is the page size Cloud SQL's emulator serves when a list
+// request omits maxResults. instances.list documents "at most 500 instances"
+// when unspecified; the 100 here is the provider's pre-existing default and is
+// recorded as a separate fidelity item (DC61), not changed by the DC55 fix.
+const defaultMaxResults = 100
+
+// maxResultsKeys is the emulator's page-size surface for Cloud SQL: the
+// documented maxResults plus the emulator's pageSize alias.
+var maxResultsKeys = []string{"maxResults", "pageSize"}
+
 // paginate sorts items by key and applies Cloud SQL's maxResults/pageToken
 // cursor pagination. The next page token is the base64url-encoded key of the
-// last returned item.
-func paginate[T any](items []T, key func(T) string, params map[string]any) (page []T, nextPageToken string) {
+// last returned item. size is resolved by the caller before any parent lookup,
+// so an invalid maxResults answers the binding error rather than a 404 for a
+// missing instance.
+func paginate[T any](items []T, key func(T) string, params map[string]any, size int) (page []T, nextPageToken string) {
 	sort.Slice(items, func(i, j int) bool { return key(items[i]) < key(items[j]) })
-	size := maxResults(params)
 	start := 0
 	if tok, _ := params["pageToken"].(string); tok != "" {
 		if raw, err := base64.RawURLEncoding.DecodeString(tok); err == nil {
@@ -1086,10 +1110,14 @@ func paginate[T any](items []T, key func(T) string, params map[string]any) (page
 	return page, nextPageToken
 }
 
-// maxResults reads Cloud SQL's maxResults query parameter, falling back to
-// pageSize and the default of 100.
-func maxResults(params map[string]any) int {
-	for _, k := range []string{"maxResults", "pageSize"} {
+// emulatorMaxResults reads the emulator's pagination extension on a list method
+// whose Discovery document declares neither maxResults nor pageToken
+// (databases.list, users.list, flags.list, tiers.list — none of them page in
+// real GCP). Real GCP ignores an unknown query parameter, so a malformed value
+// keeps selecting the default page here instead of failing a request the real
+// API would accept.
+func emulatorMaxResults(params map[string]any, def int) int {
+	for _, k := range maxResultsKeys {
 		switch v := params[k].(type) {
 		case string:
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -1105,5 +1133,5 @@ func maxResults(params map[string]any) int {
 			}
 		}
 	}
-	return 100
+	return def
 }

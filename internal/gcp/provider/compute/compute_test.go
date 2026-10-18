@@ -774,17 +774,43 @@ func TestListParamsPageSizeDefaults(t *testing.T) {
 		{"maxResults int", map[string]any{"maxResults": 2}, 2},
 		{"maxResults string", map[string]any{"maxResults": "3"}, 3},
 		{"zero means default", map[string]any{"maxResults": 0}, defaultComputePageSize},
-		// A negative maxResults is out of the documented 0-500 range and is
-		// passed through for the shared pager to reject (not clamped to 500).
-		{"negative passes through", map[string]any{"maxResults": -1}, -1},
 		{"clamped to max", map[string]any{"maxResults": 501}, maxComputePageSize},
 		{"at max", map[string]any{"maxResults": 500}, 500},
+		// maxResults is a uint32 in Compute's Discovery document, so a value
+		// above int32 is a legal binding; the documented 0-500 range clamps it.
+		{"above int32 but valid uint32", map[string]any{"maxResults": "2147483648"}, maxComputePageSize},
 		// Compute Engine has no pageSize parameter; it must not override maxResults.
 		{"pageSize ignored", map[string]any{"pageSize": 7}, defaultComputePageSize},
 	}
 	for _, tc := range cases {
-		if got := listParams(newNR(tc.params))["pageSize"]; got != tc.want {
+		params, err := listParams(newNR(tc.params))
+		if err != nil {
+			t.Errorf("%s: listParams error = %v", tc.label, err)
+			continue
+		}
+		if got := params["pageSize"]; got != tc.want {
 			t.Errorf("%s: pageSize = %v, want %d", tc.label, got, tc.want)
+		}
+	}
+}
+
+// TestListParamsRejectsBadMaxResults pins the uint32 query binding Compute's
+// Discovery document declares for maxResults: an unparseable value, a fraction
+// or a negative one is INVALID_ARGUMENT, never a silent fall back to the 500
+// default page — the same answer real GCP's binding gives.
+func TestListParamsRejectsBadMaxResults(t *testing.T) {
+	for _, v := range []any{"abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5), int64(-1)} {
+		_, err := listParams(newNR(map[string]any{"maxResults": v}))
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) {
+			t.Errorf("listParams(maxResults=%#v) error = %v, want a *model.ProviderError", v, err)
+			continue
+		}
+		if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("listParams(maxResults=%#v) = %+v, want InvalidArgument/400", v, perr)
+		}
+		if perr.Message != "Invalid value for uint32 type: maxResults" {
+			t.Errorf("listParams(maxResults=%#v) message = %q, want the uint32 binding message", v, perr.Message)
 		}
 	}
 }
@@ -1076,12 +1102,13 @@ func isCode(err error, code string) bool {
 	return perr.Code == code
 }
 
-// TestListHandlersRejectNegativeMaxResults pins AIP-158 on Compute's list
-// surfaces: a negative maxResults is INVALID_ARGUMENT (the documented range is
-// 0 to 500 inclusive), never a silent fall-back to the 500 default. Every list
-// handler that pages through listParams is exercised so the shared reject is
-// covered on each cursor walk.
-func TestListHandlersRejectNegativeMaxResults(t *testing.T) {
+// TestListHandlersRejectBadMaxResults pins the uint32 query binding on
+// Compute's list surfaces: a negative, fractional or unparseable maxResults is
+// INVALID_ARGUMENT (the documented range is 0 to 500 inclusive and the
+// parameter is unsigned), never a silent fall-back to the 500 default. Every
+// list handler that pages through listParams is exercised so the shared reject
+// is covered on each cursor walk.
+func TestListHandlersRejectBadMaxResults(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider()
 	handlers := []struct {
@@ -1102,8 +1129,11 @@ func TestListHandlersRejectNegativeMaxResults(t *testing.T) {
 		{"OperationsList", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) { return p.OperationsList(ctx, nr) }},
 	}
 	for _, h := range handlers {
-		if _, err := h.call(newNR(map[string]any{"maxResults": "-1"})); !isCode(err, "InvalidArgument") {
-			t.Errorf("%s(maxResults=-1) = %v, want InvalidArgument", h.name, err)
+		for _, v := range []any{"-1", "abc", "1.5", "4294967296"} {
+			_, err := h.call(newNR(map[string]any{"maxResults": v}))
+			if !isCode(err, "InvalidArgument") {
+				t.Errorf("%s(maxResults=%v) = %v, want InvalidArgument", h.name, v, err)
+			}
 		}
 	}
 }
