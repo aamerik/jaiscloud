@@ -186,9 +186,10 @@ func TestParseSizeRejectsNonInteger(t *testing.T) {
 }
 
 // TestParseSizeNamedParam pins the named resolver the legacy `maxResults`
-// pagers use: the binding rule is the same int32 parse, but the rejection
-// message names the parameter the client actually sent, as the Google API
-// frontend does, instead of always saying "pageSize".
+// pagers use: the binding rule is the same int32 parse, but the rejection is
+// real GCP's binding envelope for the parameter the client actually sent
+// ("Invalid value at 'max_results' (TYPE_INT32), \"abc\"" — the snake_case
+// proto field, the value re-quoted) instead of always naming pageSize (DC67).
 func TestParseSizeNamedParam(t *testing.T) {
 	for _, v := range []any{"abc", "1.5", "-0.5", "2147483648", 2147483648} {
 		_, err := ParseSizeNamed(v, "maxResults")
@@ -200,8 +201,8 @@ func TestParseSizeNamedParam(t *testing.T) {
 		if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
 			t.Errorf("ParseSizeNamed(%#v) = %+v, want InvalidArgument/400", v, perr)
 		}
-		if perr.Message != "Invalid value for int32 type: maxResults" {
-			t.Errorf("ParseSizeNamed(%#v) message = %q, want the named int32 binding message", v, perr.Message)
+		if perr.Message != `Invalid value at 'max_results' (TYPE_INT32), `+boundValueText(v) {
+			t.Errorf("ParseSizeNamed(%#v) message = %q, want the frontend int32 binding message", v, perr.Message)
 		}
 	}
 	if n, err := ParseSizeNamed("7", "maxResults"); err != nil || n != 7 {
@@ -228,9 +229,9 @@ func TestParseSizeNamedParam(t *testing.T) {
 
 // TestParseUintSizeNamed pins the uint32 binding Compute Engine and Cloud SQL's
 // instances/operations lists declare for maxResults: a negative value is not a
-// valid binding ("Invalid value for uint32 type"), the message names the
-// parameter, and a value above MaxInt32 is still a legal uint32 (the caller's
-// range policy then clamps it).
+// valid binding, the rejection carries the frontend's uint32 envelope naming
+// the proto field, and a value above MaxInt32 is still a legal uint32 (the
+// caller's range policy then clamps it).
 func TestParseUintSizeNamed(t *testing.T) {
 	for _, v := range []any{
 		"abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5), float64(-1),
@@ -245,8 +246,8 @@ func TestParseUintSizeNamed(t *testing.T) {
 		if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
 			t.Errorf("ParseUintSizeNamed(%#v) = %+v, want InvalidArgument/400", v, perr)
 		}
-		if perr.Message != "Invalid value for uint32 type: maxResults" {
-			t.Errorf("ParseUintSizeNamed(%#v) message = %q, want the named uint32 binding message", v, perr.Message)
+		if perr.Message != `Invalid value at 'max_results' (TYPE_UINT32), `+boundValueText(v) {
+			t.Errorf("ParseUintSizeNamed(%#v) message = %q, want the frontend uint32 binding message", v, perr.Message)
 		}
 	}
 	for _, tc := range []struct {
@@ -268,13 +269,101 @@ func TestParseUintSizeNamed(t *testing.T) {
 	}
 }
 
-// TestMaxResultsParam pins the legacy maxResults resolver the bespoke pagers
-// share: it reads the declared parameter before the emulator's pageSize alias,
-// rejects a value the declared binding cannot parse (naming the parameter), and
-// falls back to the caller's default for an absent, empty, zero or non-positive
-// value — the legacy parameter documents no minimum, so a negative keeps the
-// default page rather than inventing an AIP-158 400.
-func TestMaxResultsParam(t *testing.T) {
+// TestMaxResultsUint32 pins the unsigned legacy resolver Compute Engine and
+// Cloud SQL's instances/operations lists use: a negative value is not a legal
+// binding, an absent value selects the caller's default, and a value above
+// int32 is still a legal uint32 (the caller's own ceiling then clamps it).
+func TestMaxResultsUint32(t *testing.T) {
+	keys := []string{"maxResults", "pageSize"}
+	for _, tc := range []struct {
+		label  string
+		params map[string]any
+		want   int
+	}{
+		{"absent", nil, 500},
+		{"empty", map[string]any{"maxResults": ""}, 500},
+		{"zero", map[string]any{"maxResults": "0"}, 500},
+		{"value", map[string]any{"maxResults": "2"}, 2},
+		{"above int32", map[string]any{"maxResults": "3000000000"}, 3000000000},
+		{"alias", map[string]any{"pageSize": "3"}, 3},
+		// maxResults wins over the alias, as it did before the binding check.
+		{"both", map[string]any{"maxResults": "2", "pageSize": "3"}, 2},
+	} {
+		got, err := MaxResultsUint32(tc.params, keys, 500)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: MaxResultsUint32(%v) = %d, %v; want %d, nil", tc.label, tc.params, got, err, tc.want)
+		}
+	}
+	for _, v := range []any{"abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5)} {
+		_, err := MaxResultsUint32(map[string]any{"maxResults": v}, keys, 500)
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) || perr.Message != `Invalid value at 'max_results' (TYPE_UINT32), `+boundValueText(v) {
+			t.Errorf("MaxResultsUint32(maxResults=%#v) = %v, want the frontend uint32 binding error", v, err)
+		}
+	}
+}
+
+// TestBindMaxResults pins the parse half Cloud DNS applies before routing (DC62):
+// the int32 binding only, reporting the parameter and raw value so the caller
+// can apply its own range later. An unparseable value is the frontend's 400 even
+// when the parent resource is missing; absent, nil and explicitly empty all bind
+// to the zero value, which Resolve turns into the caller's default (DC63 keeps
+// empty as absent for now), and an empty maxResults still falls through to the
+// emulator's pageSize alias.
+func TestBindMaxResults(t *testing.T) {
+	keys := []string{"maxResults", "pageSize"}
+	for _, tc := range []struct {
+		label  string
+		params map[string]any
+		size   int
+		param  string
+	}{
+		{"absent", nil, 0, ""},
+		{"nil value", map[string]any{"maxResults": nil}, 0, ""},
+		{"empty", map[string]any{"maxResults": ""}, 0, ""},
+		{"zero", map[string]any{"maxResults": "0"}, 0, "maxResults"},
+		{"negative", map[string]any{"maxResults": "-1"}, -1, "maxResults"},
+		{"value", map[string]any{"maxResults": "42"}, 42, "maxResults"},
+		{"alias", map[string]any{"pageSize": "7"}, 7, "pageSize"},
+		{"both", map[string]any{"maxResults": "2", "pageSize": "3"}, 2, "maxResults"},
+		// An empty declared parameter is absent, so the alias still applies.
+		{"empty then alias", map[string]any{"maxResults": "", "pageSize": "9"}, 9, "pageSize"},
+	} {
+		got, err := BindMaxResults(tc.params, keys)
+		if err != nil {
+			t.Errorf("%s: BindMaxResults(%v) = %v", tc.label, tc.params, err)
+			continue
+		}
+		if got.Size != tc.size || got.Param != tc.param {
+			t.Errorf("%s: BindMaxResults(%v) = {%d %q ...}, want {%d %q ...}",
+				tc.label, tc.params, got.Size, got.Param, tc.size, tc.param)
+		}
+	}
+	for _, v := range []any{"abc", "1.5", "-0.5", "2147483648"} {
+		_, err := BindMaxResults(map[string]any{"maxResults": v}, keys)
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) || perr.Message != `Invalid value at 'max_results' (TYPE_INT32), `+boundValueText(v) {
+			t.Errorf("BindMaxResults(maxResults=%#v) = %v, want the frontend int32 binding error", v, err)
+		}
+	}
+	// A typed (non-query) value still echoes plainly rather than being re-quoted;
+	// the literal is pinned so a change to the rendering cannot slip through a
+	// shared helper.
+	if _, err := BindMaxResults(map[string]any{"maxResults": float64(1.5)}, keys); err == nil {
+		t.Error("BindMaxResults(maxResults=1.5) = nil error, want the binding error")
+	} else {
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) || perr.Message != `Invalid value at 'max_results' (TYPE_INT32), 1.5` {
+			t.Errorf("BindMaxResults(maxResults=float64(1.5)) = %v, want the plain-rendered binding error", err)
+		}
+	}
+}
+
+// TestMaxResultsBindingResolve pins the backend half: the caller's default for a
+// zero binding (absent or empty) and Cloud DNS's probed 1..1000 range, whose
+// rejection is the frontend's parameter-validation text naming the camelCase
+// query parameter (DC62).
+func TestMaxResultsBindingResolve(t *testing.T) {
 	keys := []string{"maxResults", "pageSize"}
 	for _, tc := range []struct {
 		label  string
@@ -283,35 +372,65 @@ func TestMaxResultsParam(t *testing.T) {
 	}{
 		{"absent", nil, 100},
 		{"empty", map[string]any{"maxResults": ""}, 100},
-		{"zero", map[string]any{"maxResults": "0"}, 100},
-		{"negative", map[string]any{"maxResults": "-1"}, 100},
-		{"value", map[string]any{"maxResults": "2"}, 2},
-		{"alias", map[string]any{"pageSize": "3"}, 3},
-		// maxResults wins over the alias, as it did before the binding check.
-		{"both", map[string]any{"maxResults": "2", "pageSize": "3"}, 2},
+		{"lower bound", map[string]any{"maxResults": "1"}, 1},
+		{"upper bound", map[string]any{"maxResults": "1000"}, 1000},
+		{"value", map[string]any{"maxResults": "42"}, 42},
+		{"alias", map[string]any{"pageSize": "7"}, 7},
 	} {
-		got, err := MaxResultsInt32(tc.params, keys, 100)
+		bound, err := BindMaxResults(tc.params, keys)
+		if err != nil {
+			t.Errorf("%s: BindMaxResults(%v) = %v", tc.label, tc.params, err)
+			continue
+		}
+		got, err := bound.Resolve(100, 1, 1000)
 		if err != nil || got != tc.want {
-			t.Errorf("%s: MaxResultsInt32(%v) = %d, %v; want %d, nil", tc.label, tc.params, got, err, tc.want)
+			t.Errorf("%s: Resolve(%v) = %d, %v; want %d, nil", tc.label, tc.params, got, err, tc.want)
 		}
 	}
-	for _, v := range []any{"abc", "1.5", "-0.5", "2147483648"} {
-		_, err := MaxResultsInt32(map[string]any{"maxResults": v}, keys, 100)
+	for _, tc := range []struct{ key, v, want string }{
+		{"maxResults", "0", `Invalid value for 'parameters.maxResults': '0'`},
+		{"maxResults", "-1", `Invalid value for 'parameters.maxResults': '-1'`},
+		{"maxResults", "-5", `Invalid value for 'parameters.maxResults': '-5'`},
+		{"maxResults", "1001", `Invalid value for 'parameters.maxResults': '1001'`},
+		{"maxResults", "2147483647", `Invalid value for 'parameters.maxResults': '2147483647'`},
+		{"pageSize", "0", `Invalid value for 'parameters.pageSize': '0'`},
+		{"pageSize", "-3", `Invalid value for 'parameters.pageSize': '-3'`},
+	} {
+		bound, err := BindMaxResults(map[string]any{tc.key: tc.v}, keys)
+		if err != nil {
+			t.Errorf("%s=%s: BindMaxResults = %v, want a clean binding", tc.key, tc.v, err)
+			continue
+		}
+		_, err = bound.Resolve(100, 1, 1000)
 		var perr *model.ProviderError
-		if !errors.As(err, &perr) || perr.Message != "Invalid value for int32 type: maxResults" {
-			t.Errorf("MaxResultsInt32(maxResults=%#v) = %v, want the named int32 binding error", v, err)
+		if !errors.As(err, &perr) {
+			t.Errorf("%s=%s error = %v, want a *model.ProviderError", tc.key, tc.v, err)
+			continue
+		}
+		if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("%s=%s = %+v, want InvalidArgument/400", tc.key, tc.v, perr)
+		}
+		if perr.Message != tc.want {
+			t.Errorf("%s=%s message = %q, want %q", tc.key, tc.v, perr.Message, tc.want)
 		}
 	}
-	// The unsigned form rejects a negative value as an illegal binding and
-	// accepts a value above int32.
-	if _, err := MaxResultsUint32(map[string]any{"maxResults": "-1"}, keys, 500); err == nil {
-		t.Error("MaxResultsUint32(maxResults=-1) = nil error, want the uint32 binding error")
-	}
-	if got, err := MaxResultsUint32(map[string]any{"maxResults": "3000000000"}, keys, 500); err != nil || got != 3000000000 {
-		t.Errorf("MaxResultsUint32(maxResults=3000000000) = %d, %v; want 3000000000, nil", got, err)
-	}
-	if got, err := MaxResultsUint32(nil, keys, 500); err != nil || got != 500 {
-		t.Errorf("MaxResultsUint32(absent) = %d, %v; want the 500 default", got, err)
+}
+
+// TestProtoFieldName pins the query-name-to-proto-field mapping the binding
+// error uses: real GCP names the snake_case field, not the camelCase query name.
+func TestProtoFieldName(t *testing.T) {
+	for in, want := range map[string]string{
+		"maxResults": "max_results",
+		"pageSize":   "page_size",
+		"fooBarBaz":  "foo_bar_baz",
+		"page_size":  "page_size",
+		"limit":      "limit",
+		"MaxResults": "max_results",
+		"page2Size":  "page2_size",
+	} {
+		if got := protoFieldName(in); got != want {
+			t.Errorf("protoFieldName(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

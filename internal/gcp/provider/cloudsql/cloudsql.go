@@ -186,7 +186,7 @@ func (p *Provider) InstancesGet(ctx context.Context, nr *model.NormalizedRequest
 }
 
 func (p *Provider) InstancesList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	size, err := paging.MaxResultsUint32(nr.Params, maxResultsKeys, defaultMaxResults)
+	size, err := instancesPageSize(nr.Params)
 	if err != nil {
 		return nil, err
 	}
@@ -1074,14 +1074,49 @@ func randomHex(n int) string {
 }
 
 // defaultMaxResults is the page size Cloud SQL's emulator serves when a list
-// request omits maxResults. instances.list documents "at most 500 instances"
-// when unspecified; the 100 here is the provider's pre-existing default and is
-// recorded as a separate fidelity item (DC61), not changed by the DC55 fix.
+// request omits maxResults on a method whose Discovery document documents no
+// default (operations.list's description is only "Maximum number of operations
+// per response"), or on the emulator's pagination extension (databases, users,
+// flags, tiers — none of them page in real GCP). instances.list documents its
+// own contract; see instancesDefaultMaxResults.
 const defaultMaxResults = 100
+
+// instances.list's documented maxResults contract: "The maximum number of
+// instances to return. The service may return fewer than this value. If
+// unspecified, at most 500 instances are returned. The maximum value is 1000;
+// values above 1000 are coerced to 1000." Only instances.list documents either
+// half, so the default and the ceiling are scoped to that handler and the other
+// lists keep defaultMaxResults (DC61).
+//
+// Provenance: the 500 default and the coercion above 1,000 are doc-derived —
+// real GCP answers 200 for maxResults=0/1001/5000, but a probe cannot observe
+// the page size without more than 1,000 instances in the project, which is why
+// the emulator's own tests seed 1,200 and assert the served page. Only the
+// negative case (400, uint32 binding) is directly probed.
+const (
+	instancesDefaultMaxResults = 500
+	instancesMaxResultsCeiling = 1000
+)
 
 // maxResultsKeys is the emulator's page-size surface for Cloud SQL: the
 // documented maxResults plus the emulator's pageSize alias.
 var maxResultsKeys = []string{"maxResults", "pageSize"}
+
+// instancesPageSize resolves instances.list's maxResults: the uint32 binding the
+// Discovery document declares, then the documented 500-result default and
+// 1,000-result ceiling (a larger value is coerced down, not rejected — real GCP
+// answers 200 for maxResults=5000, unlike Cloud DNS's 400). The pageSize alias
+// resolves through the same contract, since the emulator cannot ignore it.
+func instancesPageSize(params map[string]any) (int, error) {
+	size, err := paging.MaxResultsUint32(params, maxResultsKeys, instancesDefaultMaxResults)
+	if err != nil {
+		return 0, err
+	}
+	if size > instancesMaxResultsCeiling {
+		size = instancesMaxResultsCeiling
+	}
+	return size, nil
+}
 
 // paginate sorts items by key and applies Cloud SQL's maxResults/pageToken
 // cursor pagination. The next page token is the base64url-encoded key of the

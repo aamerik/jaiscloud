@@ -203,7 +203,11 @@ func (p *Provider) GetManagedZone(ctx context.Context, nr *model.NormalizedReque
 }
 
 func (p *Provider) ListManagedZones(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	size, err := paging.MaxResultsInt32(nr.Params, maxResultsKeys, defaultMaxResults)
+	bound, err := bindPageSize(nr.Params)
+	if err != nil {
+		return nil, err
+	}
+	size, err := resolvePageSize(bound)
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +369,7 @@ func (p *Provider) GetResourceRecordSet(ctx context.Context, nr *model.Normalize
 }
 
 func (p *Provider) ListResourceRecordSets(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	size, err := paging.MaxResultsInt32(nr.Params, maxResultsKeys, defaultMaxResults)
+	bound, err := bindPageSize(nr.Params)
 	if err != nil {
 		return nil, err
 	}
@@ -374,6 +378,10 @@ func (p *Provider) ListResourceRecordSets(ctx context.Context, nr *model.Normali
 		return nil, model.NewProviderError("InvalidArgument", "missing managedZone", 400)
 	}
 	if _, err := p.loadManagedZone(ctx, nr, zone); err != nil {
+		return nil, err
+	}
+	size, err := resolvePageSize(bound)
+	if err != nil {
 		return nil, err
 	}
 	entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtRRSet, zone)
@@ -547,13 +555,20 @@ func (p *Provider) GetChange(ctx context.Context, nr *model.NormalizedRequest) (
 }
 
 func (p *Provider) ListChanges(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	size, err := paging.MaxResultsInt32(nr.Params, maxResultsKeys, defaultMaxResults)
+	bound, err := bindPageSize(nr.Params)
 	if err != nil {
 		return nil, err
 	}
 	zone := strParam(nr, "managedZone")
 	if zone == "" {
 		return nil, model.NewProviderError("InvalidArgument", "missing managedZone", 400)
+	}
+	if _, err := p.loadManagedZone(ctx, nr, zone); err != nil {
+		return nil, err
+	}
+	size, err := resolvePageSize(bound)
+	if err != nil {
+		return nil, err
 	}
 	entries, err := p.resources.List(ctx, nr.AccountID, store.GlobalRegion, rtChange, zone)
 	if err != nil {
@@ -788,9 +803,41 @@ func storeError(err error, what string) error {
 // server).
 const defaultMaxResults = 100
 
+// Cloud DNS's maxResults range. The Discovery document declares only an int32
+// with no minimum or maximum ("If unspecified, the server decides how many
+// results to return"), but real GCP's list backend accepts 1..1000 and rejects
+// everything else with 400 "Invalid value for 'parameters.maxResults': '<v>'"
+// — zero and negatives included, unlike Cloud SQL, which clamps an over-large
+// value instead (DC61). Probe-recorded for managedZones, rrsets and changes
+// (DC62).
+const (
+	minMaxResults = 1
+	maxMaxResults = 1000
+)
+
 // maxResultsKeys is the emulator's page-size surface for Cloud DNS: the
-// documented maxResults (int32) plus the emulator's pageSize alias.
+// documented maxResults (int32) plus the emulator's pageSize alias. Both resolve
+// through the same range, since the emulator cannot ignore the alias the way
+// real GCP ignores an unknown query parameter.
 var maxResultsKeys = []string{"maxResults", "pageSize"}
+
+// bindPageSize applies Cloud DNS's maxResults query binding. Real GCP validates
+// the binding in the API frontend, before routing, so an unparseable value is
+// 400 even when the parent zone does not exist (probed: rrsets?maxResults=abc
+// on a missing zone is 400). The backend's 1..1000 range check is separate and
+// runs *after* the parent-zone lookup (rrsets?maxResults=0 on a missing zone is
+// the zone's 404), so handlers call bindPageSize first and Resolve once the
+// zone is known — or immediately on the parent-less managedZones.list.
+func bindPageSize(params map[string]any) (paging.MaxResultsBinding, error) {
+	return paging.BindMaxResults(params, maxResultsKeys)
+}
+
+// resolvePageSize applies the backend half of Cloud DNS's maxResults contract:
+// the emulator's default when the parameter was absent or empty, and the
+// probed 1..1000 range otherwise.
+func resolvePageSize(b paging.MaxResultsBinding) (int, error) {
+	return b.Resolve(defaultMaxResults, minMaxResults, maxMaxResults)
+}
 
 // paginate sorts items by key and applies maxResults/pageToken cursor
 // pagination (Cloud DNS's list convention). The next page token is the

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -797,7 +798,10 @@ func TestListParamsPageSizeDefaults(t *testing.T) {
 // TestListParamsRejectsBadMaxResults pins the uint32 query binding Compute's
 // Discovery document declares for maxResults: an unparseable value, a fraction
 // or a negative one is INVALID_ARGUMENT, never a silent fall back to the 500
-// default page — the same answer real GCP's binding gives.
+// default page — the same answer real GCP's binding gives. The status and the
+// shape of the envelope match; Compute's frontend names the field
+// "header.max_results" where the shared resolver names "max_results", a
+// cosmetic difference recorded in DC68.
 func TestListParamsRejectsBadMaxResults(t *testing.T) {
 	for _, v := range []any{"abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5), int64(-1)} {
 		_, err := listParams(newNR(map[string]any{"maxResults": v}))
@@ -809,13 +813,22 @@ func TestListParamsRejectsBadMaxResults(t *testing.T) {
 		if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
 			t.Errorf("listParams(maxResults=%#v) = %+v, want InvalidArgument/400", v, perr)
 		}
-		if perr.Message != "Invalid value for uint32 type: maxResults" {
-			t.Errorf("listParams(maxResults=%#v) message = %q, want the uint32 binding message", v, perr.Message)
+		if want := `Invalid value at 'max_results' (TYPE_UINT32), ` + boundValue(v); perr.Message != want {
+			t.Errorf("listParams(maxResults=%#v) message = %q, want %q", v, perr.Message, want)
 		}
 	}
 }
 
 // ─── requestId idempotency (TD18) ─────────────────────────────────────────────
+
+// boundValue renders the offending query value the way the frontend's binding
+// error echoes it: a string value is re-quoted verbatim.
+func boundValue(v any) string {
+	if s, ok := v.(string); ok {
+		return strconv.Quote(s)
+	}
+	return fmt.Sprint(v)
+}
 
 // testRequestID is a well-formed UUID used by the requestId tests.
 const testRequestID = "3b241101-e2bb-4255-8caf-4136c566a962"

@@ -2,7 +2,11 @@ package cloudsql
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -432,6 +436,105 @@ func TestInstanceListPagination(t *testing.T) {
 	}
 }
 
+// boundValue renders the offending query value the way the frontend's binding
+// error echoes it: a string value is re-quoted verbatim.
+func boundValue(v any) string {
+	if s, ok := v.(string); ok {
+		return strconv.Quote(s)
+	}
+	return fmt.Sprint(v)
+}
+
+// TestInstancesListMaxResultsDefaultAndCeiling pins instances.list's
+// documented maxResults contract (DC61): "If unspecified, at most 500 instances
+// are returned. The maximum value is 1000; values above 1000 are coerced to
+// 1000." The 1,200 seeded instances make both halves observable — the default
+// page is 500 (not the pre-fix 100) and a larger request is clamped to 1,000
+// rather than served whole. Only instances.list documents either half, so
+// operations.list keeps the emulator's 100 (asserted below).
+func TestInstancesListMaxResultsDefaultAndCeiling(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	data := func(name string) []byte {
+		b, err := json.Marshal(instanceBody(name))
+		if err != nil {
+			t.Fatalf("marshal %s: %v", name, err)
+		}
+		return b
+	}
+	for i := 0; i < 1200; i++ {
+		name := fmt.Sprintf("inst-%04d", i)
+		if err := p.resources.Create(ctx, "proj", store.GlobalRegion, store.ResourceEntry{
+			Type: rtInstance, ID: name, Data: data(name),
+		}); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	for _, tc := range []struct {
+		label string
+		param *string
+		want  int
+	}{
+		{"unspecified", nil, instancesDefaultMaxResults},
+		{"zero", ptr("0"), instancesDefaultMaxResults},
+		{"at ceiling", ptr("1000"), 1000},
+		{"above ceiling", ptr("1001"), 1000},
+		{"far above ceiling", ptr("5000"), 1000},
+		{"legal uint32", ptr("3000000000"), 1000},
+		{"alias above ceiling", ptr("pageSize=5000"), 1000},
+	} {
+		params := map[string]any{}
+		if tc.param != nil {
+			if strings.HasPrefix(*tc.param, "pageSize=") {
+				params["pageSize"] = strings.TrimPrefix(*tc.param, "pageSize=")
+			} else {
+				params["maxResults"] = *tc.param
+			}
+		}
+		resp, err := p.InstancesList(ctx, newNR(params))
+		if err != nil {
+			t.Errorf("%s: InstancesList = %v", tc.label, err)
+			continue
+		}
+		items, _ := resp.Data["items"].([]any)
+		if len(items) != tc.want {
+			t.Errorf("%s: page size = %d, want %d", tc.label, len(items), tc.want)
+		}
+		if _, ok := resp.Data["nextPageToken"]; !ok {
+			t.Errorf("%s: expected a nextPageToken for a truncated page", tc.label)
+		}
+	}
+	// operations.list documents no default, so it keeps the emulator's 100 —
+	// proof that the 500 default is scoped to instances.list.
+	for i := 0; i < 150; i++ {
+		name := fmt.Sprintf("op-%04d", i)
+		if err := p.resources.Create(ctx, "proj", store.GlobalRegion, store.ResourceEntry{
+			Type: rtOperation, ID: name, Data: []byte(`{"name":"` + name + `"}`),
+		}); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	// operations.list keeps the emulator's 100 default and none of instances'
+	// contract: an explicit 5,000 is served whole (150 of 150), not clamped to
+	// the instances ceiling.
+	resp, err := p.OperationsList(ctx, newNR(nil))
+	if err != nil {
+		t.Fatalf("operations.list: %v", err)
+	}
+	if ops, _ := resp.Data["items"].([]any); len(ops) != defaultMaxResults {
+		t.Errorf("operations.list default page = %d, want %d", len(ops), defaultMaxResults)
+	}
+	resp, err = p.OperationsList(ctx, newNR(map[string]any{"maxResults": "5000"}))
+	if err != nil {
+		t.Fatalf("operations.list(maxResults=5000): %v", err)
+	}
+	if ops, _ := resp.Data["items"].([]any); len(ops) != 150 {
+		t.Errorf("operations.list(maxResults=5000) page = %d, want all 150 (no instances ceiling)", len(ops))
+	}
+}
+
+func ptr(s string) *string { return &s }
+
 func isCode(err error, code string) bool {
 	var perr *model.ProviderError
 	if !errors.As(err, &perr) {
@@ -482,8 +585,8 @@ func TestListMaxResultsBinding(t *testing.T) {
 			if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
 				t.Errorf("%s(maxResults=%#v) = %+v, want InvalidArgument/400", h.name, v, perr)
 			}
-			if perr.Message != "Invalid value for uint32 type: maxResults" {
-				t.Errorf("%s(maxResults=%#v) message = %q, want the named uint32 binding message", h.name, v, perr.Message)
+			if want := `Invalid value at 'max_results' (TYPE_UINT32), ` + boundValue(v); perr.Message != want {
+				t.Errorf("%s(maxResults=%#v) message = %q, want %q", h.name, v, perr.Message, want)
 			}
 		}
 		if resp, err := h.call(map[string]any{"maxResults": "2"}); err != nil || resp == nil {
