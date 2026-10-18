@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
@@ -575,16 +576,20 @@ func TestRESTFieldUpdateAndGet(t *testing.T) {
 	// the widened `*` arm carries ttl_config as well as index_config.
 	maskless, err := p.UpdateField(ctx, adminNR("databases/(default)/collectionGroups/cg/fields/f", map[string]any{
 		"body": map[string]any{
-			"indexConfig": map[string]any{"usesAncestorConfig": true, "ancestorField": "cg"},
-			"ttlConfig":   map[string]any{"state": "ACTIVE", "expirationOffset": "7200s"},
+			"indexConfig": map[string]any{"usesAncestorConfig": false, "ancestorField": "cg", "reverting": true},
+			"ttlConfig":   map[string]any{"state": "NEEDS_REPAIR", "expirationOffset": "7200s"},
 		},
 	}))
 	if err != nil {
 		t.Fatalf("UpdateField(maskless): %v", err)
 	}
 	respObj, _ = maskless.Data["response"].(map[string]any)
-	if mic, _ := respObj["indexConfig"].(map[string]any); mic["ancestorField"] != "cg" {
-		t.Errorf("maskless indexConfig = %v, want ancestorField cg", respObj["indexConfig"])
+	// The three index-config members and the TTL state are OUTPUT_ONLY: the
+	// patch's values are ignored and the derived ones are reported (DC49).
+	wantAncestor := "projects/proj/databases/(default)/collectionGroups/cg/fields/__name__"
+	if mic, _ := respObj["indexConfig"].(map[string]any); mic["ancestorField"] != wantAncestor ||
+		mic["usesAncestorConfig"] != true || mic["reverting"] != false {
+		t.Errorf("maskless indexConfig = %v, want the derived inherited form", respObj["indexConfig"])
 	}
 	if tc, _ := respObj["ttlConfig"].(map[string]any); tc["state"] != "ACTIVE" || tc["expirationOffset"] != "7200s" {
 		t.Errorf("maskless ttlConfig = %v, want ACTIVE/7200s", respObj["ttlConfig"])
@@ -699,5 +704,67 @@ func TestAdminMaskForms(t *testing.T) { // Plain csv updateMask is normalized to
 		Raw: httptest.NewRequest("PATCH", "/v1/projects/proj/databases/db?updateMask=concurrencyMode", nil)}
 	if got, present := adminMask(nr); !present || len(got) != 1 || got[0] != "concurrency_mode" {
 		t.Errorf("adminMask(raw) = %v present=%v", got, present)
+	}
+}
+
+func TestRESTDatabaseOutputFields(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+	frozen := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: frozen})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	// The implicit (default) database is materialized with real output fields,
+	// and earliest_version_time is derived per response (DC46/DC54).
+	def, err := p.GetDatabase(ctx, adminNR("databases/(default)", nil))
+	if err != nil {
+		t.Fatalf("GetDatabase(default): %v", err)
+	}
+	if def.Data["uid"] == nil || def.Data["uid"] == "" || def.Data["uid"] == "default" {
+		t.Errorf("default uid = %v", def.Data["uid"])
+	}
+	if def.Data["etag"] == nil || def.Data["createTime"] == nil || def.Data["updateTime"] == nil {
+		t.Errorf("default database = %v, want etag + timestamps", def.Data)
+	}
+	if want := restRFC3339(frozen.Add(-time.Hour)); def.Data["earliestVersionTime"] != want {
+		t.Errorf("default earliestVersionTime = %v, want %v", def.Data["earliestVersionTime"], want)
+	}
+	if def.Data["concurrencyMode"] != concurrencyPessimistic {
+		t.Errorf("default concurrencyMode = %v, want %s (STANDARD edition)", def.Data["concurrencyMode"], concurrencyPessimistic)
+	}
+	// The materialized record is stable across reads: a per-call synthesis would
+	// rotate the etag/uid and never satisfy the delete precondition.
+	defAgain, err := p.GetDatabase(ctx, adminNR("databases/(default)", nil))
+	if err != nil {
+		t.Fatalf("GetDatabase(default) again: %v", err)
+	}
+	if defAgain.Data["etag"] != def.Data["etag"] || defAgain.Data["uid"] != def.Data["uid"] {
+		t.Errorf("default output fields are not stable: %v -> %v", def.Data, defAgain.Data)
+	}
+
+	// A create that omits concurrencyMode defaults by edition (DC53), and the
+	// PITR-off retention window drives earliest_version_time.
+	resp, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{"databaseId": "outp-db"}))
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	created, _ := resp.Data["response"].(map[string]any)
+	if created["concurrencyMode"] != concurrencyPessimistic {
+		t.Errorf("create concurrencyMode = %v, want %s", created["concurrencyMode"], concurrencyPessimistic)
+	}
+	if want := restRFC3339(frozen.Add(-time.Hour)); created["earliestVersionTime"] != want {
+		t.Errorf("create earliestVersionTime = %v, want %v", created["earliestVersionTime"], want)
+	}
+
+	enterprise, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "outp-ent",
+		"body":       map[string]any{"databaseEdition": "ENTERPRISE"},
+	}))
+	if err != nil {
+		t.Fatalf("CreateDatabase(ENTERPRISE): %v", err)
+	}
+	entObj, _ := enterprise.Data["response"].(map[string]any)
+	if entObj["concurrencyMode"] != concurrencyOptimistic {
+		t.Errorf("create(ENTERPRISE) concurrencyMode = %v, want %s", entObj["concurrencyMode"], concurrencyOptimistic)
 	}
 }

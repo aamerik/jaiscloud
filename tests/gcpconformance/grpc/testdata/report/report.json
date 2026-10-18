@@ -1071,21 +1071,21 @@
       "rpc": "CreateDatabase",
       "method": "CreateDatabase",
       "status": "pass",
-      "key_field": "operation done=true; database name"
+      "key_field": "operation done=true; database name; edition-default concurrency_mode; earliest_version_time about now-1h"
     },
     {
       "service": "firestoreadmin",
       "rpc": "GetDatabase",
       "method": "GetDatabase",
       "status": "pass",
-      "key_field": "database name/uid"
+      "key_field": "database name/uid/timestamps/etag + (default) materialized with stable output fields"
     },
     {
       "service": "firestoreadmin",
       "rpc": "ListDatabases",
       "method": "ListDatabases",
       "status": "pass",
-      "key_field": "created database present + (default)"
+      "key_field": "created database present + (default) with output fields"
     },
     {
       "service": "firestoreadmin",
@@ -1106,14 +1106,14 @@
       "rpc": "UpdateField",
       "method": "UpdateField",
       "status": "pass",
-      "key_field": "operation done=true; index_config under mask + index_config/ttl_config under an omitted mask + empty mask is a no-op"
+      "key_field": "operation done=true; index_config under mask with OUTPUT_ONLY members derived + index_config/ttl_config under an omitted mask + empty mask is a no-op"
     },
     {
       "service": "firestoreadmin",
       "rpc": "GetField",
       "method": "GetField",
       "status": "pass",
-      "key_field": "index_config round-trip"
+      "key_field": "index_config round-trip with derived ancestor/uses_ancestor_config + ttl state ACTIVE"
     },
     {
       "service": "firestoreadmin",

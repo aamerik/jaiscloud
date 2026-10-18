@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -70,15 +71,30 @@ const (
 const (
 	databaseEditionUnspecified = "DATABASE_EDITION_UNSPECIFIED"
 	databaseEditionStandard    = "STANDARD"
+	databaseEditionEnterprise  = "ENTERPRISE"
 )
+
+// Database.concurrency_mode values. A create that omits the mode defaults by
+// edition: Optimistic for Enterprise and Pessimistic for every other database
+// (database.proto).
+const (
+	concurrencyOptimistic  = "OPTIMISTIC"
+	concurrencyPessimistic = "PESSIMISTIC"
+)
+
+// ttlConfigActive is the terminal Field.TtlConfig.State real GCP reports for a
+// configured TTL policy. The field is OUTPUT_ONLY, so it is derived rather than
+// stored from a request (DC49).
+const ttlConfigActive = "ACTIVE"
 
 // passwordAlphabet is the character set for a synthesized user-creds password.
 const passwordAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 // databaseDef is the persisted google.firestore.admin.v1.Database (the mutable
 // subset the emulator models). Fields the emulator has no source for
-// (earliest_version_time, cmek_config, source_info, ...) are omitted rather than
-// fabricated.
+// (cmek_config, source_info, ...) are omitted rather than fabricated;
+// earliest_version_time is derived per response (EarliestVersionTime), never
+// stored, because the proto documents it as continuously updated.
 type databaseDef struct {
 	Name                          string        `json:"name,omitempty"`
 	Uid                           string        `json:"uid,omitempty"`
@@ -300,6 +316,18 @@ func randomPassword() string {
 	return string(out)
 }
 
+// randomUUID4 returns a random UUID4, the documented shape of Database.uid
+// ("The system-generated UUID4 for this Database").
+func randomUUID4() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return randomHex(32)
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
 // databaseRetentionPeriod returns the documented version-retention window for a
 // database. version_retention_period is OUTPUT_ONLY
 // (google/firestore/admin/v1/database.proto): real GCP derives it from the PITR
@@ -313,18 +341,55 @@ func databaseRetentionPeriod(pitrEnablement string) time.Duration {
 	return time.Hour
 }
 
-// synthesizeDefaultDatabase returns the implicit (default) database record for a
-// project. It is never stored unless updated or deleted.
-func synthesizeDefaultDatabase(project string) databaseDef {
+// defaultConcurrencyMode is the documented create-time concurrency_mode default
+// for an edition: "Optimistic for Enterprise and Pessimistic for all other
+// databases" (database.proto).
+func defaultConcurrencyMode(edition string) string {
+	if edition == databaseEditionEnterprise {
+		return concurrencyOptimistic
+	}
+	return concurrencyPessimistic
+}
+
+// EarliestVersionTime is the documented read window for past versions:
+// "populated with `now - version_retention_period`" (database.proto). The field
+// is OUTPUT_ONLY and continuously updated, so it is derived per response rather
+// than persisted.
+func EarliestVersionTime(d DatabaseDef) time.Time {
+	retention := d.VersionRetentionPeriod
+	if retention <= 0 {
+		retention = databaseRetentionPeriod(d.PointInTimeRecoveryEnablement)
+	}
+	return clock.Now().Add(-retention)
+}
+
+// normalizeDatabase applies the documented zero-value equivalences and the
+// OUTPUT_ONLY fields to a stored record, also repairing records written by an
+// older build (a pre-DC38 record may carry a client-supplied retention window).
+func normalizeDatabase(rec databaseDef) databaseDef {
+	rec.DeleteProtectionState = normalizeDeleteProtection(rec.DeleteProtectionState)
+	rec.VersionRetentionPeriod = databaseRetentionPeriod(rec.PointInTimeRecoveryEnablement)
+	return rec
+}
+
+// newDefaultDatabase builds the implicit (default) database every Firestore
+// project has. It is shaped like a named database — a real UUID4 uid, create and
+// update timestamps and an etag — so the output fields are present and the etag
+// is a usable delete precondition (DC46).
+func newDefaultDatabase(project string) databaseDef {
+	now := clock.Now()
 	return databaseDef{
 		Name:                          databaseName(project, defaultDatabaseID),
-		Uid:                           "default",
+		Uid:                           randomUUID4(),
+		CreateTime:                    now,
+		UpdateTime:                    now,
 		Type:                          "FIRESTORE_NATIVE",
-		ConcurrencyMode:               "OPTIMISTIC",
+		ConcurrencyMode:               defaultConcurrencyMode(databaseEditionStandard),
 		VersionRetentionPeriod:        databaseRetentionPeriod(pitrDisabled),
 		PointInTimeRecoveryEnablement: pitrDisabled,
 		DeleteProtectionState:         deleteProtectionDisabled,
 		DatabaseEdition:               databaseEditionStandard,
+		Etag:                          randomHex(16),
 	}
 }
 
@@ -348,18 +413,21 @@ func (s *Service) CreateDatabaseDef(ctx context.Context, project, dbID string, d
 		return databaseDef{}, "", gcpInvalidArgument("database id must be 4-63 chars, start with a lowercase letter, and contain only lowercase letters, digits, or hyphens")
 	}
 	db.Name = databaseName(project, dbID)
-	db.Uid = randomHex(32)
+	db.Uid = randomUUID4()
 	now := clock.Now()
 	db.CreateTime, db.UpdateTime = now, now
 	if db.Type == "" {
 		db.Type = "FIRESTORE_NATIVE"
 	}
-	if db.ConcurrencyMode == "" {
-		db.ConcurrencyMode = "OPTIMISTIC"
-	}
 	if db.DatabaseEdition == "" || db.DatabaseEdition == databaseEditionUnspecified {
 		// database.proto: STANDARD "is the default setting if not specified".
 		db.DatabaseEdition = databaseEditionStandard
+	}
+	if db.ConcurrencyMode == "" {
+		// database.proto: "If unspecified in a CreateDatabase request, this will
+		// default based on the database edition: Optimistic for Enterprise and
+		// Pessimistic for all other databases."
+		db.ConcurrencyMode = defaultConcurrencyMode(db.DatabaseEdition)
 	}
 	// version_retention_period is OUTPUT_ONLY: derive it from the requested PITR
 	// toggle rather than accepting the value in the create body. key_prefix is
@@ -375,32 +443,115 @@ func (s *Service) CreateDatabaseDef(ctx context.Context, project, dbID string, d
 }
 
 // GetDatabase returns a database record. The implicit (default) database is
-// synthesized when no record (including a delete tombstone) exists.
+// materialized on first access (see defaultDatabase).
 func (s *Service) GetDatabase(ctx context.Context, project, db string) (databaseDef, error) {
-	var rec databaseDef
-	if s.resources != nil {
-		err := s.getResource(ctx, project, rtDatabase, databaseRel(db), &rec)
-		switch {
-		case err == nil:
-			if rec.Deleted {
-				return databaseDef{}, gcpNotFound("database")
-			}
-			// A record persisted before the default existed reads back as
-			// unspecified; normalize the documented zero-value equivalence.
-			rec.DeleteProtectionState = normalizeDeleteProtection(rec.DeleteProtectionState)
-			// version_retention_period is OUTPUT_ONLY: always report the value
-			// derived from the stored PITR toggle (also repairs records written
-			// by an older build that stored a client-supplied value).
-			rec.VersionRetentionPeriod = databaseRetentionPeriod(rec.PointInTimeRecoveryEnablement)
-			return rec, nil
-		case !isNotFound(err):
-			return databaseDef{}, err
-		}
-	}
 	if db == defaultDatabaseID {
-		return synthesizeDefaultDatabase(project), nil
+		return s.defaultDatabase(ctx, project)
+	}
+	var rec databaseDef
+	if s.resources == nil {
+		return databaseDef{}, gcpNotFound("database")
+	}
+	err := s.getResource(ctx, project, rtDatabase, databaseRel(db), &rec)
+	switch {
+	case err == nil:
+		if rec.Deleted {
+			return databaseDef{}, gcpNotFound("database")
+		}
+		return normalizeDatabase(rec), nil
+	case !isNotFound(err):
+		return databaseDef{}, err
 	}
 	return databaseDef{}, gcpNotFound("database")
+}
+
+// defaultDatabase returns the implicit (default) database, materializing it on
+// first access. Real GCP's (default) database is a real resource carrying a uid,
+// timestamps and an etag, so the record must be stable across reads: a
+// per-call synthesized record would change those OUTPUT_ONLY fields every time
+// and could never satisfy the documented delete etag precondition (DC46). A
+// tombstoned (default) is NotFound, like any deleted database.
+func (s *Service) defaultDatabase(ctx context.Context, project string) (databaseDef, error) {
+	if s.resources == nil {
+		return newDefaultDatabase(project), nil
+	}
+	// The steady state is a plain read: materializing on every GET would turn the
+	// most common admin call into a write.
+	var rec databaseDef
+	switch err := s.getResource(ctx, project, rtDatabase, databaseRel(defaultDatabaseID), &rec); {
+	case err == nil:
+		if rec.Deleted {
+			return databaseDef{}, gcpNotFound("database")
+		}
+		if !needsDefaultDatabaseRepair(rec) {
+			return normalizeDatabase(rec), nil
+		}
+	case !isNotFound(err):
+		return databaseDef{}, err
+	}
+	// First access, or a record whose output fields a pre-DC46 build left empty:
+	// create or repair it atomically, so two concurrent readers agree on one
+	// uid/etag.
+	var out databaseDef
+	_, err := s.resources.UpsertAtomic(ctx, project, store.GlobalRegion, rtDatabase, databaseRel(defaultDatabaseID),
+		func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
+			var created databaseDef
+			if exists {
+				if err := json.Unmarshal(current.Data, &created); err != nil {
+					return current, model.NewProviderError("Internal", err.Error(), 500)
+				}
+				if created.Deleted {
+					return current, gcpNotFound("database")
+				}
+				if !needsDefaultDatabaseRepair(created) {
+					// Another reader materialized it between our read and here.
+					out = normalizeDatabase(created)
+					return current, nil
+				}
+				repairDefaultDatabase(&created)
+			} else {
+				created = newDefaultDatabase(project)
+			}
+			data, err := json.Marshal(created)
+			if err != nil {
+				return current, model.NewProviderError("Internal", err.Error(), 500)
+			}
+			out = normalizeDatabase(created)
+			return store.ResourceEntry{Type: rtDatabase, ID: databaseRel(defaultDatabaseID), Data: data}, nil
+		})
+	if err != nil {
+		return databaseDef{}, err
+	}
+	return out, nil
+}
+
+// needsDefaultDatabaseRepair reports whether a persisted (default) record was
+// written by a build that synthesized it without output fields (a record is only
+// persisted on an update/delete there): the placeholder uid and the missing
+// timestamps/etag are the markers (DC46).
+func needsDefaultDatabaseRepair(rec databaseDef) bool {
+	return rec.Uid == "" || rec.Uid == "default" ||
+		rec.CreateTime.IsZero() || rec.UpdateTime.IsZero() || rec.Etag == ""
+}
+
+// repairDefaultDatabase fills the output fields a legacy synthesized (default)
+// record lacks, so the uid/etag a client reads are stable and the etag is a
+// usable delete precondition. concurrency_mode is left as stored: a client may
+// legitimately have patched the legacy record's mode.
+func repairDefaultDatabase(rec *databaseDef) {
+	if rec.Uid == "" || rec.Uid == "default" {
+		rec.Uid = randomUUID4()
+	}
+	now := clock.Now()
+	if rec.CreateTime.IsZero() {
+		rec.CreateTime = now
+	}
+	if rec.UpdateTime.IsZero() {
+		rec.UpdateTime = rec.CreateTime
+	}
+	if rec.Etag == "" {
+		rec.Etag = randomHex(16)
+	}
 }
 
 // ListDatabases returns every database in the project, including the implicit
@@ -419,12 +570,19 @@ func (s *Service) ListDatabases(ctx context.Context, project string, showDeleted
 		if r.Deleted && !showDeleted {
 			continue
 		}
-		r.DeleteProtectionState = normalizeDeleteProtection(r.DeleteProtectionState)
-		r.VersionRetentionPeriod = databaseRetentionPeriod(r.PointInTimeRecoveryEnablement)
-		out = append(out, r)
+		out = append(out, normalizeDatabase(r))
 	}
 	if !haveDefault {
-		out = append(out, synthesizeDefaultDatabase(project))
+		// Materializing the default is the one write a list performs. If it is
+		// deleted between the list and this call, report the remaining databases
+		// rather than failing the LIST with NOT_FOUND.
+		def, err := s.defaultDatabase(ctx, project)
+		switch {
+		case err == nil:
+			out = append(out, def)
+		case !isNotFound(err):
+			return nil, err
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
@@ -532,8 +690,9 @@ func (s *Service) mutateDatabase(ctx context.Context, project, db string, mutate
 				if cur.Deleted {
 					return current, gcpNotFound("database")
 				}
+				cur = normalizeDatabase(cur)
 			case db == defaultDatabaseID:
-				cur = synthesizeDefaultDatabase(project)
+				cur = normalizeDatabase(newDefaultDatabase(project))
 			default:
 				return current, gcpNotFound("database")
 			}
@@ -552,6 +711,57 @@ func (s *Service) mutateDatabase(ctx context.Context, project, db string, mutate
 		return databaseDef{}, err
 	}
 	return result, nil
+}
+
+// mutateOne runs load → mutate → store for one record inside the store's atomic
+// read-modify-write, so two concurrent patches cannot lose one another (DC51) —
+// the same guarantee mutateDatabase gives the database resource. create, when
+// non-nil, supplies the record for a missing entry (the Firestore Admin field
+// patch upserts, the backup-schedule patch does not); mutate reports whether the
+// record changed, so a present-but-empty mask can return the stored record
+// unmodified instead of rewriting its data.
+func mutateOne[T any](ctx context.Context, s *Service, project, rt, id string, create func() T, mutate func(cur T, exists bool) (T, bool, error)) (T, error) {
+	var zero T
+	what := strings.TrimPrefix(rt, "firestore_")
+	if s.resources == nil {
+		if create == nil {
+			return zero, gcpNotFound(what)
+		}
+		next, _, err := mutate(create(), false)
+		return next, err
+	}
+	var out T
+	_, err := s.resources.UpsertAtomic(ctx, project, store.GlobalRegion, rt, id,
+		func(current store.ResourceEntry, exists bool) (store.ResourceEntry, error) {
+			var cur T
+			switch {
+			case exists:
+				if err := json.Unmarshal(current.Data, &cur); err != nil {
+					return current, model.NewProviderError("Internal", err.Error(), 500)
+				}
+			case create != nil:
+				cur = create()
+			default:
+				return current, gcpNotFound(what)
+			}
+			next, write, err := mutate(cur, exists)
+			if err != nil {
+				return current, err
+			}
+			out = next
+			if !write {
+				return current, nil
+			}
+			data, err := json.Marshal(next)
+			if err != nil {
+				return current, model.NewProviderError("Internal", err.Error(), 500)
+			}
+			return store.ResourceEntry{Type: rt, ID: id, Data: data}, nil
+		})
+	if err != nil {
+		return zero, err
+	}
+	return out, nil
 }
 
 // applyDatabaseField copies one mutable Database field (by snake_case proto
@@ -650,7 +860,47 @@ func (s *Service) GetField(ctx context.Context, project, db, cg, fieldPath strin
 	if err := s.getResource(ctx, project, rtField, fieldRel(db, cg, fieldPath), &f); err != nil {
 		return fieldDef{}, err
 	}
+	deriveFieldServerFields(project, db, cg, &f)
 	return f, nil
+}
+
+// deriveFieldServerFields fills the Field members the proto marks OUTPUT_ONLY
+// from what the collection-group configuration implies, rather than from a
+// request (DC49):
+//
+//   - uses_ancestor_config / ancestor_field: a field inherits its single-field
+//     index configuration from its collection group's __name__ field. The
+//     emulator does not model single-field overrides, so every field reports the
+//     inherited form, and ancestor_field names the __name__ field (the proto
+//     populates it in both forms). One documented form is therefore not
+//     distinguishable: "to explicitly remove all indexes for this field, specify
+//     an index config with an empty list of indexes" (Field.index_config) would
+//     read back as the inherited form rather than as an explicit empty config.
+//   - reverting: only true while a revert is in progress; the synchronous
+//     control plane never runs one.
+//   - ttl_config.state: a configured TTL policy is ACTIVE (CREATING and
+//     NEEDS_REPAIR are transitional states the emulator has no source for).
+func deriveFieldServerFields(project, db, cg string, f *fieldDef) {
+	if f.IndexConfig != nil {
+		f.IndexConfig.UsesAncestorConfig = true
+		f.IndexConfig.AncestorField = fieldName(project, db, cg, "__name__")
+		f.IndexConfig.Reverting = false
+	}
+	if f.TtlConfig != nil {
+		f.TtlConfig.State = ttlConfigActive
+	}
+}
+
+// collectionGroupOf extracts the collection group from a stored field resource
+// name ("projects/{p}/databases/{db}/collectionGroups/{cg}/fields/{path}").
+func collectionGroupOf(name string) string {
+	parts := strings.Split(name, "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "collectionGroups" {
+			return parts[i+1]
+		}
+	}
+	return ""
 }
 
 // ListFields returns the configured collection-group fields for a database,
@@ -664,6 +914,9 @@ func (s *Service) ListFields(ctx context.Context, project, db, cg, filter string
 	fields, err := listResources[fieldDef](ctx, s, project, rtField, prefix)
 	if err != nil {
 		return nil, "", err
+	}
+	for i := range fields {
+		deriveFieldServerFields(project, db, collectionGroupOf(fields[i].Name), &fields[i])
 	}
 	if filter != "" {
 		kept := fields[:0]
@@ -697,6 +950,10 @@ func fieldMatchesFilter(f fieldDef, filter string) bool {
 				return false
 			}
 		case strings.Contains(clause, "usesAncestorConfig:false"):
+			// The emulator derives uses_ancestor_config=true for every field (it
+			// models no single-field index overrides), so this arm matches
+			// nothing today; it is kept because the filter is documented and a
+			// future override surface would populate the false form.
 			if f.IndexConfig == nil || f.IndexConfig.UsesAncestorConfig {
 				return false
 			}
@@ -715,42 +972,51 @@ func fieldMatchesFilter(f fieldDef, filter string) bool {
 
 // UpdateFieldDef creates or updates a field's index/ttl configuration under
 // mask, returning the stored field and the terminal operation name. A
-// present-but-empty mask is a no-op and does not write the record.
+// present-but-empty mask is a no-op and does not write the record. The
+// read-modify-write runs inside the store's atomic primitive so two concurrent
+// patches cannot lose one another (DC51), and the OUTPUT_ONLY config members are
+// re-derived from the collection-group configuration (DC49).
 func (s *Service) UpdateFieldDef(ctx context.Context, project, db, cg, fieldPath string, patch fieldDef, mask []string, maskPresent bool) (fieldDef, string, error) {
 	if fieldPath == "" {
 		return fieldDef{}, "", gcpInvalidArgument("field path is required")
 	}
 	// An omitted mask is the implied mask of every populated field (AIP-134).
 	mask = impliedMask(mask, maskPresent)
-	cur := fieldDef{Name: fieldName(project, db, cg, fieldPath)}
-	exists := false
-	var existing fieldDef
-	if err := s.getResource(ctx, project, rtField, fieldRel(db, cg, fieldPath), &existing); err == nil {
-		cur, exists = existing, true
-	} else if !isNotFound(err) {
-		return fieldDef{}, "", err
-	}
+	name := fieldName(project, db, cg, fieldPath)
 	opName := databaseOperationName(project, db, randomHex(12))
-	if len(mask) == 0 {
-		// Present-but-empty mask: no-op (AIP-134), no write. A populated patch
-		// upserts a missing field, but a no-op cannot fabricate one: report the
-		// miss instead of returning a field that was never stored.
-		if !exists {
-			return fieldDef{}, "", gcpNotFound("field")
-		}
-		return cur, opName, nil
-	}
-	for _, path := range mask {
-		applyFieldMask(&cur, path, patch)
-	}
-	cur.Name = fieldName(project, db, cg, fieldPath)
-	if err := s.putResource(ctx, project, rtField, fieldRel(db, cg, fieldPath), cur, false); err != nil {
+	cur, err := mutateOne(ctx, s, project, rtField, fieldRel(db, cg, fieldPath),
+		func() fieldDef { return fieldDef{Name: name} },
+		func(cur fieldDef, exists bool) (fieldDef, bool, error) {
+			cur.Name = name
+			if len(mask) == 0 {
+				// Present-but-empty mask: no-op (AIP-134), no write. A populated
+				// patch upserts a missing field, but a no-op cannot fabricate
+				// one: report the miss instead of returning a field that was
+				// never stored. The response is still shaped like a read, so a
+				// legacy record does not answer differently here than on GET.
+				if !exists {
+					return fieldDef{}, false, gcpNotFound("field")
+				}
+				deriveFieldServerFields(project, db, cg, &cur)
+				return cur, false, nil
+			}
+			for _, path := range mask {
+				applyFieldMask(&cur, path, patch)
+			}
+			deriveFieldServerFields(project, db, cg, &cur)
+			return cur, true, nil
+		})
+	if err != nil {
 		return fieldDef{}, "", err
 	}
 	return cur, opName, nil
 }
 
-// applyFieldMask copies one Field configuration by proto field path.
+// applyFieldMask copies the writable Field configuration named by a proto field
+// path. The OUTPUT_ONLY members — index_config.uses_ancestor_config,
+// ancestor_field, reverting and ttl_config.state — have no arm: a mask naming one
+// is ignored, as AIP-161 requires, and the values are derived by
+// deriveFieldServerFields from the collection-group configuration (DC49).
 func applyFieldMask(cur *fieldDef, path string, patch fieldDef) {
 	switch path {
 	case "*":
@@ -772,43 +1038,13 @@ func applyFieldMask(cur *fieldDef, path string, patch fieldDef) {
 		}
 	case "index_config.indexes":
 		if patch.IndexConfig != nil {
-			cur.IndexConfig = &fieldIndexConfig{
-				Indexes:            patch.IndexConfig.Indexes,
-				UsesAncestorConfig: false,
-				Reverting:          false,
-			}
-		}
-	case "index_config.uses_ancestor_config":
-		if patch.IndexConfig != nil {
-			ensureIndexConfig(cur)
-			cur.IndexConfig.UsesAncestorConfig = patch.IndexConfig.UsesAncestorConfig
-		}
-	case "index_config.ancestor_field":
-		if patch.IndexConfig != nil {
-			ensureIndexConfig(cur)
-			cur.IndexConfig.AncestorField = patch.IndexConfig.AncestorField
-		}
-	case "index_config.reverting":
-		if patch.IndexConfig != nil {
-			ensureIndexConfig(cur)
-			cur.IndexConfig.Reverting = patch.IndexConfig.Reverting
-		}
-	case "ttl_config.state":
-		if patch.TtlConfig != nil {
-			ensureTtlConfig(cur)
-			cur.TtlConfig.State = patch.TtlConfig.State
+			cur.IndexConfig = &fieldIndexConfig{Indexes: patch.IndexConfig.Indexes}
 		}
 	case "ttl_config.expiration_offset":
 		if patch.TtlConfig != nil {
 			ensureTtlConfig(cur)
 			cur.TtlConfig.ExpirationOffset = patch.TtlConfig.ExpirationOffset
 		}
-	}
-}
-
-func ensureIndexConfig(f *fieldDef) {
-	if f.IndexConfig == nil {
-		f.IndexConfig = &fieldIndexConfig{}
 	}
 }
 
@@ -942,53 +1178,51 @@ func (s *Service) ListBackupSchedules(ctx context.Context, project, db string) (
 }
 
 // UpdateBackupScheduleDef applies patch to a backup schedule under mask. A
-// present-but-empty mask is a no-op and does not write the record.
+// present-but-empty mask is a no-op and does not write the record. The
+// read-modify-write runs inside the store's atomic primitive so two concurrent
+// patches cannot lose one another (DC51).
 func (s *Service) UpdateBackupScheduleDef(ctx context.Context, project, db, id string, patch backupScheduleDef, mask []string, maskPresent bool) (backupScheduleDef, error) {
 	// An omitted mask is the implied mask of every populated field (AIP-134),
 	// exactly as UpdateFieldDef documents above.
 	mask = impliedMask(mask, maskPresent)
-	cur, err := s.GetBackupSchedule(ctx, project, db, id)
-	if err != nil {
-		return backupScheduleDef{}, err
-	}
-	if len(mask) == 0 {
-		// Present-but-empty mask: no-op (AIP-134), no write.
-		return cur, nil
-	}
-	for _, path := range mask {
-		switch path {
-		case "*":
-			// Every populated field, including both halves of the recurrence
-			// oneof — a maskless patch carrying a weekly recurrence must not be
-			// silently dropped.
-			if patch.Retention > 0 {
-				cur.Retention = patch.Retention
+	return mutateOne(ctx, s, project, rtBackupSchedule, backupScheduleRel(db, id), nil,
+		func(cur backupScheduleDef, _ bool) (backupScheduleDef, bool, error) {
+			if len(mask) == 0 {
+				// Present-but-empty mask: no-op (AIP-134), no write.
+				return cur, false, nil
 			}
-			switch patch.Recurrence {
-			case "DAILY":
-				cur.Recurrence, cur.DayOfWeek = "DAILY", 0
-			case "WEEKLY":
-				cur.Recurrence, cur.DayOfWeek = "WEEKLY", patch.DayOfWeek
+			for _, path := range mask {
+				switch path {
+				case "*":
+					// Every populated field, including both halves of the
+					// recurrence oneof — a maskless patch carrying a weekly
+					// recurrence must not be silently dropped.
+					if patch.Retention > 0 {
+						cur.Retention = patch.Retention
+					}
+					switch patch.Recurrence {
+					case "DAILY":
+						cur.Recurrence, cur.DayOfWeek = "DAILY", 0
+					case "WEEKLY":
+						cur.Recurrence, cur.DayOfWeek = "WEEKLY", patch.DayOfWeek
+					}
+				case "retention":
+					if patch.Retention > 0 {
+						cur.Retention = patch.Retention
+					}
+				case "daily_recurrence":
+					if patch.Recurrence == "DAILY" {
+						cur.Recurrence, cur.DayOfWeek = "DAILY", 0
+					}
+				case "weekly_recurrence":
+					if patch.Recurrence == "WEEKLY" {
+						cur.Recurrence, cur.DayOfWeek = "WEEKLY", patch.DayOfWeek
+					}
+				}
 			}
-		case "retention":
-			if patch.Retention > 0 {
-				cur.Retention = patch.Retention
-			}
-		case "daily_recurrence":
-			if patch.Recurrence == "DAILY" {
-				cur.Recurrence, cur.DayOfWeek = "DAILY", 0
-			}
-		case "weekly_recurrence":
-			if patch.Recurrence == "WEEKLY" {
-				cur.Recurrence, cur.DayOfWeek = "WEEKLY", patch.DayOfWeek
-			}
-		}
-	}
-	cur.UpdateTime = clock.Now()
-	if err := s.putResource(ctx, project, rtBackupSchedule, backupScheduleRel(db, id), cur, false); err != nil {
-		return backupScheduleDef{}, err
-	}
-	return cur, nil
+			cur.UpdateTime = clock.Now()
+			return cur, true, nil
+		})
 }
 
 // DeleteBackupSchedule removes a backup schedule record.

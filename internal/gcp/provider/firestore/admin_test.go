@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/gcperr"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
@@ -44,7 +46,7 @@ func TestDatabaseCRUD(t *testing.T) {
 	if want := "projects/proj/databases/test-db"; created.Name != want {
 		t.Errorf("name = %q, want %q", created.Name, want)
 	}
-	if created.Type != "FIRESTORE_NATIVE" || created.ConcurrencyMode != "OPTIMISTIC" {
+	if created.Type != "FIRESTORE_NATIVE" || created.ConcurrencyMode != concurrencyPessimistic {
 		t.Errorf("defaults = type %q concurrency %q", created.Type, created.ConcurrencyMode)
 	}
 	// Delete protection is documented as disabled by default.
@@ -91,6 +93,107 @@ func TestDatabaseCRUD(t *testing.T) {
 	// Create of (default) is AlreadyExists.
 	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "(default)", databaseDef{}); err == nil {
 		t.Error("CreateDatabase((default)) succeeded, want AlreadyExists")
+	}
+}
+
+func TestDefaultDatabaseOutputFields(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+
+	// The implicit (default) database is a real resource on real GCP: it must
+	// carry a uid, create/update timestamps, an etag and the documented
+	// concurrency default for STANDARD (DC46/DC53), not just a name.
+	def, err := p.GetDatabase(ctx, "proj", "(default)")
+	if err != nil {
+		t.Fatalf("GetDatabase(default): %v", err)
+	}
+	if def.Uid == "" || def.Uid == "default" {
+		t.Errorf("default uid = %q, want a generated value", def.Uid)
+	}
+	if def.CreateTime.IsZero() || def.UpdateTime.IsZero() {
+		t.Errorf("default timestamps = create %v update %v, want both set", def.CreateTime, def.UpdateTime)
+	}
+	if def.Etag == "" {
+		t.Error("default etag empty: the delete precondition is inoperative")
+	}
+	if def.ConcurrencyMode != concurrencyPessimistic {
+		t.Errorf("default concurrency = %q, want PESSIMISTIC (STANDARD edition)", def.ConcurrencyMode)
+	}
+
+	// The record is stable across reads — a per-call synthesis would rotate the
+	// output fields, and the etag could never satisfy a delete precondition.
+	again, err := p.GetDatabase(ctx, "proj", "(default)")
+	if err != nil {
+		t.Fatalf("GetDatabase(default) again: %v", err)
+	}
+	if again.Etag != def.Etag || again.Uid != def.Uid || !again.CreateTime.Equal(def.CreateTime) {
+		t.Errorf("default record is not stable: %+v vs %+v", again, def)
+	}
+
+	// The etag read above is the documented precondition: a stale one blocks the
+	// delete, the current one proceeds, and the tombstoned default stays gone.
+	if _, _, err := p.DeleteDatabaseDef(ctx, "proj", "(default)", "stale-etag"); err == nil {
+		t.Fatal("stale-etag delete of (default) succeeded")
+	} else {
+		assertDeletePrecondition(t, err, "default")
+	}
+	if _, _, err := p.DeleteDatabaseDef(ctx, "proj", "(default)", def.Etag); err != nil {
+		t.Fatalf("DeleteDatabaseDef(default): %v", err)
+	}
+	if _, err := p.GetDatabase(ctx, "proj", "(default)"); !isNotFound(err) {
+		t.Errorf("deleted (default) read = %v, want NotFound (no resurrection)", err)
+	}
+	// The tombstone neither reappears in a list nor fails one.
+	if listed, err := p.ListDatabases(ctx, "proj", false); err != nil || len(listed) != 0 {
+		t.Errorf("ListDatabases after deleting (default) = %+v err=%v, want none", listed, err)
+	}
+	if listed, err := p.ListDatabases(ctx, "proj", true); err != nil || len(listed) != 1 || !listed[0].Deleted {
+		t.Errorf("ListDatabases(showDeleted) = %+v err=%v, want the tombstoned default", listed, err)
+	}
+
+	// ListDatabases materializes the default on a project that never touched it.
+	listed, err := p.ListDatabases(ctx, "other", false)
+	if err != nil {
+		t.Fatalf("ListDatabases: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Etag == "" || listed[0].Uid == "" {
+		t.Errorf("ListDatabases(other) = %+v, want the materialized default with output fields", listed)
+	}
+
+	// A record written by a pre-DC46 build (persisted by an update on the
+	// synthesized default) keeps the placeholder uid and no timestamps/etag;
+	// reading it repairs those fields once, so the output is stable and usable.
+	legacy := databaseDef{
+		Name:                          databaseName("legacy", defaultDatabaseID),
+		Uid:                           "default",
+		Type:                          "FIRESTORE_NATIVE",
+		ConcurrencyMode:               "OPTIMISTIC",
+		PointInTimeRecoveryEnablement: pitrDisabled,
+	}
+	if err := p.putResource(ctx, "legacy", rtDatabase, databaseRel(defaultDatabaseID), legacy, false); err != nil {
+		t.Fatalf("seed legacy default: %v", err)
+	}
+	repaired, err := p.GetDatabase(ctx, "legacy", "(default)")
+	if err != nil {
+		t.Fatalf("GetDatabase(legacy default): %v", err)
+	}
+	if repaired.Uid == "default" || repaired.Uid == "" || repaired.Etag == "" ||
+		repaired.CreateTime.IsZero() || repaired.UpdateTime.IsZero() {
+		t.Errorf("legacy default was not repaired: %+v", repaired)
+	}
+	if repaired.VersionRetentionPeriod != time.Hour {
+		t.Errorf("legacy default retention = %v, want the derived 1h", repaired.VersionRetentionPeriod)
+	}
+	againLegacy, err := p.GetDatabase(ctx, "legacy", "(default)")
+	if err != nil {
+		t.Fatalf("GetDatabase(legacy default) again: %v", err)
+	}
+	if againLegacy.Uid != repaired.Uid || againLegacy.Etag != repaired.Etag ||
+		!againLegacy.CreateTime.Equal(repaired.CreateTime) {
+		t.Errorf("legacy default repair is not stable: %+v -> %+v", repaired, againLegacy)
+	}
+	if _, _, err := p.DeleteDatabaseDef(ctx, "legacy", "(default)", repaired.Etag); err != nil {
+		t.Errorf("DeleteDatabaseDef(legacy default) with the repaired etag: %v", err)
 	}
 }
 
@@ -443,7 +546,7 @@ func TestFieldUpdateGetList(t *testing.T) {
 	p := newAdminService()
 
 	_, op, err := p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "population",
-		fieldDef{IndexConfig: &fieldIndexConfig{UsesAncestorConfig: true, AncestorField: "cities"}},
+		fieldDef{IndexConfig: &fieldIndexConfig{UsesAncestorConfig: false, AncestorField: "cities", Reverting: true}},
 		[]string{"index_config"}, true)
 	if err != nil {
 		t.Fatalf("UpdateFieldDef: %v", err)
@@ -452,12 +555,16 @@ func TestFieldUpdateGetList(t *testing.T) {
 		t.Errorf("operation name = %q", op)
 	}
 
+	// The three index-config members are OUTPUT_ONLY: the patch's values are
+	// ignored and the derived inheriting form is reported (DC49).
+	wantAncestor := "projects/proj/databases/(default)/collectionGroups/cities/fields/__name__"
 	got, err := p.GetField(ctx, "proj", "(default)", "cities", "population")
 	if err != nil {
 		t.Fatalf("GetField: %v", err)
 	}
-	if got.IndexConfig == nil || !got.IndexConfig.UsesAncestorConfig || got.IndexConfig.AncestorField != "cities" {
-		t.Errorf("field index config = %+v", got.IndexConfig)
+	if got.IndexConfig == nil || !got.IndexConfig.UsesAncestorConfig ||
+		got.IndexConfig.AncestorField != wantAncestor || got.IndexConfig.Reverting {
+		t.Errorf("field index config = %+v, want the derived inherited form", got.IndexConfig)
 	}
 
 	// A second field so pagination has something to page over.
@@ -699,5 +806,275 @@ func TestBackupReadOnly(t *testing.T) {
 	}
 	if err := p.DeleteBackup(ctx, "proj", "us-central1", "b1"); !isNotFound(err) {
 		t.Errorf("DeleteBackup(missing) err = %v, want NotFound", err)
+	}
+}
+
+func TestCreateDatabaseConcurrencyByEdition(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+
+	// database.proto: "If unspecified in a CreateDatabase request, this will
+	// default based on the database edition: Optimistic for Enterprise and
+	// Pessimistic for all other databases" (DC53).
+	cases := []struct{ id, edition, want string }{
+		{"eddefault", "", concurrencyPessimistic},
+		{"edstandard", databaseEditionStandard, concurrencyPessimistic},
+		{"edunset", databaseEditionUnspecified, concurrencyPessimistic},
+		{"edenterprise", databaseEditionEnterprise, concurrencyOptimistic},
+	}
+	for _, tc := range cases {
+		created, _, err := p.CreateDatabaseDef(ctx, "proj", tc.id, databaseDef{DatabaseEdition: tc.edition})
+		if err != nil {
+			t.Fatalf("CreateDatabaseDef(%q): %v", tc.edition, err)
+		}
+		if created.ConcurrencyMode != tc.want {
+			t.Errorf("create(edition %q) concurrency = %q, want %q", tc.edition, created.ConcurrencyMode, tc.want)
+		}
+	}
+
+	// An explicit mode wins over the edition default, on both editions.
+	for _, explicit := range []string{concurrencyPessimistic, concurrencyOptimistic} {
+		for _, edition := range []string{databaseEditionStandard, databaseEditionEnterprise} {
+			id := "edexplicit-" + strings.ToLower(edition+"-"+explicit)
+			created, _, err := p.CreateDatabaseDef(ctx, "proj", id, databaseDef{
+				DatabaseEdition: edition,
+				ConcurrencyMode: explicit,
+			})
+			if err != nil {
+				t.Fatalf("CreateDatabaseDef(%s/%s): %v", edition, explicit, err)
+			}
+			if created.ConcurrencyMode != explicit {
+				t.Errorf("create(edition %q, mode %q) concurrency = %q, want the explicit value", edition, explicit, created.ConcurrencyMode)
+			}
+		}
+	}
+}
+
+func TestDatabaseEarliestVersionTime(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+	frozen := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: frozen})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	// database.proto: earliest_version_time is OUTPUT_ONLY and "populated with
+	// `now - version_retention_period`" — 1 hour with PITR off, 7 days with it
+	// on (DC54).
+	created, _, err := p.CreateDatabaseDef(ctx, "proj", "windowdb", databaseDef{})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	if got, want := EarliestVersionTime(created), frozen.Add(-time.Hour); !got.Equal(want) {
+		t.Errorf("earliest version time = %v, want %v", got, want)
+	}
+
+	enabled, _, err := p.UpdateDatabaseDef(ctx, "proj", "windowdb",
+		databaseDef{PointInTimeRecoveryEnablement: pitrEnabled},
+		[]string{"point_in_time_recovery_enablement"}, true, created.Etag)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseDef(PITR): %v", err)
+	}
+	if got, want := EarliestVersionTime(enabled), frozen.Add(-7*24*time.Hour); !got.Equal(want) {
+		t.Errorf("earliest version time (PITR) = %v, want %v", got, want)
+	}
+
+	// A legacy record with no stored window still derives it from the toggle.
+	legacy := databaseDef{Name: databaseName("proj", "legacydb"), PointInTimeRecoveryEnablement: pitrEnabled}
+	if got, want := EarliestVersionTime(legacy), frozen.Add(-7*24*time.Hour); !got.Equal(want) {
+		t.Errorf("earliest version time (legacy) = %v, want %v", got, want)
+	}
+}
+
+func TestFieldServerOwnedOutputOnly(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+
+	// Establish the writable configuration.
+	if _, _, err := p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "location",
+		fieldDef{
+			IndexConfig: &fieldIndexConfig{Indexes: []indexDef{{
+				Name:       "projects/proj/databases/(default)/collectionGroups/cities/indexes/ix1",
+				QueryScope: "COLLECTION",
+				Fields:     []indexField{{FieldPath: "location", Order: "ASCENDING"}},
+			}}},
+			TtlConfig: &fieldTtlConfig{ExpirationOffset: time.Hour},
+		}, nil, false); err != nil {
+		t.Fatalf("UpdateFieldDef: %v", err)
+	}
+
+	// index_config.uses_ancestor_config / ancestor_field / reverting and
+	// ttl_config.state are OUTPUT_ONLY (DC49): a mask naming them writes
+	// nothing, so the writable configuration survives and the derived values are
+	// reported.
+	wantAncestor := "projects/proj/databases/(default)/collectionGroups/cities/fields/__name__"
+	got, _, err := p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "location",
+		fieldDef{
+			IndexConfig: &fieldIndexConfig{UsesAncestorConfig: false, AncestorField: "elsewhere", Reverting: true},
+			TtlConfig:   &fieldTtlConfig{State: "NEEDS_REPAIR"},
+		},
+		[]string{"index_config.uses_ancestor_config", "index_config.ancestor_field", "index_config.reverting", "ttl_config.state"}, true)
+	if err != nil {
+		t.Fatalf("UpdateFieldDef(output-only mask): %v", err)
+	}
+	ic := got.IndexConfig
+	if ic == nil || !ic.UsesAncestorConfig || ic.AncestorField != wantAncestor || ic.Reverting {
+		t.Errorf("index config = %+v, want the derived inherited form", ic)
+	}
+	if len(ic.Indexes) != 1 {
+		t.Errorf("output-only mask lost the writable indexes: %+v", ic.Indexes)
+	}
+	if got.TtlConfig == nil || got.TtlConfig.State != ttlConfigActive || got.TtlConfig.ExpirationOffset != time.Hour {
+		t.Errorf("ttl config = %+v, want ACTIVE/1h", got.TtlConfig)
+	}
+
+	// DC49's contract is store-side as well as on the wire: the request's
+	// output-only values never reach the record, so a request that carried them
+	// cannot leak them through any reader.
+	var stored fieldDef
+	if err := p.getResource(ctx, "proj", rtField, fieldRel("(default)", "cities", "location"), &stored); err != nil {
+		t.Fatalf("getResource: %v", err)
+	}
+	if stored.IndexConfig == nil || stored.IndexConfig.AncestorField != wantAncestor || stored.IndexConfig.Reverting ||
+		stored.TtlConfig == nil || stored.TtlConfig.State != ttlConfigActive {
+		t.Errorf("stored field = %+v, want the derived output-only members", stored)
+	}
+}
+
+// rendezvousStore forces the classic lost-update interleaving: every write is
+// held until all armed writers have arrived, so each writer's read necessarily
+// precedes every write. A load-then-store update loses one of two concurrent
+// patches under it; the store's atomic read-modify-write does not.
+type rendezvousStore struct {
+	store.ResourceStore
+	t       *testing.T
+	mu      sync.Mutex
+	writers int
+	arrived int
+	release chan struct{}
+}
+
+func newRendezvousStore(t *testing.T, inner store.ResourceStore) *rendezvousStore {
+	return &rendezvousStore{ResourceStore: inner, t: t}
+}
+
+// arm makes the next writers writes rendezvous.
+func (r *rendezvousStore) arm(writers int) {
+	r.mu.Lock()
+	r.writers, r.arrived = writers, 0
+	r.release = make(chan struct{})
+	r.mu.Unlock()
+}
+
+func (r *rendezvousStore) arrive() {
+	r.mu.Lock()
+	if r.writers == 0 {
+		r.mu.Unlock()
+		return
+	}
+	r.arrived++
+	if r.arrived == r.writers {
+		close(r.release)
+	}
+	ch := r.release
+	r.mu.Unlock()
+	// A branch under test that stops writing under the armed count must fail the
+	// test, not hang it until the go-test timeout.
+	select {
+	case <-ch:
+	case <-time.After(10 * time.Second):
+		r.t.Errorf("rendezvousStore: only some of the %d armed writes arrived", r.writers)
+	}
+}
+
+func (r *rendezvousStore) Upsert(ctx context.Context, account, region string, entry store.ResourceEntry) error {
+	r.arrive()
+	return r.ResourceStore.Upsert(ctx, account, region, entry)
+}
+
+func (r *rendezvousStore) UpsertAtomic(ctx context.Context, account, region, resourceType, id string, mutate func(store.ResourceEntry, bool) (store.ResourceEntry, error)) (store.ResourceEntry, error) {
+	r.arrive()
+	return r.ResourceStore.UpsertAtomic(ctx, account, region, resourceType, id, mutate)
+}
+
+func TestFieldAndScheduleUpdatesAreAtomic(t *testing.T) {
+	ctx := context.Background()
+	resources := newRendezvousStore(t, store.NewMemoryResourceStore())
+	p := newService(nil, resources)
+
+	// Field: the index configuration and the TTL offset are patched through
+	// separate masks; under a read-modify-write race one would be lost (DC51).
+	fieldPath := "projects/proj/databases/(default)/collectionGroups/cities/fields/location"
+	if _, _, err := p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "location",
+		fieldDef{TtlConfig: &fieldTtlConfig{ExpirationOffset: time.Hour}}, nil, false); err != nil {
+		t.Fatalf("seed UpdateFieldDef: %v", err)
+	}
+	resources.arm(2)
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _, errs[0] = p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "location",
+			fieldDef{IndexConfig: &fieldIndexConfig{Indexes: []indexDef{{
+				Name:       "projects/proj/databases/(default)/collectionGroups/cities/indexes/ix1",
+				QueryScope: "COLLECTION",
+				Fields:     []indexField{{FieldPath: "location", Order: "ASCENDING"}},
+			}}}}, []string{"index_config.indexes"}, true)
+	}()
+	go func() {
+		defer wg.Done()
+		_, _, errs[1] = p.UpdateFieldDef(ctx, "proj", "(default)", "cities", "location",
+			fieldDef{TtlConfig: &fieldTtlConfig{ExpirationOffset: 5 * time.Hour}},
+			[]string{"ttl_config.expiration_offset"}, true)
+	}()
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent UpdateFieldDef[%d]: %v", i, err)
+		}
+	}
+	merged, err := p.GetField(ctx, "proj", "(default)", "cities", "location")
+	if err != nil {
+		t.Fatalf("GetField: %v", err)
+	}
+	if merged.Name != fieldPath {
+		t.Fatalf("field name = %q", merged.Name)
+	}
+	if merged.IndexConfig == nil || len(merged.IndexConfig.Indexes) != 1 {
+		t.Errorf("a concurrent patch lost the index config: %+v", merged.IndexConfig)
+	}
+	if merged.TtlConfig == nil || merged.TtlConfig.ExpirationOffset != 5*time.Hour {
+		t.Errorf("a concurrent patch lost the TTL offset: %+v", merged.TtlConfig)
+	}
+
+	// Backup schedule: retention and the recurrence oneof likewise.
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "(default)", "1",
+		backupScheduleDef{Retention: 7 * 24 * time.Hour, Recurrence: "DAILY"}); err != nil {
+		t.Fatalf("CreateBackupScheduleDef: %v", err)
+	}
+	resources.arm(2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, errs[0] = p.UpdateBackupScheduleDef(ctx, "proj", "(default)", "1",
+			backupScheduleDef{Retention: 14 * 24 * time.Hour}, []string{"retention"}, true)
+	}()
+	go func() {
+		defer wg.Done()
+		_, errs[1] = p.UpdateBackupScheduleDef(ctx, "proj", "(default)", "1",
+			backupScheduleDef{Recurrence: "WEEKLY", DayOfWeek: 1}, []string{"weekly_recurrence"}, true)
+	}()
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent UpdateBackupScheduleDef[%d]: %v", i, err)
+		}
+	}
+	bs, err := p.GetBackupSchedule(ctx, "proj", "(default)", "1")
+	if err != nil {
+		t.Fatalf("GetBackupSchedule: %v", err)
+	}
+	if bs.Retention != 14*24*time.Hour || bs.Recurrence != "WEEKLY" || bs.DayOfWeek != 1 {
+		t.Errorf("a concurrent patch lost a schedule change: %+v", bs)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	adminpb "cloud.google.com/go/firestore/apiv1/admin/adminpb"
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/store"
 
 	"google.golang.org/genproto/googleapis/type/dayofweek"
@@ -490,12 +491,13 @@ func TestFieldAdminRoundTrip(t *testing.T) {
 		t.Fatalf("field = %+v", field)
 	}
 
+	wantAncestor := "projects/proj/databases/(default)/collectionGroups/cities/fields/__name__"
 	got, err := client.GetField(ctx, &adminpb.GetFieldRequest{Name: name})
 	if err != nil {
 		t.Fatalf("GetField: %v", err)
 	}
-	if got.GetIndexConfig().GetAncestorField() != "cities" {
-		t.Fatalf("GetField = %+v", got)
+	if got.GetIndexConfig().GetAncestorField() != wantAncestor {
+		t.Fatalf("GetField = %+v, want the derived __name__ ancestor", got)
 	}
 
 	list, err := client.ListFields(ctx, &adminpb.ListFieldsRequest{
@@ -535,7 +537,7 @@ func TestFieldAdminRoundTrip(t *testing.T) {
 		maskless.GetTtlConfig().GetExpirationOffset().AsDuration() != 2*time.Hour {
 		t.Errorf("maskless ttl_config = %+v", maskless.GetTtlConfig())
 	}
-	if maskless.GetIndexConfig().GetAncestorField() != "cities" {
+	if maskless.GetIndexConfig().GetAncestorField() != wantAncestor {
 		t.Errorf("maskless patch dropped index_config = %+v", maskless.GetIndexConfig())
 	}
 }
@@ -696,5 +698,86 @@ func TestDatabaseInvalidName(t *testing.T) {
 	defer cleanup()
 	if _, err := client.GetDatabase(context.Background(), &adminpb.GetDatabaseRequest{Name: "not-a-name"}); status.Code(err) != codes.InvalidArgument {
 		t.Errorf("GetDatabase(bad name) = %v, want InvalidArgument", err)
+	}
+}
+
+// TestDatabaseOutputFields pins the Database fields the emulator derives rather
+// than stores: the edition-dependent concurrency default (DC53), the
+// continuously updated earliest_version_time (DC54) and the implicit (default)
+// database's real uid/timestamps/etag (DC46).
+func TestDatabaseOutputFields(t *testing.T) {
+	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
+	defer cleanup()
+	ctx := context.Background()
+	frozen := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: frozen})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	// A create that omits concurrency_mode defaults by edition: Pessimistic for
+	// STANDARD, Optimistic for ENTERPRISE.
+	for _, tc := range []struct {
+		id      string
+		edition adminpb.Database_DatabaseEdition
+		want    adminpb.Database_ConcurrencyMode
+	}{
+		{"editionstd", adminpb.Database_STANDARD, adminpb.Database_PESSIMISTIC},
+		{"editionent", adminpb.Database_ENTERPRISE, adminpb.Database_OPTIMISTIC},
+	} {
+		op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+			Parent:     testDBParent,
+			DatabaseId: tc.id,
+			Database:   &adminpb.Database{DatabaseEdition: tc.edition},
+		})
+		if err != nil {
+			t.Fatalf("CreateDatabase(%v): %v", tc.edition, err)
+		}
+		db := &adminpb.Database{}
+		if err := op.GetResponse().UnmarshalTo(db); err != nil {
+			t.Fatalf("CreateDatabase response: %v", err)
+		}
+		if db.GetConcurrencyMode() != tc.want {
+			t.Errorf("create(%v) concurrency = %v, want %v", tc.edition, db.GetConcurrencyMode(), tc.want)
+		}
+		// earliest_version_time is populated with now - version_retention_period
+		// (PITR is off, so 1 hour).
+		if got := db.GetEarliestVersionTime().AsTime(); !got.Equal(frozen.Add(-time.Hour)) {
+			t.Errorf("create(%v) earliest_version_time = %v, want %v", tc.edition, got, frozen.Add(-time.Hour))
+		}
+	}
+
+	// The implicit (default) database carries the documented output fields, and
+	// the etag it reports is a usable delete precondition.
+	def, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: "projects/proj/databases/(default)"})
+	if err != nil {
+		t.Fatalf("GetDatabase(default): %v", err)
+	}
+	if def.GetUid() == "" || def.GetUid() == "default" {
+		t.Errorf("default uid = %q, want a generated value", def.GetUid())
+	}
+	if def.GetEtag() == "" || def.GetCreateTime() == nil || def.GetUpdateTime() == nil {
+		t.Errorf("default database = %+v, want etag + timestamps", def)
+	}
+	if got := def.GetEarliestVersionTime().AsTime(); !got.Equal(frozen.Add(-time.Hour)) {
+		t.Errorf("default earliest_version_time = %v, want %v", got, frozen.Add(-time.Hour))
+	}
+	again, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: def.GetName()})
+	if err != nil {
+		t.Fatalf("GetDatabase(default) again: %v", err)
+	}
+	if again.GetEtag() != def.GetEtag() {
+		t.Errorf("default etag is not stable across reads: %q -> %q", def.GetEtag(), again.GetEtag())
+	}
+	if _, err := client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{
+		Name: def.GetName(), Etag: "stale-etag",
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("stale-etag delete of (default) code = %v, want FailedPrecondition", status.Code(err))
+	}
+	if _, err := client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{
+		Name: def.GetName(), Etag: def.GetEtag(),
+	}); err != nil {
+		t.Errorf("DeleteDatabase(default) with the read etag: %v", err)
+	}
+	if _, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: def.GetName()}); status.Code(err) != codes.NotFound {
+		t.Errorf("deleted (default) read code = %v, want NotFound", status.Code(err))
 	}
 }

@@ -25,13 +25,13 @@ import (
 // run-unique named database, all other probes on (default).
 func firestoreAdminControlChecks() []Check {
 	return []Check{
-		{Service: "firestoreadmin", RPC: "CreateDatabase", KeyField: "operation done=true; database name", Run: checkFsAdminCreateDatabase},
-		{Service: "firestoreadmin", RPC: "GetDatabase", KeyField: "database name/uid", Run: checkFsAdminGetDatabase},
-		{Service: "firestoreadmin", RPC: "ListDatabases", KeyField: "created database present + (default)", Run: checkFsAdminListDatabases},
+		{Service: "firestoreadmin", RPC: "CreateDatabase", KeyField: "operation done=true; database name; edition-default concurrency_mode; earliest_version_time about now-1h", Run: checkFsAdminCreateDatabase},
+		{Service: "firestoreadmin", RPC: "GetDatabase", KeyField: "database name/uid/timestamps/etag + (default) materialized with stable output fields", Run: checkFsAdminGetDatabase},
+		{Service: "firestoreadmin", RPC: "ListDatabases", KeyField: "created database present + (default) with output fields", Run: checkFsAdminListDatabases},
 		{Service: "firestoreadmin", RPC: "UpdateDatabase", KeyField: "concurrency_mode under mask + omitted mask applies populated fields + empty mask is a no-op + OUTPUT_ONLY fields ignored, retention derived from PITR, IMMUTABLE edition change rejected", Run: checkFsAdminUpdateDatabase},
 		{Service: "firestoreadmin", RPC: "DeleteDatabase", KeyField: "stale etag -> FailedPrecondition; delete protection -> FailedPrecondition; operation response carries database; absent after delete", Run: checkFsAdminDeleteDatabase},
-		{Service: "firestoreadmin", RPC: "UpdateField", Method: "UpdateField", KeyField: "operation done=true; index_config under mask + index_config/ttl_config under an omitted mask + empty mask is a no-op", Run: checkFsAdminUpdateField},
-		{Service: "firestoreadmin", RPC: "GetField", Method: "GetField", KeyField: "index_config round-trip", Run: checkFsAdminGetField},
+		{Service: "firestoreadmin", RPC: "UpdateField", Method: "UpdateField", KeyField: "operation done=true; index_config under mask with OUTPUT_ONLY members derived + index_config/ttl_config under an omitted mask + empty mask is a no-op", Run: checkFsAdminUpdateField},
+		{Service: "firestoreadmin", RPC: "GetField", Method: "GetField", KeyField: "index_config round-trip with derived ancestor/uses_ancestor_config + ttl state ACTIVE", Run: checkFsAdminGetField},
 		{Service: "firestoreadmin", RPC: "ListFields", Method: "ListFields", KeyField: "field present under wildcard group", Run: checkFsAdminListFields},
 		{Service: "firestoreadmin", RPC: "CreateUserCreds", Method: "CreateUserCreds", KeyField: "secure_password returned once", Run: checkFsAdminCreateUserCreds},
 		{Service: "firestoreadmin", RPC: "GetUserCreds", Method: "GetUserCreds", KeyField: "name; no secure_password", Run: checkFsAdminGetUserCreds},
@@ -67,6 +67,12 @@ func fsAdminFieldCG(cfg Config) string { return cfg.ResourceName("gcpc-fsaf") }
 
 func fsAdminFieldName(cfg Config) string {
 	return fmt.Sprintf("%s/collectionGroups/%s/fields/%s", fsAdminDefaultDB(cfg), fsAdminFieldCG(cfg), fsAdminField(cfg))
+}
+
+// fsAdminFieldAncestor is the collection group's __name__ field, the ancestor a
+// field's single-field index configuration is inherited from.
+func fsAdminFieldAncestor(cfg Config) string {
+	return fmt.Sprintf("%s/collectionGroups/%s/fields/__name__", fsAdminDefaultDB(cfg), fsAdminFieldCG(cfg))
 }
 
 func fsAdminUserCredsID(cfg Config) string { return cfg.ResourceName("fscred") }
@@ -118,6 +124,21 @@ func checkFsAdminCreateDatabase(ctx context.Context, cfg Config) error {
 	if db.GetType() != adminpb.Database_FIRESTORE_NATIVE {
 		return fmt.Errorf("CreateDatabase type = %v, want FIRESTORE_NATIVE", db.GetType())
 	}
+	// The create omitted concurrency_mode and the edition, so both defaults apply:
+	// STANDARD, and Pessimistic ("If unspecified in a CreateDatabase request, this
+	// will default based on the database edition: Optimistic for Enterprise and
+	// Pessimistic for all other databases").
+	if db.GetConcurrencyMode() != adminpb.Database_PESSIMISTIC {
+		return fmt.Errorf("CreateDatabase concurrency_mode = %v, want PESSIMISTIC for the STANDARD default", db.GetConcurrencyMode())
+	}
+	// earliest_version_time is `now - version_retention_period`; PITR is off, so
+	// it trails the response by about an hour.
+	if db.GetEarliestVersionTime() == nil || db.GetVersionRetentionPeriod() == nil {
+		return fmt.Errorf("CreateDatabase = %+v, want earliest_version_time + version_retention_period", db)
+	}
+	if got := db.GetEarliestVersionTime().AsTime(); got.After(time.Now().Add(-time.Hour)) || got.Before(time.Now().Add(-2*time.Hour)) {
+		return fmt.Errorf("CreateDatabase earliest_version_time = %v, want about now-1h", got)
+	}
 	return nil
 }
 
@@ -133,6 +154,25 @@ func checkFsAdminGetDatabase(ctx context.Context, cfg Config) error {
 	}
 	if got.GetUid() == "" || got.GetLocationId() != "nam5" {
 		return fmt.Errorf("GetDatabase = %+v, want uid + location nam5", got)
+	}
+	if got.GetCreateTime() == nil || got.GetUpdateTime() == nil || got.GetEtag() == "" {
+		return fmt.Errorf("GetDatabase = %+v, want create/update time + etag", got)
+	}
+
+	// The implicit (default) database is a real resource: its output fields are
+	// present and its etag is the delete precondition a client would send.
+	def, err := stub.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: fsAdminDefaultDB(cfg)})
+	if err != nil {
+		return fmt.Errorf("GetDatabase(default): %w", err)
+	}
+	if def.GetUid() == "" || def.GetUid() == "default" || def.GetEtag() == "" ||
+		def.GetCreateTime() == nil || def.GetUpdateTime() == nil || def.GetEarliestVersionTime() == nil {
+		return fmt.Errorf("GetDatabase(default) = %+v, want uid/timestamps/etag/earliest_version_time", def)
+	}
+	if again, err := stub.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: def.GetName()}); err != nil {
+		return fmt.Errorf("GetDatabase(default) again: %w", err)
+	} else if again.GetEtag() != def.GetEtag() || again.GetUid() != def.GetUid() {
+		return fmt.Errorf("GetDatabase(default) output fields are not stable: %+v -> %+v", def, again)
 	}
 	return nil
 }
@@ -155,6 +195,9 @@ func checkFsAdminListDatabases(ctx context.Context, cfg Config) error {
 		}
 		if d.GetName() == fsAdminDefaultDB(cfg) {
 			haveDefault = true
+			if d.GetUid() == "" || d.GetEtag() == "" || d.GetCreateTime() == nil || d.GetEarliestVersionTime() == nil {
+				return fmt.Errorf("ListDatabases (default) = %+v, want the materialized resource's output fields", d)
+			}
 		}
 	}
 	if !haveCreated {
@@ -367,9 +410,13 @@ func checkFsAdminUpdateField(ctx context.Context, cfg Config) error {
 	op, err := stub.UpdateField(ctx, &adminpb.UpdateFieldRequest{
 		Field: &adminpb.Field{
 			Name: fsAdminFieldName(cfg),
+			// The index-config members are OUTPUT_ONLY: values a request carries
+			// are ignored and the inherited (collection-group __name__) form is
+			// reported instead.
 			IndexConfig: &adminpb.Field_IndexConfig{
-				UsesAncestorConfig: true,
-				AncestorField:      fsAdminFieldCG(cfg),
+				UsesAncestorConfig: false,
+				AncestorField:      "ignored",
+				Reverting:          true,
 			},
 		},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"index_config"}},
@@ -383,6 +430,10 @@ func checkFsAdminUpdateField(ctx context.Context, cfg Config) error {
 	}
 	if field.GetName() != fsAdminFieldName(cfg) || !field.GetIndexConfig().GetUsesAncestorConfig() {
 		return fmt.Errorf("UpdateField = %+v", field)
+	}
+	if got := field.GetIndexConfig(); got.GetAncestorField() != fsAdminFieldAncestor(cfg) || got.GetReverting() {
+		return fmt.Errorf("UpdateField index_config = %+v, want the derived ancestor %q and reverting=false",
+			got, fsAdminFieldAncestor(cfg))
 	}
 
 	// A nil UpdateMask is the implied mask of the populated fields (AIP-134):
@@ -445,8 +496,12 @@ func checkFsAdminGetField(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("GetField: %w", err)
 	}
-	if got.GetIndexConfig().GetAncestorField() != fsAdminFieldCG(cfg) {
-		return fmt.Errorf("GetField index_config = %+v", got.GetIndexConfig())
+	if got.GetIndexConfig().GetAncestorField() != fsAdminFieldAncestor(cfg) ||
+		!got.GetIndexConfig().GetUsesAncestorConfig() || got.GetIndexConfig().GetReverting() {
+		return fmt.Errorf("GetField index_config = %+v, want the derived inherited form", got.GetIndexConfig())
+	}
+	if got.GetTtlConfig().GetState() != adminpb.Field_TtlConfig_ACTIVE {
+		return fmt.Errorf("GetField ttl_config = %+v, want state ACTIVE", got.GetTtlConfig())
 	}
 	return nil
 }
