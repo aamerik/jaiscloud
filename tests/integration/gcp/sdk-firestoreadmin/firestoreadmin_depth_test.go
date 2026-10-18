@@ -80,6 +80,13 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 		require.NotEmpty(t, created.GetEtag())
 		require.Equal(t, adminpb.Database_DELETE_PROTECTION_DISABLED, created.GetDeleteProtectionState(),
 			"delete protection is documented as disabled by default")
+		// database.proto: a create that omits concurrency_mode defaults by
+		// edition — Pessimistic for STANDARD (DC53) — and earliest_version_time
+		// is `now - version_retention_period` (DC54).
+		require.Equal(t, adminpb.Database_PESSIMISTIC, created.GetConcurrencyMode(),
+			"STANDARD is the create default, so the concurrency default is Pessimistic")
+		require.WithinDuration(t, time.Now().Add(-time.Hour), created.GetEarliestVersionTime().AsTime(), 2*time.Minute,
+			"PITR is off by default, so the readable window is the last hour")
 
 		got, err := c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: databaseName(id)})
 		require.NoError(t, err)
@@ -161,6 +168,8 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 		require.Empty(t, enabled.GetKeyPrefix(), "key_prefix is OUTPUT_ONLY")
 		require.Equal(t, created.GetDatabaseEdition(), enabled.GetDatabaseEdition(),
 			"database_edition is IMMUTABLE and a resent value is preserved")
+		require.WithinDuration(t, time.Now().Add(-7*24*time.Hour), enabled.GetEarliestVersionTime().AsTime(), 2*time.Minute,
+			"enabling PITR widens the earliest readable version to 7 days back")
 
 		// A masked change to the IMMUTABLE edition is INVALID_ARGUMENT (AIP-203);
 		// the patch above resent the created value, which is accepted. The
@@ -172,10 +181,50 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 		testdepth.AssertError(t, err, testdepth.SpecInvalidArgument())
 	})
 
-	t.Run("DefaultDatabaseIsSynthesized", func(t *testing.T) {
+	// database.proto: a create that omits concurrency_mode defaults by edition.
+	// STANDARD is covered above (Pessimistic); an Enterprise create defaults to
+	// Optimistic.
+	t.Run("CreateConcurrencyDefaultByEdition", func(t *testing.T) {
+		id := unique("entdb")
+		op, err := c.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+			Parent:     projectName(),
+			DatabaseId: id,
+			Database:   &adminpb.Database{DatabaseEdition: adminpb.Database_ENTERPRISE},
+		})
+		require.NoError(t, err)
+		db, err := op.Wait(ctx)
+		require.NoError(t, err)
+		require.Equal(t, adminpb.Database_ENTERPRISE, db.GetDatabaseEdition())
+		require.Equal(t, adminpb.Database_OPTIMISTIC, db.GetConcurrencyMode(),
+			"an Enterprise create that omits concurrency_mode defaults to Optimistic")
+		deleteDatabaseOnCleanup(t, c, id)
+	})
+
+	t.Run("DefaultDatabaseOutputFields", func(t *testing.T) {
+		// The implicit (default) database is a real resource on real GCP: it
+		// reports a uid, create/update timestamps and an etag, and that etag is
+		// the documented delete precondition (DC46). It is not deleted here
+		// because the other subtests use it as a parent.
 		def, err := c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: databaseName("(default)")})
 		require.NoError(t, err)
 		require.Equal(t, adminpb.Database_FIRESTORE_NATIVE, def.GetType())
+		require.NotEmpty(t, def.GetUid())
+		require.NotEqual(t, "default", def.GetUid(), "uid is a system-generated UUID4, not a placeholder")
+		require.NotEmpty(t, def.GetEtag())
+		require.NotNil(t, def.GetCreateTime())
+		require.NotNil(t, def.GetUpdateTime())
+		require.NotNil(t, def.GetEarliestVersionTime())
+
+		again, err := c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: def.GetName()})
+		require.NoError(t, err)
+		require.Equal(t, def.GetEtag(), again.GetEtag(), "the default database's output fields are stable across reads")
+		require.Equal(t, def.GetUid(), again.GetUid())
+
+		_, err = c.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: def.GetName(), Etag: "stale-etag"})
+		testdepth.AssertError(t, err, testdepth.SpecPreconditionFailed())
+		kept, err := c.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: def.GetName()})
+		require.NoError(t, err, "a stale-etag delete must leave the default database in place")
+		require.Equal(t, def.GetEtag(), kept.GetEtag())
 	})
 
 	// A present-but-empty update_mask is AIP-134's no-op, distinct from the

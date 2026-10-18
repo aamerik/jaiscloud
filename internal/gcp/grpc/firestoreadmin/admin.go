@@ -187,6 +187,10 @@ func databaseToProto(d firestoreprovider.DatabaseDef) *adminpb.Database {
 	if d.VersionRetentionPeriod > 0 {
 		out.VersionRetentionPeriod = durationpb.New(d.VersionRetentionPeriod)
 	}
+	// earliest_version_time is OUTPUT_ONLY and continuously updated
+	// (database.proto: "populated with `now - version_retention_period`"), so it
+	// is derived per response instead of being stored (DC54).
+	out.EarliestVersionTime = timestamp.Proto(firestoreprovider.EarliestVersionTime(d))
 	return out
 }
 

@@ -313,6 +313,10 @@ func databaseMap(d databaseDef) map[string]any {
 	if d.VersionRetentionPeriod > 0 {
 		m["versionRetentionPeriod"] = restDuration(d.VersionRetentionPeriod)
 	}
+	// earliest_version_time is OUTPUT_ONLY and continuously updated
+	// (database.proto: "populated with `now - version_retention_period`"), so it
+	// is derived per response instead of being stored (DC54).
+	m["earliestVersionTime"] = restRFC3339(EarliestVersionTime(d))
 	if d.Etag != "" {
 		m["etag"] = d.Etag
 	}
@@ -439,16 +443,21 @@ func (p *Provider) DeleteDatabase(ctx context.Context, nr *model.NormalizedReque
 func fieldMap(f fieldDef) map[string]any {
 	m := map[string]any{"name": f.Name}
 	if f.IndexConfig != nil {
-		indexes := make([]any, 0, len(f.IndexConfig.Indexes))
-		for _, ix := range f.IndexConfig.Indexes {
-			indexes = append(indexes, indexMap(ix))
-		}
-		m["indexConfig"] = map[string]any{
-			"indexes":            indexes,
+		// protojson omits an empty repeated field, so a field carrying no
+		// indexes sends no `indexes` member rather than an empty array.
+		ic := map[string]any{
 			"usesAncestorConfig": f.IndexConfig.UsesAncestorConfig,
 			"reverting":          f.IndexConfig.Reverting,
 			"ancestorField":      f.IndexConfig.AncestorField,
 		}
+		if len(f.IndexConfig.Indexes) > 0 {
+			indexes := make([]any, 0, len(f.IndexConfig.Indexes))
+			for _, ix := range f.IndexConfig.Indexes {
+				indexes = append(indexes, indexMap(ix))
+			}
+			ic["indexes"] = indexes
+		}
+		m["indexConfig"] = ic
 	}
 	if f.TtlConfig != nil {
 		tc := map[string]any{}
