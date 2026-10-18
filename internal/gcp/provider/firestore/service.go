@@ -659,7 +659,7 @@ func (s *Service) Commit(ctx context.Context, transaction []byte, writes []*writ
 	}
 
 	commitTime := clock.Now()
-	ws, results, implicitReads, err := s.buildWrites(ctx, writes, commitTime)
+	ws, results, implicitReads, changed, err := s.buildWrites(ctx, writes, commitTime)
 	if err != nil {
 		return time.Time{}, nil, err
 	}
@@ -668,7 +668,10 @@ func (s *Service) Commit(ctx context.Context, transaction []byte, writes []*writ
 		return time.Time{}, nil, mapCommitError(err)
 	}
 	s.clearReadSet(transaction)
-	for _, w := range ws {
+	for i, w := range ws {
+		if !changed[i] {
+			continue
+		}
 		if w.Document == nil {
 			s.publishChange(ChangeEvent{Name: w.Name})
 		} else {
@@ -689,7 +692,7 @@ func (s *Service) BatchWrite(ctx context.Context, writes []*writeWire) ([]any, [
 	statuses := make([]any, 0, len(writes))
 	writeResults := make([]any, 0, len(writes))
 	for _, w := range writes {
-		ws, results, implicitReads, err := s.buildWrites(ctx, []*writeWire{w}, now)
+		ws, results, implicitReads, changed, err := s.buildWrites(ctx, []*writeWire{w}, now)
 		if err != nil {
 			statuses = append(statuses, statusWireForWriteError(err))
 			writeResults = append(writeResults, map[string]any{})
@@ -699,6 +702,18 @@ func (s *Service) BatchWrite(ctx context.Context, writes []*writeWire) ([]any, [
 			statuses = append(statuses, statusWireForWriteError(err))
 			writeResults = append(writeResults, map[string]any{})
 			continue
+		}
+		// A committed write fans out to listeners, exactly as in Commit: real
+		// Firestore's batchWrite notifies Listen subscribers for every write it
+		// applies (verified against real GCP) and stays silent for the
+		// empty-mask no-op.
+		if changed[0] {
+			if w := ws[0]; w.Document == nil {
+				s.publishChange(ChangeEvent{Name: w.Name})
+			} else {
+				d := *w.Document
+				s.publishChange(ChangeEvent{Name: w.Name, Doc: &d})
+			}
 		}
 		statuses = append(statuses, statusWire(0, ""))
 		writeResults = append(writeResults, results[0])
@@ -752,74 +767,87 @@ func (s *Service) BatchGet(ctx context.Context, documents []string, transaction 
 // read-set first and then the per-write precondition under its lock, returning
 // the named DocumentMissingError / DocumentExistsError the caller maps to the
 // canonical NOT_FOUND / ALREADY_EXISTS.
-func (s *Service) buildWrites(ctx context.Context, wire []*writeWire, now time.Time) ([]firestorestore.Write, []map[string]any, []firestorestore.ReadRef, error) {
+//
+// changed reports, per write, whether the write actually altered the document.
+// It is false only for AIP-134's present-but-empty update mask on an existing
+// document with no field transforms — a no-op that real GCP answers with the
+// stored update_time and does not report to listeners (verified against real
+// Firestore: an empty-mask commit yields no DocumentChange on Listen, while the
+// same commit with a transform or a real field write does). Both transports use
+// it to skip publishChange.
+func (s *Service) buildWrites(ctx context.Context, wire []*writeWire, now time.Time) ([]firestorestore.Write, []map[string]any, []firestorestore.ReadRef, []bool, error) {
 	writes := make([]firestorestore.Write, 0, len(wire))
 	results := make([]map[string]any, 0, len(wire))
 	reads := make([]firestorestore.ReadRef, 0, len(wire))
+	changed := make([]bool, 0, len(wire))
 	for _, w := range wire {
 		pre, err := toPrecondition(w.CurrentDocument)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 
 		switch {
 		case w.Delete != "":
 			if err := validateDocumentName(w.Delete); err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, nil, err
 			}
 			writes = append(writes, firestorestore.Write{Name: w.Delete, Precondition: pre})
 			results = append(results, map[string]any{}) // no updateTime after delete
+			changed = append(changed, true)
 
 		case w.Transform != nil:
 			doc, res, readRef, err := s.buildTransform(ctx, w.Transform, pre, now)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, nil, err
 			}
 			writes = append(writes, firestorestore.Write{Name: doc.Name, Document: &doc, Precondition: pre})
 			results = append(results, res)
 			reads = append(reads, readRef)
+			changed = append(changed, true)
 
 		case w.Update != nil:
-			doc, res, readRef, err := s.buildUpdate(ctx, w.Update, w.UpdateMask, w.UpdateTransforms, pre, now)
+			doc, res, readRef, writeChanged, err := s.buildUpdate(ctx, w.Update, w.UpdateMask, w.UpdateTransforms, pre, now)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, nil, err
 			}
 			writes = append(writes, firestorestore.Write{Name: doc.Name, Document: &doc, Precondition: pre})
 			results = append(results, res)
 			reads = append(reads, readRef)
+			changed = append(changed, writeChanged)
 
 		default:
-			return nil, nil, nil, model.NewProviderError("InvalidArgument", "write must specify update, delete, or transform", 400)
+			return nil, nil, nil, nil, model.NewProviderError("InvalidArgument", "write must specify update, delete, or transform", 400)
 		}
 	}
-	return writes, results, reads, nil
+	return writes, results, reads, changed, nil
 }
 
 // buildUpdate resolves an update (with optional mask + transforms) against the
 // current document. The returned ReadRef is the document state this merge was
 // computed from — the caller must fold it into the read-set passed to
-// store.Commit so a write that lands between this read and the eventual
-// Commit call is detected (ErrAborted) instead of silently overwritten by the
-// merge this function computed from a now-stale base.
-func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *documentMaskWire, transforms []fieldTransformWire, pre *firestorestore.Precondition, now time.Time) (firestorestore.Document, map[string]any, firestorestore.ReadRef, error) {
+// store.Commit so a write that lands between this read and the eventually
+// computed write is detected (ErrAborted) instead of silently overwritten.
+// changed is false for the empty-mask no-op on an existing document (see
+// buildWrites).
+func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *documentMaskWire, transforms []fieldTransformWire, pre *firestorestore.Precondition, now time.Time) (firestorestore.Document, map[string]any, firestorestore.ReadRef, bool, error) {
 	now = now.Truncate(time.Microsecond)
 	if dw.Name == "" {
-		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, model.NewProviderError("InvalidArgument", "update document name is required", 400)
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, false, model.NewProviderError("InvalidArgument", "update document name is required", 400)
 	}
 	if err := validateDocumentName(dw.Name); err != nil {
-		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, false, err
 	}
 	if err := validateFields(dw.Fields); err != nil {
-		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, false, err
 	}
 	if err := checkSize(dw.Fields); err != nil {
-		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, false, err
 	}
 
 	existing, err := s.store.GetDocument(ctx, dw.Name)
 	exists := err == nil
 	if err != nil && !errors.Is(err, firestorestore.ErrDocumentNotFound) {
-		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, false, err
 	}
 	readRef := firestorestore.ReadRef{Name: dw.Name, Exists: exists, UpdateTime: existing.UpdateTime}
 
@@ -835,6 +863,16 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 	//
 	// applyMask is NOT used for the empty-mask case because its len==0 → replace
 	// contract is REST-patch-specific (it would wipe unrelated fields).
+	//
+	// With no transforms too, the empty mask is AIP-134's no-op on an existing
+	// document: the stored document comes back untouched, update_time does not
+	// rotate, and listeners see no change (real Firestore: the write result
+	// carries the stored update_time and Listen reports only NO_CHANGE). A
+	// missing document is still created, fieldless, as the upsert real GCP does.
+	// This mirrors PatchDocument's no-op branch (DC52).
+	if mask != nil && len(mask.FieldPaths) == 0 && len(transforms) == 0 && exists {
+		return existing, map[string]any{"updateTime": timestamp.Canonical(existing.UpdateTime)}, readRef, false, nil
+	}
 	var merged map[string]*firestorestore.Value
 	switch {
 	case mask == nil:
@@ -851,12 +889,12 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 		var res []*firestorestore.Value
 		merged, res, err = applyFieldTransforms(merged, transforms, now)
 		if err != nil {
-			return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
+			return firestorestore.Document{}, nil, firestorestore.ReadRef{}, false, err
 		}
 		transformResults = res
 	}
 	if err := checkSize(merged); err != nil {
-		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, err
+		return firestorestore.Document{}, nil, firestorestore.ReadRef{}, false, err
 	}
 
 	createTime := now
@@ -874,7 +912,7 @@ func (s *Service) buildUpdate(ctx context.Context, dw *documentWire, mask *docum
 		}
 		res["transformResults"] = tr
 	}
-	return doc, res, readRef, nil
+	return doc, res, readRef, true, nil
 }
 
 // buildTransform resolves a document transform against the current document.

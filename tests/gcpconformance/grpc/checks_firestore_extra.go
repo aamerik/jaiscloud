@@ -48,7 +48,7 @@ func firestoreExtraChecks() []Check {
 		{Service: "firestore", RPC: "ExecutePipeline", Method: "ExecutePipeline", KeyField: "results[] + execution_time", Run: checkFirestoreExecutePipeline},
 
 		// ── writes / transactions ───────────────────────────────────────────
-		{Service: "firestore", RPC: "BatchWrite", Method: "BatchWrite", KeyField: "write_results[] + OK statuses", Run: checkFirestoreBatchWrite},
+		{Service: "firestore", RPC: "BatchWrite", Method: "BatchWrite", KeyField: "write_results[] + OK statuses + empty-mask no-op", Run: checkFirestoreBatchWrite},
 		{Service: "firestore", RPC: "BeginTransaction + Commit", Method: "BeginTransaction", KeyField: "transaction id; committed write persists", Run: checkFirestoreBeginTransaction},
 		{Service: "firestore", RPC: "Rollback", Method: "Rollback", KeyField: "rolled-back write absent, committed present", Run: checkFirestoreRollback},
 		{Service: "firestore", RPC: "Write", Method: "Write", KeyField: "stream_id/stream_token + write_results", Run: checkFirestoreWrite},
@@ -574,6 +574,38 @@ func checkFirestoreBatchWrite(ctx context.Context, cfg Config) error {
 		if doc.GetFields()["name"].GetStringValue() == "" {
 			return fmt.Errorf("BatchWrite document %q has no name field", name)
 		}
+	}
+	// A present-but-empty update mask with no field transforms is AIP-134's
+	// no-op: the write result echoes the stored update_time, the stored fields
+	// do not move (verified against real GCP).
+	storedTime := resp.GetWriteResults()[0].GetUpdateTime().AsTime()
+	noop, err := client.BatchWrite(ctx, &firestorepb.BatchWriteRequest{
+		Database: fsDatabase(cfg),
+		Writes: []*firestorepb.Write{{
+			Operation: &firestorepb.Write_Update{Update: &firestorepb.Document{
+				Name: a,
+				Fields: map[string]*firestorepb.Value{
+					"name": {ValueType: &firestorepb.Value_StringValue{StringValue: "ignored"}},
+				},
+			}},
+			UpdateMask: &firestorepb.DocumentMask{FieldPaths: []string{}},
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("BatchWrite (empty mask): %w", err)
+	}
+	if len(noop.GetWriteResults()) != 1 || noop.GetStatus()[0].GetCode() != 0 {
+		return fmt.Errorf("BatchWrite (empty mask): %d write_results, status %v", len(noop.GetWriteResults()), noop.GetStatus())
+	}
+	if got := noop.GetWriteResults()[0].GetUpdateTime().AsTime(); !got.Equal(storedTime) {
+		return fmt.Errorf("BatchWrite empty-mask no-op update_time = %v, want the stored %v", got, storedTime)
+	}
+	noopDoc, err := client.GetDocument(ctx, &firestorepb.GetDocumentRequest{Name: a})
+	if err != nil {
+		return fmt.Errorf("BatchWrite empty-mask no-op get: %w", err)
+	}
+	if got := noopDoc.GetFields()["name"].GetStringValue(); got != "batch-a-value" {
+		return fmt.Errorf("BatchWrite empty-mask no-op wrote %q, want the stored batch-a-value", got)
 	}
 	fsDelete(ctx, client, a)
 	fsDelete(ctx, client, b)
