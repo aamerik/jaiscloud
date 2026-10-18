@@ -242,3 +242,19 @@ entries:
     match: "DGT1"
     pr: 509
     note: "resolved: tasks:batchCreate/batchDelete return a done google.longrunning.Operation (DGT1, #509)"
+
+  # DC1 (W1.1, depth-gate honesty) was delivered by DC10's ratchet PR #559:
+  # every `exempt` depth cell now needs an `owner` and a future `review_by`, and
+  # an overdue `review_by` fails the gate. Its own declared branch
+  # (chore/gcp-depth-gate-honesty) was abandoned before implementation — it
+  # carried only the Makefile `SERIES` priority tweak, since reverted — so the
+  # source doc (gitignored scratch) needs this committed, evidence-gated closure
+  # for both the backlog row and its wave row.
+  - source: "final/DC10"
+    match: "counts an exemption as accounted-for"
+    pr: 559
+    note: "resolved: DC1 delivered by DC10 — depth gate requires owner + future review_by (#559); abandoned branch retired"
+  - source: "final/DC10"
+    match: "tooling (depth-gate honesty)"
+    pr: 559
+    note: "resolved: W1.1 (DC1) delivered by DC10's depth-gate honesty work (#559)"
