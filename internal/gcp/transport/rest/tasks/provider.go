@@ -58,7 +58,7 @@ func (p *Provider) ListQueues(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, err
 	}
-	pageSize, err := paging.Size(intFrom(nr.Params["pageSize"]), core.MaxQueuesPageSize)
+	pageSize, err := paging.SizeFrom(nr.Params["pageSize"], core.MaxQueuesPageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func (p *Provider) ListTasks(ctx context.Context, nr *model.NormalizedRequest) (
 	if err != nil {
 		return nil, err
 	}
-	pageSize, err := paging.Size(intFrom(nr.Params["pageSize"]), core.MaxTasksPageSize)
+	pageSize, err := paging.SizeFrom(nr.Params["pageSize"], core.MaxTasksPageSize)
 	if err != nil {
 		return nil, err
 	}

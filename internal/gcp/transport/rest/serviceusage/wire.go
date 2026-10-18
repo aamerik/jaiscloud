@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	core "jaiscloud/internal/gcp/service/serviceusage"
@@ -61,20 +60,6 @@ func parseJSON(body []byte) (map[string]any, error) {
 func strParam(nr *model.NormalizedRequest, key string) string {
 	s, _ := nr.Params[key].(string)
 	return s
-}
-
-func intFrom(v any) int {
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case string:
-		n, _ := strconv.Atoi(x)
-		return n
-	default:
-		return 0
-	}
 }
 
 // bodyOf returns the decoded JSON request body, or an empty map when absent.

@@ -143,7 +143,11 @@ func (p *Provider) GetFunction(ctx context.Context, nr *model.NormalizedRequest)
 func (p *Provider) ListFunctions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
 	v := p.version(nr)
-	page, next, err := p.core.ListFunctions(ctx, project, strParam(nr, "location"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListFunctions(ctx, project, strParam(nr, "location"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +340,11 @@ func (p *Provider) GetLocation(_ context.Context, nr *model.NormalizedRequest) (
 }
 
 func (p *Provider) ListLocations(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	page, next, err := p.core.ListLocations(p.project(nr), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListLocations(p.project(nr), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -454,7 +462,11 @@ func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedReque
 	if boolParam(nr, "returnPartialSuccess") {
 		return nil, model.NewProviderError("Unimplemented", "ListOperations returnPartialSuccess is not supported", 501)
 	}
-	page, next, err := p.core.ListOperations(ctx, project, strParam(nr, "location"), v, strParam(nr, "filter"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListOperations(ctx, project, strParam(nr, "location"), v, strParam(nr, "filter"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

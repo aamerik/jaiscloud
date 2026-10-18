@@ -16,6 +16,8 @@
 package sdk_tasks_test
 
 import (
+	"io"
+	"net/http"
 	"strconv"
 	"testing"
 
@@ -231,4 +233,21 @@ func TestSDKTasksDepthNegativePageSize(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list.Queues, 1)
 	require.Equal(t, queue, list.Queues[0].Name)
+
+	// A non-integer pageSize fails the int32 query binding with 400 — the
+	// apiary client cannot emit one (PageSize is an int64), so pin it over raw
+	// HTTP against the same REST surface.
+	for _, tc := range []struct{ name, path string }{
+		{"queues.list", "/v2/" + parent + "/queues"},
+		{"tasks.list", "/v2/" + queue + "/tasks"},
+	} {
+		for _, v := range []string{"abc", "-0.5", "1.5"} {
+			resp, err := http.Get(baseURL() + tc.path + "?pageSize=" + v)
+			require.NoError(t, err)
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode, "%s pageSize=%s body=%s", tc.name, v, body)
+			require.Contains(t, string(body), "INVALID_ARGUMENT")
+		}
+	}
 }

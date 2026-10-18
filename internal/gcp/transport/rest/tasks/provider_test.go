@@ -221,6 +221,25 @@ func TestProviderListNegativePageSize(t *testing.T) {
 	if got := resp.Data["queues"].([]any); len(got) != 1 {
 		t.Fatalf("queues = %v, want the seeded queue", got)
 	}
+	// A non-integer pageSize fails the int32 query binding on both list methods
+	// instead of being folded into zero (an absent parameter).
+	for _, v := range []any{"abc", "-0.5", "1.5"} {
+		for name, err := range map[string]error{
+			"queues.list": func() error {
+				_, err := p.ListQueues(ctx, req(map[string]any{"project": "p", "location": "l", "pageSize": v}))
+				return err
+			}(),
+			"tasks.list": func() error {
+				_, err := p.ListTasks(ctx, req(map[string]any{"project": "p", "location": "l", "queue": "q1", "pageSize": v}))
+				return err
+			}(),
+		} {
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s(pageSize=%#v) err = %v, want InvalidArgument/400", name, v, err)
+			}
+		}
+	}
 }
 
 func taskNameOf(t *testing.T, full string) string {

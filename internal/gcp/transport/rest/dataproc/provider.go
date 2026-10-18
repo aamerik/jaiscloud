@@ -87,8 +87,12 @@ func (p *Provider) GetCluster(ctx context.Context, nr *model.NormalizedRequest) 
 }
 
 func (p *Provider) ListClusters(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := p.core.ListClusters(ctx, p.project(nr), strParam(nr, "region"),
-		strParam(nr, "filter"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		strParam(nr, "filter"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -186,13 +190,17 @@ func (p *Provider) GetJob(ctx context.Context, nr *model.NormalizedRequest) (*mo
 }
 
 func (p *Provider) ListJobs(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	matcher, err := core.ParseJobStateMatcher(strParam(nr, "jobStateMatcher"))
 	if err != nil {
 		return nil, err
 	}
 	page, next, err := p.core.ListJobs(ctx, p.project(nr), strParam(nr, "region"),
 		strParam(nr, "clusterName"), strParam(nr, "filter"), matcher,
-		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -272,8 +280,12 @@ func (p *Provider) GetWorkflowTemplate(ctx context.Context, nr *model.Normalized
 
 // ListWorkflowTemplates returns a page of the region's workflow templates.
 func (p *Provider) ListWorkflowTemplates(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := p.core.ListWorkflowTemplates(ctx, p.project(nr), strParam(nr, "region"),
-		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

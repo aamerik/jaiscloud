@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/gcp/paging"
 	core "jaiscloud/internal/gcp/service/monitoring"
 	monitoringstore "jaiscloud/internal/gcp/store/monitoring"
 	"jaiscloud/internal/gcp/timestamp"
@@ -14,6 +15,13 @@ import (
 )
 
 // ─── request helpers ──────────────────────────────────────────────────────────
+
+// pageSizeParam parses the pageSize query parameter as the int32 the Cloud
+// Monitoring Discovery document declares; a non-integer value is
+// INVALID_ARGUMENT rather than a silent zero.
+func pageSizeParam(nr *model.NormalizedRequest) (int, error) {
+	return paging.ParseSize(nr.Params["pageSize"])
+}
 
 func invalidArgument(msg string) error {
 	return model.NewProviderError("InvalidArgument", msg, 400)

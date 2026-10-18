@@ -31,6 +31,8 @@ package sdkrest_test
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"sort"
 	"strings"
 	"testing"
@@ -642,4 +644,26 @@ func TestSDKKMSImportJobsListFilterOrderBy(t *testing.T) {
 	// An unsupported filter is a 400, not a silently ignored parameter.
 	_, err = svc.Projects.Locations.KeyRings.ImportJobs.List(ring).Filter("bogus=1").Do()
 	require.Error(t, err, "an unsupported import-job filter must be INVALID_ARGUMENT")
+}
+
+// TestSDKKMSNonIntegerPageSize pins the int32 query binding on the KMS REST
+// lists over raw HTTP (the apiary client's PageSize is an int64 and cannot emit
+// a non-integer): a malformed or fractional pageSize is 400 INVALID_ARGUMENT,
+// not a silent default page.
+func TestSDKKMSNonIntegerPageSize(t *testing.T) {
+	base := strings.TrimRight(endpoint(), "/")
+	for _, path := range []string{
+		"/v1/projects/proj/locations/global/keyRings",
+		"/v1/projects/proj/locations/global/keyRings/kr/cryptoKeys",
+		"/v1/projects/proj/locations/global/keyRings/kr/importJobs",
+	} {
+		for _, v := range []string{"abc", "-0.5", "1.5"} {
+			resp, err := http.Get(base + path + "?pageSize=" + v)
+			require.NoError(t, err)
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode, "%s?pageSize=%s body=%s", path, v, body)
+			require.Contains(t, string(body), "INVALID_ARGUMENT")
+		}
+	}
 }

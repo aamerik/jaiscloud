@@ -269,7 +269,11 @@ func (p *Provider) BucketGet(ctx context.Context, nr *model.NormalizedRequest) (
 
 func (p *Provider) BucketList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	parent := strParam(nr, "parent")
-	buckets, next, err := p.core.ListBuckets(ctx, parent, intParam(nr, "pageSize"), strParam(nr, "pageToken"))
+	pageSize, err := intParam(nr, "pageSize")
+	if err != nil {
+		return nil, err
+	}
+	buckets, next, err := p.core.ListBuckets(ctx, parent, pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +344,11 @@ func (p *Provider) ViewGet(ctx context.Context, nr *model.NormalizedRequest) (*m
 
 func (p *Provider) ViewList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	parent := strParam(nr, "parent")
-	views, next, err := p.core.ListViews(ctx, parent, intParam(nr, "pageSize"), strParam(nr, "pageToken"))
+	pageSize, err := intParam(nr, "pageSize")
+	if err != nil {
+		return nil, err
+	}
+	views, next, err := p.core.ListViews(ctx, parent, pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -419,7 +427,11 @@ func (p *Provider) LinkGet(ctx context.Context, nr *model.NormalizedRequest) (*m
 
 func (p *Provider) LinkList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	parent := strParam(nr, "parent")
-	links, next, err := p.core.ListLinks(ctx, parent, intParam(nr, "pageSize"), strParam(nr, "pageToken"))
+	pageSize, err := intParam(nr, "pageSize")
+	if err != nil {
+		return nil, err
+	}
+	links, next, err := p.core.ListLinks(ctx, parent, pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -466,7 +478,11 @@ func (p *Provider) LogScopeGet(ctx context.Context, nr *model.NormalizedRequest)
 
 func (p *Provider) LogScopeList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	parent := strParam(nr, "parent")
-	scopes, next, err := p.core.ListLogScopes(ctx, parent, intParam(nr, "pageSize"), strParam(nr, "pageToken"))
+	pageSize, err := intParam(nr, "pageSize")
+	if err != nil {
+		return nil, err
+	}
+	scopes, next, err := p.core.ListLogScopes(ctx, parent, pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

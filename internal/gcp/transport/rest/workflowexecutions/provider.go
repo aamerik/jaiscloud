@@ -3,6 +3,7 @@ package workflowexecutions
 import (
 	"context"
 
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 
@@ -71,10 +72,14 @@ func (p *Provider) GetExecution(ctx context.Context, nr *model.NormalizedRequest
 
 func (p *Provider) ListExecutions(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
+	pageSize, err := paging.ParseSize(nr.Params["pageSize"])
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := p.core.ListExecutions(ctx, project, strParam(nr, "location"), strParam(nr, "workflowId"),
 		viewFromParam(strParam(nr, "view"), core.ViewBasic),
 		strParam(nr, "filter"), strParam(nr, "orderBy"),
-		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

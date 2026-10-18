@@ -553,3 +553,43 @@ func TestImportJobListAppliesExpiryBeforeFilter(t *testing.T) {
 		t.Fatalf("state=ACTIVE past expire_time = %v, want none", items)
 	}
 }
+
+// TestListNonIntegerPageSize pins the int32 query binding on every KMS list
+// method: an unparseable or fractional pageSize is 400 INVALID_ARGUMENT, never
+// folded into zero and served as an absent parameter.
+func TestListNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p := newTestProvider()
+	calls := map[string]func(*model.NormalizedRequest) (*model.ProviderResponse, error){
+		"keyRings": func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.KeyRingList(ctx, nr)
+		},
+		"cryptoKeys": func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.CryptoKeyList(ctx, nr)
+		},
+		"versions": func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.CryptoKeyVersionList(ctx, nr)
+		},
+		"importJobs": func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ImportJobList(ctx, nr)
+		},
+	}
+	names := map[string]string{
+		"keyRings":   "locations/global/keyRings",
+		"cryptoKeys": "locations/global/keyRings/kr/cryptoKeys",
+		"versions":   "locations/global/keyRings/kr/cryptoKeys/k/cryptoKeyVersions",
+		"importJobs": "locations/global/keyRings/kr/importJobs",
+	}
+	for name, call := range calls {
+		for _, v := range []any{"abc", "-0.5", "1.5"} {
+			_, err := call(newNR(map[string]any{"name": names[name], "pageSize": v}))
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s pageSize=%#v err = %v, want InvalidArgument/400", name, v, err)
+			}
+		}
+		if _, err := call(newNR(map[string]any{"name": names[name], "pageSize": "5"})); err != nil {
+			t.Errorf("%s pageSize=5: %v", name, err)
+		}
+	}
+}

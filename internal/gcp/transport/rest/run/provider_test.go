@@ -255,4 +255,23 @@ func TestListNegativePageSizeRejected(t *testing.T) {
 	if _, err := p.ListOperations(ctx, req("ListOperations", map[string]any{"pageSize": "-1"})); err != nil {
 		t.Errorf("ListOperations(pageSize=-1) = %v, want nil (documented default)", err)
 	}
+	// A non-integer pageSize still fails the int32 query binding on every list
+	// method — including operations.list, whose non-positive exception must not
+	// swallow an unparseable value.
+	for name, call := range map[string]func() error{
+		"ListServices": func() error {
+			_, err := p.ListServices(ctx, req("ListServices", map[string]any{"pageSize": "abc"}))
+			return err
+		},
+		"ListOperations": func() error {
+			_, err := p.ListOperations(ctx, req("ListOperations", map[string]any{"pageSize": "-0.5"}))
+			return err
+		},
+	} {
+		err := call()
+		var pe *model.ProviderError
+		if !errors.As(err, &pe) || pe.Code != "InvalidArgument" || pe.HTTPStatus != 400 {
+			t.Errorf("%s(non-integer pageSize) = %v, want InvalidArgument/400", name, err)
+		}
+	}
 }

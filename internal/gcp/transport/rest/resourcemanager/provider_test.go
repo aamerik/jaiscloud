@@ -2,6 +2,7 @@ package resourcemanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -482,4 +483,45 @@ func projectState(resp *model.ProviderResponse, id string) string {
 		return s
 	}
 	return ""
+}
+
+// TestListProjectsNonIntegerPageSize pins the int32 query binding: a
+// non-integer pageSize is INVALID_ARGUMENT rather than a silent zero.
+func TestListProjectsNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	for _, v := range []any{"abc", "-0.5", "1.5"} {
+		_, err := p.ListProjects(ctx, newNR(map[string]any{"pageSize": v}))
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("ListProjects pageSize=%#v err = %v, want InvalidArgument/400", v, err)
+		}
+	}
+	if _, err := p.ListProjects(ctx, newNR(map[string]any{"pageSize": "5"})); err != nil {
+		t.Errorf("ListProjects pageSize=5: %v", err)
+	}
+}
+
+// TestIntOf covers every shape the IAM policy `version` body field can arrive
+// in (a decoded JSON number, an explicit int from a normalized request, a
+// string from a query-style caller, and json.Number), plus the unparseable and
+// absent fallbacks. intOf no longer parses pageSize (paging.ParseSize does), so
+// this keeps the surviving helper's branches pinned.
+func TestIntOf(t *testing.T) {
+	for _, tc := range []struct {
+		in   any
+		want int
+	}{
+		{float64(3), 3},
+		{int(4), 4},
+		{"5", 5},
+		{json.Number("6"), 6},
+		{"not-a-number", 0},
+		{json.Number("x"), 0},
+		{nil, 0},
+	} {
+		if got := intOf(tc.in); got != tc.want {
+			t.Errorf("intOf(%#v) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
 }

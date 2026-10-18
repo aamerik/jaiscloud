@@ -595,3 +595,28 @@ func TestRESTValueTypeEnumIsCanonical(t *testing.T) {
 		}
 	}
 }
+
+// TestListNonIntegerPageSize pins the int32 query binding on the REST path: a
+// non-integer pageSize answers 400 INVALID_ARGUMENT rather than paging from the
+// start as if the parameter were absent.
+func TestListNonIntegerPageSize(t *testing.T) {
+	c, p := newTestProvider(t)
+	for _, path := range []string{
+		"/v3/projects/test/metricDescriptors",
+		"/v3/projects/test/monitoredResourceDescriptors",
+		"/v3/projects/test/alertPolicies",
+		"/v3/projects/test/notificationChannels",
+		"/v3/projects/test/services",
+	} {
+		for _, v := range []string{"abc", "-0.5", "1.5"} {
+			_, err := call(t, c, p, http.MethodGet, path+"?pageSize="+v, nil)
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("GET %s?pageSize=%s err = %v, want InvalidArgument/400", path, v, err)
+			}
+		}
+		if _, err := call(t, c, p, http.MethodGet, path+"?pageSize=5", nil); err != nil {
+			t.Errorf("GET %s?pageSize=5: %v", path, err)
+		}
+	}
+}

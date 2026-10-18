@@ -101,7 +101,11 @@ func (p *Provider) GetService(ctx context.Context, nr *model.NormalizedRequest) 
 
 func (p *Provider) ListServices(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListServices(ctx, project, strParam(nr, "location"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListServices(ctx, project, strParam(nr, "location"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +160,11 @@ func (p *Provider) GetBackup(ctx context.Context, nr *model.NormalizedRequest) (
 
 func (p *Provider) ListBackups(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListBackups(ctx, project, strParam(nr, "location"), strParam(nr, "serviceId"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListBackups(ctx, project, strParam(nr, "location"), strParam(nr, "serviceId"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +210,11 @@ func (p *Provider) GetMetadataImport(ctx context.Context, nr *model.NormalizedRe
 
 func (p *Provider) ListMetadataImports(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListMetadataImports(ctx, project, strParam(nr, "location"), strParam(nr, "serviceId"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListMetadataImports(ctx, project, strParam(nr, "location"), strParam(nr, "serviceId"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +260,11 @@ func (p *Provider) GetFederation(ctx context.Context, nr *model.NormalizedReques
 
 func (p *Provider) ListFederations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListFederations(ctx, project, strParam(nr, "location"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListFederations(ctx, project, strParam(nr, "location"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +361,11 @@ func (p *Provider) ResolveOperation(ctx context.Context, project, location, opID
 
 func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
-	page, next, err := p.core.ListOperations(ctx, project, strParam(nr, "location"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListOperations(ctx, project, strParam(nr, "location"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
