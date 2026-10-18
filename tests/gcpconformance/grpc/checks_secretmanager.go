@@ -3,7 +3,9 @@ package grpcconformance
 import (
 	"context"
 	"fmt"
+	"path"
 
+	"cloud.google.com/go/kms/apiv1/kmspb"
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	"google.golang.org/api/iterator"
@@ -19,6 +21,7 @@ func secretManagerChecks() []Check {
 		{Service: "secretmanager", RPC: "CreateSecret", KeyField: "success", Run: checkSecretCreate},
 		{Service: "secretmanager", RPC: "GetSecret", KeyField: "name", Run: checkSecretGet},
 		{Service: "secretmanager", RPC: "GetSecret", KeyField: "replication.automatic.customerManagedEncryption.kmsKeyName", Run: checkSecretCMEKReplication},
+		{Service: "secretmanager", RPC: "AddSecretVersion", KeyField: "replicationStatus.automatic.customerManagedEncryption.kmsKeyVersionName", Run: checkSecretVersionCMEKStatus},
 		{Service: "secretmanager", RPC: "ListSecrets", KeyField: "secrets[].name", Run: checkSecretList},
 		{Service: "secretmanager", RPC: "AddSecretVersion", KeyField: "name", Run: checkSecretAddVersion},
 		{Service: "secretmanager", RPC: "AccessSecretVersion", KeyField: "payload.data", Run: checkSecretAccessVersion},
@@ -132,6 +135,118 @@ func checkSecretCMEKReplication(ctx context.Context, cfg Config) error {
 	}
 	if gotKey := got.GetReplication().GetAutomatic().GetCustomerManagedEncryption().GetKmsKeyName(); gotKey != key {
 		return fmt.Errorf("GetSecret CMEK = %q, want %q", gotKey, key)
+	}
+	return nil
+}
+
+// checkSecretVersionCMEKStatus asserts that a version added to a CMEK secret
+// reports the exact CryptoKeyVersion that wrapped its payload under
+// replicationStatus.automatic.customerManagedEncryption.kmsKeyVersionName
+// (DC44). It drives a real KMS CryptoKey so the wrap actually happens, rotates
+// the key's primary version, and verifies the status is per-version: the older
+// version keeps the CryptoKeyVersion that wrapped it.
+func checkSecretVersionCMEKStatus(ctx context.Context, cfg Config) error {
+	kmsClient, err := newKMSClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new kms client: %w", err)
+	}
+	defer kmsClient.Close()
+
+	ringID := cfg.ResourceName("gcpc-grpc-sm-cmek")
+	// The key ring belongs to this probe, not to the KMS checks' fixture.
+	if _, err := kmsClient.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{
+		Parent: kmsParent(cfg), KeyRingId: ringID, KeyRing: &kmspb.KeyRing{},
+	}); err != nil {
+		return fmt.Errorf("CreateKeyRing: %w", err)
+	}
+	key, err := kmsClient.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
+		Parent:      kmsParent(cfg) + "/keyRings/" + ringID,
+		CryptoKeyId: "gcpc-sm-cmek-key",
+		CryptoKey:   &kmspb.CryptoKey{Purpose: kmspb.CryptoKey_ENCRYPT_DECRYPT},
+	})
+	if err != nil {
+		return fmt.Errorf("CreateCryptoKey: %w", err)
+	}
+	keyName := key.GetName()
+	primaryVersion := path.Base(key.GetPrimary().GetName())
+	if primaryVersion == "" || primaryVersion == "." {
+		return fmt.Errorf("CreateCryptoKey returned no primary version")
+	}
+
+	client, err := newSecretClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new secret client: %w", err)
+	}
+	defer client.Close()
+
+	id := cfg.ResourceName("gcpc-grpc-secret-version-cmek")
+	name := secretProject(cfg) + "/secrets/" + id
+	if _, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
+		Parent:   secretProject(cfg),
+		SecretId: id,
+		Secret: &secretmanagerpb.Secret{
+			Replication: &secretmanagerpb.Replication{
+				Replication: &secretmanagerpb.Replication_Automatic_{
+					Automatic: &secretmanagerpb.Replication_Automatic{
+						CustomerManagedEncryption: &secretmanagerpb.CustomerManagedEncryption{KmsKeyName: keyName},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		return fmt.Errorf("CreateSecret: %w", err)
+	}
+	defer func() {
+		_ = client.DeleteSecret(context.Background(), &secretmanagerpb.DeleteSecretRequest{Name: name})
+	}()
+
+	addVersion := func() (*secretmanagerpb.SecretVersion, error) {
+		return client.AddSecretVersion(ctx, &secretmanagerpb.AddSecretVersionRequest{
+			Parent:  name,
+			Payload: &secretmanagerpb.SecretPayload{Data: []byte(secretPayload)},
+		})
+	}
+	keyVersionName := func(v *secretmanagerpb.SecretVersion) string {
+		return v.GetReplicationStatus().GetAutomatic().GetCustomerManagedEncryption().GetKmsKeyVersionName()
+	}
+
+	// Secret Manager spells the key version `.../cryptoKeys/{key}/versions/{n}`
+	// (not Cloud KMS's `.../cryptoKeyVersions/{n}`).
+	wantVersion := func(n string) string { return keyName + "/versions/" + n }
+
+	v1, err := addVersion()
+	if err != nil {
+		return fmt.Errorf("AddSecretVersion: %w", err)
+	}
+	if got, want := keyVersionName(v1), wantVersion(primaryVersion); got != want {
+		return fmt.Errorf("version 1 kmsKeyVersionName = %q, want %q", got, want)
+	}
+
+	// Rotate the key's primary, then add a second version: the new version is
+	// wrapped by the new primary, while version 1 keeps its own key version.
+	next, err := kmsClient.CreateCryptoKeyVersion(ctx, &kmspb.CreateCryptoKeyVersionRequest{Parent: keyName})
+	if err != nil {
+		return fmt.Errorf("CreateCryptoKeyVersion: %w", err)
+	}
+	nextVersion := path.Base(next.GetName())
+	if _, err := kmsClient.UpdateCryptoKeyPrimaryVersion(ctx, &kmspb.UpdateCryptoKeyPrimaryVersionRequest{
+		Name: keyName, CryptoKeyVersionId: nextVersion,
+	}); err != nil {
+		return fmt.Errorf("UpdateCryptoKeyPrimaryVersion: %w", err)
+	}
+	v2, err := addVersion()
+	if err != nil {
+		return fmt.Errorf("AddSecretVersion after rotation: %w", err)
+	}
+	if got, want := keyVersionName(v2), wantVersion(nextVersion); got != want {
+		return fmt.Errorf("version 2 kmsKeyVersionName = %q, want %q", got, want)
+	}
+	gotV1, err := client.GetSecretVersion(ctx, &secretmanagerpb.GetSecretVersionRequest{Name: v1.GetName()})
+	if err != nil {
+		return fmt.Errorf("GetSecretVersion: %w", err)
+	}
+	if got, want := keyVersionName(gotV1), wantVersion(primaryVersion); got != want {
+		return fmt.Errorf("version 1 after rotation kmsKeyVersionName = %q, want %q", got, want)
 	}
 	return nil
 }

@@ -93,14 +93,14 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 
 	versions := make([]versionRow, 0)
-	vrows, err := s.pool.Query(ctx, `SELECT project_id, secret_id, version_id, state, create_time, destroy_time, data FROM jc_sm_versions ORDER BY project_id, secret_id, version_id`)
+	vrows, err := s.pool.Query(ctx, `SELECT project_id, secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek FROM jc_sm_versions ORDER BY project_id, secret_id, version_id`)
 	if err != nil {
 		return err
 	}
 	for vrows.Next() {
 		var r versionRow
 		var destroyTime *time.Time
-		if err := vrows.Scan(&r.ProjectID, &r.SecretID, &r.Version.VersionID, &r.Version.State, &r.Version.CreateTime, &destroyTime, &r.Version.Data); err != nil {
+		if err := vrows.Scan(&r.ProjectID, &r.SecretID, &r.Version.VersionID, &r.Version.State, &r.Version.CreateTime, &destroyTime, &r.Version.Data, &r.Version.KmsKeyName, &r.Version.WrappedDEK); err != nil {
 			vrows.Close()
 			return err
 		}
@@ -162,8 +162,12 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		}
 	}
 	for _, r := range snap.Versions {
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, destroy_time, data) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-			r.ProjectID, r.SecretID, r.Version.VersionID, r.Version.State, r.Version.CreateTime, nullableTime(r.Version.DestroyTime), r.Version.Data); err != nil {
+		// kms_key_name/wrapped_dek must ride along with data: a restored CMEK
+		// version without its wrapped DEK cannot be decrypted, and would report
+		// no customerManagedEncryption status (the per-version wrap is what
+		// DC44 renders).
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+			r.ProjectID, r.SecretID, r.Version.VersionID, r.Version.State, r.Version.CreateTime, nullableTime(r.Version.DestroyTime), r.Version.Data, r.Version.KmsKeyName, r.Version.WrappedDEK); err != nil {
 			return err
 		}
 	}

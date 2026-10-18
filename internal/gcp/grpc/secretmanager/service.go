@@ -766,6 +766,10 @@ func versionToProto(project string, v secretmanagerstore.Version) *secretmanager
 		// Mirror the REST provider's versionToMap: real Secret Manager marks
 		// version responses as carrying a client-specified payload checksum.
 		ClientSpecifiedPayloadChecksum: true,
+		// The version reports the CMEK status of its own payload: the exact
+		// CryptoKeyVersion that wrapped it, when a customer-managed key was
+		// used (DC44).
+		ReplicationStatus: versionReplicationStatusToProto(v),
 	}
 	if !v.CreateTime.IsZero() {
 		out.CreateTime = timestamp.Proto(v.CreateTime)
@@ -774,6 +778,23 @@ func versionToProto(project string, v secretmanagerstore.Version) *secretmanager
 		out.DestroyTime = timestamp.Proto(v.DestroyTime)
 	}
 	return out
+}
+
+// versionReplicationStatusToProto renders the SecretVersion's replication
+// status. Real GCP always sets the automatic arm for an automatic-replication
+// secret and nests customerManagedEncryption (the CryptoKeyVersion that wrapped
+// this version) only when CMEK was used; sibling to the REST provider's
+// versionReplicationStatusToMap.
+func versionReplicationStatusToProto(v secretmanagerstore.Version) *secretmanagerpb.ReplicationStatus {
+	auto := &secretmanagerpb.ReplicationStatus_AutomaticStatus{}
+	if keyVersion := secretmanagersvc.KmsKeyVersionName(v.KmsKeyName, v.WrappedDEK); keyVersion != "" {
+		auto.CustomerManagedEncryption = &secretmanagerpb.CustomerManagedEncryptionStatus{
+			KmsKeyVersionName: keyVersion,
+		}
+	}
+	return &secretmanagerpb.ReplicationStatus{
+		ReplicationStatus: &secretmanagerpb.ReplicationStatus_Automatic{Automatic: auto},
+	}
 }
 
 func stateToProto(state string) secretmanagerpb.SecretVersion_State {

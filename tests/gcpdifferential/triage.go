@@ -534,22 +534,6 @@ var triageRules = []TriageRule{
 		Reason:   "GCS canonicalizes a bucket location to uppercase (US-CENTRAL1); the emulator echoes the requested form (us-central1); the location and locationType are otherwise the same geography",
 	},
 
-	// SDK-tour Secret Manager: output-only per-version metadata the emulator
-	// does not echo (etag, replicationStatus); the version identity and state
-	// match real GCP.
-	{
-		Service: "secretmanager",
-		Op:      "tour_secret_add_version",
-		Kind:    "missing_field",
-		Reason:  "output-only Secret Manager version metadata the emulator does not echo (etag, replicationStatus); the version name and state match",
-	},
-	{
-		Service: "secretmanager",
-		Op:      "tour_secret_list_versions",
-		Kind:    "missing_field",
-		Reason:  "output-only Secret Manager version metadata the emulator does not echo (etag, replicationStatus); the version name and state match",
-	},
-
 	// SDK error/retry tour. Real GCP decorates a BigQuery jobs.query error
 	// detail with the offending parameter's map location; the emulator omits
 	// those advisory fields. HTTP status, error code and envelope shape match,

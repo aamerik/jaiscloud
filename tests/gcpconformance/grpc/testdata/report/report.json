@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 485,
-  "passed": 485,
+  "total": 486,
+  "passed": 486,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 485,
-    "passed": 485,
+    "checks": 486,
+    "passed": 486,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -149,8 +149,8 @@
     },
     {
       "service": "secretmanager",
-      "total": 19,
-      "passed": 19,
+      "total": 20,
+      "passed": 20,
       "failed": 0,
       "unimplemented": 0
     },
@@ -624,6 +624,13 @@
       "method": "GetSecret",
       "status": "pass",
       "key_field": "replication.automatic.customerManagedEncryption.kmsKeyName"
+    },
+    {
+      "service": "secretmanager",
+      "rpc": "AddSecretVersion",
+      "method": "AddSecretVersion",
+      "status": "pass",
+      "key_field": "replicationStatus.automatic.customerManagedEncryption.kmsKeyVersionName"
     },
     {
       "service": "secretmanager",
