@@ -931,15 +931,22 @@ func importJobToProto(ij kmscore.ImportJob) *kmspb.ImportJob {
 	if !ij.ExpireTime.IsZero() {
 		out.ExpireTime = timestamp.Proto(ij.ExpireTime)
 	}
+	// The wrapping public key is documented "Only returned if state is ACTIVE",
+	// so an EXPIRED job keeps its format (which echoes the requested format) but
+	// omits the key material.
 	switch {
 	case len(ij.PublicKeyRaw) > 0:
 		out.PublicKeyFormat = kmspb.PublicKey_NIST_PQC
 		if ij.ImportMethod == "HPKE_KEM_XWING_HKDF_SHA256_AES_256_GCM" {
 			out.PublicKeyFormat = kmspb.PublicKey_XWING_RAW_BYTES
 		}
-		out.PublicKey = &kmspb.ImportJob_WrappingPublicKey{Data: ij.PublicKeyRaw}
+		if ij.State == "ACTIVE" {
+			out.PublicKey = &kmspb.ImportJob_WrappingPublicKey{Data: ij.PublicKeyRaw}
+		}
 	case ij.PublicKeyPEM != "":
-		out.PublicKey = &kmspb.ImportJob_WrappingPublicKey{Pem: ij.PublicKeyPEM}
+		if ij.State == "ACTIVE" {
+			out.PublicKey = &kmspb.ImportJob_WrappingPublicKey{Pem: ij.PublicKeyPEM}
+		}
 	}
 	return out
 }

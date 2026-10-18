@@ -512,6 +512,84 @@ func TestClock_KMSScheduledDestroy(t *testing.T) {
 		"gRPC must report the promoted DESTROYED state")
 }
 
+// TestClock_KMSExpiredImportJobHidesWrappingKey: the ImportJob wrapping public
+// key is documented "Only returned if state is ACTIVE". The emulator derives the
+// state lazily on read, so once the frozen clock crosses the 72h import window
+// the job reads back EXPIRED with public_key unset on get and list, over REST and
+// gRPC — a client can no longer wrap key material against a job that cannot
+// accept it. The publicKeyFormat stays, as it echoes the requested format.
+func TestClock_KMSExpiredImportJobHidesWrappingKey(t *testing.T) {
+	resetState(t)
+
+	T0 := time.Date(2024, 3, 15, 10, 0, 0, 0, time.UTC)
+	tcFreezeAt(t, T0)
+
+	parent := "projects/" + tcProjectID() + "/locations/global"
+	sfx := tcSuffix()
+	ringID, jobID := "clock-import-ring-"+sfx, "clock-import-job-"+sfx
+
+	resp, body := do(t, http.MethodPost, "/v1/"+parent+"/keyRings?keyRingId="+ringID, []byte("{}"), tcJSONHeaders())
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create key ring: %s", body)
+
+	jobPath := parent + "/keyRings/" + ringID + "/importJobs"
+	jobName := jobPath + "/" + jobID
+	resp, body = do(t, http.MethodPost, "/v1/"+jobPath+"?importJobId="+jobID,
+		[]byte(`{"importMethod":"RSA_OAEP_3072_SHA256"}`), tcJSONHeaders())
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create import job: %s", body)
+	created := jsonMap(t, body)
+	require.Equal(t, "ACTIVE", created["state"], "new import job: %s", body)
+	pub, _ := created["publicKey"].(map[string]any)
+	require.NotEmpty(t, pub["pem"], "an in-window job must publish its wrapping key: %s", body)
+	expireRaw, _ := created["expireTime"].(string)
+	expireAt, err := time.Parse(time.RFC3339Nano, expireRaw)
+	require.NoError(t, err, "expireTime %q", expireRaw)
+
+	ctx := context.Background()
+	kc, err := kms.NewKeyManagementClient(ctx,
+		option.WithEndpoint(tcGRPCAddr()),
+		option.WithGRPCDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+		option.WithoutAuthentication())
+	require.NoError(t, err, "dial kms gRPC")
+	t.Cleanup(func() { _ = kc.Close() })
+
+	// Seeded negative: inside the window both transports publish the key.
+	got, err := kc.GetImportJob(ctx, &kmspb.GetImportJobRequest{Name: jobName})
+	require.NoError(t, err, "gRPC GetImportJob in-window")
+	require.NotNil(t, got.GetPublicKey(), "an ACTIVE job must publish its wrapping key")
+
+	// Cross the 72h window: a read derives EXPIRED and withholds the key.
+	tcAdvanceTo(t, expireAt.Add(time.Second))
+	resp, body = do(t, http.MethodGet, "/v1/"+jobName, nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "get import job: %s", body)
+	expired := jsonMap(t, body)
+	require.Equal(t, "EXPIRED", expired["state"], "past expire_time: %s", body)
+	_, hasKey := expired["publicKey"]
+	require.False(t, hasKey, "an EXPIRED import job must not return its wrapping public key: %s", body)
+	require.Equal(t, "PEM", expired["publicKeyFormat"], "the format echoes the request: %s", body)
+
+	// The list renders the same shape as the get.
+	resp, body = do(t, http.MethodGet, "/v1/"+jobPath, nil, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "list import jobs: %s", body)
+	items, _ := jsonMap(t, body)["importJobs"].([]any)
+	require.Len(t, items, 1, "importJobs.list: %s", body)
+	item, _ := items[0].(map[string]any)
+	require.Equal(t, "EXPIRED", item["state"], "listed state: %s", body)
+	_, hasKey = item["publicKey"]
+	require.False(t, hasKey, "importJobs.list must not return an EXPIRED job's wrapping key: %s", body)
+
+	// gRPC agrees on the get and the list.
+	got, err = kc.GetImportJob(ctx, &kmspb.GetImportJobRequest{Name: jobName})
+	require.NoError(t, err, "gRPC GetImportJob past expire_time")
+	require.Equal(t, kmspb.ImportJob_EXPIRED, got.GetState(), "gRPC must derive the EXPIRED state")
+	require.Nil(t, got.GetPublicKey(), "gRPC EXPIRED import job must not return its wrapping key")
+	require.Equal(t, kmspb.PublicKey_PEM, got.GetPublicKeyFormat())
+	listed, err := kc.ListImportJobs(ctx, &kmspb.ListImportJobsRequest{Parent: parent + "/keyRings/" + ringID}).Next()
+	require.NoError(t, err, "gRPC ListImportJobs")
+	require.NotNil(t, listed, "gRPC ListImportJobs must return the job")
+	require.Nil(t, listed.GetPublicKey(),
+		"gRPC list must not return an EXPIRED job's wrapping key")
+}
+
 // ─── 5. async LRO deadline settlement ─────────────────────────────────────────
 
 // TestLROAsyncClockDeadline: in the opt-in async LRO mode an in-flight operation
