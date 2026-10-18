@@ -184,6 +184,15 @@ func gcpAborted(msg string) error {
 	return model.NewProviderError("Aborted", msg, 409)
 }
 
+// gcpFailedPrecondition is the documented precondition failure (HTTP 400 with
+// the FAILED_PRECONDITION google.rpc status). It is deliberately separate from
+// gcpAborted: AIP-154 etag mismatches on an update are ABORTED, but a method
+// whose request etag documents a blocked operation (DeleteDatabase) answers
+// FAILED_PRECONDITION.
+func gcpFailedPrecondition(msg string) error {
+	return model.NewProviderError("FailedPrecondition", msg, 400)
+}
+
 // putResource marshals v and creates (create=true) or upserts the store entry.
 func (s *Service) putResource(ctx context.Context, project, rt, id string, v any, create bool) error {
 	if s.resources == nil {
@@ -500,10 +509,14 @@ func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 // name. The record is the operation's documented response_type "Database"; real
 // GCP returns it (deleteTime set) so the official client's
 // DeleteDatabaseOperation.Wait resolves.
+//
+// DeleteDatabaseRequest.etag documents that a mismatch blocks the delete and
+// returns FAILED_PRECONDITION (the proto and the Discovery document both say
+// so), unlike an update's AIP-154 ABORTED.
 func (s *Service) DeleteDatabaseDef(ctx context.Context, project, db, etag string) (databaseDef, string, error) {
 	deleted, err := s.mutateDatabase(ctx, project, db, func(cur databaseDef) (databaseDef, error) {
 		if etag != "" && etag != cur.Etag {
-			return databaseDef{}, gcpAborted("etag mismatch")
+			return databaseDef{}, gcpFailedPrecondition("etag mismatch: the database changed since the etag was read")
 		}
 		cur.Deleted = true
 		cur.DeleteTime = clock.Now()

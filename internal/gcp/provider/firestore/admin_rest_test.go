@@ -94,9 +94,25 @@ func TestRESTDatabaseLifecycle(t *testing.T) {
 		t.Errorf("maskless patch changed an unpopulated field: concurrencyMode = %v", iin["concurrencyMode"])
 	}
 
+	// A stale etag on the documented delete query param blocks the delete with
+	// FAILED_PRECONDITION/400 and leaves the database in place.
+	currentEtag, _ := iin["etag"].(string)
+	if currentEtag == "" {
+		t.Fatal("maskless patch response carries no etag")
+	}
+	if _, err := p.DeleteDatabase(ctx, adminNR("databases/test-db", map[string]any{"etag": currentEtag + "-stale"})); err == nil {
+		t.Error("DeleteDatabase(stale etag) succeeded, want FailedPrecondition")
+	} else {
+		assertDeleteEtagPrecondition(t, err)
+	}
+	if _, err := p.GetDatabase(ctx, adminNR("databases/test-db", nil)); err != nil {
+		t.Errorf("stale-etag delete removed the database: %v", err)
+	}
+
 	// delete returns a terminal operation carrying the soft-deleted database
-	// (operation_info response_type "Database").
-	del, err := p.DeleteDatabase(ctx, adminNR("databases/test-db", nil))
+	// (operation_info response_type "Database"). The current etag (the
+	// documented query parameter) is accepted.
+	del, err := p.DeleteDatabase(ctx, adminNR("databases/test-db", map[string]any{"etag": currentEtag}))
 	if err != nil {
 		t.Fatalf("DeleteDatabase: %v", err)
 	}

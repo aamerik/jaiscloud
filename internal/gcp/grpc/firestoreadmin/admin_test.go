@@ -112,6 +112,17 @@ func TestDatabaseAdminRoundTrip(t *testing.T) {
 		t.Errorf("stale etag code = %v, want Aborted", status.Code(err))
 	}
 
+	// The delete's etag documents a blocked deletion, so a stale one is
+	// FAILED_PRECONDITION (not the update's ABORTED) and deletes nothing.
+	if _, err := client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{
+		Name: created.GetName(), Etag: created.GetEtag(),
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("stale etag delete code = %v, want FailedPrecondition", status.Code(err))
+	}
+	if _, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: created.GetName()}); err != nil {
+		t.Errorf("stale-etag delete removed the database: %v", err)
+	}
+
 	delOp, err := client.DeleteDatabase(ctx, &adminpb.DeleteDatabaseRequest{Name: created.GetName(), Etag: implied.GetEtag()})
 	if err != nil {
 		t.Fatalf("DeleteDatabase: %v", err)
