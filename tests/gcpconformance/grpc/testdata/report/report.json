@@ -966,7 +966,7 @@
       "rpc": "UpdateDocument (update_mask)",
       "method": "UpdateDocument",
       "status": "pass",
-      "key_field": "masked field updated, unmasked preserved"
+      "key_field": "masked field updated, unmasked preserved, empty mask no-op, mask=response projection"
     },
     {
       "service": "firestore",

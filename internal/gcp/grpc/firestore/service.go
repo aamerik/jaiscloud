@@ -144,9 +144,12 @@ func (s *Service) UpdateDocument(ctx context.Context, req *firestorepb.UpdateDoc
 	if err != nil {
 		return nil, mapError(model.NewProviderError("InvalidArgument", err.Error(), 400))
 	}
-	var mask []string
+	// Presence of the mask matters: an unset update_mask replaces the whole
+	// document, while a set-but-empty one is AIP-134's no-op. `mask` is the
+	// unrelated response projection ("fields to return").
+	var mask *firestoreprovider.UpdateMask
 	if req.GetUpdateMask() != nil {
-		mask = req.GetUpdateMask().GetFieldPaths()
+		mask = &firestoreprovider.UpdateMask{Paths: req.GetUpdateMask().GetFieldPaths()}
 	}
 	pre, err := decodeStorePrecondition(req.GetCurrentDocument())
 	if err != nil {
@@ -156,7 +159,7 @@ func (s *Service) UpdateDocument(ctx context.Context, req *firestorepb.UpdateDoc
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return encodeDocument(out), nil
+	return encodeDocument(firestoreprovider.ProjectDocument(out, req.GetMask().GetFieldPaths())), nil
 }
 
 func (s *Service) DeleteDocument(ctx context.Context, req *firestorepb.DeleteDocumentRequest) (*emptypb.Empty, error) {
