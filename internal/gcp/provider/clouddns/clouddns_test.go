@@ -377,3 +377,67 @@ func isCode(err error, code string) bool {
 	}
 	return perr.Code == code
 }
+
+// TestListMaxResultsBinding pins Cloud DNS's maxResults int32 query binding on
+// every paged listing: an unparseable value ("abc", "1.5"), a fraction or an
+// out-of-int32 one is INVALID_ARGUMENT/400 with the binding message, never a
+// silently absent parameter served from the default 100, while a legal integer
+// still pages. Found in the DC41 review (DC55). The binding is resolved before
+// the parent-zone lookup, so a bad maxResults beats the missing-zone 404.
+func TestListMaxResultsBinding(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	mustCreateZone(t, p, "zone-a")
+	handlers := []struct {
+		name string
+		call func(map[string]any) (*model.ProviderResponse, error)
+	}{
+		{"ListManagedZones", func(extra map[string]any) (*model.ProviderResponse, error) {
+			return p.ListManagedZones(ctx, newNR(extra))
+		}},
+		{"ListResourceRecordSets", func(extra map[string]any) (*model.ProviderResponse, error) {
+			extra["managedZone"] = "zone-a"
+			return p.ListResourceRecordSets(ctx, newNR(extra))
+		}},
+		{"ListChanges", func(extra map[string]any) (*model.ProviderResponse, error) {
+			extra["managedZone"] = "zone-a"
+			return p.ListChanges(ctx, newNR(extra))
+		}},
+	}
+	for _, h := range handlers {
+		for _, v := range []any{"abc", "1.5", "-0.5", "2147483648", float64(1.5)} {
+			_, err := h.call(map[string]any{"maxResults": v})
+			var perr *model.ProviderError
+			if !errors.As(err, &perr) {
+				t.Errorf("%s(maxResults=%#v) error = %v, want a *model.ProviderError", h.name, v, err)
+				continue
+			}
+			if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s(maxResults=%#v) = %+v, want InvalidArgument/400", h.name, v, perr)
+			}
+			if perr.Message != "Invalid value for int32 type: maxResults" {
+				t.Errorf("%s(maxResults=%#v) message = %q, want the named int32 binding message", h.name, v, perr.Message)
+			}
+		}
+		if resp, err := h.call(map[string]any{"maxResults": "2"}); err != nil || resp == nil {
+			t.Errorf("%s(maxResults=2) = %v, %v; want a page", h.name, resp, err)
+		}
+		// A non-positive int32 is a legal binding and the legacy parameter
+		// documents no minimum, so it keeps selecting the default page.
+		if resp, err := h.call(map[string]any{"maxResults": "-1"}); err != nil || resp == nil {
+			t.Errorf("%s(maxResults=-1) = %v, %v; want the default page", h.name, resp, err)
+		}
+		// The pageSize alias the emulator accepts is validated the same way.
+		if _, err := h.call(map[string]any{"pageSize": "abc"}); !isCode(err, "InvalidArgument") {
+			t.Errorf("%s(pageSize=abc) = %v, want InvalidArgument", h.name, err)
+		}
+	}
+	// The binding error wins over the missing-parent 404.
+	resp, err := p.ListResourceRecordSets(ctx, newNR(map[string]any{"managedZone": "missing", "maxResults": "abc"}))
+	if !isCode(err, "InvalidArgument") {
+		t.Errorf("ListResourceRecordSets(missing zone, maxResults=abc) = %v, %v; want InvalidArgument", resp, err)
+	}
+	if _, err := p.ListResourceRecordSets(ctx, newNR(map[string]any{"managedZone": "missing"})); !isCode(err, "NotFound") {
+		t.Errorf("ListResourceRecordSets(missing zone) = %v, want NotFound", err)
+	}
+}

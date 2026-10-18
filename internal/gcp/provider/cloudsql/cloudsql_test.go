@@ -450,6 +450,94 @@ func hasItemField(items []any, field, value string) bool {
 	return false
 }
 
+// TestListMaxResultsBinding pins Cloud SQL's maxResults query binding on the
+// two list methods whose Discovery document declares it: instances.list and
+// operations.list declare a uint32, so an unparseable value ("abc", "1.5"), a
+// negative one or one above uint32 is INVALID_ARGUMENT/400 with the binding
+// message, never a silent fall back to the default page. A value above int32 is
+// still a legal uint32.
+func TestListMaxResultsBinding(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	mustCreateInstance(t, p, "i1")
+	handlers := []struct {
+		name string
+		call func(map[string]any) (*model.ProviderResponse, error)
+	}{
+		{"InstancesList", func(extra map[string]any) (*model.ProviderResponse, error) {
+			return p.InstancesList(ctx, newNR(extra))
+		}},
+		{"OperationsList", func(extra map[string]any) (*model.ProviderResponse, error) {
+			return p.OperationsList(ctx, newNR(extra))
+		}},
+	}
+	for _, h := range handlers {
+		for _, v := range []any{"abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5)} {
+			_, err := h.call(map[string]any{"maxResults": v})
+			var perr *model.ProviderError
+			if !errors.As(err, &perr) {
+				t.Errorf("%s(maxResults=%#v) error = %v, want a *model.ProviderError", h.name, v, err)
+				continue
+			}
+			if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s(maxResults=%#v) = %+v, want InvalidArgument/400", h.name, v, perr)
+			}
+			if perr.Message != "Invalid value for uint32 type: maxResults" {
+				t.Errorf("%s(maxResults=%#v) message = %q, want the named uint32 binding message", h.name, v, perr.Message)
+			}
+		}
+		if resp, err := h.call(map[string]any{"maxResults": "2"}); err != nil || resp == nil {
+			t.Errorf("%s(maxResults=2) = %v, %v; want a page", h.name, resp, err)
+		}
+		// The pageSize alias the emulator accepts is validated the same way.
+		if _, err := h.call(map[string]any{"pageSize": "abc"}); !isCode(err, "InvalidArgument") {
+			t.Errorf("%s(pageSize=abc) = %v, want InvalidArgument", h.name, err)
+		}
+	}
+	// A value above int32 is a legal uint32, not a parse error.
+	if _, err := p.InstancesList(ctx, newNR(map[string]any{"maxResults": "3000000000"})); err != nil {
+		t.Errorf("InstancesList(maxResults=3000000000) = %v, want a page (legal uint32)", err)
+	}
+}
+
+// TestListEmulatorPaginationStaysLenient pins the methods whose Discovery
+// document declares neither maxResults nor pageToken (databases.list,
+// users.list, flags.list, tiers.list): pagination there is an emulator
+// extension, and real GCP ignores an unknown query parameter, so a malformed
+// value keeps selecting the default page instead of failing a request the real
+// API would accept.
+func TestListEmulatorPaginationStaysLenient(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	mustCreateInstance(t, p, "i1")
+	handlers := []struct {
+		name string
+		call func(map[string]any) (*model.ProviderResponse, error)
+	}{
+		{"DatabasesList", func(extra map[string]any) (*model.ProviderResponse, error) {
+			extra["instance"] = "i1"
+			return p.DatabasesList(ctx, newNR(extra))
+		}},
+		{"UsersList", func(extra map[string]any) (*model.ProviderResponse, error) {
+			extra["instance"] = "i1"
+			return p.UsersList(ctx, newNR(extra))
+		}},
+		{"ListFlags", func(extra map[string]any) (*model.ProviderResponse, error) {
+			return p.ListFlags(ctx, newNR(extra))
+		}},
+		{"ListTiers", func(extra map[string]any) (*model.ProviderResponse, error) {
+			return p.ListTiers(ctx, newNR(extra))
+		}},
+	}
+	for _, h := range handlers {
+		for _, v := range []any{"abc", "1.5", "-1", float64(1.5)} {
+			if resp, err := h.call(map[string]any{"maxResults": v}); err != nil || resp == nil {
+				t.Errorf("%s(maxResults=%#v) = %v, %v; want the default page (extension stays lenient)", h.name, v, resp, err)
+			}
+		}
+	}
+}
+
 // TestListFlagsConcurrent guards against in-place sorting of the shared
 // package-level flag catalogue: paginate must only sort a per-request copy.
 func TestListFlagsConcurrent(t *testing.T) {
