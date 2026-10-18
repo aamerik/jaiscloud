@@ -373,7 +373,7 @@ func TestDocumentsPatchMask(t *testing.T) {
 			"a": map[string]any{"integerValue": "99"},
 		},
 	}
-	nr.Params["mask.fieldPaths"] = "a"
+	nr.Params["updateMask.fieldPaths"] = "a"
 
 	resp, err := p.DocumentsPatch(ctx, nr)
 	if err != nil {

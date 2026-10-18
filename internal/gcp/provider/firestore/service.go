@@ -311,10 +311,37 @@ func (s *Service) CreateDocument(ctx context.Context, project, database, path, d
 	return doc, nil
 }
 
+// UpdateMask is a *write* mask (Firestore's `update_mask`, which fields to
+// update) together with its presence. Presence is carried separately because
+// the proto's message-presence is what tells an omitted mask from an empty one,
+// and conflating the two silently rewrites data:
+//   - nil: no mask was supplied — the body fields replace the document's fields.
+//   - non-nil with paths: patch — only the listed field paths are written.
+//   - non-nil without paths: AIP-134's no-op — the supplied fields are ignored
+//     and the stored document is returned unmodified (on a missing document the
+//     upsert still creates it, with no fields).
+//
+// This is not Firestore's response mask (`DocumentMask.mask`, "fields to
+// return"), which projects the reply and never restricts the write.
+type UpdateMask struct {
+	Paths []string
+}
+
+// ProjectDocument applies a response field mask (`mask` / `mask.fieldPaths`):
+// the returned document carries only the requested paths. A request without a
+// mask, or with an empty one, returns every field, matching GetDocument.
+func ProjectDocument(doc firestorestore.Document, paths []string) firestorestore.Document {
+	if len(paths) == 0 {
+		return doc
+	}
+	doc.Fields = maskFields(doc, paths)
+	return doc
+}
+
 // PatchDocument upserts a document: a missing document is created. The mask
-// restricts which fields are updated; without it the fields fully replace the
-// document's fields.
-func (s *Service) PatchDocument(ctx context.Context, project, database, path string, fields map[string]*firestorestore.Value, mask []string, pre *firestorestore.Precondition) (firestorestore.Document, error) {
+// restricts which fields are updated (see UpdateMask for the three states);
+// without it the fields fully replace the document's fields.
+func (s *Service) PatchDocument(ctx context.Context, project, database, path string, fields map[string]*firestorestore.Value, mask *UpdateMask, pre *firestorestore.Precondition) (firestorestore.Document, error) {
 	if err := validatePath(path); err != nil {
 		return firestorestore.Document{}, err
 	}
@@ -341,23 +368,53 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 		return firestorestore.Document{}, err
 	}
 
-	var base map[string]*firestorestore.Value
-	createTime := now
-	updateTime := now
-	if exists {
-		base = existing.Fields
-		createTime = existing.CreateTime
-		updateTime = nextUpdateTime(existing.UpdateTime, now)
-	}
-	merged := applyMask(fields, mask, base)
-	if err := checkSize(merged); err != nil {
-		return firestorestore.Document{}, err
-	}
-	doc := firestorestore.Document{
-		Name:       name,
-		Fields:     merged,
-		CreateTime: createTime,
-		UpdateTime: updateTime,
+	// Three mask states (UpdateMask): omitted replaces, a populated mask
+	// patches, and a present-but-empty mask is AIP-134's no-op.
+	noop := mask != nil && len(mask.Paths) == 0
+	var doc firestorestore.Document
+	switch {
+	case noop && exists:
+		// Return the stored document untouched: no field applied, no
+		// update_time rotation, no change event. The write below still runs
+		// through store.Commit so the precondition and the implicit read are
+		// re-validated atomically, but it stores identical content — a
+		// concurrent write landing in between therefore surfaces as a
+		// retryable ABORTED rather than being silently ignored.
+		doc = existing
+	case noop:
+		// No-op on a missing document. PATCH is an upsert, so the document is
+		// created — but with no fields: the empty mask discards the body, the
+		// same as the transform-only update path in buildUpdate.
+		doc = firestorestore.Document{
+			Name:       name,
+			Fields:     map[string]*firestorestore.Value{},
+			CreateTime: now,
+			UpdateTime: now,
+		}
+	default:
+		var base map[string]*firestorestore.Value
+		createTime := now
+		updateTime := now
+		if exists {
+			base = existing.Fields
+			createTime = existing.CreateTime
+			updateTime = nextUpdateTime(existing.UpdateTime, now)
+		}
+		var merged map[string]*firestorestore.Value
+		if mask == nil {
+			merged = cloneFields(fields)
+		} else {
+			merged = applyMask(fields, mask.Paths, base)
+		}
+		if err := checkSize(merged); err != nil {
+			return firestorestore.Document{}, err
+		}
+		doc = firestorestore.Document{
+			Name:       name,
+			Fields:     merged,
+			CreateTime: createTime,
+			UpdateTime: updateTime,
+		}
 	}
 	// Route through store.Commit (the same atomic check-and-apply primitive
 	// transactions use) instead of a separate Get-then-Update/Create, so a
@@ -373,6 +430,10 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 		{Name: name, Document: &doc, Precondition: pre},
 	}); err != nil {
 		return firestorestore.Document{}, mapCommitError(err)
+	}
+	if noop && exists {
+		// Nothing changed, so no document change to fan out to listeners.
+		return doc, nil
 	}
 	d := doc
 	s.publishChange(ChangeEvent{Name: d.Name, Doc: &d})

@@ -604,20 +604,15 @@ func maskFields(doc firestorestore.Document, paths []string) map[string]*firesto
 }
 
 // applyMask merges body fields into a document's fields per Firestore patch
-// semantics:
-//   - no mask: the body fields fully replace the document's fields.
-//   - mask present: only the field paths in the mask are updated; a mask path
-//     not present in the body is deleted; fields outside the mask are unchanged.
+// semantics: only the field paths in the mask are updated; a mask path not
+// present in the body is deleted; fields outside the mask are unchanged.
 //
 // base is the existing fields (nil when the document is being created).
+//
+// The mask must be populated: the omitted mask (replace every field) and the
+// present-but-empty mask (AIP-134's no-op) are resolved by the caller, and an
+// empty mask here leaves the base untouched rather than silently replacing it.
 func applyMask(fields map[string]*firestorestore.Value, mask []string, base map[string]*firestorestore.Value) map[string]*firestorestore.Value {
-	if len(mask) == 0 {
-		out := make(map[string]*firestorestore.Value, len(fields))
-		for k, v := range fields {
-			out[k] = v
-		}
-		return out
-	}
 	out := make(map[string]*firestorestore.Value, len(base)+len(mask))
 	for k, v := range base {
 		out[k] = v
@@ -725,8 +720,10 @@ func (p *Provider) CreateDocument(ctx context.Context, nr *model.NormalizedReque
 }
 
 // DocumentsPatch implements documents.patch. Patch upserts: a missing document
-// is created. The updateMask (updateMask.fieldPaths) restricts which fields are
-// updated; without it the body fields fully replace the document's fields.
+// is created. The write mask is `updateMask.fieldPaths`: a populated mask
+// updates only the listed paths, an omitted one replaces every field, and a
+// present-but-empty one is AIP-134's no-op. `mask.fieldPaths` is the unrelated
+// response projection (fields to return), applied to the reply only.
 func (p *Provider) DocumentsPatch(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	database, path, err := relativeName(nr)
 	if err != nil {
@@ -737,10 +734,7 @@ func (p *Provider) DocumentsPatch(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	mask := maskFieldPaths(nr)
-	if len(mask) == 0 {
-		mask = updateMaskPaths(nr)
-	}
+	mask := updateMaskFromQuery(nr)
 	pre, err := preconditionFromQuery(nr)
 	if err != nil {
 		return nil, err
@@ -749,7 +743,20 @@ func (p *Provider) DocumentsPatch(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	return provider.OK(documentMap(doc)), nil
+	return provider.OK(documentMap(ProjectDocument(doc, maskFieldPaths(nr)))), nil
+}
+
+// updateMaskFromQuery reads the documents.patch *write* mask from the
+// `updateMask.fieldPaths` query parameter, preserving presence: a parameter
+// supplied with no values (`?updateMask.fieldPaths=`) is a present-but-empty
+// mask, which is AIP-134's no-op — not an omitted mask, which replaces every
+// field. `mask.fieldPaths` is deliberately not consulted here; it selects the
+// fields the response is projected to (see DocumentsPatch).
+func updateMaskFromQuery(nr *model.NormalizedRequest) *UpdateMask {
+	if !maskParamPresent(nr, "updateMask.fieldPaths") {
+		return nil
+	}
+	return &UpdateMask{Paths: updateMaskPaths(nr)}
 }
 
 // DocumentsDelete implements documents.delete. Idempotent, unless a
