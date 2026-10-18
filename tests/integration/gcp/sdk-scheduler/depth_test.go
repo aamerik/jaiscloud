@@ -279,4 +279,13 @@ func TestSDKSchedulerDepthNegativePageSize(t *testing.T) {
 	list, err := svc.Projects.Locations.Jobs.List(parent).PageSize(500).Do()
 	require.NoError(t, err)
 	require.NotNil(t, list)
+
+	// A non-integer pageSize fails the int32 query binding with 400 — the
+	// apiary client cannot emit one (PageSize is an int64), so pin it over raw
+	// HTTP against the same REST surface.
+	for _, v := range []string{"abc", "-0.5", "1.5"} {
+		status, body := httpDo(t, http.MethodGet, "/v1/"+parent+"/jobs?pageSize="+v, nil)
+		require.Equal(t, http.StatusBadRequest, status, "pageSize=%s body=%s", v, body)
+		require.Contains(t, string(body), "INVALID_ARGUMENT")
+	}
 }

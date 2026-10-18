@@ -75,17 +75,3 @@ func splitVerb(seg string) (name, verb string) {
 	}
 	return seg, ""
 }
-
-func intFrom(v any) int {
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case string:
-		n, _ := strconv.Atoi(x)
-		return n
-	default:
-		return 0
-	}
-}

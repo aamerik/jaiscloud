@@ -359,3 +359,20 @@ func TestListPaginationAndFilterValidation(t *testing.T) {
 		t.Fatalf("invalid filter error = %v, want 400", err)
 	}
 }
+
+// TestListNonIntegerPageSize pins the int32 query binding: a non-integer
+// pageSize is INVALID_ARGUMENT rather than a silent zero.
+func TestListNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	for _, v := range []any{"abc", "-0.5", "1.5"} {
+		_, err := p.ListServices(ctx, newNR(map[string]any{"project": "proj", "pageSize": v}))
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("ListServices pageSize=%#v err = %v, want InvalidArgument/400", v, err)
+		}
+	}
+	if _, err := p.ListServices(ctx, newNR(map[string]any{"project": "proj", "pageSize": "5"})); err != nil {
+		t.Errorf("ListServices pageSize=5: %v", err)
+	}
+}

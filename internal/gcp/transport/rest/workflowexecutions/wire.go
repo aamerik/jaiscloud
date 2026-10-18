@@ -30,20 +30,6 @@ func strFrom(v any) string {
 	return s
 }
 
-func intFrom(v any) int {
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case string:
-		n, _ := strconv.Atoi(x)
-		return n
-	default:
-		return 0
-	}
-}
-
 func stringMapFrom(v any) map[string]string {
 	m, ok := v.(map[string]any)
 	if !ok {

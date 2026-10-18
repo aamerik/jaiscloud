@@ -132,9 +132,13 @@ func (p *Provider) GetTrigger(ctx context.Context, nr *model.NormalizedRequest) 
 
 func (p *Provider) ListTriggers(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := p.core.ListTriggers(ctx, project, strParam(nr, "location"),
 		strParam(nr, "filter"), strParam(nr, "orderBy"),
-		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -193,8 +197,12 @@ func (p *Provider) ListChannels(ctx context.Context, nr *model.NormalizedRequest
 	project := p.project(nr)
 	// channels.list documents only orderBy (no filter), so a `filter` query
 	// parameter is not read here.
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := p.core.ListChannels(ctx, project, strParam(nr, "location"),
-		strParam(nr, "orderBy"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		strParam(nr, "orderBy"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -272,8 +280,12 @@ func operationNotFound(name string) error {
 func (p *Provider) ListProviders(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
 	location := strParam(nr, "location")
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := p.core.ListProviders(ctx, project, location,
-		strParam(nr, "filter"), strParam(nr, "orderBy"), intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		strParam(nr, "filter"), strParam(nr, "orderBy"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -394,8 +406,12 @@ func (p *Provider) advancedList(k core.Kind) provider.HandlerFunc {
 		if k.HasListParams() {
 			filter, orderBy = strParam(nr, "filter"), strParam(nr, "orderBy")
 		}
+		pageSize, err := pageSizeParam(nr)
+		if err != nil {
+			return nil, err
+		}
 		page, next, err := p.core.ListAdvanced(ctx, project, k, strParam(nr, "location"),
-			filter, orderBy, intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+			filter, orderBy, pageSize, strParam(nr, "pageToken"))
 		if err != nil {
 			return nil, err
 		}
@@ -471,8 +487,12 @@ func (p *Provider) advancedTestIam(k core.Kind) provider.HandlerFunc {
 // method: the names of the enrollments attached to the named message bus.
 func (p *Provider) ListMessageBusEnrollments(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	names, next, err := p.core.ListMessageBusEnrollments(ctx, project, strParam(nr, "location"), core.NameID(strParam(nr, "name")),
-		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

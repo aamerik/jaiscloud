@@ -3,8 +3,16 @@ package workflows
 import (
 	"strconv"
 
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/model"
 )
+
+// pageSizeParam parses the pageSize query parameter as the int32 the Workflows
+// Discovery document declares; a non-integer value is INVALID_ARGUMENT rather
+// than a silent zero.
+func pageSizeParam(nr *model.NormalizedRequest) (int, error) {
+	return paging.ParseSize(nr.Params["pageSize"])
+}
 
 // bodyOf returns the decoded JSON request body, or an empty map when absent.
 func bodyOf(nr *model.NormalizedRequest) map[string]any {
@@ -41,20 +49,6 @@ func boolParam(nr *model.NormalizedRequest, key string) bool {
 func strFrom(v any) string {
 	s, _ := v.(string)
 	return s
-}
-
-func intFrom(v any) int {
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case string:
-		n, _ := strconv.Atoi(x)
-		return n
-	default:
-		return 0
-	}
 }
 
 // stringMapFrom decodes a JSON object of string values. A non-map (including an

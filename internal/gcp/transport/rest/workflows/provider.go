@@ -99,9 +99,13 @@ func (p *Provider) project(nr *model.NormalizedRequest) string {
 
 func (p *Provider) ListWorkflows(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	project := p.project(nr)
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := p.core.ListWorkflows(ctx, project, strParam(nr, "location"),
 		strParam(nr, "filter"), strParam(nr, "orderBy"),
-		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -140,8 +144,12 @@ func (p *Provider) ListWorkflowRevisions(ctx context.Context, nr *model.Normaliz
 	if location == "" {
 		location = core.LocationFromName(name)
 	}
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := p.core.ListWorkflowRevisions(ctx, project, location, core.WorkflowIDFromName(name),
-		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+		pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
@@ -234,8 +242,12 @@ func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedReque
 	if boolParam(nr, "returnPartialSuccess") {
 		return nil, model.NewProviderError("Unimplemented", "ListOperations returnPartialSuccess is not supported", 501)
 	}
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
 	page, next, err := p.core.ListOperations(ctx, project, location,
-		intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"), strParam(nr, "filter"))
+		pageSize, strParam(nr, "pageToken"), strParam(nr, "filter"))
 	if err != nil {
 		return nil, err
 	}

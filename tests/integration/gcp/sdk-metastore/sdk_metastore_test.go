@@ -110,7 +110,7 @@ func TestSDKMetastore(t *testing.T) {
 	// CreateMetadataImport returns a done LRO.
 	importID := unique("imp")
 	importOp, err := svc.Projects.Locations.Services.MetadataImports.Create(backupParent, &metastore.MetadataImport{
-		Description: "initial",
+		Description:  "initial",
 		DatabaseDump: &metastore.DatabaseDump{GcsUri: "gs://bucket/dump.sql"},
 	}).MetadataImportId(importID).Do()
 	require.NoError(t, err)

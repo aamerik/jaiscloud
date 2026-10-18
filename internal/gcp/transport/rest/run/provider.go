@@ -177,16 +177,26 @@ func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest
 }
 
 func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	ops, err := p.core.ListOperations(ctx, strParam(nr, "project"), strParam(nr, "location"))
-	if err != nil {
-		return nil, err
-	}
+	// Parse the query binding before the store lookup: real GCP rejects an
+	// unparseable pageSize regardless of whether the parent exists.
 	// run.projects.locations.operations.list documents "If not set or set to
 	// less than or equal to 0, the default page size is 100" — a documented
 	// exception to AIP-158's reject-negative rule, so a non-positive size is
-	// cleared to the default rather than raising InvalidArgument.
-	if intFrom(nr.Params["pageSize"]) < 0 {
+	// cleared to the default rather than raising InvalidArgument. (The shared
+	// pager's actual default is 1000, a pre-existing divergence not changed
+	// here.) The raw value is still parsed strictly first: a non-integer
+	// pageSize is INVALID_ARGUMENT (the int32 binding), never silently cleared
+	// as if absent.
+	pageSize, err := paging.ParseSize(nr.Params["pageSize"])
+	if err != nil {
+		return nil, err
+	}
+	if pageSize < 0 {
 		nr.Params["pageSize"] = 0
+	}
+	ops, err := p.core.ListOperations(ctx, strParam(nr, "project"), strParam(nr, "location"))
+	if err != nil {
+		return nil, err
 	}
 	page, next, err := paging.Page(ops, func(o runstore.Operation) string { return o.ID }, nr.Params)
 	if err != nil {

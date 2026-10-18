@@ -3,10 +3,9 @@ package logging
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
 
+	"jaiscloud/internal/gcp/paging"
 	core "jaiscloud/internal/gcp/service/logging"
 	loggingstore "jaiscloud/internal/gcp/store/logging"
 	"jaiscloud/internal/gcp/timestamp"
@@ -218,23 +217,14 @@ func entryToWire(e loggingstore.LogEntry) map[string]any {
 
 // ─── sink / exclusion transcoding ─────────────────────────────────────────────
 
-// intParam reads a signed integer request parameter that may arrive as a JSON
-// number (body) or a query string. Unlike intFrom it preserves a leading minus,
-// so an out-of-range pageSize (e.g. -1) reaches the core's validation and is
-// rejected consistently with the gRPC transport.
-func intParam(nr *model.NormalizedRequest, key string) int {
-	switch v := nr.Params[key].(type) {
-	case float64:
-		return int(v)
-	case string:
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		if err != nil {
-			return 0
-		}
-		return n
-	default:
-		return 0
-	}
+// intParam reads the pageSize request parameter (a query string or a JSON body
+// number) as the int32 the Logging Discovery documents declare. A value the
+// int32 binding cannot parse is INVALID_ARGUMENT rather than a silent zero; a
+// negative value is still passed through so the core can apply each method's
+// documented non-positive rule (the non-positive-ignored lists take the default,
+// entries.list rejects it).
+func intParam(nr *model.NormalizedRequest, key string) (int, error) {
+	return paging.ParseSize(nr.Params[key])
 }
 
 // boolParam reads a boolean request parameter that may arrive as a JSON bool

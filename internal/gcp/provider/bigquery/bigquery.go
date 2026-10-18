@@ -65,6 +65,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -417,18 +418,50 @@ func (p *Provider) jobSummaryMap(projectID string, j bqstore.Job) map[string]any
 
 // pagingParams translates BigQuery's maxResults/pageToken query parameters into
 // the shared paging helper's pageSize/pageToken shape (maxResults is BigQuery's
-// page-size parameter; paging.PageSize reads pageSize).
+// page-size parameter; paging.PageSize reads pageSize). maxResults is declared
+// `uint32`, not the int32 pageSize the other APIs use, so a legal value above
+// MaxInt32 is capped for the int-based pager instead of being handed to
+// PageSize's int32 binding (which would reject it). A non-integer is still
+// rejected by PageSize; the list handlers also validate maxResults up front
+// (nonNegativeIntParam).
 func pagingParams(params map[string]any) map[string]any {
 	out := map[string]any{}
 	if v, ok := params["pageToken"]; ok {
 		out["pageToken"] = v
 	}
 	if v, ok := params["maxResults"]; ok {
-		out["pageSize"] = v
+		out["pageSize"] = cappedMaxResults(v)
 	} else if v, ok := params["pageSize"]; ok {
 		out["pageSize"] = v
 	}
 	return out
+}
+
+// cappedMaxResults maps a legal BigQuery maxResults (uint32) onto the shared
+// pager's int without changing its meaning: anything above MaxInt32 is capped
+// there (the page can never exceed the available items anyway). Values the
+// uint32 binding would reject are passed through untouched so PageSize reports
+// the binding error.
+func cappedMaxResults(v any) any {
+	switch x := v.(type) {
+	case string:
+		if n, err := strconv.ParseUint(x, 10, 32); err == nil && n > math.MaxInt32 {
+			return int(math.MaxInt32)
+		}
+	case float64:
+		if x == math.Trunc(x) && x > math.MaxInt32 && x <= math.MaxUint32 {
+			return int(math.MaxInt32)
+		}
+	case int:
+		if x > math.MaxInt32 {
+			return int(math.MaxInt32)
+		}
+	case int64:
+		if x > math.MaxInt32 && x <= math.MaxUint32 {
+			return int(math.MaxInt32)
+		}
+	}
+	return v
 }
 
 // --- Datasets ---

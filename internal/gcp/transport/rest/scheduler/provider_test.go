@@ -115,6 +115,15 @@ func TestProviderListJobsNegativePageSize(t *testing.T) {
 	if _, err := p.ListJobs(ctx, req(map[string]any{"project": "p", "location": "l", "pageSize": float64(0)})); err != nil {
 		t.Fatalf("ListJobs(pageSize=0): %v", err)
 	}
+	// A non-integer value fails the int32 query binding instead of being folded
+	// into zero (an absent parameter).
+	for _, v := range []any{"abc", "-0.5", "1.5"} {
+		_, err := p.ListJobs(ctx, req(map[string]any{"project": "p", "location": "l", "pageSize": v}))
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Fatalf("ListJobs(pageSize=%#v) err = %v, want InvalidArgument/400", v, err)
+		}
+	}
 }
 
 func TestProviderEncodeError(t *testing.T) {

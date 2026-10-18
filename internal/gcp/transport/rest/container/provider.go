@@ -397,6 +397,14 @@ func clusterUpdateFromMap(m map[string]any) core.ClusterUpdate {
 // paginate applies GKE's pageSize/pageToken (a numeric offset, as the emulator
 // has no opaque cursor store) and returns the selected indices plus the next
 // token ("" when the page is the last).
+//
+// The pageSize parse here is deliberately lenient (unparseable → the 500
+// default) rather than the int32 binding the other bespoke pagers enforce:
+// GKE's Discovery document declares no pageSize/pageToken on clusters.list,
+// nodePools.list or operations.list, so real GKE ignores the parameter
+// entirely. The emulator's pagination on those methods is a deliberate
+// convenience (DC40), and rejecting a stray value would diverge further from
+// the real API than ignoring it.
 func paginate(total int, nr *model.NormalizedRequest) ([]int, string) {
 	pageSize := intFrom(nr.Params["pageSize"])
 	if pageSize <= 0 || pageSize > 500 {

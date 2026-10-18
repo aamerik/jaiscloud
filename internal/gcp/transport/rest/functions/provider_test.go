@@ -1379,3 +1379,33 @@ func TestInvokeTriggerExecutorErrorIs500(t *testing.T) {
 		t.Errorf("body = %q, want boom", body)
 	}
 }
+
+// TestListNonIntegerPageSize pins the int32 query binding: a non-integer
+// pageSize is INVALID_ARGUMENT rather than a silent zero.
+func TestListNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t, store.NewMemoryResourceStore(), nil)
+	calls := map[string]func(*model.NormalizedRequest) (*model.ProviderResponse, error){
+		"functions": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListFunctions(ctx, n)
+		},
+		"locations": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListLocations(ctx, n)
+		},
+		"operations": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListOperations(ctx, n)
+		},
+	}
+	for name, call := range calls {
+		for _, v := range []any{"abc", "-0.5", "1.5"} {
+			_, err := call(newNR(map[string]any{"location": "us-central1", "pageSize": v}))
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s pageSize=%#v err = %v, want InvalidArgument/400", name, v, err)
+			}
+		}
+		if _, err := call(newNR(map[string]any{"location": "us-central1", "pageSize": "5"})); err != nil {
+			t.Errorf("%s pageSize=5: %v", name, err)
+		}
+	}
+}

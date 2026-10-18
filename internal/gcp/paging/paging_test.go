@@ -1,6 +1,7 @@
 package paging
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -114,7 +115,6 @@ func TestPageSizeFallback(t *testing.T) {
 		{"pageSize": 0},
 		{"pageSize": float64(0)},
 		{}, // absent
-		{"pageSize": "not-a-number"},
 	} {
 		got, err := PageSize(params)
 		if err != nil {
@@ -133,6 +133,82 @@ func TestPageSizeFallback(t *testing.T) {
 		got, err := PageSize(params)
 		if err != nil || got != 7 {
 			t.Errorf("PageSize(%v) = %d, %v; want 7, nil", params, got, err)
+		}
+	}
+}
+
+// TestParseSizeRejectsNonInteger pins the int32 binding rule the bespoke REST
+// pagers previously skipped: a pageSize that is not an integer (or is outside
+// int32) is INVALID_ARGUMENT, never silently folded into "absent" — the same
+// answer real GCP's query binding gives.
+func TestParseSizeRejectsNonInteger(t *testing.T) {
+	for _, v := range []any{
+		"abc", "-0.5", "1.5", "1e3", " 5", "5 ",
+		float64(-0.5), float64(1.5),
+		"2147483648", "-2147483649",
+		float64(2147483648),
+		true,
+	} {
+		got, err := ParseSize(v)
+		var perr *model.ProviderError
+		if !errors.As(err, &perr) {
+			t.Errorf("ParseSize(%#v) error = %v, want a *model.ProviderError", v, err)
+			continue
+		}
+		if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("ParseSize(%#v) = %+v, want InvalidArgument/400", v, perr)
+		}
+		if got != 0 {
+			t.Errorf("ParseSize(%#v) = %d, want 0 alongside the error", v, got)
+		}
+	}
+	for _, tc := range []struct {
+		v    any
+		want int
+	}{
+		{nil, 0},
+		{"", 0}, // an empty query value is treated as absent
+		{"7", 7},
+		{int(7), 7},
+		{int32(7), 7},
+		{int64(7), 7},
+		{float64(7), 7},
+		{json.Number("7"), 7},
+		{"-3", -3},
+		{"2147483647", 2147483647},
+		{"-2147483648", -2147483648},
+	} {
+		got, err := ParseSize(tc.v)
+		if err != nil || got != tc.want {
+			t.Errorf("ParseSize(%#v) = %d, %v; want %d, nil", tc.v, got, err, tc.want)
+		}
+	}
+}
+
+// TestSizeFromBespokePager pins SizeFrom: the response to a raw query value
+// that a bespoke pager hands straight in — a non-integer is rejected, while
+// zero/absent selects the documented maximum and a negative value keeps the
+// AIP-158 negative error.
+func TestSizeFromBespokePager(t *testing.T) {
+	for _, v := range []any{"abc", "-0.5", "1.5", 1.5} {
+		if _, err := SizeFrom(v, 500); err == nil {
+			t.Errorf("SizeFrom(%#v, 500) = nil error, want InvalidArgument", v)
+		}
+	}
+	for _, tc := range []struct {
+		v    any
+		max  int
+		want int
+	}{
+		{nil, 500, 500},
+		{"0", 500, 500},
+		{"250", 500, 250},
+		{"501", 500, 500},
+		{float64(42), 500, 42},
+	} {
+		got, err := SizeFrom(tc.v, tc.max)
+		if err != nil || got != tc.want {
+			t.Errorf("SizeFrom(%#v, %d) = %d, %v; want %d, nil", tc.v, tc.max, got, err, tc.want)
 		}
 	}
 }
@@ -176,7 +252,9 @@ func TestPageSizeNegativeRejected(t *testing.T) {
 		{"pageSize": "-1"},
 		{"pageSize": -1},
 		{"pageSize": float64(-1)},
-		{"pageSize": float64(-0.5)}, // sign is checked before truncation
+		// A negative fraction is rejected by the int32 binding ("invalid value")
+		// before the sign rule is reached; either way it is not truncated to 0.
+		{"pageSize": float64(-0.5)},
 	} {
 		_, err := PageSize(params)
 		var perr *model.ProviderError

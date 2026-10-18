@@ -915,3 +915,33 @@ func TestJobSubstateTerminalOmitted(t *testing.T) {
 		t.Fatalf("expected a RUNNING statusHistory entry, got %v", data["statusHistory"])
 	}
 }
+
+// TestListNonIntegerPageSize pins the int32 query binding: a non-integer
+// pageSize is INVALID_ARGUMENT rather than a silent zero.
+func TestListNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+	calls := map[string]func(*model.NormalizedRequest) (*model.ProviderResponse, error){
+		"clusters": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListClusters(ctx, n)
+		},
+		"jobs": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListJobs(ctx, n)
+		},
+		"workflowTemplates": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListWorkflowTemplates(ctx, n)
+		},
+	}
+	for name, call := range calls {
+		for _, v := range []any{"abc", "-0.5", "1.5"} {
+			_, err := call(testNR(map[string]any{"region": "us-central1", "pageSize": v}))
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s pageSize=%#v err = %v, want InvalidArgument/400", name, v, err)
+			}
+		}
+		if _, err := call(testNR(map[string]any{"region": "us-central1", "pageSize": "5"})); err != nil {
+			t.Errorf("%s pageSize=5: %v", name, err)
+		}
+	}
+}

@@ -623,3 +623,44 @@ func TestIAMHandlers(t *testing.T) {
 		t.Fatalf("database getIamPolicy: %v", err)
 	}
 }
+
+// TestListNonIntegerPageSize pins the int32 query binding: a non-integer
+// pageSize is INVALID_ARGUMENT rather than a silent zero.
+func TestListNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	calls := map[string]func(*model.NormalizedRequest) (*model.ProviderResponse, error){
+		"services": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListServices(ctx, n)
+		},
+		"backups": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListBackups(ctx, n)
+		},
+		"imports": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListMetadataImports(ctx, n)
+		},
+		"federations": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListFederations(ctx, n)
+		},
+		"operations": func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListOperations(ctx, n)
+		},
+	}
+	for name, call := range calls {
+		for _, v := range []any{"abc", "-0.5", "1.5"} {
+			_, err := call(newNR(map[string]any{"location": "us-central1", "pageSize": v}))
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s pageSize=%#v err = %v, want InvalidArgument/400", name, v, err)
+			}
+		}
+		// A legal integer is still accepted on the collections that need no
+		// seeded parent (backups/imports answer NotFound first, which is not the
+		// binding contract under test here).
+		if name == "services" || name == "federations" || name == "operations" {
+			if _, err := call(newNR(map[string]any{"location": "us-central1", "pageSize": "5"})); err != nil {
+				t.Errorf("%s pageSize=5: %v", name, err)
+			}
+		}
+	}
+}

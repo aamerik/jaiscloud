@@ -44,7 +44,7 @@ func (p *Provider) ListJobs(ctx context.Context, nr *model.NormalizedRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	pageSize, err := paging.Size(intFrom(nr.Params["pageSize"]), core.MaxPageSize)
+	pageSize, err := paging.SizeFrom(nr.Params["pageSize"], core.MaxPageSize)
 	if err != nil {
 		return nil, err
 	}

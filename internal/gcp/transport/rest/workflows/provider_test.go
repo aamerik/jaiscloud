@@ -333,3 +333,48 @@ func TestProviderResolvesForeignLocationOperation(t *testing.T) {
 		t.Fatalf("resolved data = %v", resp.Data)
 	}
 }
+
+// TestListNonIntegerPageSize pins the int32 query binding: an unparseable or
+// fractional pageSize is INVALID_ARGUMENT instead of silently paging from the
+// start as though the parameter were absent.
+func TestListNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+	for _, tc := range []struct {
+		name string
+		call func(*model.NormalizedRequest) (*model.ProviderResponse, error)
+	}{
+		{"workflows", func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListWorkflows(ctx, n)
+		}},
+		{"revisions", func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListWorkflowRevisions(ctx, n)
+		}},
+		{"operations", func(n *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListOperations(ctx, n)
+		}},
+	} {
+		for _, v := range []any{"abc", "-0.5", "1.5"} {
+			_, err := tc.call(nr(map[string]any{
+				"location": "us-central1",
+				"name":     "projects/proj/locations/us-central1/workflows/wf",
+				"pageSize": v,
+			}))
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s pageSize=%#v err = %v, want InvalidArgument/400", tc.name, v, err)
+			}
+		}
+		// A legal integer is accepted where the collection needs no seeded
+		// workflow (revisions answers NotFound first).
+		if tc.name != "revisions" {
+			if _, err := tc.call(nr(map[string]any{
+				"location": "us-central1",
+				"name":     "projects/proj/locations/us-central1/workflows/wf",
+				"pageSize": "5",
+			})); err != nil {
+				t.Errorf("%s pageSize=5: %v", tc.name, err)
+			}
+		}
+	}
+}

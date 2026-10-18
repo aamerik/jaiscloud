@@ -373,3 +373,36 @@ func TestRESTSinkUnsupportedMask(t *testing.T) {
 		t.Fatal("unsupported mask = nil error")
 	}
 }
+
+// TestRESTListNonIntegerPageSize pins the int32 binding on the Logging lists: a
+// non-integer pageSize (a query string or an entries.list body number) is 400
+// INVALID_ARGUMENT, never a silent zero/default.
+func TestRESTListNonIntegerPageSize(t *testing.T) {
+	c, p := newTestProvider(t)
+	for _, path := range []string{
+		"/v2/projects/test/sinks",
+		"/v2/projects/test/exclusions",
+		"/v2/projects/test/metrics",
+		"/v2/projects/test/locations/global/buckets",
+		"/v2/projects/test/locations/global/buckets/b1/views",
+		"/v2/projects/test/locations/global/buckets/b1/links",
+		"/v2/projects/test/locations/global/logScopes",
+		"/v2/projects/test/logs",
+	} {
+		for _, v := range []string{"abc", "-0.5", "1.5"} {
+			_, err := call(t, c, p, http.MethodGet, path+"?pageSize="+v, nil)
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("GET %s?pageSize=%s err = %v, want InvalidArgument/400", path, v, err)
+			}
+		}
+	}
+	for _, pageSize := range []any{"abc", "-0.5"} {
+		_, err := call(t, c, p, http.MethodPost, "/v2/entries:list",
+			map[string]any{"resourceNames": []any{"projects/test"}, "pageSize": pageSize})
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("entries:list pageSize %#v = %v, want InvalidArgument/400", pageSize, err)
+		}
+	}
+}

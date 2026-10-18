@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud/internal/gcp/paging"
 	kmscore "jaiscloud/internal/gcp/service/kms"
 	kmsstore "jaiscloud/internal/gcp/store/kms"
 	"jaiscloud/internal/gcp/timestamp"
@@ -110,7 +111,11 @@ func (p *Provider) KeyRingCreate(ctx context.Context, nr *model.NormalizedReques
 
 func (p *Provider) KeyRingList(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	loc, _ := nr.Params["location"].(string)
-	page, next, total, err := p.core.PageKeyRings(ctx, nr.AccountID, loc, listQueryFromParams(nr.Params))
+	query, err := listQueryFromParams(nr.Params)
+	if err != nil {
+		return nil, err
+	}
+	page, next, total, err := p.core.PageKeyRings(ctx, nr.AccountID, loc, query)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +219,11 @@ func (p *Provider) CryptoKeyList(ctx context.Context, nr *model.NormalizedReques
 	if loc == "" || kr == "" {
 		return nil, model.NewProviderError("InvalidRequest", "missing location/keyRing", 400)
 	}
-	page, next, total, err := p.core.PageCryptoKeys(ctx, nr.AccountID, loc, kr, listQueryFromParams(nr.Params))
+	query, err := listQueryFromParams(nr.Params)
+	if err != nil {
+		return nil, err
+	}
+	page, next, total, err := p.core.PageCryptoKeys(ctx, nr.AccountID, loc, kr, query)
 	if err != nil {
 		return nil, err
 	}
@@ -463,7 +472,11 @@ func (p *Provider) CryptoKeyVersionList(ctx context.Context, nr *model.Normalize
 		return nil, err
 	}
 	loc, kr, key := parseCryptoKeyFromParent(name)
-	page, next, total, err := p.core.PageVersions(ctx, nr.AccountID, loc, kr, key, listQueryFromParams(nr.Params))
+	query, err := listQueryFromParams(nr.Params)
+	if err != nil {
+		return nil, err
+	}
+	page, next, total, err := p.core.PageVersions(ctx, nr.AccountID, loc, kr, key, query)
 	if err != nil {
 		return nil, err
 	}
@@ -908,7 +921,11 @@ func (p *Provider) ImportJobList(ctx context.Context, nr *model.NormalizedReques
 		return nil, err
 	}
 	loc, kr := parseKeyRing(strings.TrimSuffix(name, "/importJobs"))
-	page, next, total, err := p.core.PageImportJobs(ctx, nr.AccountID, loc, kr, listQueryFromParams(nr.Params))
+	query, err := listQueryFromParams(nr.Params)
+	if err != nil {
+		return nil, err
+	}
+	page, next, total, err := p.core.PageImportJobs(ctx, nr.AccountID, loc, kr, query)
 	if err != nil {
 		return nil, err
 	}
@@ -1089,21 +1106,19 @@ func durationString(d time.Duration) string {
 }
 
 // listQueryFromParams reads the documented filter/orderBy/pageSize/pageToken
-// query parameters the KMS list handlers forward to the core.
-func listQueryFromParams(params map[string]any) kmscore.ListQuery {
+// query parameters into the transport-neutral list query. pageSize is parsed as
+// an int32 by the shared resolver: a non-integer value is INVALID_ARGUMENT, as
+// real GCP's query binding rejects it, rather than being folded into zero and
+// silently treated as absent.
+func listQueryFromParams(params map[string]any) (kmscore.ListQuery, error) {
 	filter, _ := params["filter"].(string)
 	orderBy, _ := params["orderBy"].(string)
-	pageSize := 0
-	switch v := params["pageSize"].(type) {
-	case string:
-		pageSize, _ = strconv.Atoi(v)
-	case int:
-		pageSize = v
-	case float64:
-		pageSize = int(v)
+	pageSize, err := paging.ParseSize(params["pageSize"])
+	if err != nil {
+		return kmscore.ListQuery{}, err
 	}
 	pageToken, _ := params["pageToken"].(string)
-	return kmscore.ListQuery{Filter: filter, OrderBy: orderBy, PageSize: pageSize, PageToken: pageToken}
+	return kmscore.ListQuery{Filter: filter, OrderBy: orderBy, PageSize: pageSize, PageToken: pageToken}, nil
 }
 
 // parseKeyRing parses a name's location/keyRing pair, tolerating a full

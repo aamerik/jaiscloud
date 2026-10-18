@@ -3,6 +3,7 @@ package resourcemanager
 import (
 	"context"
 
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/policy"
 	core "jaiscloud/internal/gcp/service/resourcemanager"
 	"jaiscloud/internal/model"
@@ -65,7 +66,11 @@ func (p *Provider) GetProject(ctx context.Context, nr *model.NormalizedRequest) 
 // emulator never does), so showDeleted is always set; the request filter is
 // evaluated by the core.
 func (p *Provider) ListProjects(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	page, next, err := p.core.ListProjects(ctx, intOf(nr.Params["pageSize"]), strParam(nr, "pageToken"), true, strParam(nr, "filter"))
+	pageSize, err := paging.ParseSize(nr.Params["pageSize"])
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListProjects(ctx, pageSize, strParam(nr, "pageToken"), true, strParam(nr, "filter"))
 	if err != nil {
 		return nil, err
 	}

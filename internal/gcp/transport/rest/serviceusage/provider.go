@@ -3,6 +3,7 @@ package serviceusage
 import (
 	"context"
 
+	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/provider"
 
@@ -48,11 +49,17 @@ func (p *Provider) project(nr *model.NormalizedRequest) string {
 }
 
 func (p *Provider) ListServices(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	// Query binding errors (pageSize) precede semantic validation (filter), as
+	// the real API parses the request binding before the handler runs.
+	pageSize, err := paging.ParseSize(nr.Params["pageSize"])
+	if err != nil {
+		return nil, err
+	}
 	filter, err := core.ParseFilter(strParam(nr, "filter"))
 	if err != nil {
 		return nil, err
 	}
-	page, next, err := p.core.ListAPIs(ctx, p.project(nr), filter, intFrom(nr.Params["pageSize"]), strParam(nr, "pageToken"))
+	page, next, err := p.core.ListAPIs(ctx, p.project(nr), filter, pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}

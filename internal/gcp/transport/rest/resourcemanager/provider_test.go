@@ -483,3 +483,20 @@ func projectState(resp *model.ProviderResponse, id string) string {
 	}
 	return ""
 }
+
+// TestListProjectsNonIntegerPageSize pins the int32 query binding: a
+// non-integer pageSize is INVALID_ARGUMENT rather than a silent zero.
+func TestListProjectsNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider()
+	for _, v := range []any{"abc", "-0.5", "1.5"} {
+		_, err := p.ListProjects(ctx, newNR(map[string]any{"pageSize": v}))
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("ListProjects pageSize=%#v err = %v, want InvalidArgument/400", v, err)
+		}
+	}
+	if _, err := p.ListProjects(ctx, newNR(map[string]any{"pageSize": "5"})); err != nil {
+		t.Errorf("ListProjects pageSize=5: %v", err)
+	}
+}

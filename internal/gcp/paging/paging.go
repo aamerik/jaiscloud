@@ -21,6 +21,8 @@ package paging
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"math"
 	"sort"
 	"strconv"
 
@@ -105,24 +107,84 @@ func PageOrdered[T any](items []T, params map[string]any,
 
 // PageSize parses the pageSize query parameter (string, int, or float64),
 // falling back to the GCP default of 1000 when it is absent or zero. A negative
-// value is rejected with INVALID_ARGUMENT per AIP-158.
+// value is rejected with INVALID_ARGUMENT per AIP-158, and so is a value that
+// is not a valid int32 (real GCP's query/proto binding rejects it rather than
+// treating it as absent).
 func PageSize(params map[string]any) (int, error) {
-	switch v := params["pageSize"].(type) {
-	case string:
-		if n, err := strconv.Atoi(v); err == nil {
-			return normalizePageSize(n)
-		}
-	case int:
-		return normalizePageSize(v)
-	case float64:
-		// Check the sign before truncating: int(-0.5) is 0, which would
-		// otherwise be mistaken for the default.
-		if v < 0 {
-			return 0, negativePageSize()
-		}
-		return normalizePageSize(int(v))
+	n, err := ParseSize(params["pageSize"])
+	if err != nil {
+		return 0, err
 	}
-	return defaultPageSize, nil
+	return normalizePageSize(n)
+}
+
+// ParseSize reads a raw pageSize value as an int32, the type every GCP Discovery
+// document declares for the parameter. Unlike PageSize it applies no paging
+// policy: an absent value (nil) is 0, and the caller decides whether zero means
+// the default (PageSize) or the maximum (Size). A value the int32 binding would
+// reject — an unparseable string such as "abc", a fraction such as "1.5" or
+// "-0.5", or one outside int32 — is INVALID_ARGUMENT, never silently absent.
+// This is the entry point for a bespoke REST pager that parses its own pageSize
+// before handing the integer to paging.Size or to a transport-neutral core.
+func ParseSize(v any) (int, error) {
+	switch x := v.(type) {
+	case nil:
+		return 0, nil
+	case string:
+		// An empty value (`?pageSize=`) has no integer to bind and is treated as
+		// absent, the behavior the lenient parsers had; every other non-integer
+		// form is rejected.
+		if x == "" {
+			return 0, nil
+		}
+		n, err := strconv.ParseInt(x, 10, 32)
+		if err != nil {
+			return 0, invalidPageSize()
+		}
+		return int(n), nil
+	case int:
+		if x < math.MinInt32 || x > math.MaxInt32 {
+			return 0, invalidPageSize()
+		}
+		return x, nil
+	case int32:
+		return int(x), nil
+	case int64:
+		if x < math.MinInt32 || x > math.MaxInt32 {
+			return 0, invalidPageSize()
+		}
+		return int(x), nil
+	case float64:
+		// A proto int32 binding rejects a fraction outright (never truncates);
+		// check that before the sign so "-0.5" is "invalid value", not
+		// "must not be negative", and "1.9" is not silently sent as 1.
+		if x != math.Trunc(x) || x < math.MinInt32 || x > math.MaxInt32 {
+			return 0, invalidPageSize()
+		}
+		return int(x), nil
+	case json.Number:
+		n, err := strconv.ParseInt(x.String(), 10, 32)
+		if err != nil {
+			return 0, invalidPageSize()
+		}
+		return int(n), nil
+	default:
+		return 0, invalidPageSize()
+	}
+}
+
+// SizeFrom is the bespoke-pager entry point that combines ParseSize with the
+// AIP-158 ceiling: an absent/zero value selects max, a negative one is
+// INVALID_ARGUMENT, an over-large one is coerced down, and a value the int32
+// query binding cannot parse is INVALID_ARGUMENT (rather than being folded into
+// zero and treated as absent). A pager whose size arrives as a raw query value
+// calls this instead of parsing the string itself.
+func SizeFrom(v any, max int) (int, error) {
+	n, err := ParseSize(v)
+	if err != nil {
+		return 0, err
+	}
+	return Size(n, max)
 }
 
 // Size applies the AIP-158 page-size contract to a bespoke pager that has
@@ -169,6 +231,12 @@ func normalizePageSize(n int) (int, error) {
 
 func negativePageSize() error {
 	return model.NewProviderError("InvalidArgument", "pageSize must not be negative", 400)
+}
+
+// invalidPageSize is the error real GCP's int32 query binding returns for a
+// value it cannot parse (the message the Google API frontend uses).
+func invalidPageSize() error {
+	return model.NewProviderError("InvalidArgument", "Invalid value for int32 type: pageSize", 400)
 }
 
 func encodeCursor(id string) string {

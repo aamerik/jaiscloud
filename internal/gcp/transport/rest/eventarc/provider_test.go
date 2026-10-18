@@ -1371,3 +1371,36 @@ func TestAdvancedListFilterAndOrderREST(t *testing.T) {
 		t.Errorf("providers orderBy displayName desc = %v, want %v", got, want)
 	}
 }
+
+// TestListNonIntegerPageSize pins the int32 query binding: an unparseable or
+// fractional pageSize is INVALID_ARGUMENT, never a silent zero that would page
+// from the beginning as if the parameter were absent.
+func TestListNonIntegerPageSize(t *testing.T) {
+	ctx := context.Background()
+	p, _, _ := newProvider()
+	for _, tc := range []struct {
+		name string
+		call func(*model.NormalizedRequest) (*model.ProviderResponse, error)
+	}{
+		{"triggers", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListTriggers(ctx, nr)
+		}},
+		{"channels", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListChannels(ctx, nr)
+		}},
+		{"providers", func(nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+			return p.ListProviders(ctx, nr)
+		}},
+	} {
+		for _, v := range []any{"abc", "-0.5", "1.5"} {
+			_, err := tc.call(newNR(map[string]any{"location": "us-central1", "pageSize": v}))
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+				t.Errorf("%s pageSize=%#v err = %v, want InvalidArgument/400", tc.name, v, err)
+			}
+		}
+		if _, err := tc.call(newNR(map[string]any{"location": "us-central1", "pageSize": "5"})); err != nil {
+			t.Errorf("%s pageSize=5: %v", tc.name, err)
+		}
+	}
+}

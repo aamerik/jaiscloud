@@ -1596,3 +1596,33 @@ func TestListRowsCellEncoding(t *testing.T) {
 		t.Fatalf("missing value must be {\"v\": null}, got %#v", sparseCells[1])
 	}
 }
+
+// TestMaxResultsUint32Range pins BigQuery's maxResults type: the Discovery
+// document declares it uint32, so a legal value above MaxInt32 (which the
+// shared int32 pageSize binding would reject) still pages successfully, while a
+// value above uint32 or a non-integer is 400 INVALID_ARGUMENT.
+func TestMaxResultsUint32Range(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+	if _, err := p.CreateDataset(ctx, newNR(map[string]any{"body": map[string]any{
+		"datasetReference": map[string]any{"projectId": "proj", "datasetId": "d"},
+	}})); err != nil {
+		t.Fatalf("create dataset: %v", err)
+	}
+	for _, v := range []any{"4294967295", "2147483648", float64(4294967295)} {
+		resp, err := p.ListDatasets(ctx, newNR(map[string]any{"maxResults": v}))
+		if err != nil {
+			t.Fatalf("ListDatasets(maxResults=%v): %v", v, err)
+		}
+		if got, _ := resp.Data["datasets"].([]any); len(got) != 1 {
+			t.Fatalf("ListDatasets(maxResults=%v) = %v, want the dataset", v, resp.Data["datasets"])
+		}
+	}
+	for _, v := range []any{"4294967296", "-1", "abc", float64(1.5)} {
+		_, err := p.ListDatasets(ctx, newNR(map[string]any{"maxResults": v}))
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("ListDatasets(maxResults=%v) err = %v, want InvalidArgument/400", v, err)
+		}
+	}
+}
