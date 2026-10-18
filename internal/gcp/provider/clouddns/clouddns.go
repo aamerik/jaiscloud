@@ -833,8 +833,9 @@ func bindPageSize(params map[string]any) (paging.MaxResultsBinding, error) {
 }
 
 // resolvePageSize applies the backend half of Cloud DNS's maxResults contract:
-// the emulator's default when the parameter was absent or empty, and the
-// probed 1..1000 range otherwise.
+// the emulator's default when the parameter was absent, and the probed 1..1000
+// range otherwise (an explicitly empty value is rejected by the binding before
+// this point, DC63).
 func resolvePageSize(b paging.MaxResultsBinding) (int, error) {
 	return b.Resolve(defaultMaxResults, minMaxResults, maxMaxResults)
 }

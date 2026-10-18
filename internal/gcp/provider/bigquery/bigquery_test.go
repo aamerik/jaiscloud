@@ -762,6 +762,57 @@ func TestListPagination(t *testing.T) {
 	}
 }
 
+// TestMaxResultsEmptyBinding pins BigQuery's uint32 maxResults query binding on
+// every method that declares it: an explicitly empty value is not "absent"
+// (DC63), it is the frontend's binding rejection, so the error names
+// `max_results` (not the shared pager's internal pageSize alias) and the
+// message carries TYPE_UINT32. The check still happens up front, before any
+// dataset/table/job lookup, and an absent maxResults keeps meaning "no limit".
+func TestMaxResultsEmptyBinding(t *testing.T) {
+	ctx := context.Background()
+	p := New(bqstore.NewMemoryStore())
+	calls := []struct {
+		name string
+		call func() error
+	}{
+		{"datasets.list", func() error {
+			_, err := p.ListDatasets(ctx, newNR(map[string]any{"maxResults": ""}))
+			return err
+		}},
+		{"tables.list", func() error {
+			_, err := p.ListTables(ctx, newNR(map[string]any{"datasetId": "d", "maxResults": ""}))
+			return err
+		}},
+		{"tabledata.list", func() error {
+			_, err := p.ListRows(ctx, newNR(map[string]any{"datasetId": "d", "tableId": "t", "maxResults": ""}))
+			return err
+		}},
+		{"jobs.list", func() error {
+			_, err := p.ListJobs(ctx, newNR(map[string]any{"maxResults": ""}))
+			return err
+		}},
+		{"jobs.getQueryResults", func() error {
+			_, err := p.GetQueryResults(ctx, newNR(map[string]any{"jobId": "j1", "maxResults": ""}))
+			return err
+		}},
+	}
+	for _, tc := range calls {
+		err := tc.call()
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+			t.Errorf("%s(maxResults=) = %v, want InvalidArgument/400", tc.name, err)
+			continue
+		}
+		if want := `Invalid value at 'max_results' (TYPE_UINT32), ""`; perr.Message != want {
+			t.Errorf("%s(maxResults=) message = %q, want %q", tc.name, perr.Message, want)
+		}
+	}
+	// An absent maxResults stays "no page limit" rather than an error.
+	if _, err := p.ListDatasets(ctx, newNR(nil)); err != nil {
+		t.Errorf("datasets.list without maxResults = %v, want a page", err)
+	}
+}
+
 // TestQueryResultPaging covers the result-set paging on jobs.query and
 // getQueryResults: maxResults truncates a page and returns a pageToken,
 // getQueryResults honors pageToken then startIndex, an unset maxResults still
@@ -973,15 +1024,22 @@ func TestQueryResultPagingNegatives(t *testing.T) {
 		t.Fatalf("pageToken must select the second page, got row %v", cell["v"])
 	}
 
-	// A huge maxResults must not overflow the page bound (no panic, all rows).
+	// The largest legal uint32 maxResults must not overflow the page bound (no
+	// panic, all remaining rows). Values above uint32 are outside the declared
+	// binding and are rejected up front, like real GCP's frontend.
 	huge, err := p.GetQueryResults(ctx, newNR(map[string]any{
-		"jobId": jobID, "startIndex": "1", "maxResults": "9223372036854775807",
+		"jobId": jobID, "startIndex": "1", "maxResults": "4294967295",
 	}))
 	if err != nil {
-		t.Fatalf("huge maxResults: %v", err)
+		t.Fatalf("max uint32 maxResults: %v", err)
 	}
 	if rws, _ := huge.Data["rows"].([]any); len(rws) != 2 {
-		t.Fatalf("huge maxResults from startIndex 1: expected 2 rows, got %d", len(rws))
+		t.Fatalf("max uint32 maxResults from startIndex 1: expected 2 rows, got %d", len(rws))
+	}
+	if _, err := p.GetQueryResults(ctx, newNR(map[string]any{
+		"jobId": jobID, "maxResults": "9223372036854775807",
+	})); err == nil {
+		t.Fatalf("out-of-uint32 maxResults: expected the binding error")
 	}
 
 	// Paging input is validated on a DML job too (which returns no result set).
