@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -157,6 +158,11 @@ type backupScheduleDef struct {
 	Retention  time.Duration `json:"retention,omitempty"`
 	Recurrence string        `json:"recurrence,omitempty"`
 	DayOfWeek  int           `json:"dayOfWeek,omitempty"`
+	// MaterializedThrough is the latest scheduled occurrence this emulator has
+	// already turned into a Backup record (or skipped because it had aged out
+	// of the retention window). It makes the lazy materialization idempotent
+	// and stops a deleted backup from reappearing on the next read.
+	MaterializedThrough time.Time `json:"materializedThrough,omitempty"`
 }
 
 // backupDef is the persisted google.firestore.admin.v1.Backup. Backups are
@@ -1241,8 +1247,230 @@ func (s *Service) DeleteBackupSchedule(ctx context.Context, project, db, id stri
 
 // ─── Backups ──────────────────────────────────────────────────────────────────
 
-// GetBackup returns a backup record.
+const (
+	// defaultBackupRetention is the fallback retention when a schedule omits the
+	// field (it is required in the API; the emulator stays lenient).
+	defaultBackupRetention = 7 * 24 * time.Hour
+	// maxBackupsPerPass bounds one lazy materialization pass so a large clock
+	// jump cannot build an unbounded list of records.
+	maxBackupsPerPass = 32
+)
+
+// backupScheduleInterval returns a schedule's recurrence period. The emulator
+// anchors occurrences to the schedule's create time: a WEEKLY schedule with a
+// day_of_week naming a different weekday still fires on the create-time weekday
+// (the Discovery document models the day but the emulator does not shift the
+// anchor).
+func backupScheduleInterval(bs backupScheduleDef) time.Duration {
+	if bs.Recurrence == "WEEKLY" {
+		return 7 * 24 * time.Hour
+	}
+	return 24 * time.Hour
+}
+
+// parseBackupScheduleName splits a schedule name
+// ("projects/{p}/databases/{db}/backupSchedules/{id}").
+func parseBackupScheduleName(name string) (db, id string, ok bool) {
+	parts := strings.Split(name, "/")
+	if len(parts) != 6 || parts[0] != "projects" || parts[2] != "databases" || parts[4] != "backupSchedules" {
+		return "", "", false
+	}
+	return parts[3], parts[5], true
+}
+
+// backupStats is the Backup.stats payload, measured from the database the backup
+// was taken from. documentCount counts documents and indexCount counts tracked
+// composite index definitions — the emulator does not model per-document index
+// entries — and sizeBytes sums the persisted document records.
+type backupStats struct {
+	documentCount int64
+	indexCount    int64
+	sizeBytes     int64
+}
+
+// backupStatsFor measures a database's current document/index state. Store
+// errors are returned so a materialized backup never carries silently wrong
+// statistics.
+func (s *Service) backupStatsFor(ctx context.Context, project, db string) (backupStats, error) {
+	var st backupStats
+	if s.store != nil {
+		docs, err := s.store.ListDocuments(ctx, project, db)
+		if err != nil {
+			return st, err
+		}
+		st.documentCount = int64(len(docs))
+		for _, d := range docs {
+			if data, err := json.Marshal(d); err == nil {
+				st.sizeBytes += int64(len(data))
+			}
+		}
+	}
+	indexes, err := listResources[indexDef](ctx, s, project, rtIndex, "databases/"+db+"/collectionGroups/")
+	if err != nil {
+		return st, err
+	}
+	st.indexCount = int64(len(indexes))
+	return st, nil
+}
+
+// materializeBackups creates the Backup records a due backup schedule implies.
+// Backups are read-only in the Admin API — a backup schedule produces them — so
+// the emulator derives them lazily on every backup read/list from the schedule
+// and the emulator clock (which the admin control plane can advance), and drops
+// the ones whose retention window has closed, as real Firestore does.
+//
+// The work is proportional to the project's schedules (one GetDatabase and, when
+// an occurrence is due, one document scan per schedule), plus one list of the
+// location's backups for the expiry pass. That is fine at emulator scale, but it
+// means a single GetBackup is not a pure read: it can materialize and purge.
+func (s *Service) materializeBackups(ctx context.Context, project, loc string) error {
+	if s.resources == nil {
+		return nil
+	}
+	now := clock.Now().UTC()
+	schedules, err := listResources[backupScheduleDef](ctx, s, project, rtBackupSchedule, "databases/")
+	if err != nil {
+		return err
+	}
+	for _, bs := range schedules {
+		db, _, ok := parseBackupScheduleName(bs.Name)
+		if !ok {
+			continue
+		}
+		dbrec, err := s.GetDatabase(ctx, project, db)
+		if err != nil {
+			// A deleted database stops producing backups; its surviving backups
+			// stay readable until they expire.
+			continue
+		}
+		backupLoc := dbrec.LocationID
+		if backupLoc == "" && loc != "-" {
+			backupLoc = loc
+		}
+		// A backup lives in its database's location; a database without one (the
+		// implicit "(default)" record) has nowhere to place them.
+		if backupLoc == "" || (loc != "-" && backupLoc != loc) {
+			continue
+		}
+		if err := s.materializeSchedule(ctx, project, db, backupLoc, dbrec, bs, now); err != nil {
+			return err
+		}
+	}
+	return s.purgeExpiredBackups(ctx, project, loc, now)
+}
+
+// materializeSchedule materializes the occurrences of one schedule that are due
+// and not yet recorded. Occurrence k happens at createTime + k*interval; the
+// schedule's create time is not itself a backup. Occurrences older than the
+// retention window are skipped (they would be purged immediately), and the
+// schedule's MaterializedThrough high-water mark advances past every occurrence
+// considered, so a deleted backup is not recreated by the next read.
+func (s *Service) materializeSchedule(ctx context.Context, project, db, backupLoc string, dbrec databaseDef, bs backupScheduleDef, now time.Time) error {
+	start := bs.CreateTime.UTC()
+	if start.IsZero() || now.Before(start) {
+		return nil
+	}
+	interval := backupScheduleInterval(bs)
+	retention := bs.Retention
+	if retention <= 0 {
+		retention = defaultBackupRetention
+	}
+	last := int64(now.Sub(start) / interval)
+	if last < 1 {
+		return nil
+	}
+	first := int64(1)
+	if from := bs.MaterializedThrough.UTC(); !from.IsZero() {
+		first = int64(from.Sub(start)/interval) + 1
+	}
+	// Drop occurrences that already fell out of the retention window.
+	earliest := now.Add(-retention)
+	if k := int64(earliest.Sub(start)/interval) + 1; k > first {
+		first = k
+	}
+	if first < last-maxBackupsPerPass+1 {
+		first = last - maxBackupsPerPass + 1
+	}
+	if first > last {
+		return nil
+	}
+
+	_, schedID, _ := parseBackupScheduleName(bs.Name)
+	if schedID == "" {
+		return nil
+	}
+	stats, err := s.backupStatsFor(ctx, project, db)
+	if err != nil {
+		return err
+	}
+	for k := first; k <= last; k++ {
+		snapshot := start.Add(time.Duration(k) * interval)
+		id := fmt.Sprintf("%s-%d", schedID, snapshot.Unix())
+		b := backupDef{
+			Name:          backupName(project, backupLoc, id),
+			Database:      databaseName(project, db),
+			DatabaseUid:   dbrec.Uid,
+			SnapshotTime:  snapshot,
+			ExpireTime:    snapshot.Add(retention),
+			State:         "READY",
+			DocumentCount: stats.documentCount,
+			IndexCount:    stats.indexCount,
+			SizeBytes:     stats.sizeBytes,
+		}
+		if err := s.putResource(ctx, project, rtBackup, backupRel(backupLoc, id), b, false); err != nil {
+			return err
+		}
+	}
+	// Advance the high-water mark atomically: a read-side write must not
+	// overwrite a concurrent schedule patch (nor resurrect a deleted schedule).
+	if _, err := mutateOne(ctx, s, project, rtBackupSchedule, backupScheduleRel(db, schedID), nil,
+		func(cur backupScheduleDef, _ bool) (backupScheduleDef, bool, error) {
+			mark := start.Add(time.Duration(last) * interval)
+			if !cur.MaterializedThrough.Before(mark) {
+				return cur, false, nil
+			}
+			cur.MaterializedThrough = mark
+			return cur, true, nil
+		}); err != nil {
+		if isNotFound(err) {
+			return nil // the schedule was deleted while this read was in flight
+		}
+		return err
+	}
+	return nil
+}
+
+// purgeExpiredBackups removes backup records whose retention window has closed.
+// Real Firestore deletes expired backups; the emulator does it lazily on read.
+func (s *Service) purgeExpiredBackups(ctx context.Context, project, loc string, now time.Time) error {
+	prefix := "locations/" + loc + "/backups/"
+	if loc == "-" {
+		prefix = "locations/"
+	}
+	entries, err := s.resources.List(ctx, project, store.GlobalRegion, rtBackup, prefix)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		var b backupDef
+		if json.Unmarshal(e.Data, &b) != nil {
+			continue
+		}
+		if b.ExpireTime.IsZero() || b.ExpireTime.After(now) {
+			continue
+		}
+		if err := s.resources.Delete(ctx, project, store.GlobalRegion, rtBackup, e.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetBackup returns a backup record produced by a due backup schedule.
 func (s *Service) GetBackup(ctx context.Context, project, loc, id string) (backupDef, error) {
+	if err := s.materializeBackups(ctx, project, loc); err != nil {
+		return backupDef{}, err
+	}
 	var b backupDef
 	if err := s.getResource(ctx, project, rtBackup, backupRel(loc, id), &b); err != nil {
 		return backupDef{}, err
@@ -1250,17 +1478,29 @@ func (s *Service) GetBackup(ctx context.Context, project, loc, id string) (backu
 	return b, nil
 }
 
-// ListBackups returns the backups in a location, filtered by a substring of the
-// backup resource name.
+// ListBackups returns the backups in a location (or, for the documented "-"
+// wildcard, in every location), filtered by a substring of the backup resource
+// name. Due backup-schedule occurrences are materialized first.
 func (s *Service) ListBackups(ctx context.Context, project, loc, filter string) ([]backupDef, error) {
-	backups, err := listResources[backupDef](ctx, s, project, rtBackup, "locations/"+loc+"/backups/")
+	if err := s.materializeBackups(ctx, project, loc); err != nil {
+		return nil, err
+	}
+	prefix := "locations/" + loc + "/backups/"
+	if loc == "-" {
+		prefix = "locations/"
+	}
+	backups, err := listResources[backupDef](ctx, s, project, rtBackup, prefix)
 	if err != nil {
 		return nil, err
 	}
 	if filter != "" {
-		kept := backups[:0]
+		kept := make([]backupDef, 0, len(backups))
 		for _, b := range backups {
-			if strings.Contains(b.Name, filter) {
+			match, err := backupMatchesFilter(b, filter)
+			if err != nil {
+				return nil, err
+			}
+			if match {
 				kept = append(kept, b)
 			}
 		}
@@ -1268,6 +1508,35 @@ func (s *Service) ListBackups(ctx context.Context, project, loc, filter string) 
 	}
 	sort.Slice(backups, func(i, j int) bool { return backups[i].Name < backups[j].Name })
 	return backups, nil
+}
+
+// backupMatchesFilter evaluates a ListBackups filter expression. The Discovery
+// document declares one eligible field — database_uid — compared with `=`
+// (equality) or the generic `:` contains operator. An unsupported field or a
+// malformed expression is InvalidArgument, as real Firestore answers.
+func backupMatchesFilter(b backupDef, filter string) (bool, error) {
+	expr := strings.TrimSpace(filter)
+	idx := strings.IndexAny(expr, "=:")
+	if idx < 0 {
+		return false, model.NewProviderError("InvalidArgument",
+			"invalid backup filter "+strconv.Quote(filter)+": expected <field> <operator> <value>", 400)
+	}
+	field := strings.ToLower(strings.TrimSpace(expr[:idx]))
+	op := expr[idx]
+	value := strings.TrimSpace(expr[idx+1:])
+	if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
+		value = value[1 : len(value)-1]
+	}
+	if field != "database_uid" {
+		return false, model.NewProviderError("InvalidArgument",
+			"invalid backup filter "+strconv.Quote(filter)+": the only supported field is database_uid", 400)
+	}
+	switch op {
+	case '=':
+		return b.DatabaseUid == value, nil
+	default: // ':'
+		return strings.Contains(b.DatabaseUid, value), nil
+	}
 }
 
 // DeleteBackup removes a backup record.

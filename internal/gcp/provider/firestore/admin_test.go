@@ -3,6 +3,7 @@ package firestore
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/gcperr"
+	firestorestore "jaiscloud/internal/gcp/store/firestore"
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
@@ -1076,5 +1078,253 @@ func TestFieldAndScheduleUpdatesAreAtomic(t *testing.T) {
 	}
 	if bs.Retention != 14*24*time.Hour || bs.Recurrence != "WEEKLY" || bs.DayOfWeek != 1 {
 		t.Errorf("a concurrent patch lost a schedule change: %+v", bs)
+	}
+}
+
+// TestBackupMaterializationFromSchedule covers the read-only backup surface: a
+// backup schedule produces backups, so a read materializes the occurrences that
+// are due on the emulator clock, the retention window bounds them, and a deleted
+// backup is not resurrected by the next read.
+func TestBackupMaterializationFromSchedule(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+	base := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: base})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "bkpdb", databaseDef{LocationID: "us-central1"}); err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "bkpdb", "1",
+		backupScheduleDef{Retention: 24 * time.Hour, Recurrence: "DAILY"}); err != nil {
+		t.Fatalf("CreateBackupScheduleDef: %v", err)
+	}
+
+	// Nothing is due before the first occurrence, and another location never
+	// sees this database's backups.
+	if list, err := p.ListBackups(ctx, "proj", "us-central1", ""); err != nil || len(list) != 0 {
+		t.Fatalf("ListBackups before first occurrence len=%d err=%v", len(list), err)
+	}
+
+	// A schedule patched after the materialization reads it must keep its
+	// patched fields: advancing the high-water mark is an atomic field update,
+	// not a whole-record overwrite.
+	if _, err := p.UpdateBackupScheduleDef(ctx, "proj", "bkpdb", "1",
+		backupScheduleDef{Retention: 48 * time.Hour}, []string{"retention"}, true); err != nil {
+		t.Fatalf("UpdateBackupScheduleDef: %v", err)
+	}
+
+	// Cross the first daily occurrence.
+	clock.SetGlobalClock(clock.FixedClock{T: base.Add(24*time.Hour + time.Minute)})
+	list, err := p.ListBackups(ctx, "proj", "us-central1", "")
+	if err != nil {
+		t.Fatalf("ListBackups: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("ListBackups after first occurrence = %d backups, want 1", len(list))
+	}
+	b := list[0]
+	if want := "projects/proj/locations/us-central1/backups/1-" + strconv.FormatInt(base.Add(24*time.Hour).Unix(), 10); b.Name != want {
+		t.Errorf("backup name = %q, want %q", b.Name, want)
+	}
+	if b.Database != "projects/proj/databases/bkpdb" || b.DatabaseUid == "" {
+		t.Errorf("backup database = %q uid %q", b.Database, b.DatabaseUid)
+	}
+	if !b.SnapshotTime.Equal(base.Add(24 * time.Hour)) {
+		t.Errorf("snapshotTime = %v, want %v", b.SnapshotTime, base.Add(24*time.Hour))
+	}
+	if !b.ExpireTime.Equal(base.Add(72 * time.Hour)) {
+		t.Errorf("expireTime = %v, want %v (snapshot + the patched 48h retention)", b.ExpireTime, base.Add(72*time.Hour))
+	}
+	if b.State != "READY" {
+		t.Errorf("state = %q, want READY", b.State)
+	}
+	sched, err := p.GetBackupSchedule(ctx, "proj", "bkpdb", "1")
+	if err != nil {
+		t.Fatalf("GetBackupSchedule: %v", err)
+	}
+	if sched.Retention != 48*time.Hour {
+		t.Errorf("patched retention = %v, want 48h preserved across materialization", sched.Retention)
+	}
+	if !sched.MaterializedThrough.Equal(base.Add(24 * time.Hour)) {
+		t.Errorf("materializedThrough = %v, want %v", sched.MaterializedThrough, base.Add(24*time.Hour))
+	}
+
+	// A read is idempotent, the documented "-" wildcard sees the backup, and a
+	// different location does not.
+	if again, err := p.ListBackups(ctx, "proj", "us-central1", ""); err != nil || len(again) != 1 {
+		t.Fatalf("second ListBackups len=%d err=%v, want the same single backup", len(again), err)
+	}
+	if all, err := p.ListBackups(ctx, "proj", "-", ""); err != nil || len(all) != 1 {
+		t.Fatalf("ListBackups(-) len=%d err=%v", len(all), err)
+	}
+	if other, err := p.ListBackups(ctx, "proj", "europe-west1", ""); err != nil || len(other) != 0 {
+		t.Fatalf("ListBackups(europe-west1) len=%d err=%v, want none", len(other), err)
+	}
+
+	got, err := p.GetBackup(ctx, "proj", "us-central1", "1-"+strconv.FormatInt(base.Add(24*time.Hour).Unix(), 10))
+	if err != nil || got.Name != b.Name {
+		t.Fatalf("GetBackup = %+v err=%v", got, err)
+	}
+
+	// Deleting it must not make the next read recreate it.
+	id := strings.TrimPrefix(b.Name, "projects/proj/locations/us-central1/backups/")
+	if err := p.DeleteBackup(ctx, "proj", "us-central1", id); err != nil {
+		t.Fatalf("DeleteBackup: %v", err)
+	}
+	if gone, err := p.ListBackups(ctx, "proj", "us-central1", ""); err != nil || len(gone) != 0 {
+		t.Fatalf("ListBackups after delete len=%d err=%v, want no resurrection", len(gone), err)
+	}
+
+	// The next day's occurrence materializes while the deleted one stays gone.
+	clock.SetGlobalClock(clock.FixedClock{T: base.Add(48*time.Hour + time.Minute)})
+	next, err := p.ListBackups(ctx, "proj", "us-central1", "")
+	if err != nil || len(next) != 1 {
+		t.Fatalf("ListBackups day 2 len=%d err=%v, want 1", len(next), err)
+	}
+	if !next[0].SnapshotTime.Equal(base.Add(48 * time.Hour)) {
+		t.Errorf("day-2 snapshotTime = %v, want %v", next[0].SnapshotTime, base.Add(48*time.Hour))
+	}
+}
+
+// TestBackupMaterializationPurgesExpired asserts a backup whose retention window
+// has closed is removed on read, as real Firestore does.
+func TestBackupMaterializationPurgesExpired(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+	base := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: base})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "purgedb", databaseDef{LocationID: "us-central1"}); err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	// A weekly schedule with a two-day retention: the occurrence expires before
+	// the next one is due.
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "purgedb", "1",
+		backupScheduleDef{Retention: 48 * time.Hour, Recurrence: "WEEKLY"}); err != nil {
+		t.Fatalf("CreateBackupScheduleDef: %v", err)
+	}
+
+	clock.SetGlobalClock(clock.FixedClock{T: base.Add(7*24*time.Hour + time.Minute)})
+	list, err := p.ListBackups(ctx, "proj", "us-central1", "")
+	if err != nil || len(list) != 1 {
+		t.Fatalf("ListBackups week 1 len=%d err=%v, want 1", len(list), err)
+	}
+	// Read again three days later: the backup is past its retention window.
+	clock.SetGlobalClock(clock.FixedClock{T: base.Add(10 * 24 * time.Hour)})
+	list, err = p.ListBackups(ctx, "proj", "us-central1", "")
+	if err != nil || len(list) != 0 {
+		t.Fatalf("ListBackups after expiry len=%d err=%v, want the expired backup purged", len(list), err)
+	}
+}
+
+// TestBackupMaterializationStats proves a materialized backup carries the
+// database's measured statistics (documents, composite indexes, persisted size)
+// rather than an empty stats object.
+func TestBackupMaterializationStats(t *testing.T) {
+	ctx := context.Background()
+	p := newService(firestorestore.NewMemoryStore(), store.NewMemoryResourceStore())
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: base})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "statsdb", databaseDef{LocationID: "us-central1"}); err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	for _, name := range []string{"c/one", "c/two"} {
+		doc := firestorestore.Document{Name: "projects/proj/databases/statsdb/documents/" + name}
+		if err := p.store.CreateDocument(ctx, doc); err != nil {
+			t.Fatalf("CreateDocument(%s): %v", name, err)
+		}
+	}
+	if _, _, err := p.CreateIndexDef(ctx, "proj", "statsdb", "c", indexDef{
+		QueryScope: "COLLECTION",
+		Fields:     []indexField{{FieldPath: "a", Order: "ASCENDING"}, {FieldPath: "b", Order: "ASCENDING"}},
+	}); err != nil {
+		t.Fatalf("CreateIndexDef: %v", err)
+	}
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "statsdb", "1",
+		backupScheduleDef{Retention: 24 * time.Hour, Recurrence: "DAILY"}); err != nil {
+		t.Fatalf("CreateBackupScheduleDef: %v", err)
+	}
+
+	clock.SetGlobalClock(clock.FixedClock{T: base.Add(24*time.Hour + time.Minute)})
+	list, err := p.ListBackups(ctx, "proj", "us-central1", "")
+	if err != nil || len(list) != 1 {
+		t.Fatalf("ListBackups len=%d err=%v", len(list), err)
+	}
+	b := list[0]
+	if b.DocumentCount != 2 {
+		t.Errorf("documentCount = %d, want 2", b.DocumentCount)
+	}
+	if b.IndexCount != 1 {
+		t.Errorf("indexCount = %d, want the one composite index definition", b.IndexCount)
+	}
+	if b.SizeBytes <= 0 {
+		t.Errorf("sizeBytes = %d, want the persisted document bytes", b.SizeBytes)
+	}
+}
+
+// TestListBackupsFilter covers the documented filter field (database_uid) and
+// rejects an unsupported expression instead of silently matching by name.
+func TestListBackupsFilter(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: base})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	dbrec, _, err := p.CreateDatabaseDef(ctx, "proj", "filterdb", databaseDef{LocationID: "us-central1"})
+	if err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "filterdb", "1",
+		backupScheduleDef{Retention: 24 * time.Hour, Recurrence: "DAILY"}); err != nil {
+		t.Fatalf("CreateBackupScheduleDef: %v", err)
+	}
+	clock.SetGlobalClock(clock.FixedClock{T: base.Add(24*time.Hour + time.Minute)})
+
+	for _, filter := range []string{`database_uid = "` + dbrec.Uid + `"`, "database_uid:" + dbrec.Uid[:8]} {
+		list, err := p.ListBackups(ctx, "proj", "us-central1", filter)
+		if err != nil || len(list) != 1 {
+			t.Errorf("filter %q: len=%d err=%v, want the backup", filter, len(list), err)
+		}
+	}
+	for _, filter := range []string{`database_uid != "x"`, `name = "x"`, "nonsense"} {
+		if _, err := p.ListBackups(ctx, "proj", "us-central1", filter); err == nil {
+			t.Errorf("filter %q: expected InvalidArgument", filter)
+		}
+	}
+	if list, err := p.ListBackups(ctx, "proj", "us-central1", `database_uid = "other"`); err != nil || len(list) != 0 {
+		t.Errorf("non-matching uid filter: len=%d err=%v, want none", len(list), err)
+	}
+}
+
+// TestBackupMaterializationClamp proves a large clock jump does not build an
+// unbounded backlog of backup records.
+func TestBackupMaterializationClamp(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminService()
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: base})
+	defer clock.SetGlobalClock(clock.RealClock{})
+
+	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "clampdb", databaseDef{LocationID: "us-central1"}); err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	// A long retention over a year-long jump: the pass is bounded by
+	// maxBackupsPerPass rather than materializing 365 records.
+	if _, err := p.CreateBackupScheduleDef(ctx, "proj", "clampdb", "1",
+		backupScheduleDef{Retention: 400 * 24 * time.Hour, Recurrence: "DAILY"}); err != nil {
+		t.Fatalf("CreateBackupScheduleDef: %v", err)
+	}
+	clock.SetGlobalClock(clock.FixedClock{T: base.Add(365 * 24 * time.Hour)})
+	list, err := p.ListBackups(ctx, "proj", "us-central1", "")
+	if err != nil {
+		t.Fatalf("ListBackups: %v", err)
+	}
+	if len(list) != maxBackupsPerPass {
+		t.Fatalf("materialized %d backups, want the %d-per-pass cap", len(list), maxBackupsPerPass)
 	}
 }

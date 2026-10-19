@@ -122,11 +122,57 @@ func validateValueOpts(doc *DiscoveryDoc, schema *Schema, v any, path string, op
 			return []Divergence{wrongType(path, "boolean", v)}
 		}
 		return nil
-	case "any", "":
+	case "any":
+		if payload, ok := anyPayload(doc, v); ok {
+			return validateValueOpts(doc, payload.schema, payload.value, path, opts)
+		}
+		return nil
+	case "":
 		return nil
 	default:
 		return nil
 	}
+}
+
+// anyValue is a resolved google.protobuf.Any: the message schema its "@type"
+// URL names plus the payload with the discriminator removed.
+type anyValue struct {
+	schema *Schema
+	value  map[string]any
+}
+
+// anyPayload resolves a protojson google.protobuf.Any. In protojson an Any is
+// the message object plus an "@type" URL; the URL's last dotted segment is the
+// schema name, and when the service's Discovery document declares it the payload
+// can be validated against that schema (recursively, so an Operation's
+// metadata/response are checked rather than treated as opaque bytes). ok is
+// false when the object carries no "@type" or names a message the snapshot does
+// not describe.
+func anyPayload(doc *DiscoveryDoc, v any) (anyValue, bool) {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return anyValue{}, false
+	}
+	typeURL, _ := obj["@type"].(string)
+	if typeURL == "" {
+		return anyValue{}, false
+	}
+	name := typeURL
+	if i := strings.LastIndex(typeURL, "."); i >= 0 {
+		name = typeURL[i+1:]
+	}
+	schema, ok := doc.Schemas[name]
+	if !ok || schema == nil {
+		return anyValue{}, false
+	}
+	payload := make(map[string]any, len(obj))
+	for k, val := range obj {
+		if k == "@type" {
+			continue
+		}
+		payload[k] = val
+	}
+	return anyValue{schema: schema, value: payload}, true
 }
 
 // isNullValueEnum reports whether schema is the google.protobuf.NullValue enum
@@ -139,6 +185,17 @@ func isNullValueEnum(schema *Schema) bool {
 
 func validateObject(doc *DiscoveryDoc, schema *Schema, obj map[string]any, path string, opts validateOpts) []Divergence {
 	var divs []Divergence
+
+	// A google.protobuf.Any is rendered by protojson as the message object plus
+	// an "@type" URL, and Discovery describes it as an object whose
+	// additionalProperties are of type "any". Resolve the URL once for the whole
+	// object so the payload is checked against its message schema instead of each
+	// field being treated as an opaque value.
+	if add := schema.additionalSchema(); add != nil && add.Type == "any" {
+		if payload, ok := anyPayload(doc, obj); ok {
+			return validateValueOpts(doc, payload.schema, payload.value, path, opts)
+		}
+	}
 
 	if opts.requireRequired {
 		for _, name := range schema.Required {

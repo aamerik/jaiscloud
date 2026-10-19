@@ -7,6 +7,7 @@ import (
 
 	adminpb "cloud.google.com/go/firestore/apiv1/admin/adminpb"
 	"jaiscloud/internal/clock"
+	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	"jaiscloud/internal/store"
 
 	"google.golang.org/genproto/googleapis/type/dayofweek"
@@ -779,5 +780,36 @@ func TestDatabaseOutputFields(t *testing.T) {
 	}
 	if _, err := client.GetDatabase(ctx, &adminpb.GetDatabaseRequest{Name: def.GetName()}); status.Code(err) != codes.NotFound {
 		t.Errorf("deleted (default) read code = %v, want NotFound", status.Code(err))
+	}
+}
+
+// TestBackupToProtoStats locks the Backup.stats rendering: a READY backup
+// carries the statistics message (the data becomes available once the backup is
+// materialized, and an empty database legitimately measures zero), while a
+// backup that is still being created has none.
+func TestBackupToProtoStats(t *testing.T) {
+	ready := backupToProto(firestoreprovider.BackupDef{
+		Name: "projects/p/locations/l/backups/b", State: "READY",
+	})
+	if ready.GetStats() == nil {
+		t.Fatal("a READY backup must carry Stats even with zero counts")
+	}
+	if ready.GetStats().GetDocumentCount() != 0 || ready.GetStats().GetIndexCount() != 0 || ready.GetStats().GetSizeBytes() != 0 {
+		t.Errorf("zero stats = %+v", ready.GetStats())
+	}
+
+	creating := backupToProto(firestoreprovider.BackupDef{
+		Name: "projects/p/locations/l/backups/b", State: "CREATING",
+	})
+	if creating.GetStats() != nil {
+		t.Errorf("a CREATING backup must not carry Stats, got %+v", creating.GetStats())
+	}
+
+	counted := backupToProto(firestoreprovider.BackupDef{
+		Name: "projects/p/locations/l/backups/b", State: "READY",
+		DocumentCount: 3, IndexCount: 2, SizeBytes: 99,
+	})
+	if got := counted.GetStats(); got.GetDocumentCount() != 3 || got.GetIndexCount() != 2 || got.GetSizeBytes() != 99 {
+		t.Errorf("stats = %+v, want 3/2/99", got)
 	}
 }

@@ -667,7 +667,9 @@ func backupToProto(b firestoreprovider.BackupDef) *adminpb.Backup {
 	if b.State != "" {
 		out.State = adminpb.Backup_State(adminpb.Backup_State_value[b.State])
 	}
-	if b.DocumentCount != 0 || b.IndexCount != 0 || b.SizeBytes != 0 {
+	// A READY backup carries measured statistics, including zero counts for a
+	// database that holds nothing yet.
+	if b.State == "READY" || b.DocumentCount != 0 || b.IndexCount != 0 || b.SizeBytes != 0 {
 		out.Stats = &adminpb.Backup_Stats{
 			SizeBytes:     b.SizeBytes,
 			DocumentCount: b.DocumentCount,

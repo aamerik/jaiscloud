@@ -860,7 +860,9 @@ func backupMap(b backupDef) map[string]any {
 	if b.State != "" {
 		m["state"] = b.State
 	}
-	if b.DocumentCount != 0 || b.IndexCount != 0 || b.SizeBytes != 0 {
+	// A READY backup carries measured statistics, including zero counts for a
+	// database that holds nothing yet.
+	if b.State == "READY" || b.DocumentCount != 0 || b.IndexCount != 0 || b.SizeBytes != 0 {
 		m["stats"] = map[string]any{
 			"sizeBytes":     strconv.FormatInt(b.SizeBytes, 10),
 			"documentCount": strconv.FormatInt(b.DocumentCount, 10),

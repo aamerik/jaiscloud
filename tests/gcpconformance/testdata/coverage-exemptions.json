@@ -45,32 +45,8 @@
       "reason": "Compute operations are LROs with server-assigned names; there is no create surface to stage one."
     },
     {
-      "operation": "Dataproc.CancelJob",
-      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
-    },
-    {
-      "operation": "Dataproc.DeleteJob",
-      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
-    },
-    {
       "operation": "Dataproc.DiagnoseCluster",
-      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
-    },
-    {
-      "operation": "Dataproc.GetJob",
-      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
-    },
-    {
-      "operation": "Dataproc.GetOperation",
-      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
-    },
-    {
-      "operation": "Dataproc.UpdateJob",
-      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), so the generic path probe cannot stage a job to patch. The handler is exercised by the REST jobs.patch unit test and the dataproc REST\u2194gRPC parity scenario (tests/gcpparity/cases_dataproc.go)."
-    },
-    {
-      "operation": "Dataproc.UpdateWorkflowTemplate",
-      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), and DiagnoseCluster / the operation metadata surface are unimplemented (501)."
+      "reason": "Dataproc DiagnoseCluster is an explicit Unimplemented stub (docs/fidelity-overrides.yaml, unsupported), so the probe answers 501 rather than a validatable shape."
     },
     {
       "operation": "Eventarc.DeleteOperation",
@@ -79,38 +55,6 @@
     {
       "operation": "Eventarc.GetOperation",
       "reason": "Eventarc mutations complete inline and no long-running operation is persisted, so an operations get/delete probe has no operation to address and the emulator answers NotFound (the routing and response shape are pinned by the provider unit tests)."
-    },
-    {
-      "operation": "Firestore.CreateIndex",
-      "reason": "Firestore index admin needs a staged collection group and a server-assigned index id; the Discovery path probe cannot chain a create to the read/delete."
-    },
-    {
-      "operation": "Firestore.DeleteBackup",
-      "reason": "Firestore backups are read-only in the Admin API (a backup schedule produces them); there is no create path to stage, so a get/delete probe cannot be synthesized."
-    },
-    {
-      "operation": "Firestore.GetBackup",
-      "reason": "Firestore backups are read-only in the Admin API (a backup schedule produces them); there is no create path to stage, so a get/delete probe cannot be synthesized."
-    },
-    {
-      "operation": "Firestore.DeleteIndex",
-      "reason": "Firestore index admin needs a staged collection group and a server-assigned index id; the Discovery path probe cannot chain a create to the read/delete."
-    },
-    {
-      "operation": "Firestore.GetIndex",
-      "reason": "Firestore index admin needs a staged collection group and a server-assigned index id; the Discovery path probe cannot chain a create to the read/delete."
-    },
-    {
-      "operation": "Firestore.RunQuery",
-      "reason": "Firestore runQuery needs a structured query against a staged document; the generic body probe cannot synthesize one, so the request is rejected on input rather than unimplemented."
-    },
-    {
-      "operation": "Function.GetOperation",
-      "reason": "Cloud Functions operations are long-running operations with server-assigned names."
-    },
-    {
-      "operation": "Function.ListOperations",
-      "reason": "Cloud Functions operations are long-running operations with server-assigned names."
     },
     {
       "operation": "IAM.ServiceAccountKeyDisable",
