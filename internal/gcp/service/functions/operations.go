@@ -97,6 +97,11 @@ func (s *Service) loadOperation(ctx context.Context, project, name string) (Oper
 	return operationFromStore(stored), nil
 }
 
+// AllLocations is the wildcard location the operations surface uses to read
+// across every location in a project ("projects/{p}/locations/-", and the v1
+// top-level operations collection).
+const AllLocations = "-"
+
 // LoadOperation parses and loads a persisted operation for the gRPC
 // google.longrunning.Operations resolver (which needs the typed core Operation
 // to build the Any metadata/response).
@@ -110,8 +115,11 @@ func (s *Service) LoadOperation(ctx context.Context, project, name string) (Oper
 
 // ListOperations returns a cursor page of the persisted operations for a
 // location, honoring an optional AIP-160 `filter` (the standard
-// google.longrunning.Operations.List `filter`). v is the API version the caller
-// renders operations as; it selects the resource-name form the `name` filter
+// google.longrunning.Operations.List `filter`). The wildcard location "-"
+// reads across every location in the project, which is what the v1 top-level
+// operations collection (operations/{id}, no location segment) documents as
+// its parent. v is the API version the caller renders operations as; it selects
+// the resource-name form the `name` filter
 // matches. The filter is evaluated against the settled operation so `done`
 // reflects what a client would read, and it is applied before pagination so a
 // page is always a page of matching results. An unparseable filter is
@@ -120,7 +128,15 @@ func (s *Service) ListOperations(ctx context.Context, project, location string, 
 	if location == "" {
 		return nil, "", invalidArgument("missing location")
 	}
-	ops, err := s.functions.ListOperations(ctx, project, location)
+	var (
+		ops []functionsstore.Operation
+		err error
+	)
+	if location == AllLocations {
+		ops, err = s.functions.ListOperationsAllLocations(ctx, project)
+	} else {
+		ops, err = s.functions.ListOperations(ctx, project, location)
+	}
 	if err != nil {
 		return nil, "", err
 	}

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1082,6 +1083,111 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "workflows", Method: "DELETE", Path: wfName},
 	)
 
+	// ─── Cloud Functions v1 operations ────────────────────────────────────────
+	// The vendored service Discovery document enumerates the common
+	// google.longrunning operations family on the v1 surface only: operations.get
+	// at v1/{+name} (v1 operation names are top-level, operations/{id}) and
+	// operations.list at v1/operations with the parent in the documented `name`
+	// query parameter. A v1 create captures the persisted operation name; the
+	// list reads it back scoped to its location and across the project's
+	// locations (locations/-), as the LRO documentation allows.
+	fn1ID := "conf-fn1-" + suffix
+	fn1Name := "projects/" + p + "/locations/us-central1/functions/" + fn1ID
+	sc = append(sc,
+		Scenario{Service: "functions", Method: "POST",
+			Path: "/v1/projects/" + p + "/locations/us-central1/functions",
+			Body: fmt.Sprintf(`{"name":%q,"runtime":"nodejs20","entryPoint":"handler"}`, fn1Name),
+			Save: map[string]string{"fn1op": "name"}},
+		Scenario{Service: "functions", Method: "GET", Path: "/v1/${fn1op}"},
+		Scenario{Service: "functions", Method: "GET",
+			Path: "/v1/operations?name=" + url.PathEscape("projects/"+p+"/locations/us-central1")},
+		Scenario{Service: "functions", Method: "GET",
+			Path: "/v1/operations?name=" + url.PathEscape("projects/"+p+"/locations/-")},
+	)
+
+	// ─── Cloud Dataproc job / operation / workflow-template lifecycle ─────────
+	// The probe cannot stage these: a job must be submitted to an existing
+	// cluster and carries a server-assigned reference.jobId, the cluster create's
+	// operation is the only addressable Dataproc LRO, and a workflow template
+	// update needs a previous revision (its `version` is the etag). The chain
+	// drives the public JSON API only and captures every server-assigned name.
+	dpBase := "/v1/projects/" + p + "/regions/us-central1"
+	dpCluster := "conf-dp-" + suffix
+	dpJob := "conf-dpjob-" + suffix
+	dpTemplate := "conf-dpwt-" + suffix
+	dpTemplateBody := fmt.Sprintf(
+		`{"id":%q,"placement":{"managedCluster":{"clusterName":%q}},"jobs":[{"stepId":"extract","pysparkJob":{"mainPythonFileUri":"gs://conf/%s/extract.py"}}]}`,
+		dpTemplate, dpCluster, suffix)
+	sc = append(sc,
+		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/clusters",
+			Body: fmt.Sprintf(`{"projectId":%q,"clusterName":%q}`, p, dpCluster),
+			Save: map[string]string{"dpClusterOp": "name"}},
+		Scenario{Service: "dataproc", Method: "GET", Path: "/v1/${dpClusterOp}"},
+		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/clusters/" + dpCluster},
+		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/jobs:submit",
+			Body: fmt.Sprintf(
+				`{"job":{"reference":{"jobId":%q},"placement":{"clusterName":%q},"pysparkJob":{"mainPythonFileUri":"gs://conf/%s/extract.py"}}}`,
+				dpJob, dpCluster, suffix)},
+		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/jobs/" + dpJob},
+		Scenario{Service: "dataproc", Method: "PATCH",
+			Path: dpBase + "/jobs/" + dpJob + "?updateMask=labels",
+			Body: `{"labels":{"conformance":"true"}}`},
+		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/jobs/" + dpJob + ":cancel", Body: `{}`},
+		// CANCEL_PENDING -> CANCEL_STARTED -> CANCELLED settles one hop per read;
+		// only a terminal job may be deleted.
+		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/jobs/" + dpJob},
+		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/jobs/" + dpJob},
+		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/jobs/" + dpJob},
+		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/workflowTemplates",
+			Body: dpTemplateBody},
+		Scenario{Service: "dataproc", Method: "PUT", Path: dpBase + "/workflowTemplates/" + dpTemplate,
+			Body: fmt.Sprintf(
+				`{"id":%q,"version":1,"labels":{"conformance":"true"},"placement":{"managedCluster":{"clusterName":%q}},"jobs":[{"stepId":"extract","pysparkJob":{"mainPythonFileUri":"gs://conf/%s/extract-v2.py"}}]}`,
+				dpTemplate, dpCluster, suffix)},
+		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/workflowTemplates/" + dpTemplate},
+		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/workflowTemplates/" + dpTemplate},
+		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/clusters/" + dpCluster},
+	)
+
+	// ─── Firestore control plane: composite index, runQuery, backups ──────────
+	// The probe cannot stage these either: a composite index needs two fields and
+	// returns its id inside the create operation's response; runQuery needs a
+	// seeded document; and a backup is read-only, produced by a backup schedule.
+	// The chain creates a database, drives index create→get→delete, seeds a
+	// document and queries it, then creates a daily backup schedule and advances
+	// the emulator clock past the first occurrence so the schedule materializes a
+	// backup record that is read and deleted.
+	fsDB := "conf-db-" + suffix
+	fsBase := "/v1/projects/" + p + "/databases/" + fsDB
+	fsDoc := "projects/" + p + "/databases/" + fsDB + "/documents/conf-orders/order-1"
+	sc = append(sc,
+		Scenario{Service: "firestore", Method: "POST",
+			Path: "/v1/projects/" + p + "/databases?databaseId=" + fsDB,
+			Body: `{"type":"FIRESTORE_NATIVE","locationId":"us-central1"}`},
+		Scenario{Service: "firestore", Method: "POST",
+			Path: fsBase + "/collectionGroups/conf-orders/indexes",
+			Body: `{"queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"createdAt","order":"DESCENDING"}]}`,
+			Save: map[string]string{"fsIndex": "response.name"}},
+		Scenario{Service: "firestore", Method: "GET", Path: "/v1/${fsIndex}"},
+		Scenario{Service: "firestore", Method: "DELETE", Path: "/v1/${fsIndex}"},
+		Scenario{Service: "firestore", Method: "POST", Path: fsBase + "/documents:commit",
+			Body: fmt.Sprintf(
+				`{"writes":[{"update":{"name":%q,"fields":{"status":{"stringValue":"open"},"total":{"integerValue":"42"}}}}]}`,
+				fsDoc)},
+		Scenario{Service: "firestore", Method: "POST", Path: fsBase + "/documents:runQuery",
+			Body: `{"structuredQuery":{"from":[{"collectionId":"conf-orders"}]}}`},
+		Scenario{Service: "firestore", Method: "POST", Path: fsBase + "/backupSchedules",
+			Body: `{"retention":"86400s","dailyRecurrence":{}}`},
+		// A daily schedule's first occurrence is one interval after its create
+		// time; the lazy materialization runs on the backup read, so cross it.
+		Scenario{Service: "firestore", Method: "GET",
+			Path:         "/v1/projects/" + p + "/locations/us-central1/backups",
+			AdvanceClock: "25h",
+			Save:         map[string]string{"fsBackup": "backups.0.name"}},
+		Scenario{Service: "firestore", Method: "GET", Path: "/v1/${fsBackup}"},
+		Scenario{Service: "firestore", Method: "DELETE", Path: "/v1/${fsBackup}"},
+	)
+
 	return sc
 }
 
@@ -1098,6 +1204,16 @@ func expandVars(s string, vars map[string]string) string {
 func captureVar(v any, path string) (string, bool) {
 	cur := v
 	for _, seg := range strings.Split(path, ".") {
+		if list, ok := cur.([]any); ok {
+			// A numeric segment indexes a JSON array (the first item of a list
+			// response, e.g. "backups.0.name").
+			idx, err := strconv.Atoi(seg)
+			if err != nil || idx < 0 || idx >= len(list) {
+				return "", false
+			}
+			cur = list[idx]
+			continue
+		}
 		m, ok := cur.(map[string]any)
 		if !ok {
 			return "", false

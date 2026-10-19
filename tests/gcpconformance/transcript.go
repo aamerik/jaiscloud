@@ -21,6 +21,11 @@ type Entry struct {
 	Status  int             `json:"status"`
 	Request json.RawMessage `json:"request,omitempty"`
 	Body    json.RawMessage `json:"body,omitempty"`
+	// Stream holds a server-streaming response body. Google's REST transcoder
+	// renders a server-streaming RPC as newline-delimited JSON (e.g. Firestore
+	// documents:runQuery), so the whole body is not one JSON document; each
+	// element is validated against the method's response schema in order.
+	Stream []json.RawMessage `json:"stream,omitempty"`
 }
 
 // Transcript is the on-disk recorded-response format.
@@ -50,6 +55,32 @@ func WriteTranscript(path string, tr Transcript) error {
 	}
 	b.WriteString("  ]\n}\n")
 	return os.WriteFile(path, b.Bytes(), 0o644)
+}
+
+// jsonStream splits a newline-delimited JSON body into its elements. It reports
+// false unless every non-empty line is a JSON object or array (a raw media
+// download or an HTML error page is not a stream and stays uncaptured).
+func jsonStream(body []byte) ([]json.RawMessage, bool) {
+	var out []json.RawMessage
+	for _, line := range bytes.Split(body, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		if !json.Valid(line) {
+			return nil, false
+		}
+		switch line[0] {
+		case '{', '[':
+		default:
+			return nil, false
+		}
+		out = append(out, json.RawMessage(line))
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
 }
 
 // ReadTranscript reads a transcript from JSON. A missing file is reported as a
@@ -116,6 +147,28 @@ func ValidateTranscripts(docs map[string]*DiscoveryDoc, tr Transcript) []Diverge
 			if schema == nil {
 				// No declared response body (e.g. delete returning Empty with an
 				// empty 204 body) — nothing to validate.
+				continue
+			}
+			if len(e.Stream) > 0 {
+				// A transposed server-streaming response: every element is one
+				// response message, so each is validated against the same schema.
+				for i, raw := range e.Stream {
+					var v any
+					if err := json.Unmarshal(raw, &v); err != nil {
+						divs = append(divs, Divergence{
+							Path: fmt.Sprintf("%s %s.stream[%d]", ctx, m.ID, i), Kind: kindWrongType,
+							Expected: "valid JSON", Actual: err.Error(), Severity: "high",
+							Service: e.Service, Method: m.ID,
+						})
+						continue
+					}
+					for _, d := range ValidateValue(doc, schema, v, fmt.Sprintf("%s.stream[%d]", m.ID, i)) {
+						d.Service = e.Service
+						d.Method = m.ID
+						d.Path = ctx + " " + d.Path
+						divs = append(divs, d)
+					}
+				}
 				continue
 			}
 			if len(bytes.TrimSpace(e.Body)) == 0 {
@@ -227,8 +280,15 @@ func Record(jaiscloudHost string) (Transcript, error) {
 			Path:    path,
 			Status:  resp.StatusCode,
 		}
-		if len(bytes.TrimSpace(respBody)) > 0 && json.Valid(respBody) {
-			entry.Body = json.RawMessage(respBody)
+		if len(bytes.TrimSpace(respBody)) > 0 {
+			if json.Valid(respBody) {
+				entry.Body = json.RawMessage(respBody)
+			} else if stream, ok := jsonStream(respBody); ok {
+				// A server-streaming response (newline-delimited JSON): keep every
+				// element so the schema check can validate the stream instead of
+				// silently counting the status code as evidence.
+				entry.Stream = stream
+			}
 		}
 		// Only JSON request bodies map to a Discovery `request` schema; media
 		// uploads and other raw bodies are skipped.

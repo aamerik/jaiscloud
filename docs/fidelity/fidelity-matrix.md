@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 599 | 75 |
+| rest | 613 | 61 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -243,16 +243,16 @@ _45 cell(s): ga=43 limited=0 preview=0 unsupported=2_
 | CancelJob | grpc | ga | yes | — |
 | CreateCluster | grpc | ga | yes | — |
 | CreateWorkflowTemplate | grpc | ga | yes | — |
-| Dataproc.CancelJob | rest | ga | no | — |
+| Dataproc.CancelJob | rest | ga | yes | — |
 | Dataproc.CreateCluster | rest | ga | yes | — |
 | Dataproc.CreateWorkflowTemplate | rest | ga | yes | — |
 | Dataproc.DeleteCluster | rest | ga | yes | — |
-| Dataproc.DeleteJob | rest | ga | no | — |
+| Dataproc.DeleteJob | rest | ga | yes | — |
 | Dataproc.DeleteWorkflowTemplate | rest | ga | yes | — |
 | Dataproc.DiagnoseCluster | rest | unsupported | no | explicit Unimplemented stub |
 | Dataproc.GetCluster | rest | ga | yes | — |
-| Dataproc.GetJob | rest | ga | no | — |
-| Dataproc.GetOperation | rest | ga | no | — |
+| Dataproc.GetJob | rest | ga | yes | — |
+| Dataproc.GetOperation | rest | ga | yes | — |
 | Dataproc.GetWorkflowTemplate | rest | ga | yes | — |
 | Dataproc.InstantiateInlineWorkflowTemplate | rest | ga | yes | — |
 | Dataproc.InstantiateWorkflowTemplate | rest | ga | yes | — |
@@ -264,8 +264,8 @@ _45 cell(s): ga=43 limited=0 preview=0 unsupported=2_
 | Dataproc.SubmitJob | rest | ga | yes | covered by the k3d Lakehouse e2e (real Spark on Kubernetes, GKE virtualClusterConfig + driver output in GCS) |
 | Dataproc.SubmitJobAsOperation | rest | ga | yes | — |
 | Dataproc.UpdateCluster | rest | ga | yes | — |
-| Dataproc.UpdateJob | rest | ga | no | — |
-| Dataproc.UpdateWorkflowTemplate | rest | ga | no | — |
+| Dataproc.UpdateJob | rest | ga | yes | — |
+| Dataproc.UpdateWorkflowTemplate | rest | ga | yes | — |
 | DeleteCluster | grpc | ga | yes | — |
 | DeleteJob | grpc | ga | yes | — |
 | DeleteWorkflowTemplate | grpc | ga | yes | — |
@@ -440,24 +440,24 @@ _62 cell(s): ga=62 limited=0 preview=0 unsupported=0_
 | Firestore.CreateBackupSchedule | rest | ga | yes | — |
 | Firestore.CreateDatabase | rest | ga | yes | — |
 | Firestore.CreateDocument | rest | ga | yes | — |
-| Firestore.CreateIndex | rest | ga | no | — |
+| Firestore.CreateIndex | rest | ga | yes | — |
 | Firestore.CreateUserCreds | rest | ga | yes | — |
-| Firestore.DeleteBackup | rest | ga | no | — |
+| Firestore.DeleteBackup | rest | ga | yes | — |
 | Firestore.DeleteBackupSchedule | rest | ga | yes | — |
 | Firestore.DeleteDatabase | rest | ga | yes | — |
 | Firestore.DeleteDocument | rest | ga | yes | — |
-| Firestore.DeleteIndex | rest | ga | no | — |
+| Firestore.DeleteIndex | rest | ga | yes | — |
 | Firestore.DeleteOperation | rest | ga | yes | — |
 | Firestore.DeleteUserCreds | rest | ga | yes | — |
 | Firestore.DisableUserCreds | rest | ga | yes | — |
 | Firestore.EnableUserCreds | rest | ga | yes | — |
 | Firestore.ExecutePipeline | rest | ga | yes | — |
-| Firestore.GetBackup | rest | ga | no | — |
+| Firestore.GetBackup | rest | ga | yes | — |
 | Firestore.GetBackupSchedule | rest | ga | yes | — |
 | Firestore.GetDatabase | rest | ga | yes | — |
 | Firestore.GetDocument | rest | ga | yes | — |
 | Firestore.GetField | rest | ga | yes | — |
-| Firestore.GetIndex | rest | ga | no | — |
+| Firestore.GetIndex | rest | ga | yes | — |
 | Firestore.GetOperation | rest | ga | yes | — |
 | Firestore.GetUserCreds | rest | ga | yes | — |
 | Firestore.ListBackupSchedules | rest | ga | yes | — |
@@ -473,7 +473,7 @@ _62 cell(s): ga=62 limited=0 preview=0 unsupported=0_
 | Firestore.PatchDocument | rest | ga | yes | — |
 | Firestore.ResetUserPassword | rest | ga | yes | — |
 | Firestore.Rollback | rest | ga | yes | — |
-| Firestore.RunQuery | rest | ga | no | — |
+| Firestore.RunQuery | rest | ga | yes | — |
 | Firestore.UpdateBackupSchedule | rest | ga | yes | — |
 | Firestore.UpdateDatabase | rest | ga | yes | — |
 | Firestore.UpdateField | rest | ga | yes | — |
@@ -552,11 +552,11 @@ _39 cell(s): ga=39 limited=0 preview=0 unsupported=0_
 | Function.GenerateUploadUrl | rest | ga | yes | — |
 | Function.GetFunction | rest | ga | yes | — |
 | Function.GetLocation | rest | ga | no | shared google.cloud.location.Locations.GetLocation common API; not enumerated in the service Discovery document, but served (GET /v1/projects/{p}/locations/{l}) and wire-tested |
-| Function.GetOperation | rest | ga | no | — |
+| Function.GetOperation | rest | ga | yes | — |
 | Function.InvokeTrigger | rest | ga | no | deployed function's HTTPS-trigger URL (a function URL host, not a Discovery method); served at {location}-{project}.cloudfunctions.net/{functionId} and wire-tested |
 | Function.ListFunctions | rest | ga | yes | — |
 | Function.ListLocations | rest | ga | yes | — |
-| Function.ListOperations | rest | ga | no | — |
+| Function.ListOperations | rest | ga | yes | — |
 | Function.ListRuntimes | rest | ga | yes | — |
 | Function.RedirectFunctionUpgradeTraffic | rest | ga | yes | — |
 | Function.RollbackFunctionUpgradeTraffic | rest | ga | yes | — |

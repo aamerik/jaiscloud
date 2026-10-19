@@ -129,11 +129,11 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 599
+        "rest": 613
       },
       "unverified": {
         "grpc": 21,
-        "rest": 75
+        "rest": 61
       }
     },
     "grpc_only_services": [
@@ -2495,12 +2495,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "dataproc.projects.regions.jobs.cancel",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=dataproc.projects.regions.jobs.cancel",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -2514,7 +2514,7 @@
         "discovery=dataproc.projects.regions.clusters.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 7 transcript entries)"
+        "verified=true (rest, 8 transcript entries)"
       ]
     },
     {
@@ -2528,7 +2528,7 @@
         "discovery=dataproc.projects.regions.workflowTemplates.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 5 transcript entries)"
+        "verified=true (rest, 6 transcript entries)"
       ]
     },
     {
@@ -2542,7 +2542,7 @@
         "discovery=dataproc.projects.regions.clusters.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -2551,12 +2551,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "dataproc.projects.regions.jobs.delete",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=dataproc.projects.regions.jobs.delete",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -2570,7 +2570,7 @@
         "discovery=dataproc.projects.regions.workflowTemplates.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -2597,7 +2597,7 @@
       "evidence": [
         "discovery=dataproc.projects.regions.clusters.get",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -2606,11 +2606,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "dataproc.projects.regions.jobs.get",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=dataproc.projects.regions.jobs.get",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {
@@ -2619,11 +2619,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "dataproc.projects.regions.operations.get",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=dataproc.projects.regions.operations.get",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -2636,7 +2636,7 @@
       "evidence": [
         "discovery=dataproc.projects.regions.workflowTemplates.get",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -2744,7 +2744,7 @@
         "discovery=dataproc.projects.regions.jobs.submit",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -2781,12 +2781,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "dataproc.projects.regions.jobs.patch",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=dataproc.projects.regions.jobs.patch",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -2795,12 +2795,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "dataproc.projects.regions.workflowTemplates.update",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=dataproc.projects.regions.workflowTemplates.update",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -4818,7 +4818,7 @@
         "discovery=firestore.projects.databases.documents.commit",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -4832,7 +4832,7 @@
         "discovery=firestore.projects.databases.backupSchedules.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 4 transcript entries)"
+        "verified=true (rest, 5 transcript entries)"
       ]
     },
     {
@@ -4846,7 +4846,7 @@
         "discovery=firestore.projects.databases.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 41 transcript entries)"
+        "verified=true (rest, 42 transcript entries)"
       ]
     },
     {
@@ -4869,12 +4869,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "firestore.projects.databases.collectionGroups.indexes.create",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=firestore.projects.databases.collectionGroups.indexes.create",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -4897,12 +4897,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "firestore.projects.locations.backups.delete",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=firestore.projects.locations.backups.delete",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -4953,12 +4953,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "firestore.projects.databases.collectionGroups.indexes.delete",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=firestore.projects.databases.collectionGroups.indexes.delete",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -5036,11 +5036,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "firestore.projects.locations.backups.get",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=firestore.projects.locations.backups.get",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -5101,11 +5101,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "firestore.projects.databases.collectionGroups.indexes.get",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=firestore.projects.databases.collectionGroups.indexes.get",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -5157,7 +5157,7 @@
       "evidence": [
         "discovery=firestore.projects.locations.backups.list",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -5310,11 +5310,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "firestore.projects.databases.documents.runQuery",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=firestore.projects.databases.documents.runQuery",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -6043,7 +6043,7 @@
         "discovery=cloudfunctions.projects.locations.functions.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 16 transcript entries)"
+        "verified=true (rest, 17 transcript entries)"
       ]
     },
     {
@@ -6184,11 +6184,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudfunctions.operations.get",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudfunctions.operations.get",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -6235,11 +6235,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudfunctions.operations.list",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudfunctions.operations.list",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {

@@ -16,6 +16,7 @@ package functions
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"jaiscloud/internal/gcp/policy"
 	core "jaiscloud/internal/gcp/service/functions"
@@ -410,6 +411,38 @@ func functionNameParts(nr *model.NormalizedRequest) (project, location, id strin
 
 // --- Operations ---
 
+// operationsParentLocation resolves the ListOperations scope. The Discovery
+// document documents a single `name` query parameter ("The name of the
+// operation's parent resource"); Cloud Functions v1 operation names are
+// top-level (operations/{id}) with no location segment, so "operations",
+// "projects/{p}" and "projects/{p}/locations/-" all read across the project's
+// locations, while "projects/{p}/locations/{l}" narrows to one location. The
+// emulator's own `location` query parameter is kept as an extension for the
+// console, which addresses a location directly.
+func operationsParentLocation(name, location string) (project, loc string, err error) {
+	if location != "" {
+		// The emulator's own extension addresses one location within the
+		// request's project.
+		return "", location, nil
+	}
+	switch name {
+	case "", "operations":
+		return "", core.AllLocations, nil
+	}
+	parts := strings.Split(strings.Trim(name, "/"), "/")
+	if len(parts) >= 2 && parts[0] == "projects" && parts[1] != "" {
+		switch {
+		case len(parts) == 2:
+			// Not a parent the v1 surface documents, but a lenient alias for the
+			// project-wide collection (the equivalent of locations/-).
+			return parts[1], core.AllLocations, nil
+		case len(parts) == 4 && parts[2] == "locations" && parts[3] != "":
+			return parts[1], parts[3], nil
+		}
+	}
+	return "", "", model.NewProviderError("InvalidArgument", "invalid operations parent name: "+name, 400)
+}
+
 func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
@@ -466,7 +499,16 @@ func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedReque
 	if err != nil {
 		return nil, err
 	}
-	page, next, err := p.core.ListOperations(ctx, project, strParam(nr, "location"), v, strParam(nr, "filter"), pageSize, strParam(nr, "pageToken"))
+	nameProject, location, err := operationsParentLocation(strParam(nr, "name"), strParam(nr, "location"))
+	if err != nil {
+		return nil, err
+	}
+	if nameProject != "" {
+		// The documented parent names its project explicitly; it wins over the
+		// request's account scope, exactly as real GCP resolves the resource name.
+		project = nameProject
+	}
+	page, next, err := p.core.ListOperations(ctx, project, location, v, strParam(nr, "filter"), pageSize, strParam(nr, "pageToken"))
 	if err != nil {
 		return nil, err
 	}
