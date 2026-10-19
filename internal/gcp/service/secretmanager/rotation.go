@@ -24,7 +24,6 @@ package secretmanager
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -55,34 +54,40 @@ func invalidRotation(format string, args ...any) error {
 }
 
 // ParseRotationDuration parses a google-duration JSON value the way Secret
-// Manager accepts a rotation period: seconds with the `s` suffix ("3600s",
-// "2592000s", "3600.500s"), matching protobuf's duration JSON encoding. Go's own
-// duration syntax ("1h", "60m") is not the wire format for a google-duration
-// field, so it is rejected, and so is a negative value.
+// Manager accepts a rotation period: the shared google-duration parser, naming
+// the rotation field in its error.
 func ParseRotationDuration(s string) (time.Duration, error) {
-	raw := strings.TrimSpace(s)
-	if !strings.HasSuffix(raw, "s") {
-		return 0, invalidRotation("rotation.rotationPeriod must be a duration in seconds (for example \"3600s\")")
-	}
-	secs, err := strconv.ParseFloat(strings.TrimSuffix(raw, "s"), 64)
-	// Bound the parsed value before converting it to a Duration: a huge float
-	// converts to a saturated int64, and the multiplication by a second would
-	// then overflow the nanosecond range.
-	maxSecs := float64(math.MaxInt64 / int64(time.Second))
-	if err != nil || secs < 0 || secs > maxSecs {
-		return 0, invalidRotation("rotation.rotationPeriod must be a duration in seconds (for example \"3600s\")")
-	}
-	return time.Duration(secs * float64(time.Second)), nil
+	return parseDurationSeconds("rotation.rotationPeriod", s)
 }
 
-// canonicalDuration renders a duration in the API's google-duration JSON form:
-// seconds with the `s` suffix, keeping a fractional part only when there is one
-// ("3600s", "3600.500s" → "3600.5s"). This is what both transports store, so a
-// period written through one transport reads back identically through the
+// DurationString renders a duration in the API's google-duration JSON form:
+// seconds with the `s` suffix and protojson's 0/3/6/9 fractional digits
+// ("3600s", "3600.500s", "3600.123456s"). This is what both transports store,
+// so a value written through one transport reads back identically through the
 // other.
-func canonicalDuration(d time.Duration) string {
-	return strconv.FormatFloat(d.Seconds(), 'f', -1, 64) + "s"
+func DurationString(d time.Duration) string {
+	if d < 0 {
+		// Negative durations are rejected by the parsers; render verbatim for a
+		// legacy record rather than mangling it.
+		return strconv.FormatFloat(d.Seconds(), 'f', -1, 64) + "s"
+	}
+	secs := int64(d / time.Second)
+	nanos := d - time.Duration(secs)*time.Second
+	if nanos == 0 {
+		return strconv.FormatInt(secs, 10) + "s"
+	}
+	frac := fmt.Sprintf("%09d", nanos)
+	switch {
+	case strings.HasSuffix(frac, "000000"):
+		frac = frac[:3]
+	case strings.HasSuffix(frac, "000"):
+		frac = frac[:6]
+	}
+	return fmt.Sprintf("%d.%ss", secs, frac)
 }
+
+// canonicalDuration is the internal spelling of DurationString.
+func canonicalDuration(d time.Duration) string { return DurationString(d) }
 
 // RotationPeriodString renders a stored period in the google-duration JSON form
 // the API returns ("3600s"), not Go's duration syntax. It accepts both forms on

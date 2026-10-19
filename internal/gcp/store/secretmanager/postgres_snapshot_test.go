@@ -52,6 +52,7 @@ func TestPostgresStoreSnapshotPreservesCMEK(t *testing.T) {
 	umSecret.SetReplication(userManaged)
 	if err := s.CreateSecret(ctx, "proj", "s", Secret{
 		ID: "s", CreateTime: created, NextVer: 2, KmsKeyName: key,
+		VersionDestroyTTL: "86400s", ExpireTime: created.Add(24 * time.Hour),
 	}); err != nil {
 		t.Fatalf("create secret: %v", err)
 	}
@@ -66,6 +67,7 @@ func TestPostgresStoreSnapshotPreservesCMEK(t *testing.T) {
 	if err := s.CreateVersion(ctx, "proj", Version{
 		SecretID: "s", VersionID: "1", State: "ENABLED", CreateTime: created,
 		Data: "aGk=", KmsKeyName: key, WrappedDEK: wrapped, ReplicaDEKs: replicaDEKs,
+		ScheduledDestroyTime: created.Add(time.Hour),
 	}); err != nil {
 		t.Fatalf("create version: %v", err)
 	}
@@ -84,6 +86,9 @@ func TestPostgresStoreSnapshotPreservesCMEK(t *testing.T) {
 	}
 	if sec.KmsKeyName != key {
 		t.Fatalf("secret kms_key_name = %q, want %q", sec.KmsKeyName, key)
+	}
+	if sec.VersionDestroyTTL != "86400s" || !sec.ExpireTime.Equal(created.Add(24*time.Hour)) {
+		t.Fatalf("secret lifecycle fields = %q / %v after restore", sec.VersionDestroyTTL, sec.ExpireTime)
 	}
 	restoredUM, err := s.GetSecret(ctx, "proj", "um")
 	if err != nil {
@@ -113,5 +118,8 @@ func TestPostgresStoreSnapshotPreservesCMEK(t *testing.T) {
 	}
 	if v.Data != "aGk=" {
 		t.Fatalf("version data = %q, want %q", v.Data, "aGk=")
+	}
+	if !v.ScheduledDestroyTime.Equal(created.Add(time.Hour)) {
+		t.Fatalf("version scheduled_destroy_time = %v after restore", v.ScheduledDestroyTime)
 	}
 }

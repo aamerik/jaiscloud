@@ -128,6 +128,25 @@ func (s *Service) ListSecrets(ctx context.Context, req *secretmanagerpb.ListSecr
 	if err != nil {
 		return nil, mapError(err)
 	}
+	// Sweep every secret whose expiration has passed before filtering/paging,
+	// so an expired secret is neither counted nor returned (DC70).
+	now := clock.Now()
+	live := secrets[:0]
+	for _, sec := range secrets {
+		if secretmanagersvc.Expired(sec, now) {
+			if err := s.expireSecret(ctx, project, sec.ID); err != nil {
+				return nil, mapError(err)
+			}
+			// The locked sweep may have lost to a concurrent update that
+			// extended the expiration: list the live record.
+			if fresh, gerr := s.secrets.GetSecret(ctx, project, sec.ID); gerr == nil && !secretmanagersvc.Expired(fresh, now) {
+				live = append(live, fresh)
+			}
+			continue
+		}
+		live = append(live, sec)
+	}
+	secrets = live
 	matched, applied, err := secretmanagersvc.FilterSecrets(project, req.GetFilter(), secrets)
 	if err != nil {
 		return nil, mapError(err)
@@ -164,9 +183,10 @@ func (s *Service) CreateSecret(ctx context.Context, req *secretmanagerpb.CreateS
 		return nil, mapError(model.NewProviderError("InvalidArgument", "missing secretId", 400))
 	}
 
+	now := clock.Now()
 	sec := secretmanagerstore.Secret{
 		ID:         id,
-		CreateTime: clock.Now(),
+		CreateTime: now,
 		NextVer:    1,
 	}
 	if proto != nil {
@@ -182,6 +202,26 @@ func (s *Service) CreateSecret(ctx context.Context, req *secretmanagerpb.CreateS
 			for k, v := range va {
 				sec.VersionAliases[k] = int(v)
 			}
+		}
+		// versionDestroyTtl and the expireTime/ttl oneof are part of the create
+		// surface; ttl is input-only and resolves to an absolute expireTime.
+		if ttl := proto.GetVersionDestroyTtl(); ttl != nil {
+			if err := secretmanagersvc.ValidateVersionDestroyTTL(ttl.AsDuration()); err != nil {
+				return nil, mapError(err)
+			}
+			sec.VersionDestroyTTL = secretmanagersvc.DurationString(ttl.AsDuration())
+		}
+		if exp := proto.GetExpireTime(); exp != nil {
+			if err := secretmanagersvc.ValidateExpireTime(exp.AsTime(), now); err != nil {
+				return nil, mapError(err)
+			}
+			sec.ExpireTime = exp.AsTime()
+		} else if ttl := proto.GetTtl(); ttl != nil {
+			expire, err := secretmanagersvc.ExpireTimeFromTTL(ttl.AsDuration(), now)
+			if err != nil {
+				return nil, mapError(err)
+			}
+			sec.ExpireTime = expire
 		}
 		replication, err := replicationFromSecret(proto)
 		if err != nil {
@@ -221,6 +261,14 @@ func (s *Service) GetSecret(ctx context.Context, req *secretmanagerpb.GetSecretR
 	if err != nil {
 		return nil, mapSecretErr(err)
 	}
+	// A secret past its expireTime is already deleted in real GCP; the emulator
+	// has no background worker, so a read performs the expiry sweep (DC70).
+	if secretmanagersvc.Expired(sec, clock.Now()) {
+		if err := s.expireSecret(ctx, project, id); err != nil {
+			return nil, mapError(err)
+		}
+		return nil, mapSecretErr(secretmanagerstore.ErrNoSuchSecret)
+	}
 	sec = s.maybeRotate(ctx, project, id, sec)
 	return secretToProto(project, sec), nil
 }
@@ -233,6 +281,11 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 	project, id, _, ok := splitSecretResource(proto.GetName())
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	// An expired secret is already gone in real GCP; sweep it before applying
+	// the update so the caller sees the documented 404 (DC70).
+	if err := s.rejectExpired(ctx, project, id); err != nil {
+		return nil, err
 	}
 	// update_mask is required by the API: when present, only the listed fields
 	// are written (a masked field set to empty clears the stored value); when
@@ -276,6 +329,42 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 	topicsTouched := selected("topics") && (topicsSet || !applyAll)
 	now := clock.Now()
 
+	// versionDestroyTtl and the expireTime/ttl oneof. The mask is a whitelist:
+	// only a named field is read, so a labels-only update carrying a stale
+	// read-back expiration cannot rewrite it. A named field the request does not
+	// set clears the stored value; a maskless update only applies populated
+	// fields.
+	hasPaths := mask != nil && len(mask.GetPaths()) > 0
+	incomingVersionTTL := proto.GetVersionDestroyTtl()
+	applyVersionTTL := !hasPaths || fields["version_destroy_ttl"]
+	versionTTLClear := hasPaths && fields["version_destroy_ttl"] && incomingVersionTTL == nil
+	if applyVersionTTL && incomingVersionTTL != nil {
+		if err := secretmanagersvc.ValidateVersionDestroyTTL(incomingVersionTTL.AsDuration()); err != nil {
+			return nil, mapError(err)
+		}
+	}
+	incomingExpire, incomingTTL := proto.GetExpireTime(), proto.GetTtl()
+	// expire_time and ttl are one oneof: a mask naming either selects the group,
+	// and the arm the request actually set is applied (REST cannot tell the arms
+	// apart either).
+	applyExpiration := !hasPaths || fields["expire_time"] || fields["ttl"]
+	var resolvedExpire time.Time
+	expireSet := false
+	switch {
+	case applyExpiration && incomingExpire != nil:
+		if err := secretmanagersvc.ValidateExpireTime(incomingExpire.AsTime(), now); err != nil {
+			return nil, mapError(err)
+		}
+		resolvedExpire, expireSet = incomingExpire.AsTime(), true
+	case applyExpiration && incomingTTL != nil:
+		expire, err := secretmanagersvc.ExpireTimeFromTTL(incomingTTL.AsDuration(), now)
+		if err != nil {
+			return nil, mapError(err)
+		}
+		resolvedExpire, expireSet = expire, true
+	}
+	expirationClear := hasPaths && (fields["expire_time"] || fields["ttl"]) && !expireSet
+
 	// UpdateSecretAtomic reads, merges, and writes under one lock, so a
 	// concurrent AddVersion's NextVersion() counter advance can't land
 	// between our read and our write and get silently rolled back by it.
@@ -311,6 +400,16 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 					cur.VersionAliases[k] = int(v)
 				}
 			}
+		}
+		if versionTTLClear {
+			cur.VersionDestroyTTL = ""
+		} else if applyVersionTTL && incomingVersionTTL != nil {
+			cur.VersionDestroyTTL = secretmanagersvc.DurationString(incomingVersionTTL.AsDuration())
+		}
+		if expirationClear {
+			cur.ExpireTime = time.Time{}
+		} else if expireSet {
+			cur.ExpireTime = resolvedExpire
 		}
 		if selected("replication") {
 			// The stored value is the raw policy (nil for a record written
@@ -357,6 +456,11 @@ func (s *Service) DeleteSecret(ctx context.Context, req *secretmanagerpb.DeleteS
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	// An expired secret is already gone (and its EXPIRATION event published), so
+	// a user delete answers the documented 404.
+	if err := s.rejectExpired(ctx, project, id); err != nil {
+		return nil, err
+	}
 	// The documented `etag` precondition (same contract as the REST provider),
 	// checked inside the store's atomic delete so a concurrent update cannot
 	// land between the comparison and the removal.
@@ -372,7 +476,7 @@ func (s *Service) DeleteSecret(ctx context.Context, req *secretmanagerpb.DeleteS
 		return nil, mapSecretErr(err)
 	}
 	// SECRET_DELETE carries the metadata as it was before the delete.
-	s.notifySecretDelete(ctx, project, id, deleted)
+	s.notifySecretDelete(ctx, project, id, deleted, secretmanagersvc.DeleteTypeRequested)
 	return &emptypb.Empty{}, nil
 }
 
@@ -384,6 +488,9 @@ func (s *Service) AddSecretVersion(ctx context.Context, req *secretmanagerpb.Add
 	var data []byte
 	if payload := req.GetPayload(); payload != nil {
 		data = payload.GetData()
+	}
+	if err := s.rejectExpired(ctx, project, id); err != nil {
+		return nil, err
 	}
 
 	// Allocate the version number atomically (memory mutex / DB UPDATE
@@ -432,10 +539,14 @@ func (s *Service) AccessSecretVersion(ctx context.Context, req *secretmanagerpb.
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
+	if err := s.rejectExpired(ctx, project, secret); err != nil {
+		return nil, err
+	}
 	v, err := s.secrets.GetVersion(ctx, project, secret, version)
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
+	v = s.finalizeScheduledDestroy(ctx, project, secret, v)
 	if v.State != "ENABLED" {
 		return nil, mapError(&model.ProviderError{
 			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
@@ -467,10 +578,14 @@ func (s *Service) GetSecretVersion(ctx context.Context, req *secretmanagerpb.Get
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
+	if err := s.rejectExpired(ctx, project, secret); err != nil {
+		return nil, err
+	}
 	v, err := s.secrets.GetVersion(ctx, project, secret, version)
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
+	v = s.finalizeScheduledDestroy(ctx, project, secret, v)
 	repl, err := secretmanagersvc.ParentReplication(ctx, s.secrets, project, secret)
 	if err != nil {
 		return nil, mapSecretErr(err)
@@ -510,6 +625,14 @@ func (s *Service) ListSecretVersions(ctx context.Context, req *secretmanagerpb.L
 	versions, err := s.secrets.ListVersions(ctx, project, id)
 	if err != nil {
 		return nil, mapError(err)
+	}
+	if err := s.rejectExpired(ctx, project, id); err != nil {
+		return nil, err
+	}
+	// Apply any delayed destruction that came due since the last read, so the
+	// list (and its state filter) sees the DESTROYED version (DC70).
+	for i := range versions {
+		versions[i] = s.finalizeScheduledDestroy(ctx, project, id, versions[i])
 	}
 	parentReplication, err := secretmanagersvc.ParentReplication(ctx, s.secrets, project, id)
 	if err != nil {
@@ -559,6 +682,27 @@ func (s *Service) setVersionState(ctx context.Context, name, state, etag string)
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	if err := s.rejectExpired(ctx, project, secret); err != nil {
+		return nil, err
+	}
+	// The delayed-destruction delay in force at this destroy attempt; a version
+	// already scheduled for destruction keeps its own instant.
+	parent, err := s.secrets.GetSecret(ctx, project, secret)
+	if err != nil {
+		return nil, mapSecretErr(err)
+	}
+	var destroyDelay time.Duration
+	if parent.VersionDestroyTTL != "" {
+		if d, perr := secretmanagersvc.ParseVersionDestroyTTL(parent.VersionDestroyTTL); perr == nil {
+			destroyDelay = d
+		}
+	}
+	// Apply a delayed destruction that already came due, so enable/disable see
+	// the terminal DESTROYED state instead of resurrecting a destroyed version.
+	if cur, gerr := s.secrets.GetVersion(ctx, project, secret, version); gerr == nil {
+		s.finalizeScheduledDestroy(ctx, project, secret, cur)
+	}
+	var scheduled, noop bool
 	// The etag precondition and the transition run inside one atomic store
 	// mutate, so a concurrent transition cannot invalidate the etag between the
 	// check and the write.
@@ -573,10 +717,31 @@ func (s *Service) setVersionState(ctx context.Context, name, state, etag string)
 				Message: "secret version " + v.VersionID + " is DESTROYED",
 			}
 		}
-		v.State = state
+		now := clock.Now()
 		if state == "DESTROYED" {
-			v.DestroyTime = clock.Now()
+			// A second destroy of an already-scheduled version keeps its instant
+			// and publishes nothing.
+			if !v.ScheduledDestroyTime.IsZero() && now.Before(v.ScheduledDestroyTime) {
+				noop = true
+				return v, nil
+			}
+			if destroyDelay > 0 {
+				// Delayed destruction: DISABLED now, DESTROYED when the delay
+				// expires (SECRET_VERSION_DESTROY_SCHEDULED).
+				v.State = "DISABLED"
+				v.ScheduledDestroyTime = now.Add(destroyDelay)
+				v.DestroyTime = time.Time{}
+				scheduled = true
+				return v, nil
+			}
+			v.State = "DESTROYED"
+			v.DestroyTime = now
+			v.ScheduledDestroyTime = time.Time{}
+			return v, nil
 		}
+		// Enabling or disabling a scheduled version cancels the schedule.
+		v.ScheduledDestroyTime = time.Time{}
+		v.State = state
 		return v, nil
 	})
 	if err != nil {
@@ -587,16 +752,64 @@ func (s *Service) setVersionState(ctx context.Context, name, state, etag string)
 		return nil, mapSecretErr(err)
 	}
 	out := versionToProto(project, v, repl)
-	if s.publisher != nil {
-		if parent, perr := s.secrets.GetSecret(ctx, project, secret); perr == nil {
-			s.notifyVersion(ctx, project, parent, secretmanagersvc.VersionStateEvent(state), out)
+	if s.publisher != nil && !noop {
+		eventType := secretmanagersvc.VersionStateEvent(state)
+		if scheduled {
+			eventType = secretmanagersvc.EventSecretVersionDestroyScheduled
 		}
+		s.notifyVersion(ctx, project, parent, eventType, out)
 	}
 	return out, nil
 }
 
-// ─── Cloud SQL managed rotation ──────────────────────────────────────────────
+// expireSecret deletes id when its expireTime has passed, publishing
+// SECRET_DELETE with deleteType EXPIRATION and the metadata as it was before
+// the delete. A secret that is not due (or is already gone) is left alone.
+func (s *Service) expireSecret(ctx context.Context, project, id string) error {
+	expired, deleted, err := secretmanagersvc.ExpireSecretIfDue(ctx, s.secrets, project, id)
+	if err != nil || !deleted {
+		return err
+	}
+	s.notifySecretDelete(ctx, project, id, expired, secretmanagersvc.DeleteTypeExpiration)
+	return nil
+}
 
+// rejectExpired performs the expiry sweep for a secret another handler is about
+// to operate on, returning the documented NotFound once it has expired. A
+// missing secret is left for the handler's own lookup to report.
+func (s *Service) rejectExpired(ctx context.Context, project, id string) error {
+	sec, err := s.secrets.GetSecret(ctx, project, id)
+	if err != nil || !secretmanagersvc.Expired(sec, clock.Now()) {
+		return nil
+	}
+	if err := s.expireSecret(ctx, project, id); err != nil {
+		return mapError(err)
+	}
+	// A concurrent update may have extended the expiration before the locked
+	// delete re-checked it; proceed on the live record instead of a spurious
+	// NotFound.
+	if _, gerr := s.secrets.GetSecret(ctx, project, id); errors.Is(gerr, secretmanagerstore.ErrNoSuchSecret) {
+		return mapSecretErr(secretmanagerstore.ErrNoSuchSecret)
+	}
+	return nil
+}
+
+// finalizeScheduledDestroy applies a due delayed destruction (shared with the
+// REST provider) and publishes SECRET_VERSION_DESTROY when this call performed
+// it. The emulator has no background worker, so every version read applies the
+// transition lazily (DC70, like DC71).
+func (s *Service) finalizeScheduledDestroy(ctx context.Context, project, secretID string, v secretmanagerstore.Version) secretmanagerstore.Version {
+	updated, destroyed := secretmanagersvc.FinalizeScheduledDestroy(ctx, s.secrets, project, secretID, v)
+	if destroyed && s.publisher != nil {
+		if parent, perr := s.secrets.GetSecret(ctx, project, secretID); perr == nil {
+			s.notifyVersion(ctx, project, parent, secretmanagersvc.EventSecretVersionDestroy,
+				versionToProto(project, updated, parent.ReplicationPolicy()))
+		}
+	}
+	return updated
+}
+
+// ─── Cloud SQL managed rotation ──────────────────────────────────────────────
 // managedRotationConfigured reports whether Cloud SQL managed rotation has been
 // enabled for sec. The API allows enabling it only once, so the enable
 // precondition keys on presence (not on the ACTIVE state).
@@ -634,6 +847,9 @@ func (s *Service) EnableManagedRotation(ctx context.Context, req *secretmanagerp
 	if creds.GetInstanceId() == "" || creds.GetUsername() == "" {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "cloud_sql_single_user_credentials requires instance_id and username", 400))
 	}
+	if err := s.rejectExpired(ctx, project, id); err != nil {
+		return nil, err
+	}
 	sec, err := s.secrets.GetSecret(ctx, project, id)
 	if err != nil {
 		return nil, mapSecretErr(err)
@@ -669,6 +885,9 @@ func (s *Service) RotateSecret(ctx context.Context, req *secretmanagerpb.RotateS
 	project, id, _, ok := splitSecretResource(req.GetParent())
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid parent resource name", 400))
+	}
+	if err := s.rejectExpired(ctx, project, id); err != nil {
+		return nil, err
 	}
 	sec, err := s.secrets.GetSecret(ctx, project, id)
 	if err != nil {
@@ -807,6 +1026,9 @@ func (s *Service) GetIamPolicy(ctx context.Context, req *iampb.GetIamPolicyReque
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
+	if err := s.rejectExpired(ctx, project, id); err != nil {
+		return nil, err
+	}
 	if err := s.requireSecret(ctx, project, id); err != nil {
 		return nil, err
 	}
@@ -817,6 +1039,9 @@ func (s *Service) SetIamPolicy(ctx context.Context, req *iampb.SetIamPolicyReque
 	project, id, _, ok := splitSecretResource(req.GetResource())
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	if err := s.rejectExpired(ctx, project, id); err != nil {
+		return nil, err
 	}
 	if err := s.requireSecret(ctx, project, id); err != nil {
 		return nil, err
@@ -832,6 +1057,9 @@ func (s *Service) TestIamPermissions(ctx context.Context, req *iampb.TestIamPerm
 	project, id, _, ok := splitSecretResource(req.GetResource())
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
+	}
+	if err := s.rejectExpired(ctx, project, id); err != nil {
+		return nil, err
 	}
 	if err := s.requireSecret(ctx, project, id); err != nil {
 		return nil, err
@@ -873,18 +1101,32 @@ func secretToProto(project string, s secretmanagerstore.Secret) *secretmanagerpb
 			out.VersionAliases[k] = int64(v)
 		}
 	}
+	if s.VersionDestroyTTL != "" {
+		if d, err := time.ParseDuration(s.VersionDestroyTTL); err == nil {
+			out.VersionDestroyTtl = durationpb.New(d)
+		}
+	}
+	if !s.ExpireTime.IsZero() {
+		// expireTime is always returned as a timestamp; the input-only ttl is
+		// never part of a stored record.
+		out.Expiration = &secretmanagerpb.Secret_ExpireTime{ExpireTime: timestamppb.New(s.ExpireTime)}
+	}
 	return out
 }
 
 func versionToProto(project string, v secretmanagerstore.Version, repl *secretmanagerstore.Replication) *secretmanagerpb.SecretVersion {
 	name := versionName(project, v.SecretID, v.VersionID)
+	scheduledEtag := ""
+	if !v.ScheduledDestroyTime.IsZero() {
+		scheduledEtag = timestamp.Canonical(v.ScheduledDestroyTime)
+	}
 	out := &secretmanagerpb.SecretVersion{
 		Name:  name,
 		State: stateToProto(v.State),
 		// SecretVersion.etag is output-only in the API and is the value the
 		// disable/enable/destroy preconditions compare against, so it must be
 		// present on every response (the gRPC surface used to omit it).
-		Etag: secretmanagersvc.VersionEtag(name, timestamp.Canonical(v.CreateTime), v.State),
+		Etag: secretmanagersvc.VersionEtag(name, timestamp.Canonical(v.CreateTime), v.State, scheduledEtag),
 		// Mirror the REST provider's versionToMap: real Secret Manager marks
 		// version responses as carrying a client-specified payload checksum.
 		ClientSpecifiedPayloadChecksum: true,
@@ -897,6 +1139,9 @@ func versionToProto(project string, v secretmanagerstore.Version, repl *secretma
 	}
 	if !v.DestroyTime.IsZero() {
 		out.DestroyTime = timestamp.Proto(v.DestroyTime)
+	}
+	if !v.ScheduledDestroyTime.IsZero() {
+		out.ScheduledDestroyTime = timestamp.Proto(v.ScheduledDestroyTime)
 	}
 	return out
 }
@@ -1171,9 +1416,10 @@ func (s *Service) notifySecret(ctx context.Context, project, id, eventType strin
 		secretmanagersvc.SecretEventAttributes(eventType, secretName(project, id), clock.Now()))
 }
 
-// notifySecretDelete publishes SECRET_DELETE (deleteType REQUESTED) with the
-// metadata as it was before the delete.
-func (s *Service) notifySecretDelete(ctx context.Context, project, id string, sec secretmanagerstore.Secret) {
+// notifySecretDelete publishes SECRET_DELETE (REQUESTED for a user delete,
+// EXPIRATION for the expiry sweep) with the metadata as it was before the
+// delete.
+func (s *Service) notifySecretDelete(ctx context.Context, project, id string, sec secretmanagerstore.Secret, deleteType string) {
 	if s.publisher == nil || len(sec.Topics) == 0 {
 		return
 	}
@@ -1182,7 +1428,7 @@ func (s *Service) notifySecretDelete(ctx context.Context, project, id string, se
 		return
 	}
 	secretmanagersvc.Notify(ctx, s.publisher, project, sec.Topics, data,
-		secretmanagersvc.DeleteEventAttributes(secretName(project, id), clock.Now()))
+		secretmanagersvc.DeleteEventAttributes(secretName(project, id), deleteType, clock.Now()))
 }
 
 // notifyVersion publishes a version-scoped event to the parent secret's topics,

@@ -259,8 +259,8 @@ func TestGRPCRotationValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get fractional secret: %v", err)
 	}
-	if frac.Rotation.RotationPeriod != "3600.5s" {
-		t.Fatalf("fractional rotationPeriod = %q, want 3600.5s", frac.Rotation.RotationPeriod)
+	if frac.Rotation.RotationPeriod != "3600.500s" {
+		t.Fatalf("fractional rotationPeriod = %q, want 3600.500s", frac.Rotation.RotationPeriod)
 	}
 
 	// A period-only mask keeps the stored next rotation time.

@@ -66,7 +66,7 @@ func TestNotificationAttributes(t *testing.T) {
 		t.Fatalf("version attributes = %#v", vattrs)
 	}
 
-	dattrs := DeleteEventAttributes(secretName, at)
+	dattrs := DeleteEventAttributes(secretName, DeleteTypeRequested, at)
 	if dattrs["deleteType"] != "REQUESTED" || dattrs["eventType"] != EventSecretDelete {
 		t.Fatalf("delete attributes = %#v", dattrs)
 	}

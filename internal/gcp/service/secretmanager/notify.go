@@ -26,18 +26,28 @@ import (
 	"jaiscloud/internal/gcp/timestamp"
 )
 
-// Event types Secret Manager publishes. SECRET_VERSION_DESTROY_SCHEDULED is
-// absent because the emulator has no delayed version destruction to trigger it.
+// Event types Secret Manager publishes. Every documented type now has a
+// trigger: SECRET_VERSION_DESTROY_SCHEDULED fires when a version is destroyed on
+// a secret with a destruction delay, and SECRET_DELETE carries
+// deleteType: EXPIRATION for an automatically expired secret (DC70).
 const (
-	EventSecretCreate         = "SECRET_CREATE"
-	EventSecretUpdate         = "SECRET_UPDATE"
-	EventSecretDelete         = "SECRET_DELETE"
-	EventSecretVersionAdd     = "SECRET_VERSION_ADD"
-	EventSecretVersionEnable  = "SECRET_VERSION_ENABLE"
-	EventSecretVersionDisable = "SECRET_VERSION_DISABLE"
-	EventSecretVersionDestroy = "SECRET_VERSION_DESTROY"
-	EventSecretRotate         = "SECRET_ROTATE"
-	EventTopicConfigured      = "TOPIC_CONFIGURED"
+	EventSecretCreate                  = "SECRET_CREATE"
+	EventSecretUpdate                  = "SECRET_UPDATE"
+	EventSecretDelete                  = "SECRET_DELETE"
+	EventSecretVersionAdd              = "SECRET_VERSION_ADD"
+	EventSecretVersionEnable           = "SECRET_VERSION_ENABLE"
+	EventSecretVersionDisable          = "SECRET_VERSION_DISABLE"
+	EventSecretVersionDestroy          = "SECRET_VERSION_DESTROY"
+	EventSecretVersionDestroyScheduled = "SECRET_VERSION_DESTROY_SCHEDULED"
+	EventSecretRotate                  = "SECRET_ROTATE"
+	EventTopicConfigured               = "TOPIC_CONFIGURED"
+)
+
+// SECRET_DELETE's documented deleteType values: a user-initiated delete or the
+// secret's automatic expiration.
+const (
+	DeleteTypeRequested  = "REQUESTED"
+	DeleteTypeExpiration = "EXPIRATION"
 )
 
 // DataFormatJSONAPIV1 is the only data format the API documents: data is the
@@ -80,11 +90,11 @@ func SecretEventAttributes(eventType, secretName string, at time.Time) map[strin
 }
 
 // DeleteEventAttributes is SECRET_DELETE's attribute set. deleteType is
-// REQUESTED for a user-initiated delete; the EXPIRATION variant needs secret
-// expiration, which the emulator does not model.
-func DeleteEventAttributes(secretName string, at time.Time) map[string]string {
+// REQUESTED for a user-initiated delete and EXPIRATION when the secret reached
+// its expireTime.
+func DeleteEventAttributes(secretName, deleteType string, at time.Time) map[string]string {
 	attrs := eventAttributes(EventSecretDelete, secretName, at)
-	attrs["deleteType"] = "REQUESTED"
+	attrs["deleteType"] = deleteType
 	return attrs
 }
 

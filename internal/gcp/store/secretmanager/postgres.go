@@ -54,7 +54,7 @@ func decodeSecretJSON(sec *Secret, labels, annotations, topics, rotation, aliase
 	}
 }
 
-const secretColumns = `secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication, topics`
+const secretColumns = `secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication, topics, version_destroy_ttl, expire_time`
 
 func (s *PostgresStore) CreateSecret(ctx context.Context, projectID, id string, sec Secret) error {
 	if sec.CreateTime.IsZero() {
@@ -62,9 +62,9 @@ func (s *PostgresStore) CreateSecret(ctx context.Context, projectID, id string, 
 	}
 	labels, _ := json.Marshal(sec.Labels)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication, topics)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-	`, projectID, id, json.RawMessage(labels), sec.CreateTime, sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases), sec.KmsKeyName, nullableJSON(sec.Annotations), nullableJSON(sec.Replication), nullableJSON(sec.Topics))
+		INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication, topics, version_destroy_ttl, expire_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+	`, projectID, id, json.RawMessage(labels), sec.CreateTime, sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases), sec.KmsKeyName, nullableJSON(sec.Annotations), nullableJSON(sec.Replication), nullableJSON(sec.Topics), sec.VersionDestroyTTL, nullableTime(sec.ExpireTime))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -78,13 +78,17 @@ func (s *PostgresStore) CreateSecret(ctx context.Context, projectID, id string, 
 func (s *PostgresStore) GetSecret(ctx context.Context, projectID, id string) (Secret, error) {
 	var sec Secret
 	var labels, annotations, topics, rotation, aliases, replication []byte
+	var expireTime *time.Time
 	err := s.pool.QueryRow(ctx, `SELECT `+secretColumns+` FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2`,
-		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication, &topics)
+		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication, &topics, &sec.VersionDestroyTTL, &expireTime)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Secret{}, ErrNoSuchSecret
 	}
 	if err != nil {
 		return Secret{}, err
+	}
+	if expireTime != nil {
+		sec.ExpireTime = *expireTime
 	}
 	decodeSecretJSON(&sec, labels, annotations, topics, rotation, aliases, replication)
 	return sec, nil
@@ -93,9 +97,9 @@ func (s *PostgresStore) GetSecret(ctx context.Context, projectID, id string) (Se
 func (s *PostgresStore) UpdateSecret(ctx context.Context, projectID, id string, sec Secret) error {
 	labels, _ := json.Marshal(sec.Labels)
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6, kms_key_name=$7, annotations=$8, replication=$9, topics=$10
+		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6, kms_key_name=$7, annotations=$8, replication=$9, topics=$10, version_destroy_ttl=$11, expire_time=$12
 		WHERE project_id=$1 AND secret_id=$2
-	`, projectID, id, json.RawMessage(labels), sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases), sec.KmsKeyName, nullableJSON(sec.Annotations), nullableJSON(sec.Replication), nullableJSON(sec.Topics))
+	`, projectID, id, json.RawMessage(labels), sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases), sec.KmsKeyName, nullableJSON(sec.Annotations), nullableJSON(sec.Replication), nullableJSON(sec.Topics), sec.VersionDestroyTTL, nullableTime(sec.ExpireTime))
 	if err != nil {
 		return err
 	}
@@ -128,13 +132,17 @@ func (s *PostgresStore) updateSecretAtomicOnce(ctx context.Context, projectID, i
 
 	var sec Secret
 	var labels, annotations, topics, rotation, aliases, replication []byte
+	var expireTime *time.Time
 	err = tx.QueryRow(ctx, `SELECT `+secretColumns+` FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2 FOR UPDATE`,
-		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication, &topics)
+		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication, &topics, &sec.VersionDestroyTTL, &expireTime)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Secret{}, ErrNoSuchSecret
 	}
 	if err != nil {
 		return Secret{}, err
+	}
+	if expireTime != nil {
+		sec.ExpireTime = *expireTime
 	}
 	decodeSecretJSON(&sec, labels, annotations, topics, rotation, aliases, replication)
 
@@ -145,9 +153,9 @@ func (s *PostgresStore) updateSecretAtomicOnce(ctx context.Context, projectID, i
 
 	newLabels, _ := json.Marshal(next.Labels)
 	if _, err := tx.Exec(ctx, `
-		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6, kms_key_name=$7, annotations=$8, replication=$9, topics=$10
+		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6, kms_key_name=$7, annotations=$8, replication=$9, topics=$10, version_destroy_ttl=$11, expire_time=$12
 		WHERE project_id=$1 AND secret_id=$2
-	`, projectID, id, json.RawMessage(newLabels), next.NextVer, nullableJSON(next.Rotation), nullableJSON(next.VersionAliases), next.KmsKeyName, nullableJSON(next.Annotations), nullableJSON(next.Replication), nullableJSON(next.Topics)); err != nil {
+	`, projectID, id, json.RawMessage(newLabels), next.NextVer, nullableJSON(next.Rotation), nullableJSON(next.VersionAliases), next.KmsKeyName, nullableJSON(next.Annotations), nullableJSON(next.Replication), nullableJSON(next.Topics), next.VersionDestroyTTL, nullableTime(next.ExpireTime)); err != nil {
 		return Secret{}, err
 	}
 
@@ -190,13 +198,17 @@ func (s *PostgresStore) deleteSecretIfOnce(ctx context.Context, projectID, id st
 
 	var sec Secret
 	var labels, annotations, topics, rotation, aliases, replication []byte
+	var expireTime *time.Time
 	err = tx.QueryRow(ctx, `SELECT `+secretColumns+` FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2 FOR UPDATE`,
-		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication, &topics)
+		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication, &topics, &sec.VersionDestroyTTL, &expireTime)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNoSuchSecret
 	}
 	if err != nil {
 		return err
+	}
+	if expireTime != nil {
+		sec.ExpireTime = *expireTime
 	}
 	decodeSecretJSON(&sec, labels, annotations, topics, rotation, aliases, replication)
 
@@ -224,8 +236,12 @@ func (s *PostgresStore) ListSecrets(ctx context.Context, projectID string) ([]Se
 	for rows.Next() {
 		var sec Secret
 		var labels, annotations, topics, rotation, aliases, replication []byte
-		if err := rows.Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication, &topics); err != nil {
+		var expireTime *time.Time
+		if err := rows.Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication, &topics, &sec.VersionDestroyTTL, &expireTime); err != nil {
 			return nil, err
+		}
+		if expireTime != nil {
+			sec.ExpireTime = *expireTime
 		}
 		decodeSecretJSON(&sec, labels, annotations, topics, rotation, aliases, replication)
 		result = append(result, sec)
@@ -243,20 +259,20 @@ func (s *PostgresStore) CreateVersion(ctx context.Context, projectID string, v V
 		return err
 	}
 	_, err = s.pool.Exec(ctx, `
-		INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek, replica_deks)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-	`, projectID, v.SecretID, v.VersionID, v.State, v.CreateTime, nullableTime(v.DestroyTime), v.Data, v.KmsKeyName, v.WrappedDEK, replicaDEKs)
+		INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, destroy_time, scheduled_destroy_time, data, kms_key_name, wrapped_dek, replica_deks)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	`, projectID, v.SecretID, v.VersionID, v.State, v.CreateTime, nullableTime(v.DestroyTime), nullableTime(v.ScheduledDestroyTime), v.Data, v.KmsKeyName, v.WrappedDEK, replicaDEKs)
 	return err
 }
 
 func (s *PostgresStore) GetVersion(ctx context.Context, projectID, secretID, versionID string) (Version, error) {
 	var v Version
-	var destroyTime *time.Time
+	var destroyTime, scheduledDestroyTime *time.Time
 	var replicaDEKs []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek, replica_deks
+		SELECT secret_id, version_id, state, create_time, destroy_time, scheduled_destroy_time, data, kms_key_name, wrapped_dek, replica_deks
 		FROM jc_sm_versions WHERE project_id=$1 AND secret_id=$2 AND version_id=$3
-	`, projectID, secretID, versionID).Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK, &replicaDEKs)
+	`, projectID, secretID, versionID).Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &scheduledDestroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK, &replicaDEKs)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Version{}, ErrNoSuchVersion
 	}
@@ -266,6 +282,9 @@ func (s *PostgresStore) GetVersion(ctx context.Context, projectID, secretID, ver
 	if destroyTime != nil {
 		v.DestroyTime = *destroyTime
 	}
+	if scheduledDestroyTime != nil {
+		v.ScheduledDestroyTime = *scheduledDestroyTime
+	}
 	if err := decodeReplicaDEKs(replicaDEKs, &v); err != nil {
 		return Version{}, err
 	}
@@ -274,7 +293,7 @@ func (s *PostgresStore) GetVersion(ctx context.Context, projectID, secretID, ver
 
 func (s *PostgresStore) ListVersions(ctx context.Context, projectID, secretID string) ([]Version, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek, replica_deks
+		SELECT secret_id, version_id, state, create_time, destroy_time, scheduled_destroy_time, data, kms_key_name, wrapped_dek, replica_deks
 		FROM jc_sm_versions WHERE project_id=$1 AND secret_id=$2 ORDER BY version_id
 	`, projectID, secretID)
 	if err != nil {
@@ -284,13 +303,16 @@ func (s *PostgresStore) ListVersions(ctx context.Context, projectID, secretID st
 	var result []Version
 	for rows.Next() {
 		var v Version
-		var destroyTime *time.Time
+		var destroyTime, scheduledDestroyTime *time.Time
 		var replicaDEKs []byte
-		if err := rows.Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK, &replicaDEKs); err != nil {
+		if err := rows.Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &scheduledDestroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK, &replicaDEKs); err != nil {
 			return nil, err
 		}
 		if destroyTime != nil {
 			v.DestroyTime = *destroyTime
+		}
+		if scheduledDestroyTime != nil {
+			v.ScheduledDestroyTime = *scheduledDestroyTime
 		}
 		if err := decodeReplicaDEKs(replicaDEKs, &v); err != nil {
 			return nil, err
@@ -303,8 +325,8 @@ func (s *PostgresStore) ListVersions(ctx context.Context, projectID, secretID st
 
 func (s *PostgresStore) UpdateVersion(ctx context.Context, projectID string, v Version) error {
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE jc_sm_versions SET state=$4, destroy_time=$5 WHERE project_id=$1 AND secret_id=$2 AND version_id=$3
-	`, projectID, v.SecretID, v.VersionID, v.State, nullableTime(v.DestroyTime))
+		UPDATE jc_sm_versions SET state=$4, destroy_time=$5, scheduled_destroy_time=$6 WHERE project_id=$1 AND secret_id=$2 AND version_id=$3
+	`, projectID, v.SecretID, v.VersionID, v.State, nullableTime(v.DestroyTime), nullableTime(v.ScheduledDestroyTime))
 	if err != nil {
 		return err
 	}
@@ -331,12 +353,12 @@ func (s *PostgresStore) updateVersionIfOnce(ctx context.Context, projectID, secr
 	defer tx.Rollback(ctx)
 
 	var v Version
-	var destroyTime *time.Time
+	var destroyTime, scheduledDestroyTime *time.Time
 	var replicaDEKs []byte
 	err = tx.QueryRow(ctx, `
-		SELECT secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek, replica_deks
+		SELECT secret_id, version_id, state, create_time, destroy_time, scheduled_destroy_time, data, kms_key_name, wrapped_dek, replica_deks
 		FROM jc_sm_versions WHERE project_id=$1 AND secret_id=$2 AND version_id=$3 FOR UPDATE
-	`, projectID, secretID, versionID).Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK, &replicaDEKs)
+	`, projectID, secretID, versionID).Scan(&v.SecretID, &v.VersionID, &v.State, &v.CreateTime, &destroyTime, &scheduledDestroyTime, &v.Data, &v.KmsKeyName, &v.WrappedDEK, &replicaDEKs)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Version{}, ErrNoSuchVersion
 	}
@@ -345,6 +367,9 @@ func (s *PostgresStore) updateVersionIfOnce(ctx context.Context, projectID, secr
 	}
 	if destroyTime != nil {
 		v.DestroyTime = *destroyTime
+	}
+	if scheduledDestroyTime != nil {
+		v.ScheduledDestroyTime = *scheduledDestroyTime
 	}
 	if err := decodeReplicaDEKs(replicaDEKs, &v); err != nil {
 		return Version{}, err
@@ -357,8 +382,8 @@ func (s *PostgresStore) updateVersionIfOnce(ctx context.Context, projectID, secr
 	// Identity is the address, not a mutation: never let mutate move the record.
 	next.SecretID, next.VersionID = v.SecretID, v.VersionID
 	if _, err := tx.Exec(ctx, `
-		UPDATE jc_sm_versions SET state=$4, destroy_time=$5 WHERE project_id=$1 AND secret_id=$2 AND version_id=$3
-	`, projectID, next.SecretID, next.VersionID, next.State, nullableTime(next.DestroyTime)); err != nil {
+		UPDATE jc_sm_versions SET state=$4, destroy_time=$5, scheduled_destroy_time=$6 WHERE project_id=$1 AND secret_id=$2 AND version_id=$3
+	`, projectID, next.SecretID, next.VersionID, next.State, nullableTime(next.DestroyTime), nullableTime(next.ScheduledDestroyTime)); err != nil {
 		return Version{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
