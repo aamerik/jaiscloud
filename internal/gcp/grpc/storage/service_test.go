@@ -1367,8 +1367,85 @@ func TestRestoreObject(t *testing.T) {
 	client, cleanup := storageTestService(t)
 	defer cleanup()
 	ctx := context.Background()
+	createBucket(t, client, "bucket-a", "US")
 
-	// Versioned bucket so overwrites retain (tombstone) prior generations.
+	// Soft delete is the default bucket policy: a delete keeps the generation
+	// restorable instead of hard-deleting it.
+	v1 := writeSingleShot(t, client, "bucket-a", "restore-obj", "text/plain", []byte("payload"))
+	if _, err := client.DeleteObject(ctx, &storagepb.DeleteObjectRequest{
+		Bucket: testBucket, Object: "restore-obj",
+	}); err != nil {
+		t.Fatalf("DeleteObject: %v", err)
+	}
+	if _, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
+		Bucket: testBucket, Object: "restore-obj",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetObject after delete err = %v, want NotFound", err)
+	}
+
+	restored, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(),
+	})
+	if err != nil {
+		t.Fatalf("RestoreObject: %v", err)
+	}
+	// Real GCS restores a new object copy: fresh generation, metageneration 1.
+	if restored.GetGeneration() == v1.GetGeneration() {
+		t.Fatalf("RestoreObject reused generation %d, want a new one", v1.GetGeneration())
+	}
+	if restored.GetMetageneration() != 1 {
+		t.Fatalf("RestoreObject metageneration = %d, want 1", restored.GetMetageneration())
+	}
+	if got := readObject(t, client, testBucket, "restore-obj"); string(got) != "payload" {
+		t.Fatalf("read after restore = %q, want payload", got)
+	}
+
+	// The soft-deleted source is retained for its window: a second restore of
+	// the same generation creates another live copy.
+	again, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(),
+	})
+	if err != nil {
+		t.Fatalf("second RestoreObject of the retained copy: %v", err)
+	}
+	if again.GetGeneration() == restored.GetGeneration() {
+		t.Fatalf("second restore reused generation %d, want a new one", restored.GetGeneration())
+	}
+
+	// A live generation is not soft-deleted: 412 objectNotSoftDeleted.
+	if _, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: again.GetGeneration(),
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("RestoreObject live generation err = %v, want FailedPrecondition", err)
+	}
+
+	// An unknown generation is NotFound.
+	if _, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: restored.GetGeneration() + 1000,
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("RestoreObject unknown generation err = %v, want NotFound", err)
+	}
+
+	// A soft-deleted generation is invisible without soft_deleted, visible with.
+	if _, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(),
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetObject(soft-deleted) err = %v, want NotFound", err)
+	}
+	optIn := true
+	if _, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
+		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(), SoftDeleted: &optIn,
+	}); err != nil {
+		t.Fatalf("GetObject(soft-deleted, soft_deleted=true): %v", err)
+	}
+}
+
+// TestRestoreObjectNoncurrentRejected pins the documented 412: a noncurrent
+// (archived) version is not soft-deleted.
+func TestRestoreObjectNoncurrentRejected(t *testing.T) {
+	client, cleanup := storageTestService(t)
+	defer cleanup()
+	ctx := context.Background()
 	if _, err := client.CreateBucket(ctx, &storagepb.CreateBucketRequest{
 		Parent:   "projects/_",
 		BucketId: "bucket-a",
@@ -1380,68 +1457,17 @@ func TestRestoreObject(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateBucket: %v", err)
 	}
-
-	v1 := writeSingleShot(t, client, testBucket, "restore-obj", "text/plain", []byte("version-one"))
-	v2 := writeSingleShot(t, client, testBucket, "restore-obj", "text/plain", []byte("version-two"))
-	if v1.GetGeneration() == v2.GetGeneration() {
-		t.Fatal("expected distinct generations")
+	v1 := writeSingleShot(t, client, testBucket, "restore-obj", "text/plain", []byte("v1"))
+	writeSingleShot(t, client, testBucket, "restore-obj", "text/plain", []byte("v2"))
+	if _, err := client.DeleteObject(ctx, &storagepb.DeleteObjectRequest{
+		Bucket: testBucket, Object: "restore-obj",
+	}); err != nil {
+		t.Fatalf("DeleteObject: %v", err)
 	}
-
-	// v1 is now non-live (tombstoned) after the v2 write.
-	dead, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
-		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(),
-	})
-	if err != nil {
-		t.Fatalf("GetObject(v1): %v", err)
-	}
-	if dead.GetDeleteTime() == nil {
-		t.Fatal("expected v1 to carry a delete_time before restore")
-	}
-
-	restored, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
-		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(),
-	})
-	if err != nil {
-		t.Fatalf("RestoreObject: %v", err)
-	}
-	if restored.GetGeneration() != v1.GetGeneration() {
-		t.Fatalf("RestoreObject generation = %d, want %d", restored.GetGeneration(), v1.GetGeneration())
-	}
-	if restored.GetDeleteTime() != nil {
-		t.Fatalf("RestoreObject delete_time = %v, want nil", restored.GetDeleteTime())
-	}
-
-	// v1 is the live generation again (reads resolve to it).
-	if got := readObject(t, client, testBucket, "restore-obj"); string(got) != "version-one" {
-		t.Fatalf("read after restore = %q, want version-one", got)
-	}
-	// v2 was superseded and is now non-live.
-	superseded, err := client.GetObject(ctx, &storagepb.GetObjectRequest{
-		Bucket: testBucket, Object: "restore-obj", Generation: v2.GetGeneration(),
-	})
-	if err != nil {
-		t.Fatalf("GetObject(v2): %v", err)
-	}
-	if superseded.GetDeleteTime() == nil {
-		t.Fatal("expected v2 to be non-live after restoring v1")
-	}
-
-	// Precondition mismatch on the current live generation fails without mutating.
-	stale := int64(99999999)
 	if _, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
-		Bucket: testBucket, Object: "restore-obj", Generation: v2.GetGeneration(), IfGenerationMatch: &stale,
+		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration(),
 	}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("RestoreObject precondition err = %v, want FailedPrecondition", err)
-	}
-	if got := readObject(t, client, testBucket, "restore-obj"); string(got) != "version-one" {
-		t.Fatalf("failed restore mutated live object: %q", got)
-	}
-
-	// An unknown generation is NotFound.
-	if _, err := client.RestoreObject(ctx, &storagepb.RestoreObjectRequest{
-		Bucket: testBucket, Object: "restore-obj", Generation: v1.GetGeneration() + v2.GetGeneration() + 1,
-	}); status.Code(err) != codes.NotFound {
-		t.Fatalf("RestoreObject unknown generation err = %v, want NotFound", err)
+		t.Fatalf("RestoreObject noncurrent err = %v, want FailedPrecondition", err)
 	}
 }
 

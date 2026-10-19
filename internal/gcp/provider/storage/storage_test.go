@@ -2568,7 +2568,8 @@ func TestFetchObjectBytesRoundTrip(t *testing.T) {
 // TestPutObjectBytesRoundTrip verifies the server-side object write used by
 // other emulated services (e.g. Dataproc driver output): the bucket is created
 // lazily, the bytes round-trip through the encryption + blob path, and an
-// overwrite replaces the live generation and cleans up the prior blob.
+// overwrite replaces the live generation while retaining the replaced one as a
+// soft-deleted copy (the default bucket soft delete policy).
 func TestPutObjectBytesRoundTrip(t *testing.T) {
 	blobs := blobfs.NewMemoryBlobStore()
 	p := New(gcs.NewMemoryObjectStore(), store.NewMemoryResourceStore(), blobs, crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
@@ -2599,7 +2600,19 @@ func TestPutObjectBytesRoundTrip(t *testing.T) {
 	if string(got) != "world" {
 		t.Fatalf("overwrite round-trip = %q, want %q", got, "world")
 	}
-	if _, err := blobs.Get(ctx, blobsNamespace, blobKey("stage-bkt", "meta/jobs/j1/driveroutput", prev.Generation)); err == nil {
-		t.Error("prior generation blob was not cleaned up on overwrite")
+	// The replaced generation is soft-deleted, not dropped: its metadata row and
+	// bytes stay until the soft delete window closes.
+	if _, err := blobs.Get(ctx, blobsNamespace, blobKey("stage-bkt", "meta/jobs/j1/driveroutput", prev.Generation)); err != nil {
+		t.Errorf("prior generation blob was dropped on overwrite: %v", err)
+	}
+	retained, err := p.objects.GetObjectGeneration(ctx, "stage-bkt", "meta/jobs/j1/driveroutput", prev.Generation)
+	if err != nil {
+		t.Fatalf("prior generation metadata missing: %v", err)
+	}
+	if !retained.SoftDeleted {
+		t.Error("overwritten generation was not soft-deleted")
+	}
+	if _, err := p.ObjectsGet(ctx, bucketParamsWithObj("stage-bkt", "meta/jobs/j1/driveroutput")); err != nil {
+		t.Fatalf("live object missing after overwrite: %v", err)
 	}
 }

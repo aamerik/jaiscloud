@@ -403,8 +403,12 @@ type objectMeta struct {
 	RetentionExpirationTime string `json:"retentionExpirationTime,omitempty"`
 	TemporaryHold           bool   `json:"temporaryHold,omitempty"`
 	EventBasedHold          bool   `json:"eventBasedHold,omitempty"`
-	// TimeDeleted is set on non-live generations (versioning).
+	// TimeDeleted is set on non-live generations (versioning or soft delete).
 	TimeDeleted string `json:"timeDeleted,omitempty"`
+	// SoftDeleteTime/HardDeleteTime are set on a soft-deleted generation: when
+	// it was soft-deleted and when the restore window closes.
+	SoftDeleteTime string `json:"softDeleteTime,omitempty"`
+	HardDeleteTime string `json:"hardDeleteTime,omitempty"`
 	// KmsKeyName is the CMEK key name (empty when server-DEK or CSEK encrypted).
 	KmsKeyName string `json:"kmsKeyName,omitempty"`
 	// CustomerEncryption describes a CSEK-encrypted object.
@@ -514,7 +518,7 @@ func fromStoreObject(nr *model.NormalizedRequest, m gcs.ObjectMeta) objectMeta {
 		ContentEncoding: m.ContentEncoding,
 		Md5Hash:         m.MD5Hash,
 		Crc32c:          m.CRC32C,
-		Etag:            "CAE=",
+		Etag:            ObjectEtag(m.Generation, m.Metageneration),
 		Metadata:        m.Metadata,
 		Generation:      m.Generation,
 		Metageneration:  m.Metageneration,
@@ -540,6 +544,15 @@ func fromStoreObject(nr *model.NormalizedRequest, m gcs.ObjectMeta) objectMeta {
 	}
 	if m.TimeDeleted != nil {
 		o.TimeDeleted = m.TimeDeleted.Format(time.RFC3339Nano)
+	}
+	if m.SoftDeleted {
+		// Real GCS surfaces a soft-deleted generation's window on the Object
+		// resource instead of the plain timeDeleted marker.
+		o.SoftDeleteTime = o.TimeDeleted
+		o.TimeDeleted = ""
+		if !m.HardDeleteTime.IsZero() {
+			o.HardDeleteTime = m.HardDeleteTime.Format(time.RFC3339Nano)
+		}
 	}
 	if m.KmsKeyName != "" {
 		o.KmsKeyName = m.KmsKeyName
@@ -840,6 +853,7 @@ func (p *Provider) BucketsGetStorageLayout(ctx context.Context, nr *model.Normal
 	}
 	if loc, _ := meta["location"].(string); loc != "" {
 		layout["location"] = loc
+		layout["locationType"] = BucketLocationType(loc)
 	}
 	return provider.OK(layout), nil
 }
@@ -1368,7 +1382,7 @@ func objectEventData(m gcs.ObjectMeta) []byte {
 		ContentEncoding: m.ContentEncoding,
 		Md5Hash:         m.MD5Hash,
 		Crc32c:          m.CRC32C,
-		Etag:            "CAE=",
+		Etag:            ObjectEtag(m.Generation, m.Metageneration),
 		Metadata:        m.Metadata,
 		Generation:      m.Generation,
 		Metageneration:  m.Metageneration,
@@ -1470,10 +1484,22 @@ func (p *Provider) ObjectsList(ctx context.Context, nr *model.NormalizedRequest)
 		return nil, err
 	}
 	versions, _ := nr.Params["versions"].(string)
+	softDeleted, _ := nr.Params["softDeleted"].(string)
 	var objs []gcs.ObjectMeta
-	if versions == "true" {
-		// ?versions=true lists every generation, including non-live ones.
+	if softDeleted == "true" {
+		// ?softDeleted=true is the only listing surface for soft-deleted
+		// generations (they are hidden from the live and versions listings).
 		objs, err = p.objects.ListObjectVersions(ctx, bucket)
+		if err == nil {
+			objs = FilterSoftDeleted(objs, true)
+		}
+	} else if versions == "true" {
+		// ?versions=true lists every live and noncurrent generation; soft-deleted
+		// copies are only visible through ?softDeleted=true.
+		objs, err = p.objects.ListObjectVersions(ctx, bucket)
+		if err == nil {
+			objs = FilterSoftDeleted(objs, false)
+		}
 	} else {
 		objs, err = p.objects.ListObjects(ctx, bucket)
 		if err == nil {
@@ -1750,7 +1776,7 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 	// insert explicitly sets eventBasedHold (explicit false overrides).
 	applyObjectHolds(body, bmeta, &o)
 	o.ID = bucket + "/" + object + "/" + o.Generation
-	o.Etag = "CAE="
+	o.Etag = ObjectEtag(o.Generation, o.Metageneration)
 	base := baseURL(nr)
 	o.SelfLink = objectSelfLink(base, bucket, object)
 	o.MediaLink = objectMediaLink(base, bucket, object)
@@ -1885,19 +1911,25 @@ func (p *Provider) PutObjectData(ctx context.Context, project string, meta gcs.O
 	}
 
 	meta.WrappedDEK = wrappedDEK
-	var err error
-	if versioned {
-		err = p.objects.PutObjectGenerationChecked(ctx, meta.Bucket, meta.Name, meta, precondition)
-	} else {
-		err = p.objects.PutObjectMetaChecked(ctx, meta.Bucket, meta.Name, meta, precondition)
+	// In a non-versioned bucket with soft delete enabled, an overwrite does not
+	// drop the replaced generation: real GCS retains it as a soft-deleted copy
+	// (restorable until the policy window closes).
+	var softPriorWindow time.Duration
+	if !versioned && prevMeta != nil {
+		if bmeta, berr := p.objects.GetBucket(ctx, meta.Bucket); berr == nil && !softDeleteDisabled(bmeta) {
+			softPriorWindow = softDeleteWindow(bmeta)
+		}
 	}
+	err := p.putLiveObject(ctx, meta, versioned, softPriorWindow, precondition)
 	if err != nil {
 		// Roll back the just-written blob so a failed metadata write does not
 		// leave an orphaned object (metadata absent, blob present).
 		_ = p.blobs.Delete(ctx, blobsNamespace, id)
 		return meta, err
 	}
-	if priorBlobKey != "" {
+	if priorBlobKey != "" && softPriorWindow == 0 {
+		// The replaced generation's bytes are still referenced when it was kept
+		// as a soft-deleted copy.
 		_ = p.blobs.Delete(ctx, blobsNamespace, priorBlobKey)
 	}
 	// Publish the replacement events and the OBJECT_FINALIZE for the new
@@ -1914,6 +1946,29 @@ func (p *Provider) PutObjectData(ctx context.Context, project string, meta gcs.O
 	}
 	p.publishObjectEvent(ctx, project, meta.Bucket, meta.Name, "OBJECT_FINALIZE", meta, meta.TimeCreated, finalizeAttrs)
 	return meta, nil
+}
+
+// putLiveObject stores meta as the object's live generation. A versioned bucket
+// appends a generation; a non-versioned bucket replaces the live row, except
+// when softPriorWindow is non-zero: the replaced generation is then retained as a
+// soft-deleted copy (real GCS preserves overwritten objects under a soft delete
+// policy) and the new generation is appended alongside it.
+func (p *Provider) putLiveObject(ctx context.Context, meta gcs.ObjectMeta, versioned bool, softPriorWindow time.Duration, precondition *gcs.Precondition) error {
+	if versioned {
+		return p.objects.PutObjectGenerationChecked(ctx, meta.Bucket, meta.Name, meta, precondition)
+	}
+	if softPriorWindow > 0 {
+		if _, err := p.objects.TombstoneObjectMetaChecked(ctx, meta.Bucket, meta.Name, gcs.TombstoneOptions{
+			SoftDeleted:    true,
+			HardDeleteTime: clock.Now().Add(softPriorWindow),
+		}, precondition); err != nil {
+			return err
+		}
+		// The precondition was validated by the tombstone above; the insert
+		// must not re-check it against the (now empty) live generation.
+		return p.objects.PutObjectGenerationChecked(ctx, meta.Bucket, meta.Name, meta, nil)
+	}
+	return p.objects.PutObjectMetaChecked(ctx, meta.Bucket, meta.Name, meta, precondition)
 }
 
 func (p *Provider) ObjectsGet(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -1973,7 +2028,13 @@ func (p *Provider) ObjectsGetMedia(ctx context.Context, nr *model.NormalizedRequ
 	}
 	// Metadata first: metadata gone → 404; metadata present + blob absent → 404
 	// (a tombstoned/deleted version whose data was dropped, not corruption).
-	meta, err := p.getObjectForRead(ctx, bucket, object, nr.Params)
+	mediaParams := make(map[string]any, len(nr.Params))
+	for k, v := range nr.Params {
+		mediaParams[k] = v
+	}
+	// Soft-deleted objects cannot be downloaded, whatever the query says.
+	delete(mediaParams, "softDeleted")
+	meta, err := p.getObjectForRead(ctx, bucket, object, mediaParams)
 	if err != nil {
 		return nil, err
 	}
@@ -2119,8 +2180,9 @@ func parseByteRange(rng string, total int64) (start, end int64, res rangeParse) 
 // the Go SDK's Reader.Attrs (and reader.Metadata()) populate: x-goog-hash,
 // x-goog-generation, x-goog-metageneration, x-goog-stored-content-length, and
 // one x-goog-meta-<key> header per custom metadata entry. xmlAPI selects the
-// XML API ETag format (quoted hex MD5) instead of the JSON API's constant etag;
-// it is also used for the XML API PUT Object response headers.
+// XML API ETag format (quoted hex MD5) instead of the JSON API's
+// generation/metageneration etag; it is also used for the XML API PUT Object
+// response headers.
 func mediaHeaders(m gcs.ObjectMeta, xmlAPI bool) map[string]string {
 	h := map[string]string{
 		"x-goog-generation":            m.Generation,
@@ -2138,11 +2200,10 @@ func mediaHeaders(m gcs.ObjectMeta, xmlAPI bool) map[string]string {
 	if m.ComponentCount > 0 {
 		h["x-goog-component-count"] = strconv.FormatInt(m.ComponentCount, 10)
 	}
-	// The JSON API carries the constant object etag ("CAE="), shared with the
-	// object metadata resource. Real GCS XML API responses always carry a quoted
-	// ETag; for a normal object that is the lowercase-hex MD5. Fall back to the
-	// quoted constant when no MD5 is stored (composite objects).
-	h["ETag"] = "CAE="
+	// The JSON API carries the object's generation/metageneration etag; the
+	// XML API always carries a quoted ETag — the lowercase-hex MD5 for a normal
+	// object. Fall back to that etag when no MD5 is stored (composite objects).
+	h["ETag"] = ObjectEtag(m.Generation, m.Metageneration)
 	if xmlAPI {
 		h["ETag"] = xmlETag(m.MD5Hash)
 	}
@@ -2184,7 +2245,7 @@ func canonicalMetaKey(key string) string {
 
 // xmlETag renders the XML API object ETag: the quoted lowercase-hex MD5 of the
 // object data (the XML API's documented ETag format), falling back to the
-// quoted constant etag when no MD5 is stored. The emulator computes MD5 for
+// quoted legacy ETag when no MD5 is stored. The emulator computes MD5 for
 // every non-composite write (including CSEK/CMEK); compose is the one path that
 // leaves it empty.
 func xmlETag(md5Base64 string) string {
@@ -2421,7 +2482,7 @@ func (p *Provider) copyObject(ctx context.Context, nr *model.NormalizedRequest) 
 	bmeta, _ := p.objects.GetBucket(ctx, dstBucket)
 	applyObjectHolds(body, bmeta, &o)
 	o.ID = dstBucket + "/" + dstObject + "/" + o.Generation
-	o.Etag = "CAE="
+	o.Etag = ObjectEtag(o.Generation, o.Metageneration)
 	base := baseURL(nr)
 	o.SelfLink = objectSelfLink(base, dstBucket, dstObject)
 	o.MediaLink = objectMediaLink(base, dstBucket, dstObject)
@@ -2567,7 +2628,7 @@ func (p *Provider) ObjectsMove(ctx context.Context, nr *model.NormalizedRequest)
 	o.Retention = nil
 	o.RetentionExpirationTime = ""
 	o.ID = dstBucket + "/" + dstObject + "/" + o.Generation
-	o.Etag = "CAE="
+	o.Etag = ObjectEtag(o.Generation, o.Metageneration)
 	base := baseURL(nr)
 	o.SelfLink = objectSelfLink(base, dstBucket, dstObject)
 	o.MediaLink = objectMediaLink(base, dstBucket, dstObject)
@@ -2582,10 +2643,9 @@ func (p *Provider) ObjectsMove(ctx context.Context, nr *model.NormalizedRequest)
 	return provider.OK(toMap(final)), nil
 }
 
-// ObjectsRestore implements objects.restore: a non-live (soft-deleted) object
-// generation is made live again, superseding the current live generation if
-// any. The store's RestoreObjectGeneration validates the ifGeneration*/
-// ifMetageneration* preconditions atomically with the mutation.
+// ObjectsRestore implements objects.restore: a soft-deleted object generation is
+// restored as a new copy with a fresh generation (see RestoreObjectCore for the
+// documented semantics and failure modes).
 func (p *Provider) ObjectsRestore(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	bucket, _ := nr.Params["bucket"].(string)
 	object, _ := nr.Params["object"].(string)
@@ -2596,23 +2656,10 @@ func (p *Provider) ObjectsRestore(ctx context.Context, nr *model.NormalizedReque
 	if err := requireDownscope(nr, downscope.WriteObject, bucket, object); err != nil {
 		return nil, err
 	}
-	meta, err := p.objects.RestoreObjectGeneration(ctx, bucket, object, generation, objectPrecondition(nr))
+	meta, err := p.RestoreObjectCore(ctx, bucket, object, generation, objectPrecondition(nr))
 	if err != nil {
-		switch {
-		case errors.Is(err, gcs.ErrNoSuchBucket):
-			return nil, model.NewProviderError("NotFound", "bucket not found", 404)
-		case errors.Is(err, gcs.ErrNoSuchObject):
-			return nil, model.NewProviderError("NotFound", "object generation not found", 404)
-		case errors.Is(err, gcs.ErrPreconditionFailed):
-			return nil, model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
-		default:
-			return nil, err
-		}
+		return nil, MapRestoreStoreError(err)
 	}
-	// J31: restoring a generation makes it live again, so real GCS publishes
-	// OBJECT_FINALIZE for the newly-restored object (the write-core finalize/
-	// archive/delete events did not cover the restore path).
-	p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_FINALIZE", meta, clock.Now(), nil)
 	return provider.OK(toMap(fromStoreObject(nr, meta))), nil
 }
 
@@ -2718,7 +2765,7 @@ func (p *Provider) ObjectsCompose(ctx context.Context, nr *model.NormalizedReque
 	bmeta, _ := p.objects.GetBucket(ctx, bucket)
 	applyObjectHolds(dest, bmeta, &o)
 	o.ID = bucket + "/" + object + "/" + o.Generation
-	o.Etag = "CAE="
+	o.Etag = ObjectEtag(o.Generation, o.Metageneration)
 	base := baseURL(nr)
 	o.SelfLink = objectSelfLink(base, bucket, object)
 	o.MediaLink = objectMediaLink(base, bucket, object)
@@ -3275,8 +3322,9 @@ func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object, generat
 
 	if p.bucketVersioned(ctx, bucket) {
 		// Versioned bucket: delete only the live generation, leaving a
-		// non-live tombstone that appears in ?versions=true listings.
-		if _, err := p.objects.TombstoneObjectMetaChecked(ctx, bucket, object, precondition); err != nil {
+		// noncurrent version that appears in ?versions=true listings and keeps
+		// its bytes (real GCS lets a client read a noncurrent generation).
+		if _, err := p.objects.TombstoneObjectMetaChecked(ctx, bucket, object, gcs.TombstoneOptions{}, precondition); err != nil {
 			if errors.Is(err, gcs.ErrNoSuchObject) {
 				return model.NewProviderError("NotFound", "object not found", 404)
 			}
@@ -3285,14 +3333,38 @@ func (p *Provider) DeleteObjectData(ctx context.Context, bucket, object, generat
 			}
 			return err
 		}
-		_ = p.blobs.Delete(ctx, blobsNamespace, blobKey(bucket, object, meta.Generation))
 		// A versioned delete makes the live version noncurrent, which real GCS
 		// reports as OBJECT_ARCHIVE (not OBJECT_DELETE).
 		p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_ARCHIVE", meta, clock.Now(), nil)
 		return nil
 	}
 
-	// Non-versioned bucket: hard-delete every generation (there should only
+	// Non-versioned bucket. With a soft delete policy in force (the GCS default
+	// is 7 days), the generation becomes soft-deleted: not live, its bytes kept
+	// until hardDeleteTime, and restorable through objects.restore. Only a
+	// bucket that disabled soft delete (retentionDurationSeconds "0")
+	// hard-deletes.
+	if bmeta, err := p.objects.GetBucket(ctx, bucket); err == nil && !softDeleteDisabled(bmeta) {
+		tombstone, err := p.objects.TombstoneObjectMetaChecked(ctx, bucket, object, gcs.TombstoneOptions{
+			SoftDeleted:    true,
+			HardDeleteTime: clock.Now().Add(softDeleteWindow(bmeta)),
+		}, precondition)
+		if err != nil {
+			if errors.Is(err, gcs.ErrNoSuchObject) {
+				return model.NewProviderError("NotFound", "object not found", 404)
+			}
+			if errors.Is(err, gcs.ErrPreconditionFailed) {
+				return model.NewProviderError("PreconditionFailed", "At least one of the pre-conditions you specified did not hold", 412)
+			}
+			return err
+		}
+		// The bytes stay; the object is gone from the live surface, which real
+		// GCS still reports as OBJECT_DELETE.
+		p.publishObjectEvent(ctx, p.bucketProject(ctx, bucket), bucket, object, "OBJECT_DELETE", tombstone, clock.Now(), nil)
+		return nil
+	}
+
+	// Soft delete disabled: hard-delete every generation (there should only
 	// be one) and its bytes.
 	var blobKeys []string
 	if gens, err := p.objects.ListObjectVersions(ctx, bucket); err == nil {
@@ -3335,6 +3407,12 @@ func (p *Provider) deleteObjectGeneration(ctx context.Context, bucket, object, g
 			return model.NewProviderError("NotFound", "object generation not found", 404)
 		}
 		return err
+	}
+	if target.SoftDeleted {
+		// "This API cannot be used to permanently delete soft-deleted objects";
+		// they are purged when their hardDeleteTime arrives.
+		return model.NewProviderError("NotFound", "No such object: "+object, 404).
+			WithData(map[string]any{"reason": "notFound"})
 	}
 	if perr := objectDeleteBlockedError(target); perr != nil {
 		return perr
@@ -3542,11 +3620,11 @@ func toBucketMap(nr *model.NormalizedRequest, b bucketMeta) map[string]any {
 		"storageClass":   b.StorageClass,
 		"timeCreated":    b.TimeCreated,
 		"updated":        b.Updated,
-		"generation":     "0",
+		"generation":     "1",
 		"metageneration": metageneration,
 		"projectNumber":  resource.ProjectNumber(nr.AccountID),
 		"selfLink":       bucketSelfLink(baseURL(nr), b.Name),
-		"etag":           "CAE=",
+		"etag":           BucketEtag(metageneration),
 		"versioning":     versioning,
 		"iamConfiguration": map[string]any{
 			"uniformBucketLevelAccess": map[string]any{"enabled": false},
@@ -3681,7 +3759,12 @@ func (p *Provider) objectResponse(ctx context.Context, nr *model.NormalizedReque
 func (p *Provider) objectMetaForWrite(ctx context.Context, bucket, object string, params map[string]any) (gcs.ObjectMeta, error) {
 	generation, _ := params["generation"].(string)
 	if generation != "" {
-		return p.objects.GetObjectGeneration(ctx, bucket, object, generation)
+		meta, err := p.objects.GetObjectGeneration(ctx, bucket, object, generation)
+		if err == nil && meta.SoftDeleted {
+			// A soft-deleted generation cannot be modified.
+			return gcs.ObjectMeta{}, gcs.ErrNoSuchObject
+		}
+		return meta, err
 	}
 	return p.objects.GetObjectMeta(ctx, bucket, object)
 }
@@ -3712,6 +3795,14 @@ func (p *Provider) getObjectForRead(ctx context.Context, bucket, object string, 
 			return gcs.ObjectMeta{}, model.NewProviderError("NotFound", "object not found", 404)
 		}
 		return gcs.ObjectMeta{}, err
+	}
+	// Soft-deleted objects cannot be read: only listing them with
+	// ?softDeleted=true and restoring them are supported.
+	if meta.SoftDeleted {
+		showSoftDeleted, _ := params["softDeleted"].(string)
+		if generation == "" || showSoftDeleted != "true" {
+			return gcs.ObjectMeta{}, model.NewProviderError("NotFound", "object not found", 404)
+		}
 	}
 	// Lazy lifecycle: drop a live object whose age exceeds a Delete rule.
 	if generation == "" {
@@ -4459,4 +4550,17 @@ func parseContentRange(cr string) (start, end, total int64, hasTotal, isStatus, 
 		hasTotal = true
 	}
 	return
+}
+
+// FilterSoftDeleted returns only the objects whose soft-delete state equals
+// want (true = soft-deleted copies, false = live/noncurrent generations). The
+// gRPC Storage service shares it for its soft_deleted listing/read options.
+func FilterSoftDeleted(objs []gcs.ObjectMeta, want bool) []gcs.ObjectMeta {
+	out := make([]gcs.ObjectMeta, 0, len(objs))
+	for _, m := range objs {
+		if m.SoftDeleted == want {
+			out = append(out, m)
+		}
+	}
+	return out
 }

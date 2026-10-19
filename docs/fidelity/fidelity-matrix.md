@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 559 | 115 |
+| rest | 581 | 93 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -1273,39 +1273,39 @@ _57 cell(s): ga=57 limited=0 preview=0 unsupported=0_
 | RewriteObject | grpc | ga | yes | — |
 | SetIamPolicy | grpc | ga | yes | — |
 | StartResumableWrite | grpc | ga | yes | — |
-| Storage.BucketACLInsert | rest | ga | no | — |
-| Storage.BucketACLList | rest | ga | no | — |
+| Storage.BucketACLInsert | rest | ga | yes | — |
+| Storage.BucketACLList | rest | ga | yes | — |
 | Storage.BucketsDelete | rest | ga | yes | — |
 | Storage.BucketsGet | rest | ga | yes | — |
-| Storage.BucketsGetIamPolicy | rest | ga | no | — |
-| Storage.BucketsGetStorageLayout | rest | ga | no | — |
+| Storage.BucketsGetIamPolicy | rest | ga | yes | — |
+| Storage.BucketsGetStorageLayout | rest | ga | yes | — |
 | Storage.BucketsInsert | rest | ga | yes | — |
 | Storage.BucketsList | rest | ga | yes | — |
-| Storage.BucketsLockRetentionPolicy | rest | ga | no | — |
-| Storage.BucketsSetIamPolicy | rest | ga | no | — |
-| Storage.BucketsUpdate | rest | ga | no | — |
-| Storage.NotificationsDelete | rest | ga | no | — |
-| Storage.NotificationsGet | rest | ga | no | — |
-| Storage.NotificationsInsert | rest | ga | no | — |
-| Storage.NotificationsList | rest | ga | no | — |
-| Storage.ObjectACLInsert | rest | ga | no | — |
-| Storage.ObjectACLList | rest | ga | no | — |
-| Storage.ObjectsCompose | rest | ga | no | — |
-| Storage.ObjectsCopy | rest | ga | no | — |
+| Storage.BucketsLockRetentionPolicy | rest | ga | yes | — |
+| Storage.BucketsSetIamPolicy | rest | ga | yes | — |
+| Storage.BucketsUpdate | rest | ga | yes | — |
+| Storage.NotificationsDelete | rest | ga | yes | — |
+| Storage.NotificationsGet | rest | ga | yes | — |
+| Storage.NotificationsInsert | rest | ga | yes | — |
+| Storage.NotificationsList | rest | ga | yes | — |
+| Storage.ObjectACLInsert | rest | ga | yes | — |
+| Storage.ObjectACLList | rest | ga | yes | — |
+| Storage.ObjectsCompose | rest | ga | yes | — |
+| Storage.ObjectsCopy | rest | ga | yes | — |
 | Storage.ObjectsDelete | rest | ga | yes | — |
 | Storage.ObjectsGet | rest | ga | yes | — |
-| Storage.ObjectsGetIamPolicy | rest | ga | no | — |
+| Storage.ObjectsGetIamPolicy | rest | ga | yes | — |
 | Storage.ObjectsGetMedia | rest | ga | yes | — |
 | Storage.ObjectsInsert | rest | ga | yes | — |
 | Storage.ObjectsInsertResumable | rest | ga | yes | — |
 | Storage.ObjectsInsertStartResumable | rest | ga | yes | — |
 | Storage.ObjectsList | rest | ga | yes | — |
-| Storage.ObjectsMove | rest | ga | no | — |
-| Storage.ObjectsPatch | rest | ga | no | — |
-| Storage.ObjectsRestore | rest | ga | no | — |
-| Storage.ObjectsRewrite | rest | ga | no | — |
-| Storage.ObjectsSetIamPolicy | rest | ga | no | — |
-| Storage.ObjectsUpdate | rest | ga | no | — |
+| Storage.ObjectsMove | rest | ga | yes | — |
+| Storage.ObjectsPatch | rest | ga | yes | — |
+| Storage.ObjectsRestore | rest | ga | yes | — |
+| Storage.ObjectsRewrite | rest | ga | yes | — |
+| Storage.ObjectsSetIamPolicy | rest | ga | yes | — |
+| Storage.ObjectsUpdate | rest | ga | yes | — |
 | TestIamPermissions | grpc | ga | yes | — |
 | UpdateBucket | grpc | ga | yes | — |
 | UpdateObject | grpc | ga | yes | — |
