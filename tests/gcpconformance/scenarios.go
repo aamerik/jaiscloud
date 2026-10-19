@@ -80,9 +80,102 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "storage", Method: "GET", Path: "/storage/v1/b/" + bucket + "/o/hello.txt"},
 		Scenario{Service: "storage", Method: "GET", Path: "/storage/v1/b/" + bucket + "/o"},
 		Scenario{Service: "storage", Method: "GET", Path: "/storage/v1/b/" + bucket + "/o/missing-" + suffix},
+		// A delete soft-deletes the generation (the bucket's default 7-day
+		// policy); the bucket itself can still be deleted because it holds only
+		// soft-deleted objects.
 		Scenario{Service: "storage", Method: "DELETE", Path: "/storage/v1/b/" + bucket + "/o/hello.txt"},
 		Scenario{Service: "storage", Method: "DELETE", Path: "/storage/v1/b/" + bucket},
 		Scenario{Service: "storage", Method: "GET", Path: "/storage/v1/b/" + bucket},
+	)
+
+	// ─── Cloud Storage: bucket admin, ACL/IAM, object verbs, notifications ────
+	// These operations cannot be staged by the generic Discovery probe: they
+	// need a live bucket, object generations, a locked retention policy and a
+	// Pub/Sub topic. The chain drives the public JSON API only and captures the
+	// server-assigned values (metageneration, generation, notification id, IAM
+	// etag) from earlier responses.
+	sdBucket := "conf-sd-bucket-" + suffix
+	lockBucket := "conf-lock-bucket-" + suffix
+	notifTopic := "conf-notif-topic-" + suffix
+	notifTopicName := "projects/" + p + "/topics/" + notifTopic
+	sc = append(sc,
+		// Unversioned bucket: deletes are soft deletes (7-day default policy),
+		// which is what objects.restore accepts.
+		Scenario{Service: "storage", Method: "POST", Path: "/storage/v1/b?project=" + p,
+			Body: fmt.Sprintf(`{"name":%q}`, sdBucket)},
+		// buckets.update is a full replace (PUT), not a merge.
+		Scenario{Service: "storage", Method: "PUT", Path: "/storage/v1/b/" + sdBucket,
+			Body: fmt.Sprintf(`{"name":%q,"storageClass":"STANDARD","labels":{"env":"conformance"}}`, sdBucket)},
+		Scenario{Service: "storage", Method: "GET", Path: "/storage/v1/b/" + sdBucket + "/storageLayout"},
+		// Bucket IAM: get the policy (capturing its etag for OCC), then set it.
+		Scenario{Service: "storage", Method: "GET", Path: "/storage/v1/b/" + sdBucket + "/iam",
+			Save: map[string]string{"smBucketIamEtag": "etag"}},
+		Scenario{Service: "storage", Method: "PUT", Path: "/storage/v1/b/" + sdBucket + "/iam",
+			Body: `{"bindings":[{"role":"roles/storage.objectViewer","members":["allUsers"]}],"etag":"${smBucketIamEtag}","version":3}`},
+		// Bucket ACLs (legacy access-control view).
+		Scenario{Service: "storage", Method: "GET", Path: "/storage/v1/b/" + sdBucket + "/acl"},
+		Scenario{Service: "storage", Method: "POST", Path: "/storage/v1/b/" + sdBucket + "/acl",
+			Body: `{"entity":"allUsers","role":"READER"}`},
+		// A separate bucket carries the (irreversible) retention lock: locking
+		// makes its objects undeletable, so it never hosts the object chain.
+		Scenario{Service: "storage", Method: "POST", Path: "/storage/v1/b?project=" + p,
+			Body: fmt.Sprintf(`{"name":%q,"retentionPolicy":{"retentionPeriod":"10"}}`, lockBucket),
+			Save: map[string]string{"smLockMeta": "metageneration"}},
+		Scenario{Service: "storage", Method: "POST",
+			Path: "/storage/v1/b/" + lockBucket + "/lockRetentionPolicy?ifMetagenerationMatch=${smLockMeta}"},
+		// Objects: media uploads give the generations the verbs below address.
+		Scenario{Service: "storage", Method: "POST",
+			Path:        "/upload/storage/v1/b/" + sdBucket + "/o?uploadType=media&name=o1.txt",
+			Body:        "alpha",
+			ContentType: "text/plain"},
+		Scenario{Service: "storage", Method: "POST",
+			Path:        "/upload/storage/v1/b/" + sdBucket + "/o?uploadType=media&name=o2.txt",
+			Body:        "beta",
+			ContentType: "text/plain"},
+		// objects.patch merges; objects.update replaces.
+		Scenario{Service: "storage", Method: "PATCH", Path: "/storage/v1/b/" + sdBucket + "/o/o1.txt",
+			Body: `{"metadata":{"stage":"patched"}}`},
+		Scenario{Service: "storage", Method: "PUT", Path: "/storage/v1/b/" + sdBucket + "/o/o1.txt",
+			Body: `{"name":"o1.txt","contentType":"text/plain","metadata":{"stage":"replaced"}}`},
+		Scenario{Service: "storage", Method: "POST",
+			Path: "/storage/v1/b/" + sdBucket + "/o/o1.txt/copyTo/b/" + sdBucket + "/o/c1.txt",
+			Body: `{"name":"c1.txt"}`},
+		Scenario{Service: "storage", Method: "POST",
+			Path: "/storage/v1/b/" + sdBucket + "/o/c1.txt/rewriteTo/b/" + sdBucket + "/o/r1.txt",
+			Body: `{"name":"r1.txt"}`},
+		Scenario{Service: "storage", Method: "POST",
+			Path: "/storage/v1/b/" + sdBucket + "/o/comp.txt/compose",
+			Body: `{"sourceObjects":[{"name":"o1.txt"},{"name":"o2.txt"}],"destination":{"contentType":"text/plain"}}`},
+		Scenario{Service: "storage", Method: "POST",
+			Path: "/storage/v1/b/" + sdBucket + "/o/comp.txt/moveTo/o/moved.txt"},
+		// Object-level ACL and IAM (the legacy ACL view and the IAM view).
+		Scenario{Service: "storage", Method: "GET", Path: "/storage/v1/b/" + sdBucket + "/o/o1.txt/acl"},
+		Scenario{Service: "storage", Method: "POST", Path: "/storage/v1/b/" + sdBucket + "/o/o1.txt/acl",
+			Body: `{"entity":"allUsers","role":"READER"}`},
+		Scenario{Service: "storage", Method: "GET", Path: "/storage/v1/b/" + sdBucket + "/o/o1.txt/iam",
+			Save: map[string]string{"smObjectIamEtag": "etag"}},
+		Scenario{Service: "storage", Method: "PUT", Path: "/storage/v1/b/" + sdBucket + "/o/o1.txt/iam",
+			Body: `{"bindings":[{"role":"roles/storage.objectViewer","members":["allUsers"]}],"etag":"${smObjectIamEtag}","version":3}`},
+		// Notifications need a Pub/Sub topic; capture the assigned id for
+		// get/list/delete.
+		Scenario{Service: "pubsub", Method: "PUT", Path: "/v1/projects/" + p + "/topics/" + notifTopic,
+			Body: fmt.Sprintf(`{"name":%q}`, notifTopicName)},
+		Scenario{Service: "storage", Method: "POST", Path: "/storage/v1/b/" + sdBucket + "/notificationConfigs",
+			Body: fmt.Sprintf(`{"topic":%q,"payload_format":"JSON_API_V1","event_types":["OBJECT_FINALIZE"]}`, notifTopicName),
+			Save: map[string]string{"smNotifID": "id"}},
+		Scenario{Service: "storage", Method: "GET", Path: "/storage/v1/b/" + sdBucket + "/notificationConfigs/${smNotifID}"},
+		Scenario{Service: "storage", Method: "GET", Path: "/storage/v1/b/" + sdBucket + "/notificationConfigs"},
+		Scenario{Service: "storage", Method: "DELETE", Path: "/storage/v1/b/" + sdBucket + "/notificationConfigs/${smNotifID}"},
+		// objects.restore: soft-delete a generation (the default bucket policy),
+		// then restore it. Real GCS answers with a new-generation object copy.
+		Scenario{Service: "storage", Method: "POST",
+			Path:        "/upload/storage/v1/b/" + sdBucket + "/o?uploadType=media&name=soft.txt",
+			Body:        "restorable",
+			ContentType: "text/plain",
+			Save:        map[string]string{"smSoftGen": "generation"}},
+		Scenario{Service: "storage", Method: "DELETE", Path: "/storage/v1/b/" + sdBucket + "/o/soft.txt"},
+		Scenario{Service: "storage", Method: "POST",
+			Path: "/storage/v1/b/" + sdBucket + "/o/soft.txt/restore?generation=${smSoftGen}"},
 	)
 
 	// ─── Pub/Sub ──────────────────────────────────────────────────────────────

@@ -66,7 +66,7 @@
     },
     {
       "operation": "Dataproc.UpdateJob",
-      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), so the generic path probe cannot stage a job to patch. The handler is exercised by the REST jobs.patch unit test and the dataproc REST↔gRPC parity scenario (tests/gcpparity/cases_dataproc.go)."
+      "reason": "Dataproc jobs are created by :submit with a server-assigned job id (there is no jobs.create), so the generic path probe cannot stage a job to patch. The handler is exercised by the REST jobs.patch unit test and the dataproc REST\u2194gRPC parity scenario (tests/gcpparity/cases_dataproc.go)."
     },
     {
       "operation": "Dataproc.UpdateWorkflowTemplate",
@@ -271,94 +271,6 @@
     {
       "operation": "Scheduler.JobsResume",
       "reason": "Cloud Scheduler resume requires a PAUSED job; the probe's freshly-created job is RUNNING."
-    },
-    {
-      "operation": "Storage.BucketACLInsert",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.BucketACLList",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.BucketsGetIamPolicy",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.BucketsGetStorageLayout",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.BucketsLockRetentionPolicy",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.BucketsSetIamPolicy",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.BucketsUpdate",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.NotificationsDelete",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.NotificationsGet",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.NotificationsInsert",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.NotificationsList",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.ObjectACLInsert",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.ObjectACLList",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.ObjectsCompose",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.ObjectsCopy",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.ObjectsGetIamPolicy",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.ObjectsMove",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.ObjectsPatch",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.ObjectsRestore",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.ObjectsRewrite",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.ObjectsSetIamPolicy",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
-    },
-    {
-      "operation": "Storage.ObjectsUpdate",
-      "reason": "The Storage object/bucket ACL, IAM and the compose/copy/move/rewrite/restore and notification surfaces need the resumable/media upload flow, object generations and retention state the Discovery path model cannot stage; the curated scenarios cover the core object flow."
     },
     {
       "operation": "Tasks.QueuesResume",

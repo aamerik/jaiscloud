@@ -129,11 +129,11 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 559
+        "rest": 581
       },
       "unverified": {
         "grpc": 21,
-        "rest": 115
+        "rest": 93
       }
     },
     "grpc_only_services": [
@@ -12332,7 +12332,7 @@
         "discovery=pubsub.projects.topics.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 10 transcript entries)"
+        "verified=true (rest, 11 transcript entries)"
       ]
     },
     {
@@ -14290,12 +14290,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.bucketAccessControls.insert",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.bucketAccessControls.insert",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14304,11 +14304,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.bucketAccessControls.list",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.bucketAccessControls.list",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14344,11 +14344,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.buckets.getIamPolicy",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.buckets.getIamPolicy",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14357,11 +14357,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.buckets.getStorageLayout",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.buckets.getStorageLayout",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14375,7 +14375,7 @@
         "discovery=storage.buckets.insert",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 5 transcript entries)"
+        "verified=true (rest, 7 transcript entries)"
       ]
     },
     {
@@ -14397,11 +14397,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.buckets.lockRetentionPolicy",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.buckets.lockRetentionPolicy",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14410,12 +14410,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.buckets.setIamPolicy",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.buckets.setIamPolicy",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14424,12 +14424,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.buckets.update",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.buckets.update",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14438,12 +14438,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.notifications.delete",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.notifications.delete",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14452,11 +14452,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.notifications.get",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.notifications.get",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14465,12 +14465,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.notifications.insert",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.notifications.insert",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14479,11 +14479,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.notifications.list",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.notifications.list",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14492,12 +14492,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.objectAccessControls.insert",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.objectAccessControls.insert",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14506,11 +14506,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.objectAccessControls.list",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.objectAccessControls.list",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14519,12 +14519,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.objects.compose",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.objects.compose",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14533,11 +14533,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.objects.copy",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.objects.copy",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14551,7 +14551,7 @@
         "discovery=storage.objects.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -14573,11 +14573,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.objects.getIamPolicy",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.objects.getIamPolicy",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14604,7 +14604,7 @@
         "discovery=storage.objects.insert",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 4 transcript entries)"
+        "verified=true (rest, 7 transcript entries)"
       ]
     },
     {
@@ -14618,7 +14618,7 @@
         "discovery=storage.objects.insert",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 4 transcript entries)"
+        "verified=true (rest, 7 transcript entries)"
       ]
     },
     {
@@ -14632,7 +14632,7 @@
         "discovery=storage.objects.insert",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 4 transcript entries)"
+        "verified=true (rest, 7 transcript entries)"
       ]
     },
     {
@@ -14654,12 +14654,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.objects.move",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.objects.move",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14668,12 +14668,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.objects.patch",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.objects.patch",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14682,12 +14682,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.objects.restore",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.objects.restore",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14696,11 +14696,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.objects.rewrite",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.objects.rewrite",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14709,12 +14709,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.objects.setIamPolicy",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.objects.setIamPolicy",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14723,12 +14723,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "storage.objects.update",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=storage.objects.update",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
