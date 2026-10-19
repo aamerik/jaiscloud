@@ -3781,19 +3781,19 @@ func maxResults(params map[string]any) (int, error) {
 		// "-0"), a fraction and anything above uint32.
 		n, err := strconv.ParseUint(v, 10, 32)
 		if err != nil {
-			return 0, invalidMaxResults()
+			return 0, invalidMaxResults(v)
 		}
 		return clampMaxResults(int(n)), nil
 	case int:
 		if v < 0 {
-			return 0, invalidMaxResults()
+			return 0, invalidMaxResults(v)
 		}
 		return clampMaxResults(v), nil
 	case float64:
 		// Check the range before truncating: int(-0.5) is 0, which would
 		// otherwise be mistaken for zero, and NaN is not a valid integer.
 		if math.IsNaN(v) || v < 0 || v > math.MaxUint32 {
-			return 0, invalidMaxResults()
+			return 0, invalidMaxResults(v)
 		}
 		return clampMaxResults(int(v)), nil
 	}
@@ -3809,12 +3809,32 @@ func clampMaxResults(n int) int {
 	return n
 }
 
-func invalidMaxResults() error {
-	// GCS's JSON API reports a bad query parameter as reason "invalidParameter";
-	// the codec lets Data["reason"] override its canonical-code mapping
+// invalidMaxResults is GCS's own query-binding rejection, which differs from the
+// ESF envelope the shared resolvers render (DC67): GCS answers "Invalid unsigned
+// integer value: '<v>'." for a value its uint32 binding cannot parse, and — like
+// every other GCS parameter error — also carries the offending parameter on the
+// errors[] entry as `location: "maxResults"` / `locationType: "parameter"` next
+// to reason "invalidParameter" (DC68).
+func invalidMaxResults(v any) error {
+	// The codec lets Data["reason"] override its canonical-code mapping
 	// (InvalidRequest would render as the body-level reason "invalid").
-	return model.NewProviderError("InvalidRequest", "maxResults must be a non-negative integer", 400).
-		WithData(map[string]any{"reason": "invalidParameter"})
+	return model.NewProviderError("InvalidRequest", "Invalid unsigned integer value: '"+verbatimValueText(v)+"'.", 400).
+		WithData(map[string]any{
+			"reason":       "invalidParameter",
+			"location":     "maxResults",
+			"locationType": "parameter",
+		})
+}
+
+// verbatimValueText echoes the offending query value the way GCS renders it: a
+// query parameter arrives as a string and is inserted verbatim (GCS does not
+// JSON-escape it, unlike paging's boundValueText), while a typed value is
+// rendered plainly.
+func verbatimValueText(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 // ─── IAM policy ───────────────────────────────────────────────────────────────

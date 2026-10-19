@@ -672,6 +672,23 @@ func TestSDKComputePagingAndFilter(t *testing.T) {
 	}
 }
 
+// TestSDKComputeMaxResultsBindingMessage pins the negative maxResults binding an
+// official client can emit (the generated MaxResults field is an int64): a 400
+// INVALID_ARGUMENT whose message names the `header` message's field, which is
+// where Compute's frontend binds its query parameters (DC68).
+func TestSDKComputeMaxResultsBindingMessage(t *testing.T) {
+	ctx := context.Background()
+	svc, err := compute.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	project, zone := projectID(), "us-west1-b"
+
+	_, err = svc.Instances.List(project, zone).MaxResults(-1).Do()
+	var apiErr *googleapi.Error
+	require.ErrorAs(t, err, &apiErr)
+	require.Equal(t, 400, apiErr.Code)
+	require.Equal(t, `Invalid value at 'header.max_results' (TYPE_UINT32), "-1"`, apiErr.Message)
+}
+
 // TestSDKComputeOperationsLifecycle is the p5 class: the operation-polling
 // surface (zonal + global) and a many-resource listing.
 func TestSDKComputeOperationsLifecycle(t *testing.T) {

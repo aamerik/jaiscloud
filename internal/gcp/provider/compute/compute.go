@@ -1357,7 +1357,10 @@ func listParams(nr *model.NormalizedRequest) (map[string]any, error) {
 // (`maxResults` is an unsigned integer there), as is an unparseable or
 // out-of-uint32 one, rather than being folded into the default page.
 func computePageSize(v any) (int, error) {
-	n, err := paging.ParseUintSizeNamed(v, "maxResults")
+	// Compute's query parameters hang off the frontend's `header` message, so
+	// its binding errors name 'header.max_results' where the shared resolver
+	// names 'max_results' (DC68); the field path is the resolver's name.
+	n, err := paging.ParseUintSizeNamed(v, "header.maxResults")
 	if err != nil {
 		return 0, err
 	}

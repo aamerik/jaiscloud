@@ -799,9 +799,8 @@ func TestListParamsPageSizeDefaults(t *testing.T) {
 // Discovery document declares for maxResults: an unparseable value, a fraction,
 // an explicitly empty one (DC63) or a negative one is INVALID_ARGUMENT, never a
 // silent fall back to the 500 default page — the same answer real GCP's binding
-// gives. The status and the shape of the envelope match; Compute's frontend
-// names the field "header.max_results" where the shared resolver names
-// "max_results", a cosmetic difference recorded in DC68.
+// gives. Compute's frontend binds its query parameters on the `header` message,
+// so the message names 'header.max_results' (DC68).
 func TestListParamsRejectsBadMaxResults(t *testing.T) {
 	for _, v := range []any{"", "abc", "1.5", "-1", "-0.5", "4294967296", float64(1.5), int64(-1)} {
 		_, err := listParams(newNR(map[string]any{"maxResults": v}))
@@ -813,7 +812,7 @@ func TestListParamsRejectsBadMaxResults(t *testing.T) {
 		if perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
 			t.Errorf("listParams(maxResults=%#v) = %+v, want InvalidArgument/400", v, perr)
 		}
-		if want := `Invalid value at 'max_results' (TYPE_UINT32), ` + boundValue(v); perr.Message != want {
+		if want := `Invalid value at 'header.max_results' (TYPE_UINT32), ` + boundValue(v); perr.Message != want {
 			t.Errorf("listParams(maxResults=%#v) message = %q, want %q", v, perr.Message, want)
 		}
 	}
