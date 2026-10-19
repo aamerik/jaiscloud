@@ -165,6 +165,44 @@ func runStoreTests(t *testing.T, s Store) {
 	if err := s.DeleteChannelAtomic(ctx, "proj", "us-central1", "my-channel", func(Channel) error { return nil }); err != ErrNoSuchChannel {
 		t.Fatalf("expected ErrNoSuchChannel from atomic delete of missing channel, got %v", err)
 	}
+
+	// Operations: the persisted done operations of control-plane mutations.
+	if _, err := s.GetOperation(ctx, "proj", "us-central1", "nope"); err != ErrNoSuchOperation {
+		t.Fatalf("expected ErrNoSuchOperation, got %v", err)
+	}
+	op := Operation{
+		ID:       "op-1",
+		Verb:     "create",
+		Target:   "projects/proj/locations/us-central1/triggers/my-trigger",
+		Response: []byte(`{"@type":"type.googleapis.com/google.cloud.eventarc.v1.Trigger","name":"projects/proj/locations/us-central1/triggers/my-trigger"}`),
+	}
+	if err := s.CreateOperation(ctx, "proj", "us-central1", op); err != nil {
+		t.Fatalf("create operation: %v", err)
+	}
+	gotOp, err := s.GetOperation(ctx, "proj", "us-central1", "op-1")
+	if err != nil {
+		t.Fatalf("get operation: %v", err)
+	}
+	if gotOp.Verb != "create" || gotOp.Target != op.Target || !jsonEqual(gotOp.Response, op.Response) {
+		t.Fatalf("operation fields lost: %+v", gotOp)
+	}
+	ops, err := s.ListOperations(ctx, "proj", "us-central1")
+	if err != nil || len(ops) != 1 || ops[0].ID != "op-1" {
+		t.Fatalf("list operations = %+v, %v", ops, err)
+	}
+	// Operations in another location are not listed.
+	if ops, err := s.ListOperations(ctx, "proj", "europe-west1"); err != nil || len(ops) != 0 {
+		t.Fatalf("other location operations = %+v, %v", ops, err)
+	}
+	if err := s.DeleteOperation(ctx, "proj", "us-central1", "op-1"); err != nil {
+		t.Fatalf("delete operation: %v", err)
+	}
+	if _, err := s.GetOperation(ctx, "proj", "us-central1", "op-1"); err != ErrNoSuchOperation {
+		t.Fatalf("expected ErrNoSuchOperation after delete, got %v", err)
+	}
+	if err := s.DeleteOperation(ctx, "proj", "us-central1", "op-1"); err != ErrNoSuchOperation {
+		t.Fatalf("expected ErrNoSuchOperation from delete of missing operation, got %v", err)
+	}
 }
 
 func TestMemoryStore(t *testing.T) {
@@ -176,6 +214,7 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	s := NewMemoryStore()
 	_ = s.CreateTrigger(ctx, "p", "l", Trigger{Name: "t", Labels: map[string]string{"k": "v"}, Config: []byte(`{"eventFilters":[]}`), UID: "u", Etag: "e"})
 	_ = s.CreateChannel(ctx, "p", "l", Channel{Name: "c", UID: "uc", Etag: "ec", ActivationToken: "tc", Config: []byte(`{"provider":"x"}`)})
+	_ = s.CreateOperation(ctx, "p", "l", Operation{ID: "op", Verb: "create", Target: "target", Response: []byte(`{"@type":"x"}`)})
 
 	var buf bytes.Buffer
 	if err := s.Snapshot(ctx, &buf); err != nil {
@@ -193,5 +232,9 @@ func TestMemoryStoreSnapshotRoundTrip(t *testing.T) {
 	gotCh, err := s2.GetChannel(ctx, "p", "l", "c")
 	if err != nil || gotCh.ActivationToken != "tc" || gotCh.Etag != "ec" {
 		t.Fatalf("channel lost after restore: %v %+v", err, gotCh)
+	}
+	gotOp, err := s2.GetOperation(ctx, "p", "l", "op")
+	if err != nil || gotOp.Verb != "create" || !jsonEqual(gotOp.Response, []byte(`{"@type":"x"}`)) {
+		t.Fatalf("operation lost after restore: %v %+v", err, gotOp)
 	}
 }

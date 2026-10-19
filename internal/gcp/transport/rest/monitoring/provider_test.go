@@ -154,6 +154,20 @@ func TestRESTTimeSeriesRoundTrip(t *testing.T) {
 		t.Fatalf("value = %+v", val)
 	}
 
+	// The folders arm serves list only (the Discovery document declares create
+	// on the projects surface only); it aggregates the same series store.
+	folderList, err := call(t, c, p, http.MethodGet,
+		"/v3/folders/123/timeSeries?filter="+`metric.type%3D%22`+tstype+`%22`, nil)
+	if err != nil {
+		t.Fatalf("list folders timeSeries: %v", err)
+	}
+	if got := wireData(t, folderList)["timeSeries"].([]any); len(got) == 0 {
+		t.Fatalf("folders timeSeries = %+v, want the project's series", wireData(t, folderList))
+	}
+	if _, err := call(t, c, p, http.MethodPost, "/v3/folders/123/timeSeries", map[string]any{}); err == nil {
+		t.Fatal("create at folders scope succeeded, want NotFound")
+	}
+
 	// createService mirrors create.
 	if _, err := call(t, c, p, http.MethodPost, "/v3/projects/test/timeSeries:createService", map[string]any{
 		"timeSeries": []any{map[string]any{

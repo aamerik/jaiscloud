@@ -848,6 +848,9 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "monitoring", Method: "POST", Path: monBase + "/timeSeries",
 			Body: fmt.Sprintf(`{"timeSeries":[{"metric":{"type":%q,"labels":{"k":"v"}},"resource":{"type":"global"},"metricKind":"GAUGE","valueType":"DOUBLE","points":[{"interval":{"endTime":"2026-01-01T00:00:00Z"},"value":{"doubleValue":1.5}}]}]}`, tsType)},
 		Scenario{Service: "monitoring", Method: "GET", Path: monBase + "/timeSeries?filter=" + tsFilter},
+		// The folders arm of timeSeries.list: the emulator has no folder→project
+		// membership, so it aggregates the same series store across projects.
+		Scenario{Service: "monitoring", Method: "GET", Path: "/v3/folders/123456789012/timeSeries?filter=" + tsFilter},
 		Scenario{Service: "monitoring", Method: "POST", Path: monBase + "/timeSeries:createService",
 			Body: fmt.Sprintf(`{"timeSeries":[{"metric":{"type":%q},"resource":{"type":"global"},"metricKind":"GAUGE","valueType":"DOUBLE","points":[{"interval":{"endTime":"2026-01-01T00:00:00Z"},"value":{"doubleValue":2.5}}]}]}`, tsType)},
 		Scenario{Service: "monitoring", Method: "GET", Path: monBase + "/monitoredResourceDescriptors"},
@@ -977,6 +980,9 @@ func Scenarios(suffix string) []Scenario {
 		// stored operation, so it runs before the operation is read back.
 		Scenario{Service: "run", Method: "POST", Path: "/v2/${runOp}:cancel"},
 		Scenario{Service: "run", Method: "GET", Path: "/v2/${runOp}"},
+		// operations.delete addresses the operation record itself, so it runs
+		// before the service it belongs to is deleted.
+		Scenario{Service: "run", Method: "DELETE", Path: "/v2/${runOp}"},
 		Scenario{Service: "run", Method: "DELETE", Path: runBase + "/services/" + runSvc},
 		Scenario{Service: "run", Method: "GET", Path: runBase + "/services/" + runSvc},
 	)
@@ -1035,6 +1041,10 @@ func Scenarios(suffix string) []Scenario {
 	// operation is listed through its ListOperations.
 	kafkaBase := "/v1/projects/" + p + "/locations/us-central1"
 	kafkaCluster := "conf-kafka-" + suffix
+	kafkaClusterPath := kafkaBase + "/clusters/" + kafkaCluster
+	const kafkaTopic = "conf-orders"
+	kafkaGroup := "conf-group-" + suffix
+	kafkaTopicName := "projects/" + p + "/locations/us-central1/clusters/" + kafkaCluster + "/topics/" + kafkaTopic
 	sc = append(sc,
 		Scenario{Service: "managedkafka", Method: "POST",
 			Path: kafkaBase + "/clusters?clusterId=" + kafkaCluster,
@@ -1043,8 +1053,51 @@ func Scenarios(suffix string) []Scenario {
 			Path: "/v1/${kafkaOp}", Host: "managedkafka.localhost:4588"},
 		Scenario{Service: "managedkafka", Method: "GET",
 			Path: kafkaBase + "/operations", Host: "managedkafka.localhost:4588"},
+		// A topic to hold the committed offsets, then the ACL lifecycle. ACL
+		// create/read are synchronous; the PATCH carries the create's etag
+		// (optimistic concurrency) and is the acl.update cell.
+		Scenario{Service: "managedkafka", Method: "POST",
+			Path: kafkaClusterPath + "/topics?topicId=" + kafkaTopic,
+			Body: `{"partitionCount":3,"replicationFactor":1}`,
+			Host: "managedkafka.localhost:4588"},
+		Scenario{Service: "managedkafka", Method: "POST",
+			Path: kafkaClusterPath + "/acls?aclId=topic%2F" + kafkaTopic,
+			Body: `{"aclEntries":[{"principal":"User:conformance","permissionType":"ALLOW","operation":"READ","host":"*"}]}`,
+			Save: map[string]string{"kafkaAclEtag": "etag"},
+			Host: "managedkafka.localhost:4588"},
+		Scenario{Service: "managedkafka", Method: "PATCH",
+			Path: kafkaClusterPath + "/acls/topic%2F" + kafkaTopic,
+			Body: `{"etag":"${kafkaAclEtag}","aclEntries":[` +
+				`{"principal":"User:conformance","permissionType":"ALLOW","operation":"READ","host":"*"},` +
+				`{"principal":"User:conformance","permissionType":"DENY","operation":"WRITE","host":"*"}]}`,
+			Host: "managedkafka.localhost:4588"},
+		Scenario{Service: "managedkafka", Method: "GET",
+			Path: kafkaClusterPath + "/acls/topic%2F" + kafkaTopic,
+			Host: "managedkafka.localhost:4588"},
+		// Consumer groups have no create RPC. In the mock topology (no live
+		// broker) the LITERAL GROUP ACL below — the only control-plane
+		// reference that names a group — seeds the group record, so the
+		// get/update/delete surface is reachable and the group starts empty.
+		Scenario{Service: "managedkafka", Method: "POST",
+			Path: kafkaClusterPath + "/acls?aclId=consumerGroup%2F" + kafkaGroup,
+			Body: `{"aclEntries":[{"principal":"User:conformance","permissionType":"ALLOW","operation":"READ","host":"*"}]}`,
+			Host: "managedkafka.localhost:4588"},
+		Scenario{Service: "managedkafka", Method: "GET",
+			Path: kafkaClusterPath + "/consumerGroups/" + kafkaGroup,
+			Host: "managedkafka.localhost:4588"},
+		Scenario{Service: "managedkafka", Method: "PATCH",
+			Path: kafkaClusterPath + "/consumerGroups/" + kafkaGroup + "?updateMask=topics",
+			Body: `{"name":"projects/` + p + `/locations/us-central1/clusters/` + kafkaCluster +
+				`/consumerGroups/` + kafkaGroup + `","topics":{"` + kafkaTopicName + `":{"partitions":{"0":{"offset":"1"}}}}}`,
+			Host: "managedkafka.localhost:4588"},
+		Scenario{Service: "managedkafka", Method: "GET",
+			Path: kafkaClusterPath + "/consumerGroups/" + kafkaGroup,
+			Host: "managedkafka.localhost:4588"},
 		Scenario{Service: "managedkafka", Method: "DELETE",
-			Path: kafkaBase + "/clusters/" + kafkaCluster, Host: "managedkafka.localhost:4588"},
+			Path: kafkaClusterPath + "/consumerGroups/" + kafkaGroup,
+			Host: "managedkafka.localhost:4588"},
+		Scenario{Service: "managedkafka", Method: "DELETE",
+			Path: kafkaClusterPath, Host: "managedkafka.localhost:4588"},
 	)
 
 	msBase := "/v1/projects/" + p + "/locations/us-central1"
@@ -1067,12 +1120,19 @@ func Scenarios(suffix string) []Scenario {
 	// second revision), its revisions listed again, the first revision fetched
 	// by revisionId, a missing workflow proven NotFound, then deleted.
 	wfID := "conf-wf-" + suffix
-	wfBase := "/v1/projects/" + p + "/locations/us-central1/workflows"
+	wfLocBase := "/v1/projects/" + p + "/locations/us-central1"
+	wfBase := wfLocBase + "/workflows"
 	wfName := wfBase + "/" + wfID
 	sc = append(sc,
 		Scenario{Service: "workflows", Method: "POST", Path: wfBase + "?workflowId=" + wfID,
 			Body: `{"description":"conformance","sourceContents":"main:\n  steps:\n    - r:\n        return: 1\n"}`,
-			Save: map[string]string{"wfRev": "response.revisionId"}},
+			Save: map[string]string{"wfRev": "response.revisionId", "wfOp": "name"}},
+		// The create's done operation is persisted under the location's
+		// operations collection; read it back and delete it (operations.get /
+		// operations.delete) before the workflow itself is deleted.
+		Scenario{Service: "workflows", Method: "GET", Path: "/v1/${wfOp}"},
+		Scenario{Service: "workflows", Method: "GET", Path: wfLocBase + "/operations"},
+		Scenario{Service: "workflows", Method: "DELETE", Path: "/v1/${wfOp}"},
 		Scenario{Service: "workflows", Method: "GET", Path: wfName},
 		Scenario{Service: "workflows", Method: "GET", Path: wfName + ":listRevisions"},
 		Scenario{Service: "workflows", Method: "PATCH", Path: wfName + "?updateMask=sourceContents",
@@ -1186,6 +1246,93 @@ func Scenarios(suffix string) []Scenario {
 			Save:         map[string]string{"fsBackup": "backups.0.name"}},
 		Scenario{Service: "firestore", Method: "GET", Path: "/v1/${fsBackup}"},
 		Scenario{Service: "firestore", Method: "DELETE", Path: "/v1/${fsBackup}"},
+	)
+
+	// ─── Cloud Logging: folder-scoped views and their IAM policy ──────────────
+	// The view IAM trio exists on the folders scope as well as projects; a
+	// folder-scoped bucket + view drives get/set/test on the same core.
+	logFolder := "folders/123456789012"
+	logFolderBucket := "conf-folder-bucket-" + suffix
+	logFolderView := logFolderBucket + "/views/conf-folder-view"
+	sc = append(sc,
+		Scenario{Service: "logging", Method: "POST",
+			Path: "/v2/" + logFolder + "/locations/global/buckets?bucketId=" + logFolderBucket,
+			Body: `{"description":"conformance folder bucket"}`},
+		Scenario{Service: "logging", Method: "POST",
+			Path: "/v2/" + logFolder + "/locations/global/buckets/" + logFolderBucket + "/views?viewId=conf-folder-view",
+			Body: `{"description":"conformance folder view"}`},
+		Scenario{Service: "logging", Method: "POST",
+			Path: "/v2/" + logFolder + "/locations/global/buckets/" + logFolderView + ":getIamPolicy",
+			Body: `{}`},
+		Scenario{Service: "logging", Method: "POST",
+			Path: "/v2/" + logFolder + "/locations/global/buckets/" + logFolderView + ":setIamPolicy",
+			Body: `{"policy":{"bindings":[{"role":"roles/logging.viewAccessor","members":["user:conformance@example.com"]}]}}`},
+		Scenario{Service: "logging", Method: "POST",
+			Path: "/v2/" + logFolder + "/locations/global/buckets/" + logFolderView + ":testIamPermissions",
+			Body: `{"permissions":["logging.views.get","logging.views.access"]}`},
+	)
+
+	// ─── Eventarc: persisted long-running operations ──────────────────────────
+	// A trigger create returns a done operation; the core persists it, so the
+	// shared operations surface can read, list and delete it. The locations
+	// operations path is host-discriminated (it is shared with Workflows), so
+	// those three requests carry the eventarc host token.
+	eaBase := "/v1/projects/" + p + "/locations/us-central1"
+	eaTrigger := "conf-ea-" + suffix
+	sc = append(sc,
+		Scenario{Service: "eventarc", Method: "POST", Path: eaBase + "/triggers?triggerId=" + eaTrigger,
+			Body: `{"eventFilters":[{"attribute":"type","value":"google.cloud.pubsub.topic.v1.messagePublished"}],` +
+				`"destination":{"cloudRun":{"service":"conf-run","region":"us-central1"}}}`,
+			Save: map[string]string{"eaOp": "name"}},
+		Scenario{Service: "eventarc", Method: "GET", Path: "/v1/${eaOp}", Host: "eventarc.localhost:4588"},
+		Scenario{Service: "eventarc", Method: "GET", Path: eaBase + "/operations", Host: "eventarc.localhost:4588"},
+		Scenario{Service: "eventarc", Method: "POST", Path: "/v1/${eaOp}:cancel", Host: "eventarc.localhost:4588"},
+		Scenario{Service: "eventarc", Method: "DELETE", Path: "/v1/${eaOp}", Host: "eventarc.localhost:4588"},
+		Scenario{Service: "eventarc", Method: "DELETE", Path: eaBase + "/triggers/" + eaTrigger},
+	)
+
+	// ─── Workflow Executions: get + cancel ────────────────────────────────────
+	// Executions run synchronously, so the create returns a terminal execution;
+	// get reads it back and cancel is the documented no-op on a terminal
+	// execution, returning it unchanged.
+	exWf := "conf-exec-" + suffix
+	exBase := wfLocBase + "/workflows/" + exWf
+	sc = append(sc,
+		Scenario{Service: "workflows", Method: "POST", Path: wfLocBase + "/workflows?workflowId=" + exWf,
+			Body: `{"sourceContents":"main:\n  steps:\n    - r:\n        return: 1\n"}`,
+			Save: map[string]string{"exOp": "name"}},
+		Scenario{Service: "workflowexecutions", Method: "POST", Path: exBase + "/executions",
+			Body: `{"argument":"{}"}`,
+			Save: map[string]string{"execName": "name"}},
+		Scenario{Service: "workflowexecutions", Method: "GET", Path: "/v1/${execName}?view=FULL"},
+		Scenario{Service: "workflowexecutions", Method: "POST", Path: "/v1/${execName}:cancel"},
+		Scenario{Service: "workflows", Method: "DELETE", Path: exBase},
+		Scenario{Service: "workflows", Method: "DELETE", Path: "/v1/${exOp}"},
+	)
+
+	// ─── Cloud Scheduler: pause → resume ──────────────────────────────────────
+	// The resume transition requires the paused state, so the chain pauses the
+	// job first (the create honours the caller-specified body name).
+	schedBase := "/v1/projects/" + p + "/locations/us-central1/jobs"
+	schedName := "projects/" + p + "/locations/us-central1/jobs/conf-sched-" + suffix
+	sc = append(sc,
+		Scenario{Service: "scheduler", Method: "POST", Path: schedBase,
+			Body: fmt.Sprintf(`{"name":%q,"schedule":"*/5 * * * *","timeZone":"UTC","httpTarget":{"uri":"http://example.com"}}`, schedName)},
+		Scenario{Service: "scheduler", Method: "POST", Path: "/v1/" + schedName + ":pause"},
+		Scenario{Service: "scheduler", Method: "POST", Path: "/v1/" + schedName + ":resume"},
+		Scenario{Service: "scheduler", Method: "DELETE", Path: "/v1/" + schedName},
+	)
+
+	// ─── Cloud Tasks: pause → resume ──────────────────────────────────────────
+	// Cloud Tasks names the queue in the body (there is no queueId parameter).
+	tasksBase := "/v2/projects/" + p + "/locations/us-central1/queues"
+	tasksName := "projects/" + p + "/locations/us-central1/queues/conf-queue-" + suffix
+	sc = append(sc,
+		Scenario{Service: "tasks", Method: "POST", Path: tasksBase,
+			Body: fmt.Sprintf(`{"name":%q}`, tasksName)},
+		Scenario{Service: "tasks", Method: "POST", Path: "/v2/" + tasksName + ":pause"},
+		Scenario{Service: "tasks", Method: "POST", Path: "/v2/" + tasksName + ":resume"},
+		Scenario{Service: "tasks", Method: "DELETE", Path: "/v2/" + tasksName},
 	)
 
 	return sc

@@ -632,7 +632,12 @@ func (s *Service) CreateTrigger(ctx context.Context, project, location, triggerI
 	if err := s.SyncTriggerSubscription(ctx, project, t); err != nil {
 		return eventarcstore.Trigger{}, Operation{}, err
 	}
-	return t, newOperation(location, "create", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "create", target),
+		OperationResponse(TriggerTypeURL, TriggerJSON(project, t)))
+	if err != nil {
+		return eventarcstore.Trigger{}, Operation{}, err
+	}
+	return t, op, nil
 }
 
 // GetTrigger returns one trigger.
@@ -749,7 +754,12 @@ func (s *Service) UpdateTrigger(ctx context.Context, project, location, triggerI
 	if err := s.SyncTriggerSubscription(ctx, project, updated); err != nil {
 		return eventarcstore.Trigger{}, Operation{}, err
 	}
-	return updated, newOperation(location, "update", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "update", target),
+		OperationResponse(TriggerTypeURL, TriggerJSON(project, updated)))
+	if err != nil {
+		return eventarcstore.Trigger{}, Operation{}, err
+	}
+	return updated, op, nil
 }
 
 // mergeTriggerBody applies a Trigger PATCH body to the stored trigger under the
@@ -802,7 +812,12 @@ func (s *Service) DeleteTrigger(ctx context.Context, project, location, triggerI
 		return eventarcstore.Trigger{}, Operation{}, mapErr(err)
 	}
 	s.DeleteTriggerSubscription(ctx, project, deleted)
-	return deleted, newOperation(location, "delete", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "delete", target),
+		OperationResponse(TriggerTypeURL, TriggerJSON(project, deleted)))
+	if err != nil {
+		return eventarcstore.Trigger{}, Operation{}, err
+	}
+	return deleted, op, nil
 }
 
 // --- Channels ---
@@ -843,7 +858,12 @@ func (s *Service) CreateChannel(ctx context.Context, project, location, channelI
 	if err := s.store.CreateChannel(ctx, project, location, c); err != nil {
 		return eventarcstore.Channel{}, Operation{}, mapErr(err)
 	}
-	return c, newOperation(location, "create", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "create", target),
+		OperationResponse(ChannelTypeURL, ChannelJSON(project, c)))
+	if err != nil {
+		return eventarcstore.Channel{}, Operation{}, err
+	}
+	return c, op, nil
 }
 
 // GetChannel returns one channel.
@@ -940,7 +960,12 @@ func (s *Service) UpdateChannel(ctx context.Context, project, location, channelI
 	if err != nil {
 		return eventarcstore.Channel{}, Operation{}, mapErr(err)
 	}
-	return updated, newOperation(location, "update", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "update", target),
+		OperationResponse(ChannelTypeURL, ChannelJSON(project, updated)))
+	if err != nil {
+		return eventarcstore.Channel{}, Operation{}, err
+	}
+	return updated, op, nil
 }
 
 // mergeChannelBody applies a Channel PATCH body to the stored channel under the
@@ -992,7 +1017,12 @@ func (s *Service) DeleteChannel(ctx context.Context, project, location, channelI
 	}); err != nil {
 		return eventarcstore.Channel{}, Operation{}, mapErr(err)
 	}
-	return deleted, newOperation(location, "delete", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "delete", target),
+		OperationResponse(ChannelTypeURL, ChannelJSON(project, deleted)))
+	if err != nil {
+		return eventarcstore.Channel{}, Operation{}, err
+	}
+	return deleted, op, nil
 }
 
 // --- IAM (triggers / channels) ---

@@ -430,6 +430,76 @@ func (s *PostgresStore) ListChannelsAllLocations(ctx context.Context, projectID 
 func (s *PostgresStore) Reset(ctx context.Context) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_eventarc_triggers`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_eventarc_channels`)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM jc_eventarc_operations`)
+}
+
+// --- Operations ---
+
+func (s *PostgresStore) CreateOperation(ctx context.Context, projectID, location string, op Operation) error {
+	if op.CreateTime.IsZero() {
+		op.CreateTime = clock.Now()
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO jc_eventarc_operations
+			(project_id, location, operation_id, verb, target, response, create_time)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (project_id, location, operation_id) DO UPDATE
+			SET verb = EXCLUDED.verb, target = EXCLUDED.target,
+			    response = EXCLUDED.response, create_time = EXCLUDED.create_time
+	`, projectID, location, op.ID, op.Verb, op.Target, nullableJSONRaw(op.Response, "{}"), op.CreateTime)
+	return err
+}
+
+func (s *PostgresStore) GetOperation(ctx context.Context, projectID, location, id string) (Operation, error) {
+	var op Operation
+	var response []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT project_id, location, operation_id, verb, target, response, create_time
+		FROM jc_eventarc_operations WHERE project_id=$1 AND location=$2 AND operation_id=$3
+	`, projectID, location, id).Scan(&op.ProjectID, &op.Location, &op.ID, &op.Verb, &op.Target, &response, &op.CreateTime)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Operation{}, ErrNoSuchOperation
+	}
+	if err != nil {
+		return Operation{}, err
+	}
+	op.Response = json.RawMessage(response)
+	return op, nil
+}
+
+func (s *PostgresStore) ListOperations(ctx context.Context, projectID, location string) ([]Operation, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project_id, location, operation_id, verb, target, response, create_time
+		FROM jc_eventarc_operations WHERE project_id=$1 AND location=$2 ORDER BY operation_id
+	`, projectID, location)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Operation
+	for rows.Next() {
+		var op Operation
+		var response []byte
+		if err := rows.Scan(&op.ProjectID, &op.Location, &op.ID, &op.Verb, &op.Target, &response, &op.CreateTime); err != nil {
+			return nil, err
+		}
+		op.Response = json.RawMessage(response)
+		result = append(result, op)
+	}
+	return result, rows.Err()
+}
+
+func (s *PostgresStore) DeleteOperation(ctx context.Context, projectID, location, id string) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM jc_eventarc_operations WHERE project_id=$1 AND location=$2 AND operation_id=$3
+	`, projectID, location, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchOperation
+	}
+	return nil
 }
 
 // nullableJSONRaw returns a json.RawMessage for a JSONB column, substituting the

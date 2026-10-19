@@ -507,7 +507,12 @@ func (s *Service) CreateAdvanced(ctx context.Context, project string, k Kind, lo
 	if err := s.createAdvanced(ctx, project, k, rec); err != nil {
 		return AdvancedRecord{}, Operation{}, err
 	}
-	return rec, newOperation(location, "create", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "create", target),
+		OperationResponse(k.TypeURL(), AdvancedJSON(project, k, rec)))
+	if err != nil {
+		return AdvancedRecord{}, Operation{}, err
+	}
+	return rec, op, nil
 }
 
 // GetAdvanced returns one record. A missing singleton is synthesized.
@@ -605,7 +610,12 @@ func (s *Service) UpdateAdvanced(ctx context.Context, project string, k Kind, lo
 	if err != nil {
 		return AdvancedRecord{}, Operation{}, err
 	}
-	return updated, newOperation(location, "update", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "update", target),
+		OperationResponse(k.TypeURL(), AdvancedJSON(project, k, updated)))
+	if err != nil {
+		return AdvancedRecord{}, Operation{}, err
+	}
+	return updated, op, nil
 }
 
 // DeleteAdvanced deletes a record and returns the deleted record with the done
@@ -636,7 +646,12 @@ func (s *Service) DeleteAdvanced(ctx context.Context, project string, k Kind, lo
 			return AdvancedRecord{}, Operation{}, err
 		}
 	}
-	return stored, newOperation(location, "delete", target), nil
+	op, err := s.recordOperation(ctx, project, newOperation(location, "delete", target),
+		OperationResponse(k.TypeURL(), AdvancedJSON(project, k, stored)))
+	if err != nil {
+		return AdvancedRecord{}, Operation{}, err
+	}
+	return stored, op, nil
 }
 
 // ListMessageBusEnrollments returns the names of the enrollments attached to a

@@ -49,54 +49,6 @@
       "reason": "Dataproc DiagnoseCluster is an explicit Unimplemented stub (docs/fidelity-overrides.yaml, unsupported), so the probe answers 501 rather than a validatable shape."
     },
     {
-      "operation": "Eventarc.DeleteOperation",
-      "reason": "Eventarc mutations complete inline and no long-running operation is persisted, so an operations get/delete probe has no operation to address and the emulator answers NotFound (the routing and response shape are pinned by the provider unit tests)."
-    },
-    {
-      "operation": "Eventarc.GetOperation",
-      "reason": "Eventarc mutations complete inline and no long-running operation is persisted, so an operations get/delete probe has no operation to address and the emulator answers NotFound (the routing and response shape are pinned by the provider unit tests)."
-    },
-    {
-      "operation": "IAM.ServiceAccountKeyDisable",
-      "reason": "Service-account keys have server-assigned ids returned by keys.create, so the probe cannot reference a created key."
-    },
-    {
-      "operation": "IAM.ServiceAccountKeyEnable",
-      "reason": "Service-account keys have server-assigned ids returned by keys.create, so the probe cannot reference a created key."
-    },
-    {
-      "operation": "IAM.ServiceAccountKeyGet",
-      "reason": "Service-account keys have server-assigned ids returned by keys.create, so the probe cannot reference a created key."
-    },
-    {
-      "operation": "Logging.ViewGetIamPolicy",
-      "reason": "The generic probe's synthesized bucket/view ids are per-operation and not chained to a create, so no view exists when the IAM call runs; the view IAM read/write needs a curated create-view-then-IAM flow."
-    },
-    {
-      "operation": "Logging.ViewSetIamPolicy",
-      "reason": "The generic probe's synthesized bucket/view ids are per-operation and not chained to a create, so no view exists when the IAM call runs; the view IAM read/write needs a curated create-view-then-IAM flow."
-    },
-    {
-      "operation": "Logging.ViewTestIamPermissions",
-      "reason": "The generic probe's synthesized bucket/view ids are per-operation and not chained to a create, so no view exists when the IAM call runs; the view IAM read/write needs a curated create-view-then-IAM flow."
-    },
-    {
-      "operation": "ManagedKafka.DeleteConsumerGroup",
-      "reason": "Managed Kafka consumer groups have no create surface (they are derived from server state) and ACL update requires the stored etag."
-    },
-    {
-      "operation": "ManagedKafka.GetConsumerGroup",
-      "reason": "Managed Kafka consumer groups have no create surface (they are derived from server state) and ACL update requires the stored etag."
-    },
-    {
-      "operation": "ManagedKafka.UpdateAcl",
-      "reason": "Managed Kafka consumer groups have no create surface (they are derived from server state) and ACL update requires the stored etag."
-    },
-    {
-      "operation": "ManagedKafka.UpdateConsumerGroup",
-      "reason": "Managed Kafka consumer groups have no create surface (they are derived from server state) and ACL update requires the stored etag."
-    },
-    {
       "operation": "Metastore.AlterMetadataResourceLocation",
       "reason": "Dataproc Metastore returns 501 Unimplemented for these metadata operations."
     },
@@ -115,38 +67,6 @@
     {
       "operation": "Metastore.RestoreService",
       "reason": "Dataproc Metastore returns 501 Unimplemented for these metadata operations."
-    },
-    {
-      "operation": "Monitoring.ListTimeSeries",
-      "reason": "TimeSeries is served on the projects surface only; the folders/*/timeSeries variant is unsupported."
-    },
-    {
-      "operation": "Run.DeleteOperation",
-      "reason": "Cloud Run operations are LROs with server-assigned names; there is no create surface to stage one."
-    },
-    {
-      "operation": "Scheduler.JobsResume",
-      "reason": "Cloud Scheduler resume requires a PAUSED job; the probe's freshly-created job is RUNNING."
-    },
-    {
-      "operation": "Tasks.QueuesResume",
-      "reason": "Cloud Tasks resume requires a PAUSED queue; the probe's freshly-created queue is RUNNING."
-    },
-    {
-      "operation": "WorkflowExecution.CancelExecution",
-      "reason": "Workflow executions are created through the createExecution LRO and cancelled by a server-assigned execution id that the probe cannot stage from the WorkflowExecutions Discovery surface alone."
-    },
-    {
-      "operation": "WorkflowExecution.GetExecution",
-      "reason": "Workflow executions are created through the createExecution LRO and cancelled by a server-assigned execution id that the probe cannot stage from the WorkflowExecutions Discovery surface alone."
-    },
-    {
-      "operation": "Workflow.GetOperation",
-      "reason": "Cloud Workflows operations are LROs with server-assigned names."
-    },
-    {
-      "operation": "Workflow.DeleteOperation",
-      "reason": "Cloud Workflows operations are LROs with server-assigned names, so the delete target cannot be staged from the Discovery path model alone (the list is covered by the recorded probe)."
     }
   ]
 }
