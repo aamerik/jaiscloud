@@ -335,7 +335,7 @@ func (s *Service) createImportedVersion(ctx context.Context, project, location, 
 		ImportTime:             now,
 		ProtectionLevel:        protectionLevel,
 		TrustedWrappingEnabled: in.TrustedWrappingEnabled,
-		HsmTrusted:             protectionLevel == "HSM" || protectionLevel == "HSM_SINGLE_TENANT",
+		HsmTrusted:             ck.Purpose == "AES_WRAPPING" && protectionLevel == "HSM_SINGLE_TENANT",
 	}
 	version, err := s.keys.CreateImportedVersion(ctx, project, location, kr, key, v, keyMat, privDER, pubDER)
 	if err != nil {

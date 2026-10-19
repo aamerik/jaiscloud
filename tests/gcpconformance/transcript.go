@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -163,9 +164,32 @@ func Record(jaiscloudHost string) (Transcript, error) {
 
 	var tr Transcript
 	vars := map[string]string{}
+	clockMoved := false
+	defer func() {
+		// A failed record run must not leave the shared emulator in the future.
+		if clockMoved {
+			_ = setEmulatorClock(client, jaiscloudHost, "real")
+		}
+	}()
 	for _, sc := range scenarios {
 		path := expandVars(sc.Path, vars)
 		reqBody := expandVars(sc.Body, vars)
+		if sc.Prepare != nil {
+			prepared, err := sc.Prepare(vars)
+			if err != nil {
+				return tr, fmt.Errorf("%s %s: prepare body: %w", sc.Method, path, err)
+			}
+			reqBody = prepared
+		}
+		if sc.AdvanceClock != "" {
+			if err := setEmulatorClock(client, jaiscloudHost, sc.AdvanceClock); err != nil {
+				return tr, fmt.Errorf("%s %s: set clock %q: %w", sc.Method, path, sc.AdvanceClock, err)
+			}
+			clockMoved = sc.AdvanceClock != "real"
+		}
+		if strings.Contains(reqBody, "${") {
+			return tr, fmt.Errorf("%s %s: unresolved variable in request body", sc.Method, path)
+		}
 		url := jaiscloudHost + path
 		var body io.Reader
 		if reqBody != "" {

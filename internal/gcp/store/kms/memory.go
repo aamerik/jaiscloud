@@ -93,7 +93,11 @@ func (s *MemoryStore) ListKeyRings(_ context.Context, projectID, location string
 	return result, nil
 }
 
-func (s *MemoryStore) CreateCryptoKey(_ context.Context, projectID, location, keyringID, id string, ck CryptoKey) error {
+func (s *MemoryStore) CreateCryptoKey(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey) error {
+	return s.CreateCryptoKeyWithVersion(ctx, projectID, location, keyringID, id, ck, true)
+}
+
+func (s *MemoryStore) CreateCryptoKeyWithVersion(_ context.Context, projectID, location, keyringID, id string, ck CryptoKey, withInitialVersion bool) error {
 	dek, err := s.dek()
 	if err != nil {
 		return err
@@ -112,10 +116,17 @@ func (s *MemoryStore) CreateCryptoKey(_ context.Context, projectID, location, ke
 	if _, ok := s.cryptokeys[key][id]; ok {
 		return ErrAlreadyExists
 	}
-	ck.PrimaryVersion = "1"
 	if ck.Algorithm == "" {
 		ck.Algorithm = v.Algorithm
 	}
+	if !withInitialVersion {
+		// An import-only key (or a create that skips the initial version) starts
+		// with no version; ImportCryptoKeyVersion creates the first one.
+		ck.PrimaryVersion = ""
+		s.cryptokeys[key][id] = ck
+		return nil
+	}
+	ck.PrimaryVersion = "1"
 	s.cryptokeys[key][id] = ck
 
 	vk := vKey(projectID, location, keyringID, id)
@@ -124,7 +135,7 @@ func (s *MemoryStore) CreateCryptoKey(_ context.Context, projectID, location, ke
 	v.State = "ENABLED"
 	v.CreateTime = ck.CreateTime
 	v.ProtectionLevel = ck.ProtectionLevel
-	v.HsmTrusted = ck.ProtectionLevel == "HSM" || ck.ProtectionLevel == "HSM_SINGLE_TENANT"
+	v.HsmTrusted = ck.Purpose == "AES_WRAPPING" && ck.ProtectionLevel == "HSM_SINGLE_TENANT"
 	s.versions[vk] = map[string]Version{"1": v}
 	return nil
 }

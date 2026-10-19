@@ -13,6 +13,11 @@ import (
 // cryptoKeyMap renders a CryptoKey as its Cloud KMS JSON object. primary is the
 // crypto key's primary version.
 func cryptoKeyMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey, primaryVersion kmsstore.Version) map[string]any {
+	// Discovery: "Keys with purpose ENCRYPT_DECRYPT may have a primary. For other
+	// keys, this field will be omitted." An import-only key has no version yet.
+	if k.Purpose != "ENCRYPT_DECRYPT" || k.PrimaryVersion == "" {
+		return cryptoKeyBaseMap(nr, k)
+	}
 	primaryState := primaryVersion.State
 	if primaryState == "" {
 		primaryState = "ENABLED"
@@ -38,11 +43,18 @@ func cryptoKeyMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey, primaryVers
 	if primaryVersion.State == "DESTROYED" && !primaryVersion.DestroyEventTime.IsZero() {
 		primary["destroyEventTime"] = timestamp.Canonical(primaryVersion.DestroyEventTime)
 	}
+	out := cryptoKeyBaseMap(nr, k)
+	out["primary"] = primary
+	return out
+}
+
+// cryptoKeyBaseMap renders the CryptoKey fields that do not depend on a primary
+// version.
+func cryptoKeyBaseMap(nr *model.NormalizedRequest, k kmsstore.CryptoKey) map[string]any {
 	out := map[string]any{
 		"name":       kmscore.CryptoKeyName(nr.AccountID, k.Location, k.KeyRingID, k.ID),
 		"purpose":    k.Purpose,
 		"createTime": timestamp.Canonical(k.CreateTime),
-		"primary":    primary,
 		"versionTemplate": map[string]any{
 			"algorithm":       k.Algorithm,
 			"protectionLevel": protectionLevel(k.ProtectionLevel),

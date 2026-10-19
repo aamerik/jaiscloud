@@ -98,6 +98,10 @@ type Store interface {
 	ListKeyRings(ctx context.Context, projectID, location string) ([]KeyRing, error)
 
 	CreateCryptoKey(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey) error
+	// CreateCryptoKeyWithVersion also stores ck but lets the caller decide whether
+	// the implicit initial CryptoKeyVersion is created (Cloud KMS creates it
+	// unless import-only or skipInitialVersionCreation is requested).
+	CreateCryptoKeyWithVersion(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey, withInitialVersion bool) error
 	GetCryptoKey(ctx context.Context, projectID, location, keyringID, id string) (CryptoKey, error)
 	ListCryptoKeys(ctx context.Context, projectID, location, keyringID string) ([]CryptoKey, error)
 	// UpdateCryptoKeyAtomic atomically reads the current crypto key, calls

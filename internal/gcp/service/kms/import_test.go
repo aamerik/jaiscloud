@@ -165,6 +165,9 @@ func TestCoreTrustedWrappingRoundTrip(t *testing.T) {
 	if !v.TrustedWrappingEnabled {
 		t.Fatal("trusted import should set trustedWrappingEnabled")
 	}
+	if v.HsmTrusted {
+		t.Fatal("hsmTrusted is only valid for AES_WRAPPING versions, not an imported RAW key")
+	}
 	exported, err := core.ExportTrustedKeyWrappedCryptoKeyVersion(ctx, "proj", "global", "kr", "sym", v.Version,
 		VersionName("proj", "global", "kr", "wrap", "1"))
 	if err != nil {
@@ -176,5 +179,69 @@ func TestCoreTrustedWrappingRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(back, material) {
 		t.Fatal("trusted wrapping round-trip mismatch")
+	}
+}
+
+// TestCoreImportOnlyKeyStartsWithoutVersion pins Cloud KMS import semantics: a
+// key created with importOnly has no version, so the first imported version is
+// version 1 (and the key has no primary).
+func TestCoreImportOnlyKeyStartsWithoutVersion(t *testing.T) {
+	ctx := context.Background()
+	core, keys := newCore()
+	if _, err := core.CreateKeyRing(ctx, "proj", "global", "kr"); err != nil {
+		t.Fatalf("CreateKeyRing: %v", err)
+	}
+	ck, err := core.CreateCryptoKey(ctx, "proj", "global", "kr", "imp", CryptoKeyInput{Purpose: "ENCRYPT_DECRYPT", ImportOnly: true})
+	if err != nil {
+		t.Fatalf("CreateCryptoKey: %v", err)
+	}
+	if ck.PrimaryVersion != "" {
+		t.Fatalf("import-only key primary = %q, want none", ck.PrimaryVersion)
+	}
+	if versions, err := keys.ListVersions(ctx, "proj", "global", "kr", "imp"); err != nil {
+		t.Fatalf("ListVersions: %v", err)
+	} else if len(versions) != 0 {
+		t.Fatalf("import-only key has %d versions, want 0", len(versions))
+	}
+	// skipInitialVersionCreation has the same effect on a normal key.
+	skipped, err := core.CreateCryptoKey(ctx, "proj", "global", "kr", "skipped", CryptoKeyInput{Purpose: "ENCRYPT_DECRYPT", SkipInitialVersion: true})
+	if err != nil {
+		t.Fatalf("CreateCryptoKey(skip): %v", err)
+	}
+	if skipped.PrimaryVersion != "" {
+		t.Fatalf("skipInitialVersionCreation key primary = %q, want none", skipped.PrimaryVersion)
+	}
+	if versions, err := keys.ListVersions(ctx, "proj", "global", "kr", "skipped"); err != nil {
+		t.Fatalf("ListVersions(skip): %v", err)
+	} else if len(versions) != 0 {
+		t.Fatalf("skipInitialVersionCreation key has %d versions, want 0", len(versions))
+	}
+
+	job, err := core.CreateImportJob(ctx, "proj", "global", "kr", "job", ImportJobInput{ImportMethod: "RSA_OAEP_3072_SHA256_AES_256"})
+	if err != nil {
+		t.Fatalf("CreateImportJob: %v", err)
+	}
+	block, _ := pem.Decode([]byte(job.PublicKeyPEM))
+	pubAny, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse import job key: %v", err)
+	}
+	kwpKey := bytes.Repeat([]byte{0x11}, 32)
+	sealed, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, pubAny.(*rsa.PublicKey), kwpKey, nil)
+	if err != nil {
+		t.Fatalf("RSA-OAEP: %v", err)
+	}
+	wrapped, err := kmsstore.AESKeyWrapWithPadding(kwpKey, bytes.Repeat([]byte{0x22}, 32))
+	if err != nil {
+		t.Fatalf("AES-KWP: %v", err)
+	}
+	v, err := core.ImportCryptoKeyVersion(ctx, "proj", "global", "kr", "imp", ImportVersionRequest{
+		ImportJob: job.Name, Algorithm: "GOOGLE_SYMMETRIC_ENCRYPTION", WrappedKey: append(sealed, wrapped...),
+	})
+	if err != nil {
+		t.Fatalf("ImportCryptoKeyVersion: %v", err)
+	}
+	if v.Version != "1" {
+		t.Fatalf("first imported version = %q, want 1", v.Version)
 	}
 }

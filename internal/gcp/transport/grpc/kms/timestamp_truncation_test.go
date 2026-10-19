@@ -27,7 +27,7 @@ func TestKMSTimesMicrosecondTruncation(t *testing.T) {
 
 	k := cryptoKeyToProto("proj", kmsstore.CryptoKey{
 		ID: "k1", Location: "global", KeyRingID: "kr1", PrimaryVersion: "1",
-		CreateTime: instant, NextRotationTime: instant,
+		Purpose: "ENCRYPT_DECRYPT", CreateTime: instant, NextRotationTime: instant,
 	}, kmsstore.Version{Version: "1", CreateTime: instant})
 	check("cryptoKey.createTime", k.GetCreateTime().AsTime())
 	check("cryptoKey.nextRotationTime", k.GetNextRotationTime().AsTime())

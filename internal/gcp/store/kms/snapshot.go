@@ -80,6 +80,7 @@ type kmsCryptokeyRow struct {
 	NextRotationTime time.Time         `json:"nextRotationTime,omitempty"`
 	ProtectionLevel  string            `json:"protectionLevel,omitempty"`
 	ImportOnly       bool              `json:"importOnly,omitempty"`
+	NextVersion      int               `json:"nextVersion,omitempty"`
 }
 
 type kmsVersionRow struct {
@@ -130,7 +131,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 
 	cryptokeys := make([]kmsCryptokeyRow, 0)
-	crows, err := s.pool.Query(ctx, `SELECT project_id, location, keyring_id, key_id, purpose, algorithm, create_time, primary_version, labels, rotation_period, next_rotation_time, protection_level, import_only FROM jc_kms_cryptokeys ORDER BY project_id, location, keyring_id, key_id`)
+	crows, err := s.pool.Query(ctx, `SELECT project_id, location, keyring_id, key_id, purpose, algorithm, create_time, primary_version, labels, rotation_period, next_rotation_time, protection_level, import_only, next_version FROM jc_kms_cryptokeys ORDER BY project_id, location, keyring_id, key_id`)
 	if err != nil {
 		return err
 	}
@@ -139,7 +140,7 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 		var labels []byte
 		var rotationSecs *int64
 		var next *time.Time
-		if err := crows.Scan(&r.ProjectID, &r.Location, &r.KeyRingID, &r.ID, &r.Purpose, &r.Algorithm, &r.CreateTime, &r.PrimaryVersion, &labels, &rotationSecs, &next, &r.ProtectionLevel, &r.ImportOnly); err != nil {
+		if err := crows.Scan(&r.ProjectID, &r.Location, &r.KeyRingID, &r.ID, &r.Purpose, &r.Algorithm, &r.CreateTime, &r.PrimaryVersion, &labels, &rotationSecs, &next, &r.ProtectionLevel, &r.ImportOnly, &r.NextVersion); err != nil {
 			crows.Close()
 			return err
 		}
@@ -255,8 +256,14 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		}
 	}
 	for _, r := range snap.CryptoKeys {
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_kms_cryptokeys (project_id, location, keyring_id, key_id, purpose, algorithm, create_time, primary_version, labels, rotation_period, next_rotation_time, protection_level, import_only) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-			r.ProjectID, r.Location, r.KeyRingID, r.ID, r.Purpose, r.Algorithm, r.CreateTime, r.PrimaryVersion, labelsJSON(r.Labels), rotationSeconds(r.RotationPeriod), nullableTime(r.NextRotationTime), protectionLevelOrDefault(r.ProtectionLevel), r.ImportOnly); err != nil {
+		nextVersion := r.NextVersion
+		if nextVersion == 0 {
+			// Snapshots written before the counter was captured: fall back to
+			// the schema default.
+			nextVersion = 2
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_kms_cryptokeys (project_id, location, keyring_id, key_id, purpose, algorithm, create_time, primary_version, labels, rotation_period, next_rotation_time, protection_level, import_only, next_version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+			r.ProjectID, r.Location, r.KeyRingID, r.ID, r.Purpose, r.Algorithm, r.CreateTime, r.PrimaryVersion, labelsJSON(r.Labels), rotationSeconds(r.RotationPeriod), nullableTime(r.NextRotationTime), protectionLevelOrDefault(r.ProtectionLevel), r.ImportOnly, nextVersion); err != nil {
 			return err
 		}
 	}

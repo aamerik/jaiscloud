@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 581 | 93 |
+| rest | 599 | 75 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -668,7 +668,7 @@ _77 cell(s): ga=77 limited=0 preview=0 unsupported=0_
 | ImportTrustedKeyWrappedCryptoKeyVersion | grpc | ga | yes | — |
 | KMS.CryptoKeyCreate | rest | ga | yes | — |
 | KMS.CryptoKeyDecrypt | rest | ga | yes | — |
-| KMS.CryptoKeyDelete | rest | ga | no | — |
+| KMS.CryptoKeyDelete | rest | ga | yes | — |
 | KMS.CryptoKeyEncrypt | rest | ga | yes | — |
 | KMS.CryptoKeyGet | rest | ga | yes | — |
 | KMS.CryptoKeyGetIamPolicy | rest | ga | yes | — |
@@ -676,25 +676,25 @@ _77 cell(s): ga=77 limited=0 preview=0 unsupported=0_
 | KMS.CryptoKeySetIamPolicy | rest | ga | yes | — |
 | KMS.CryptoKeyTestIamPermissions | rest | ga | yes | — |
 | KMS.CryptoKeyUpdate | rest | ga | yes | — |
-| KMS.CryptoKeyUpdatePrimaryVersion | rest | ga | no | — |
-| KMS.CryptoKeyVersionAsymmetricDecrypt | rest | ga | no | — |
-| KMS.CryptoKeyVersionAsymmetricSign | rest | ga | no | — |
+| KMS.CryptoKeyUpdatePrimaryVersion | rest | ga | yes | — |
+| KMS.CryptoKeyVersionAsymmetricDecrypt | rest | ga | yes | — |
+| KMS.CryptoKeyVersionAsymmetricSign | rest | ga | yes | — |
 | KMS.CryptoKeyVersionCreate | rest | ga | yes | — |
-| KMS.CryptoKeyVersionDecapsulate | rest | ga | no | — |
-| KMS.CryptoKeyVersionDelete | rest | ga | no | — |
-| KMS.CryptoKeyVersionDestroy | rest | ga | no | — |
-| KMS.CryptoKeyVersionExportTrusted | rest | ga | no | — |
-| KMS.CryptoKeyVersionGet | rest | ga | no | — |
-| KMS.CryptoKeyVersionGetPublicKey | rest | ga | no | — |
-| KMS.CryptoKeyVersionImport | rest | ga | no | — |
-| KMS.CryptoKeyVersionImportTrusted | rest | ga | no | — |
+| KMS.CryptoKeyVersionDecapsulate | rest | ga | yes | — |
+| KMS.CryptoKeyVersionDelete | rest | ga | yes | — |
+| KMS.CryptoKeyVersionDestroy | rest | ga | yes | — |
+| KMS.CryptoKeyVersionExportTrusted | rest | ga | yes | — |
+| KMS.CryptoKeyVersionGet | rest | ga | yes | — |
+| KMS.CryptoKeyVersionGetPublicKey | rest | ga | yes | — |
+| KMS.CryptoKeyVersionImport | rest | ga | yes | — |
+| KMS.CryptoKeyVersionImportTrusted | rest | ga | yes | — |
 | KMS.CryptoKeyVersionList | rest | ga | yes | — |
-| KMS.CryptoKeyVersionMacSign | rest | ga | no | — |
-| KMS.CryptoKeyVersionMacVerify | rest | ga | no | — |
-| KMS.CryptoKeyVersionRawDecrypt | rest | ga | no | — |
-| KMS.CryptoKeyVersionRawEncrypt | rest | ga | no | — |
-| KMS.CryptoKeyVersionRestore | rest | ga | no | — |
-| KMS.CryptoKeyVersionUpdate | rest | ga | no | — |
+| KMS.CryptoKeyVersionMacSign | rest | ga | yes | — |
+| KMS.CryptoKeyVersionMacVerify | rest | ga | yes | — |
+| KMS.CryptoKeyVersionRawDecrypt | rest | ga | yes | — |
+| KMS.CryptoKeyVersionRawEncrypt | rest | ga | yes | — |
+| KMS.CryptoKeyVersionRestore | rest | ga | yes | — |
+| KMS.CryptoKeyVersionUpdate | rest | ga | yes | — |
 | KMS.GenerateRandomBytes | rest | ga | yes | — |
 | KMS.ImportJobCreate | rest | ga | yes | — |
 | KMS.ImportJobGet | rest | ga | yes | — |

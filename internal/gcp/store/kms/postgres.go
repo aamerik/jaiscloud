@@ -133,6 +133,10 @@ func (s *PostgresStore) ListKeyRings(ctx context.Context, projectID, location st
 }
 
 func (s *PostgresStore) CreateCryptoKey(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey) error {
+	return s.CreateCryptoKeyWithVersion(ctx, projectID, location, keyringID, id, ck, true)
+}
+
+func (s *PostgresStore) CreateCryptoKeyWithVersion(ctx context.Context, projectID, location, keyringID, id string, ck CryptoKey, withInitialVersion bool) error {
 	if ck.CreateTime.IsZero() {
 		ck.CreateTime = clock.Now()
 	}
@@ -154,20 +158,28 @@ func (s *PostgresStore) CreateCryptoKey(ctx context.Context, projectID, location
 	}
 	defer tx.Rollback(ctx)
 
+	primaryVersion, nextVersion := "1", 2
+	if !withInitialVersion {
+		// No implicit version: the first import becomes version 1.
+		primaryVersion, nextVersion = "", 1
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO jc_kms_cryptokeys (project_id, location, keyring_id, key_id, purpose, create_time, primary_version, algorithm, next_version, labels, rotation_period, next_rotation_time, protection_level, import_only)
-		VALUES ($1,$2,$3,$4,$5,$6,'1',$7,2,$8,$9,$10,$11,$12)
-	`, projectID, location, keyringID, id, ck.Purpose, ck.CreateTime, ck.Algorithm, labelsJSON(ck.Labels), rotationSeconds(ck.RotationPeriod), nullableTime(ck.NextRotationTime), protectionLevelOrDefault(ck.ProtectionLevel), ck.ImportOnly); err != nil {
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+	`, projectID, location, keyringID, id, ck.Purpose, ck.CreateTime, primaryVersion, ck.Algorithm, nextVersion, labelsJSON(ck.Labels), rotationSeconds(ck.RotationPeriod), nullableTime(ck.NextRotationTime), protectionLevelOrDefault(ck.ProtectionLevel), ck.ImportOnly); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return ErrAlreadyExists
 		}
 		return err
 	}
+	if !withInitialVersion {
+		return tx.Commit(ctx)
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO jc_kms_cryptokey_versions (project_id, location, keyring_id, key_id, version, state, algorithm, create_time, key_material, private_key, public_key, protection_level, hsm_trusted)
 		VALUES ($1,$2,$3,$4,'1','ENABLED',$5,$6,$7,$8,$9,$10,$11)
-	`, projectID, location, keyringID, id, v.Algorithm, ck.CreateTime, v.KeyMaterial, v.PrivateKey, v.PublicKey, protectionLevelOrDefault(ck.ProtectionLevel), ck.ProtectionLevel == "HSM" || ck.ProtectionLevel == "HSM_SINGLE_TENANT"); err != nil {
+	`, projectID, location, keyringID, id, v.Algorithm, ck.CreateTime, v.KeyMaterial, v.PrivateKey, v.PublicKey, protectionLevelOrDefault(ck.ProtectionLevel), ck.Purpose == "AES_WRAPPING" && ck.ProtectionLevel == "HSM_SINGLE_TENANT"); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

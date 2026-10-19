@@ -4,6 +4,8 @@ package gcpconformance
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -35,6 +37,20 @@ type Scenario struct {
 	// scalar value is captured for use by later scenarios (e.g. the ciphertext
 	// returned by KMS encrypt feeding KMS decrypt).
 	Save map[string]string
+	// Prepare, when set, builds the request body from previously saved
+	// variables (Body is ignored). It models client-side work a real caller
+	// performs between two API calls — wrapping key material with an import
+	// job's public key, sealing with an asymmetric public key, encapsulating
+	// with a KEM public key. The bytes it returns are sent to the public API
+	// unchanged, so no emulator behaviour is bypassed.
+	Prepare func(vars map[string]string) (string, error)
+	// AdvanceClock, when set, reconfigures the emulator's clock through the
+	// admin control plane before the request is issued; the control-plane call
+	// is not part of the recorded transcript. "real" restores wall time, and a
+	// Go duration ("744h") offsets the clock from real time. State machines
+	// that only advance on an elapsed window (a scheduled key destruction)
+	// need it; the request under test is still the public API.
+	AdvanceClock string
 }
 
 // runSuffix returns a per-run unique suffix so scenario names stay idempotent
@@ -245,7 +261,171 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "kms", Method: "GET", Path: base + "/" + ring + "/cryptoKeys/missing-" + suffix},
 	)
 
+	// ─── Cloud KMS: key/version lifecycle evidence ────────────────────────────
+	// The 18 crypto-key and crypto-key-version cells above have no validated
+	// response from the generic probe: it cannot stage an import job's wrapping
+	// key, an HSM trusted-wrapping key, a KEM public key, or an elapsed
+	// destruction window. This chain drives the public JSON API only and
+	// captures the server-assigned names, IVs, MACs and import-job keys that
+	// later calls address. The client-side cryptography a real caller performs
+	// between calls (RSA-OAEP wrapping, AES-KWP, ML-KEM encapsulation, RSAES-OAEP
+	// sealing) lives in Prepare/clientcrypto.go.
+	kmsRing := "conf-kms-" + suffix
+	kmsBase := "/v1/projects/" + p + "/locations/global/keyRings/" + kmsRing
+	kmsName := "projects/" + p + "/locations/global/keyRings/" + kmsRing
+	symMaterial := []byte("conformance-symmetric-key-000001")
+	kwpMaterial := bytes.Repeat([]byte{0x4b}, 32)
+	trustedMaterial := []byte("trusted-material-conformance-001")
+	trustedWrapped, err := aesKeyWrapWithPadding(kwpMaterial, trustedMaterial)
+	if err != nil {
+		panic("kms trusted-wrap fixture: " + err.Error())
+	}
+	signDigest := sha256.Sum256([]byte("conformance digest"))
+	sc = append(sc,
+		Scenario{Service: "kms", Method: "POST",
+			Path: "/v1/projects/" + p + "/locations/global/keyRings?keyRingId=" + kmsRing, Body: `{}`},
+
+		// Symmetric key: a second version, primary selection, and the
+		// enable/disable state machine (cryptoKeyVersions.patch).
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys?cryptoKeyId=sym",
+			Body: `{"purpose":"ENCRYPT_DECRYPT"}`},
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys/sym/cryptoKeyVersions", Body: `{}`},
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys/sym:updatePrimaryVersion",
+			Body: `{"cryptoKeyVersionId":"2"}`},
+		Scenario{Service: "kms", Method: "GET", Path: kmsBase + "/cryptoKeys/sym/cryptoKeyVersions/2"},
+		Scenario{Service: "kms", Method: "PATCH",
+			Path: kmsBase + "/cryptoKeys/sym/cryptoKeyVersions/2?updateMask=state", Body: `{"state":"DISABLED"}`},
+		Scenario{Service: "kms", Method: "PATCH",
+			Path: kmsBase + "/cryptoKeys/sym/cryptoKeyVersions/2?updateMask=state", Body: `{"state":"ENABLED"}`},
+		Scenario{Service: "kms", Method: "POST",
+			Path: kmsBase + "/cryptoKeys/sym/cryptoKeyVersions/2:destroy", Body: `{}`},
+		Scenario{Service: "kms", Method: "POST",
+			Path: kmsBase + "/cryptoKeys/sym/cryptoKeyVersions/2:restore", Body: `{}`},
+
+		// Raw AES-GCM: the server-generated IV from rawEncrypt feeds rawDecrypt.
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys?cryptoKeyId=raw",
+			Body: `{"purpose":"RAW_ENCRYPT_DECRYPT"}`},
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys/raw/cryptoKeyVersions/1:rawEncrypt",
+			Body: fmt.Sprintf(`{"plaintext":%q}`, b64([]byte("raw-encrypt-plaintext"))),
+			Save: map[string]string{"kmsRawCT": "ciphertext", "kmsRawIV": "initializationVector"}},
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys/raw/cryptoKeyVersions/1:rawDecrypt",
+			Body: `{"ciphertext":"${kmsRawCT}","initializationVector":"${kmsRawIV}","tagLength":16}`},
+
+		// HMAC: macSign's output verifies through macVerify.
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys?cryptoKeyId=mac",
+			Body: `{"purpose":"MAC","versionTemplate":{"algorithm":"HMAC_SHA256"}}`},
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys/mac/cryptoKeyVersions/1:macSign",
+			Body: fmt.Sprintf(`{"data":%q}`, b64([]byte("mac-conformance-data"))),
+			Save: map[string]string{"kmsMac": "mac"}},
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys/mac/cryptoKeyVersions/1:macVerify",
+			Body: fmt.Sprintf(`{"data":%q,"mac":"${kmsMac}"}`, b64([]byte("mac-conformance-data")))},
+
+		// Asymmetric signing (ECDSA P-256): the public key and a SHA-256 digest.
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys?cryptoKeyId=sign",
+			Body: `{"purpose":"ASYMMETRIC_SIGN","versionTemplate":{"algorithm":"EC_SIGN_P256_SHA256"}}`},
+		Scenario{Service: "kms", Method: "GET", Path: kmsBase + "/cryptoKeys/sign/cryptoKeyVersions/1/publicKey"},
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys/sign/cryptoKeyVersions/1:asymmetricSign",
+			Body: fmt.Sprintf(`{"digest":{"sha256":%q}}`, b64(signDigest[:]))},
+
+		// Asymmetric decryption (RSA-OAEP-2048): seal with the public key.
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys?cryptoKeyId=dec",
+			Body: `{"purpose":"ASYMMETRIC_DECRYPT","versionTemplate":{"algorithm":"RSA_DECRYPT_OAEP_2048_SHA256"}}`},
+		Scenario{Service: "kms", Method: "GET", Path: kmsBase + "/cryptoKeys/dec/cryptoKeyVersions/1/publicKey",
+			Save: map[string]string{"kmsDecPub": "pem"}},
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys/dec/cryptoKeyVersions/1:asymmetricDecrypt",
+			Prepare: func(vars map[string]string) (string, error) {
+				sealed, err := rsaOAEPEncrypt(vars["kmsDecPub"], []byte("asymmetric-plaintext"))
+				if err != nil {
+					return "", err
+				}
+				return fmt.Sprintf(`{"ciphertext":%q}`, b64(sealed)), nil
+			}},
+
+		// Key encapsulation (ML-KEM-768): encapsulate against the public key.
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys?cryptoKeyId=kem",
+			Body: `{"purpose":"KEY_ENCAPSULATION","versionTemplate":{"algorithm":"ML_KEM_768"}}`},
+		// PQC algorithms require public_key_format (Cloud KMS rejects the call
+		// without it); the response carries the key as ChecksummedData.
+		Scenario{Service: "kms", Method: "GET",
+			Path: kmsBase + "/cryptoKeys/kem/cryptoKeyVersions/1/publicKey?publicKeyFormat=NIST_PQC",
+			Save: map[string]string{"kmsKemPub": "publicKey.data"}},
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys/kem/cryptoKeyVersions/1:decapsulate",
+			Prepare: func(vars map[string]string) (string, error) {
+				raw, err := base64.StdEncoding.DecodeString(vars["kmsKemPub"])
+				if err != nil {
+					return "", err
+				}
+				ciphertext, err := mlkemEncapsulate(raw)
+				if err != nil {
+					return "", err
+				}
+				return fmt.Sprintf(`{"ciphertext":%q}`, b64(ciphertext)), nil
+			}},
+
+		// Import: the job exposes a wrapping public key; the material is wrapped
+		// with RSA-OAEP + AES-KWP and imported as the first version of an
+		// import-only key (real Cloud KMS only accepts imports into such keys).
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys?cryptoKeyId=imp&skipInitialVersionCreation=true",
+			Body: `{"purpose":"ENCRYPT_DECRYPT","importOnly":true}`},
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/importJobs?importJobId=job-soft",
+			Body: `{"importMethod":"RSA_OAEP_3072_SHA256_AES_256","protectionLevel":"SOFTWARE"}`,
+			Save: map[string]string{"kmsJobPub": "publicKey.pem"}},
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys/imp/cryptoKeyVersions:import",
+			Prepare: func(vars map[string]string) (string, error) {
+				wrapped, err := wrapImportMaterial(vars["kmsJobPub"], symMaterial)
+				if err != nil {
+					return "", err
+				}
+				return fmt.Sprintf(`{"importJob":%q,"algorithm":"GOOGLE_SYMMETRIC_ENCRYPTION","wrappedKey":%q}`,
+					kmsName+"/importJobs/job-soft", b64(wrapped)), nil
+			}},
+
+		// Trusted wrapping: an HSM AES-256-KWP importing key is itself imported
+		// (so its material is known client-side), then used to unwrap a
+		// trusted-wrapped version and to export it again.
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/importJobs?importJobId=job-hsm",
+			Body: `{"importMethod":"RSA_OAEP_3072_SHA256_AES_256","protectionLevel":"HSM_SINGLE_TENANT"}`,
+			Save: map[string]string{"kmsHsmPub": "publicKey.pem"}},
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys?cryptoKeyId=kwp&skipInitialVersionCreation=true",
+			Body: `{"purpose":"AES_WRAPPING","importOnly":true,"versionTemplate":{"algorithm":"AES_256_KWP","protectionLevel":"HSM_SINGLE_TENANT"}}`},
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys/kwp/cryptoKeyVersions:import",
+			Prepare: func(vars map[string]string) (string, error) {
+				wrapped, err := wrapImportMaterial(vars["kmsHsmPub"], kwpMaterial)
+				if err != nil {
+					return "", err
+				}
+				return fmt.Sprintf(`{"importJob":%q,"algorithm":"AES_256_KWP","wrappedKey":%q}`,
+					kmsName+"/importJobs/job-hsm", b64(wrapped)), nil
+			},
+			Save: map[string]string{"kwpVersion": "name"}},
+		// Trusted wrapping is only valid for HSM_SINGLE_TENANT keys and, per
+		// Discovery, never for ENCRYPT_DECRYPT; the target imports a raw AES key.
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys?cryptoKeyId=trusted&skipInitialVersionCreation=true",
+			Body: `{"purpose":"RAW_ENCRYPT_DECRYPT","importOnly":true,"versionTemplate":{"algorithm":"AES_256_GCM","protectionLevel":"HSM_SINGLE_TENANT"}}`},
+		Scenario{Service: "kms", Method: "POST",
+			Path: kmsBase + "/cryptoKeys/trusted/cryptoKeyVersions:importTrustedKeyWrappedCryptoKeyVersion",
+			Body: fmt.Sprintf(`{"importingKey":"${kwpVersion}","algorithm":"AES_256_GCM","wrappedKey":%q}`,
+				b64(trustedWrapped)),
+			Save: map[string]string{"kmsTrustedVersion": "name"}},
+		Scenario{Service: "kms", Method: "GET",
+			Path: "/v1/${kmsTrustedVersion}:exportTrustedKeyWrappedCryptoKeyVersion?wrappingKey=${kwpVersion}"},
+
+		// Deletion: a version must be created, destroyed, past its destruction
+		// window, deleted, and only then can the crypto key be deleted. The
+		// 30-day window is crossed on the emulator clock (744h = 31 days).
+		Scenario{Service: "kms", Method: "POST", Path: kmsBase + "/cryptoKeys?cryptoKeyId=del",
+			Body: `{"purpose":"ENCRYPT_DECRYPT"}`},
+		Scenario{Service: "kms", Method: "POST",
+			Path: kmsBase + "/cryptoKeys/del/cryptoKeyVersions/1:destroy", Body: `{}`},
+		Scenario{Service: "kms", Method: "GET",
+			Path: kmsBase + "/cryptoKeys/del/cryptoKeyVersions/1", AdvanceClock: "744h"},
+		Scenario{Service: "kms", Method: "DELETE",
+			Path: kmsBase + "/cryptoKeys/del/cryptoKeyVersions/1"},
+		Scenario{Service: "kms", Method: "DELETE", Path: kmsBase + "/cryptoKeys/del", AdvanceClock: "real"},
+	)
+
 	// ─── IAM ──────────────────────────────────────────────────────────────────
+
 	saBase := "/v1/projects/" + p + "/serviceAccounts"
 	sc = append(sc,
 		Scenario{Service: "iam", Method: "POST", Path: saBase + "?accountId=" + sa,

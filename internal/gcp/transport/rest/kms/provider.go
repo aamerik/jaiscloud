@@ -203,6 +203,9 @@ func (p *Provider) CryptoKeyCreate(ctx context.Context, nr *model.NormalizedRequ
 			in.ImportOnly = true
 		}
 	}
+	if strField(nr.Params, "skipInitialVersionCreation") == "true" {
+		in.SkipInitialVersion = true
+	}
 	ck, err := p.core.CreateCryptoKey(ctx, nr.AccountID, loc, kr, key, in)
 	if err != nil {
 		return nil, err
@@ -322,6 +325,12 @@ func (p *Provider) CryptoKeyEncrypt(ctx context.Context, nr *model.NormalizedReq
 		return nil, model.NewProviderError("InvalidRequest", "plaintext must be base64", 400)
 	}
 	aad := decodeAAD(body["additionalAuthenticatedData"])
+	if err := verifyCRCField(body, "plaintextCrc32c", pt); err != nil {
+		return nil, err
+	}
+	if err := verifyCRCField(body, "additionalAuthenticatedDataCrc32c", aad); err != nil {
+		return nil, err
+	}
 	res, err := p.core.Encrypt(ctx, nr.AccountID, loc, kr, key, "", pt, aad)
 	if err != nil {
 		return nil, err
@@ -331,8 +340,8 @@ func (p *Provider) CryptoKeyEncrypt(ctx context.Context, nr *model.NormalizedReq
 		"ciphertext":              base64.StdEncoding.EncodeToString(res.Ciphertext),
 		"ciphertextCrc32c":        crc32cString(res.Ciphertext),
 		"protectionLevel":         "SOFTWARE",
-		"verifiedPlaintextCrc32c": true,
-		"verifiedAdditionalAuthenticatedDataCrc32c": len(aad) > 0,
+		"verifiedPlaintextCrc32c": strField(body, "plaintextCrc32c") != "",
+		"verifiedAdditionalAuthenticatedDataCrc32c": strField(body, "additionalAuthenticatedDataCrc32c") != "",
 	}), nil
 }
 
@@ -539,7 +548,18 @@ func (p *Provider) CryptoKeyVersionDelete(ctx context.Context, nr *model.Normali
 	if err := p.core.DeleteVersion(ctx, nr.AccountID, loc, kr, key, version); err != nil {
 		return nil, err
 	}
-	return provider.OK(map[string]any{}), nil
+	return provider.OK(doneOperation(kmscore.VersionName(nr.AccountID, loc, kr, key, version))), nil
+}
+
+// doneOperation renders the google.longrunning.Operation Cloud KMS returns for
+// a delete: completed inline with an empty response (the gRPC adapter returns
+// the same shape).
+func doneOperation(resourceName string) map[string]any {
+	return map[string]any{
+		"name":     resourceName + "/operations/delete",
+		"done":     true,
+		"response": map[string]any{},
+	}
 }
 
 func (p *Provider) CryptoKeyDelete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -551,7 +571,7 @@ func (p *Provider) CryptoKeyDelete(ctx context.Context, nr *model.NormalizedRequ
 	if _, err := p.core.DeleteCryptoKey(ctx, nr.AccountID, loc, kr, key); err != nil {
 		return nil, err
 	}
-	return provider.OK(map[string]any{}), nil
+	return provider.OK(doneOperation(kmscore.CryptoKeyName(nr.AccountID, loc, kr, key))), nil
 }
 
 func (p *Provider) CryptoKeyVersionUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
@@ -632,6 +652,9 @@ func (p *Provider) CryptoKeyVersionAsymmetricSign(ctx context.Context, nr *model
 	if err != nil {
 		return nil, model.NewProviderError("InvalidRequest", "digest must be base64", 400)
 	}
+	if err := verifyCRCField(body, "digestCrc32c", digest); err != nil {
+		return nil, err
+	}
 	res, err := p.core.AsymmetricSign(ctx, nr.AccountID, loc, kr, key, version, digest)
 	if err != nil {
 		return nil, err
@@ -640,7 +663,7 @@ func (p *Provider) CryptoKeyVersionAsymmetricSign(ctx context.Context, nr *model
 		"name":                 kmscore.VersionName(nr.AccountID, loc, kr, key, version),
 		"signature":            base64.StdEncoding.EncodeToString(res.Signature),
 		"signatureCrc32c":      crc32cString(res.Signature),
-		"verifiedDigestCrc32c": true,
+		"verifiedDigestCrc32c": strField(body, "digestCrc32c") != "",
 		"protectionLevel":      "SOFTWARE",
 	}), nil
 }
@@ -660,6 +683,9 @@ func (p *Provider) CryptoKeyVersionAsymmetricDecrypt(ctx context.Context, nr *mo
 	if err != nil {
 		return nil, model.NewProviderError("InvalidRequest", "ciphertext must be base64", 400)
 	}
+	if err := verifyCRCField(body, "ciphertextCrc32c", ct); err != nil {
+		return nil, err
+	}
 	pt, err := p.core.AsymmetricDecrypt(ctx, nr.AccountID, loc, kr, key, version, ct)
 	if err != nil {
 		return nil, err
@@ -667,7 +693,7 @@ func (p *Provider) CryptoKeyVersionAsymmetricDecrypt(ctx context.Context, nr *mo
 	return provider.OK(map[string]any{
 		"plaintext":                base64.StdEncoding.EncodeToString(pt),
 		"plaintextCrc32c":          crc32cString(pt),
-		"verifiedCiphertextCrc32c": true,
+		"verifiedCiphertextCrc32c": strField(body, "ciphertextCrc32c") != "",
 		"protectionLevel":          "SOFTWARE",
 	}), nil
 }
@@ -687,6 +713,9 @@ func (p *Provider) CryptoKeyVersionMacSign(ctx context.Context, nr *model.Normal
 	if err != nil {
 		return nil, model.NewProviderError("InvalidRequest", "data must be base64", 400)
 	}
+	if err := verifyCRCField(body, "dataCrc32c", data); err != nil {
+		return nil, err
+	}
 	res, err := p.core.MacSign(ctx, nr.AccountID, loc, kr, key, version, data)
 	if err != nil {
 		return nil, err
@@ -695,7 +724,7 @@ func (p *Provider) CryptoKeyVersionMacSign(ctx context.Context, nr *model.Normal
 		"name":               kmscore.VersionName(nr.AccountID, loc, kr, key, version),
 		"mac":                base64.StdEncoding.EncodeToString(res.Mac),
 		"macCrc32c":          crc32cString(res.Mac),
-		"verifiedDataCrc32c": true,
+		"verifiedDataCrc32c": strField(body, "dataCrc32c") != "",
 		"protectionLevel":    "SOFTWARE",
 	}), nil
 }
@@ -723,14 +752,20 @@ func (p *Provider) CryptoKeyVersionMacVerify(ctx context.Context, nr *model.Norm
 	if err != nil {
 		return nil, model.NewProviderError("InvalidRequest", "mac must be base64", 400)
 	}
+	if err := verifyCRCField(body, "dataCrc32c", data); err != nil {
+		return nil, err
+	}
+	if err := verifyCRCField(body, "macCrc32c", mac); err != nil {
+		return nil, err
+	}
 	success, err := p.core.MacVerify(ctx, nr.AccountID, loc, kr, key, version, data, mac)
 	if err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{
 		"success":            success,
-		"verifiedDataCrc32c": true,
-		"verifiedMacCrc32c":  true,
+		"verifiedDataCrc32c": strField(body, "dataCrc32c") != "",
+		"verifiedMacCrc32c":  strField(body, "macCrc32c") != "",
 		"protectionLevel":    "SOFTWARE",
 	}), nil
 }
@@ -742,7 +777,7 @@ func (p *Provider) CryptoKeyVersionGetPublicKey(ctx context.Context, nr *model.N
 	}
 	name = strings.TrimSuffix(name, "/publicKey")
 	loc, kr, key, version := parseVersion(name)
-	res, err := p.core.GetPublicKey(ctx, nr.AccountID, loc, kr, key, version)
+	res, err := p.core.GetPublicKey(ctx, nr.AccountID, loc, kr, key, version, strField(nr.Params, "publicKeyFormat"))
 	if err != nil {
 		return nil, err
 	}
@@ -750,21 +785,26 @@ func (p *Provider) CryptoKeyVersionGetPublicKey(ctx context.Context, nr *model.N
 		"algorithm":       res.Algorithm,
 		"name":            kmscore.PublicKeyName(nr.AccountID, loc, kr, key, version),
 		"protectionLevel": "SOFTWARE",
+		"publicKeyFormat": res.Format,
 	}
 	switch res.Format {
-	case "NIST_PQC":
-		out["publicKeyFormat"] = "NIST_PQC"
-		out["publicKey"] = base64.StdEncoding.EncodeToString(res.Raw)
-		out["publicKeyCrc32c"] = crc32cString(res.Raw)
-	case "XWING_RAW_BYTES":
-		out["publicKeyFormat"] = "XWING_RAW_BYTES"
-		out["publicKey"] = base64.StdEncoding.EncodeToString(res.Raw)
-		out["publicKeyCrc32c"] = crc32cString(res.Raw)
+	case "NIST_PQC", "XWING_RAW_BYTES", "DER":
+		out["publicKey"] = checksummedData(res.Raw)
 	default:
 		out["pem"] = res.PEM
 		out["pemCrc32c"] = crc32cString([]byte(res.PEM))
 	}
 	return provider.OK(out), nil
+}
+
+// checksummedData renders Discovery's ChecksummedData for a raw byte public
+// key: the bytes base64-encoded plus their CRC32C, the same shape the gRPC
+// adapter returns (PublicKey.publicKey is a ChecksummedData, not a bare string).
+func checksummedData(b []byte) map[string]any {
+	return map[string]any{
+		"data":           base64.StdEncoding.EncodeToString(b),
+		"crc32cChecksum": crc32cString(b),
+	}
 }
 
 // ─── Import / trusted wrapping / KEM ──────────────────────────────────────────
@@ -855,14 +895,19 @@ func (p *Provider) CryptoKeyVersionDecapsulate(ctx context.Context, nr *model.No
 	if len(ct) == 0 {
 		return nil, model.NewProviderError("InvalidRequest", "ciphertext is required", 400)
 	}
+	if err := verifyCRCField(body, "ciphertextCrc32c", ct); err != nil {
+		return nil, err
+	}
 	ss, err := p.core.Decapsulate(ctx, nr.AccountID, loc, kr, key, version, ct)
 	if err != nil {
 		return nil, err
 	}
 	return provider.OK(map[string]any{
-		"name":               kmscore.VersionName(nr.AccountID, loc, kr, key, version),
-		"sharedSecret":       base64.StdEncoding.EncodeToString(ss),
-		"sharedSecretCrc32c": crc32cString(ss),
+		"name":                     kmscore.VersionName(nr.AccountID, loc, kr, key, version),
+		"sharedSecret":             base64.StdEncoding.EncodeToString(ss),
+		"sharedSecretCrc32c":       crc32cString(ss),
+		"verifiedCiphertextCrc32c": strField(body, "ciphertextCrc32c") != "",
+		"protectionLevel":          "SOFTWARE",
 	}), nil
 }
 
