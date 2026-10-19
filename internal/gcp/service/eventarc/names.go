@@ -30,6 +30,18 @@ func OperationName(project, location, id string) string {
 	return resource.ResourceID(project)("eventarc-operation", location+"/"+id)
 }
 
+// SplitOperationName parses an operation resource name
+// (projects/{p}/locations/{l}/operations/{id}) into its project, location and
+// id. ok is false when the name is not an operations resource name.
+func SplitOperationName(name string) (project, location, id string, ok bool) {
+	parts := strings.Split(name, "/")
+	if len(parts) != 6 || parts[0] != "projects" || parts[1] == "" ||
+		parts[2] != "locations" || parts[3] == "" || parts[4] != "operations" || parts[5] == "" {
+		return "", "", "", false
+	}
+	return parts[1], parts[3], parts[5], true
+}
+
 // MessageBusName is the Eventarc message-bus resource name
 // (projects/{p}/locations/{l}/messageBuses/{id}).
 func MessageBusName(project, location, id string) string {

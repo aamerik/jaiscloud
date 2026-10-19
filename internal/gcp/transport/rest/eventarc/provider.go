@@ -61,8 +61,9 @@ func (p *Provider) Routes() map[string]provider.HandlerFunc {
 		"Eventarc.GetProvider":   p.GetProvider,
 
 		// The shared google.longrunning operations surface, reached only under
-		// the eventarc host (see adapter.operationsHostService). Eventarc
-		// mutations complete inline, so no operation is ever persisted.
+		// the eventarc host (see adapter.operationsHostService). Each completed
+		// mutation's done operation is persisted by the core, so get/list/delete
+		// address a real record.
 		"Eventarc.ListOperations":  p.ListOperations,
 		"Eventarc.GetOperation":    p.GetOperation,
 		"Eventarc.DeleteOperation": p.DeleteOperation,
@@ -239,40 +240,70 @@ func (p *Provider) DeleteChannel(ctx context.Context, nr *model.NormalizedReques
 
 // --- Long-running operations (the shared google.longrunning surface) ---
 
-// ListOperations serves GET …/locations/{l}/operations. Eventarc's mutations
-// complete inline and no operation is persisted, so the list is empty; the
-// caller still gets the standard ListOperationsResponse envelope.
+// ListOperations serves GET …/locations/{l}/operations over the operations the
+// core persists for each completed control-plane mutation.
 func (p *Provider) ListOperations(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return provider.OK(map[string]any{"operations": []any{}}), nil
+	project := p.project(nr)
+	pageSize, err := pageSizeParam(nr)
+	if err != nil {
+		return nil, err
+	}
+	page, next, err := p.core.ListOperations(ctx, project, strParam(nr, "location"), pageSize, strParam(nr, "pageToken"))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]any, 0, len(page))
+	for _, op := range page {
+		items = append(items, core.StoredOperationJSON(op, project))
+	}
+	out := map[string]any{"operations": items}
+	if next != "" {
+		out["nextPageToken"] = next
+	}
+	return provider.OK(out), nil
 }
 
-// GetOperation serves GET …/operations/{id}. Because no operation is ever
-// persisted the name is unknown, and real GCP answers NotFound.
+// GetOperation serves GET …/operations/{id} for an operation the core persisted
+// when its mutation completed (an unknown name is NotFound, as real GCP).
 func (p *Provider) GetOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return nil, operationNotFound(strParam(nr, "name"))
+	project, location, id := p.operationTarget(nr)
+	op, err := p.core.GetOperation(ctx, project, location, id)
+	if err != nil {
+		return nil, err
+	}
+	return provider.OK(core.StoredOperationJSON(op, project)), nil
+}
+
+// operationTarget resolves a location-scoped operation's project, location and
+// id from its full resource name, falling back to the request params.
+func (p *Provider) operationTarget(nr *model.NormalizedRequest) (project, location, id string) {
+	name := strParam(nr, "name")
+	if pn, pl, pid, ok := core.SplitOperationName(name); ok {
+		return pn, pl, pid
+	}
+	return p.project(nr), strParam(nr, "location"), core.NameID(name)
 }
 
 // DeleteOperation serves DELETE …/operations/{id} (an unknown name is NotFound,
 // matching the Workflows surface and real GCP).
 func (p *Provider) DeleteOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
-	return nil, operationNotFound(strParam(nr, "name"))
-}
-
-// CancelOperation serves POST …/operations/{id}:cancel. Eventarc persists no
-// operation, and the emulator's shared long-running-operations contract
-// (internal/gcp/grpc/operations) answers a cancel it does not own as an
-// unconditional no-op success; REST mirrors that so a client that cancels a
-// settled operation succeeds rather than seeing a 501/404.
-func (p *Provider) CancelOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, location, id := p.operationTarget(nr)
+	if err := p.core.DeleteOperation(ctx, project, location, id); err != nil {
+		return nil, err
+	}
 	return provider.OK(map[string]any{}), nil
 }
 
-func operationNotFound(name string) error {
-	msg := "operation not found"
-	if name != "" {
-		msg = "operation " + name + " not found"
+// CancelOperation serves POST …/operations/{id}:cancel. Every Eventarc
+// operation is already done, so cancel reports the stored operation (a no-op)
+// and answers NotFound for an unknown name.
+func (p *Provider) CancelOperation(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	project, location, id := p.operationTarget(nr)
+	op, err := p.core.CancelOperation(ctx, project, location, id)
+	if err != nil {
+		return nil, err
 	}
-	return model.NewProviderError("NotFound", msg, 404)
+	return provider.OK(core.StoredOperationJSON(op, project)), nil
 }
 
 // --- Providers (read-only discovery) ---

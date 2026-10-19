@@ -120,7 +120,15 @@ func (s *Service) ListTimeSeries(ctx context.Context, project, filter string, in
 	if err != nil {
 		return nil, "", invalidArgument("invalid filter: " + err.Error())
 	}
-	series, err := s.store.ListTimeSeries(ctx, project)
+	// The Discovery document declares timeSeries.list on the folders scope as
+	// well as projects. The emulator has no folder→project membership, so a
+	// folders parent aggregates the same series store across every project.
+	var series []monitoringstore.TimeSeries
+	if strings.HasPrefix(project, "folders/") {
+		series, err = s.store.ListAllTimeSeries(ctx)
+	} else {
+		series, err = s.store.ListTimeSeries(ctx, project)
+	}
 	if err != nil {
 		return nil, "", mapStoreError(err)
 	}

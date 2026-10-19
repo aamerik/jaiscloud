@@ -1080,3 +1080,42 @@ func TestDistributionTimeSeriesRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestListTimeSeriesFolderScope proves the folders arm resolves the scope in the
+// shared core (the same series store as the projects arm) instead of silently
+// falling back to the default project, and that writes stay project-scoped.
+func TestListTimeSeriesFolderScope(t *testing.T) {
+	mc, _, cleanup := testServer(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	metricType := "custom.googleapis.com/folder_scope_metric"
+	point := &monitoringpb.TimeSeries{
+		Metric:   &metricpb.Metric{Type: metricType},
+		Resource: &monitoredrespb.MonitoredResource{Type: "global"},
+		Points: []*monitoringpb.Point{{
+			Interval: &monitoringpb.TimeInterval{EndTime: timestamppb.New(time.Now().UTC().Add(-time.Minute))},
+			Value:    &monitoringpb.TypedValue{Value: &monitoringpb.TypedValue_Int64Value{Int64Value: 1}},
+		}},
+	}
+	if _, err := mc.CreateTimeSeries(ctx, &monitoringpb.CreateTimeSeriesRequest{
+		Name: "projects/test", TimeSeries: []*monitoringpb.TimeSeries{point},
+	}); err != nil {
+		t.Fatalf("CreateTimeSeries: %v", err)
+	}
+	resp, err := mc.ListTimeSeries(ctx, &monitoringpb.ListTimeSeriesRequest{
+		Name:   "folders/123",
+		Filter: `metric.type = "` + metricType + `"`,
+	})
+	if err != nil {
+		t.Fatalf("ListTimeSeries(folders): %v", err)
+	}
+	if len(resp.GetTimeSeries()) != 1 {
+		t.Fatalf("folders arm returned %d series, want the project's series", len(resp.GetTimeSeries()))
+	}
+	if _, err := mc.CreateTimeSeries(ctx, &monitoringpb.CreateTimeSeriesRequest{
+		Name: "folders/123", TimeSeries: []*monitoringpb.TimeSeries{point},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("folder-scoped write err = %v, want InvalidArgument", err)
+	}
+}

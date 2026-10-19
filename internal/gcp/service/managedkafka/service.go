@@ -40,6 +40,7 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"sync"
 
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/events"
@@ -119,6 +120,16 @@ type Service struct {
 	tracker *lro.Tracker
 	// broker is the optional real broker manager. Nil means mock-only.
 	broker Broker
+	// mockGroups is the mock topology's stand-in for the Kafka group
+	// coordinator: "project/location/cluster" → group id → group state. A live
+	// broker is the source of truth whenever one is wired; with no broker there
+	// is no coordinator, so the control plane keeps the minimal client-visible
+	// state itself, seeded by the cluster ACL flow (a LITERAL GROUP ACL names a
+	// group) so the consumerGroups get/update/delete surface is reachable
+	// without inventing a create RPC. Like broker state these records are
+	// runtime state and are not snapshotted.
+	mockGroupsMu sync.RWMutex
+	mockGroups   map[string]map[string]ConsumerGroup
 }
 
 // Option configures Service.
@@ -153,7 +164,7 @@ func WithBroker(b Broker) Option {
 
 // NewService returns a Managed Kafka core backed by the given store.
 func NewService(s mkstore.Store, opts ...Option) *Service {
-	svc := &Service{store: s}
+	svc := &Service{store: s, mockGroups: make(map[string]map[string]ConsumerGroup)}
 	for _, o := range opts {
 		o(svc)
 	}
@@ -170,6 +181,9 @@ func (s *Service) Reset(ctx context.Context) {
 			slog.Warn("managedkafka: broker reset failed", "err", err)
 		}
 	}
+	s.mockGroupsMu.Lock()
+	s.mockGroups = make(map[string]map[string]ConsumerGroup)
+	s.mockGroupsMu.Unlock()
 	s.store.Reset(ctx)
 }
 
@@ -506,6 +520,7 @@ func (s *Service) DeleteCluster(ctx context.Context, project, location, clusterI
 		return mkstore.Operation{}, mapStoreError(err)
 	}
 	s.stopBroker(ctx, project, location, clusterID)
+	s.dropMockGroups(project, location, clusterID)
 	target := ClusterName(project, location, clusterID)
 	op, err := s.storeOperation(ctx, project, location, "delete", target, map[string]any{})
 	if err != nil {

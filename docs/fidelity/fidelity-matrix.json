@@ -129,11 +129,11 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 613
+        "rest": 630
       },
       "unverified": {
         "grpc": 21,
-        "rest": 61
+        "rest": 44
       }
     },
     "grpc_only_services": [
@@ -3655,7 +3655,7 @@
         "discovery=eventarc.projects.locations.triggers.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 7 transcript entries)"
+        "verified=true (rest, 8 transcript entries)"
       ]
     },
     {
@@ -3734,12 +3734,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "eventarc.projects.locations.operations.delete",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=eventarc.projects.locations.operations.delete",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -3767,7 +3767,7 @@
         "discovery=eventarc.projects.locations.triggers.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -3894,11 +3894,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "eventarc.projects.locations.operations.get",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=eventarc.projects.locations.operations.get",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -4068,7 +4068,7 @@
       "evidence": [
         "discovery=eventarc.projects.locations.operations.list",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -9095,11 +9095,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "logging.folders.locations.buckets.views.getIamPolicy",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=logging.folders.locations.buckets.views.getIamPolicy",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -9121,12 +9121,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "logging.folders.locations.buckets.views.setIamPolicy",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=logging.folders.locations.buckets.views.setIamPolicy",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -9135,11 +9135,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "logging.folders.locations.buckets.views.testIamPermissions",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=logging.folders.locations.buckets.views.testIamPermissions",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -9548,7 +9548,7 @@
         "discovery=managedkafka.projects.locations.clusters.acls.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 6 transcript entries)"
+        "verified=true (rest, 8 transcript entries)"
       ]
     },
     {
@@ -9576,7 +9576,7 @@
         "discovery=managedkafka.projects.locations.clusters.topics.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 4 transcript entries)"
+        "verified=true (rest, 5 transcript entries)"
       ]
     },
     {
@@ -9613,12 +9613,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "managedkafka.projects.locations.clusters.consumerGroups.delete",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.consumerGroups.delete",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -9645,7 +9645,7 @@
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.acls.get",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -9667,11 +9667,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "managedkafka.projects.locations.clusters.consumerGroups.get",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.consumerGroups.get",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -9785,12 +9785,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "managedkafka.projects.locations.clusters.acls.patch",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.acls.patch",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -9813,12 +9813,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "managedkafka.projects.locations.clusters.consumerGroups.patch",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=managedkafka.projects.locations.clusters.consumerGroups.patch",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -11655,11 +11655,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "monitoring.folders.timeSeries.list",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=monitoring.folders.timeSeries.list",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -12947,12 +12947,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "run.projects.locations.operations.delete",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=run.projects.locations.operations.delete",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -13285,7 +13285,7 @@
         "discovery=cloudscheduler.projects.locations.jobs.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 7 transcript entries)"
+        "verified=true (rest, 8 transcript entries)"
       ]
     },
     {
@@ -13299,7 +13299,7 @@
         "discovery=cloudscheduler.projects.locations.jobs.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -13352,7 +13352,7 @@
       "evidence": [
         "discovery=cloudscheduler.projects.locations.jobs.pause",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -13361,11 +13361,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudscheduler.projects.locations.jobs.resume",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudscheduler.projects.locations.jobs.resume",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -14983,7 +14983,7 @@
         "discovery=cloudtasks.projects.locations.queues.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 17 transcript entries)"
+        "verified=true (rest, 18 transcript entries)"
       ]
     },
     {
@@ -14997,7 +14997,7 @@
         "discovery=cloudtasks.projects.locations.queues.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -15063,7 +15063,7 @@
       "evidence": [
         "discovery=cloudtasks.projects.locations.queues.pause",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -15085,11 +15085,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudtasks.projects.locations.queues.resume",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudtasks.projects.locations.queues.resume",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -15301,12 +15301,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "workflowexecutions.projects.locations.workflows.executions.cancel",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=workflowexecutions.projects.locations.workflows.executions.cancel",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -15320,7 +15320,7 @@
         "discovery=workflowexecutions.projects.locations.workflows.executions.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 3 transcript entries)"
+        "verified=true (rest, 4 transcript entries)"
       ]
     },
     {
@@ -15329,11 +15329,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "workflowexecutions.projects.locations.workflows.executions.get",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=workflowexecutions.projects.locations.workflows.executions.get",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -15441,7 +15441,7 @@
         "discovery=workflows.projects.locations.workflows.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 9 transcript entries)"
+        "verified=true (rest, 10 transcript entries)"
       ]
     },
     {
@@ -15450,12 +15450,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "workflows.projects.locations.operations.delete",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=workflows.projects.locations.operations.delete",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -15469,7 +15469,7 @@
         "discovery=workflows.projects.locations.workflows.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 2 transcript entries)"
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {
@@ -15478,11 +15478,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "workflows.projects.locations.operations.get",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=workflows.projects.locations.operations.get",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -15508,7 +15508,7 @@
       "evidence": [
         "discovery=workflows.projects.locations.operations.list",
         "postgres=yes",
-        "verified=true (rest, 1 transcript entries)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {

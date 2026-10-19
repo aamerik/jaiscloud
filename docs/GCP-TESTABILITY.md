@@ -85,15 +85,22 @@ of writing:
 
 | Layer | Cells | `ga` | `limited` | `preview` | `unsupported` | `ga` share |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 878 | 641 | 119 | 14 | 104 | 73% |
-| **gRPC** (official clients) | 410 | 306 | 12 | 0 | 92 | 75% |
-| **REST** (Discovery-backed) | 468 | 335 | 107 | 14 | 12 | 72% |
+| **Overall** | 1137 | 985 | 106 | 14 | 32 | 87% |
+| **gRPC** (official clients) | 463 | 442 | 1 | 0 | 20 | 95% |
+| **REST** (Discovery-backed) | 674 | 543 | 105 | 14 | 12 | 81% |
+
+Recorded evidence: **630/674** REST cells and **442/463** gRPC cells are
+`verified`; every Discovery-mapped `ga` REST cell now has a validated transcript
+response (the remaining unverified REST cells are `limited`/`preview`/
+`unsupported`, or `ga` operations with no Discovery method — the shared
+`google.longrunning.Operations`/`google.cloud.location` common APIs and the
+function/Cloud Run data-plane URLs).
 
 - gRPC-only wire services (no REST descriptor of their own): **Firestore Admin,
   Operations (long-running)**. Firestore Admin's REST control plane is served
   under the `firestore` service descriptor (see the `firestore` row).
-- gRPC split = 306 `ga` + 12 `limited` + 92 `unsupported` = 410. REST split = 335 + 107 + 14 + 12 = 468.
-  Overall = 410 + 468 = 878.
+- gRPC split = 442 `ga` + 1 `limited` + 20 `unsupported` = 463. REST split = 543 + 105 + 14 + 12 = 674.
+  Overall = 463 + 674 = 1137.
 
 **How to refresh.** The matrix is generated, not hand-edited. Run
 `make gen-gcp-fidelity-matrix`, then re-read

@@ -32,7 +32,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 613 | 61 |
+| rest | 630 | 44 |
 | grpc | 442 | 21 |
 
 ## bigquery
@@ -348,7 +348,7 @@ _103 cell(s): ga=103 limited=0 preview=0 unsupported=0_
 | Eventarc.DeleteEnrollment | rest | ga | yes | — |
 | Eventarc.DeleteGoogleApiSource | rest | ga | yes | — |
 | Eventarc.DeleteMessageBus | rest | ga | yes | — |
-| Eventarc.DeleteOperation | rest | ga | no | — |
+| Eventarc.DeleteOperation | rest | ga | yes | — |
 | Eventarc.DeletePipeline | rest | ga | yes | — |
 | Eventarc.DeleteTrigger | rest | ga | yes | — |
 | Eventarc.EnrollmentGetIamPolicy | rest | ga | yes | — |
@@ -360,7 +360,7 @@ _103 cell(s): ga=103 limited=0 preview=0 unsupported=0_
 | Eventarc.GetGoogleApiSource | rest | ga | yes | — |
 | Eventarc.GetGoogleChannelConfig | rest | ga | yes | — |
 | Eventarc.GetMessageBus | rest | ga | yes | — |
-| Eventarc.GetOperation | rest | ga | no | — |
+| Eventarc.GetOperation | rest | ga | yes | — |
 | Eventarc.GetPipeline | rest | ga | yes | — |
 | Eventarc.GetProvider | rest | ga | yes | — |
 | Eventarc.GetTrigger | rest | ga | yes | — |
@@ -805,10 +805,10 @@ _93 cell(s): ga=91 limited=1 preview=0 unsupported=1_
 | Logging.ViewCreate | rest | ga | yes | — |
 | Logging.ViewDelete | rest | ga | yes | — |
 | Logging.ViewGet | rest | ga | yes | — |
-| Logging.ViewGetIamPolicy | rest | ga | no | — |
+| Logging.ViewGetIamPolicy | rest | ga | yes | — |
 | Logging.ViewList | rest | ga | yes | — |
-| Logging.ViewSetIamPolicy | rest | ga | no | — |
-| Logging.ViewTestIamPermissions | rest | ga | no | — |
+| Logging.ViewSetIamPolicy | rest | ga | yes | — |
+| Logging.ViewTestIamPermissions | rest | ga | yes | — |
 | Logging.ViewUpdate | rest | ga | yes | — |
 | TailLogEntries | grpc | limited | no | bounded store-poll tail whose latency derives from buffer_window; no deterministic conformance assertion exists |
 | UndeleteBucket | grpc | ga | yes | — |
@@ -850,11 +850,11 @@ _44 cell(s): ga=44 limited=0 preview=0 unsupported=0_
 | ManagedKafka.CreateTopic | rest | ga | yes | — |
 | ManagedKafka.DeleteAcl | rest | ga | yes | — |
 | ManagedKafka.DeleteCluster | rest | ga | yes | — |
-| ManagedKafka.DeleteConsumerGroup | rest | ga | no | — |
+| ManagedKafka.DeleteConsumerGroup | rest | ga | yes | — |
 | ManagedKafka.DeleteTopic | rest | ga | yes | — |
 | ManagedKafka.GetAcl | rest | ga | yes | — |
 | ManagedKafka.GetCluster | rest | ga | yes | — |
-| ManagedKafka.GetConsumerGroup | rest | ga | no | — |
+| ManagedKafka.GetConsumerGroup | rest | ga | yes | — |
 | ManagedKafka.GetOperation | rest | ga | yes | — |
 | ManagedKafka.GetTopic | rest | ga | yes | — |
 | ManagedKafka.ListAcls | rest | ga | yes | — |
@@ -863,9 +863,9 @@ _44 cell(s): ga=44 limited=0 preview=0 unsupported=0_
 | ManagedKafka.ListOperations | rest | ga | yes | — |
 | ManagedKafka.ListTopics | rest | ga | yes | — |
 | ManagedKafka.RemoveAclEntry | rest | ga | yes | — |
-| ManagedKafka.UpdateAcl | rest | ga | no | — |
+| ManagedKafka.UpdateAcl | rest | ga | yes | — |
 | ManagedKafka.UpdateCluster | rest | ga | yes | — |
-| ManagedKafka.UpdateConsumerGroup | rest | ga | no | — |
+| ManagedKafka.UpdateConsumerGroup | rest | ga | yes | — |
 | ManagedKafka.UpdateTopic | rest | ga | yes | — |
 | RemoveAclEntry | grpc | ga | yes | — |
 | UpdateAcl | grpc | ga | yes | — |
@@ -1021,7 +1021,7 @@ _68 cell(s): ga=68 limited=0 preview=0 unsupported=0_
 | Monitoring.ListNotificationChannels | rest | ga | yes | — |
 | Monitoring.ListServiceLevelObjectives | rest | ga | yes | — |
 | Monitoring.ListServices | rest | ga | yes | — |
-| Monitoring.ListTimeSeries | rest | ga | no | — |
+| Monitoring.ListTimeSeries | rest | ga | yes | — |
 | Monitoring.SendNotificationChannelVerificationCode | rest | ga | yes | — |
 | Monitoring.UpdateAlertPolicy | rest | ga | yes | — |
 | Monitoring.UpdateNotificationChannel | rest | ga | yes | — |
@@ -1145,7 +1145,7 @@ _28 cell(s): ga=28 limited=0 preview=0 unsupported=0_
 | ListServices | grpc | ga | yes | — |
 | Run.CancelOperation | rest | ga | no | shared google.longrunning.Operations.CancelOperation common API; not enumerated in the run v2 Discovery document (operations.get/list/delete/wait only), but served (POST /v2/projects/{p}/locations/{l}/operations/{id}:cancel) and wire-tested |
 | Run.CreateService | rest | ga | yes | — |
-| Run.DeleteOperation | rest | ga | no | — |
+| Run.DeleteOperation | rest | ga | yes | — |
 | Run.DeleteRevision | rest | ga | yes | — |
 | Run.DeleteService | rest | ga | yes | — |
 | Run.GetIamPolicy | rest | ga | yes | — |
@@ -1183,7 +1183,7 @@ _16 cell(s): ga=16 limited=0 preview=0 unsupported=0_
 | Scheduler.JobsList | rest | ga | yes | — |
 | Scheduler.JobsPatch | rest | ga | yes | — |
 | Scheduler.JobsPause | rest | ga | yes | — |
-| Scheduler.JobsResume | rest | ga | no | — |
+| Scheduler.JobsResume | rest | ga | yes | — |
 | Scheduler.JobsRun | rest | ga | yes | — |
 | UpdateJob | grpc | ga | yes | — |
 
@@ -1339,7 +1339,7 @@ _34 cell(s): ga=34 limited=0 preview=0 unsupported=0_
 | Tasks.QueuesPatch | rest | ga | yes | — |
 | Tasks.QueuesPause | rest | ga | yes | — |
 | Tasks.QueuesPurge | rest | ga | yes | — |
-| Tasks.QueuesResume | rest | ga | no | — |
+| Tasks.QueuesResume | rest | ga | yes | — |
 | Tasks.QueuesSetIamPolicy | rest | ga | yes | — |
 | Tasks.QueuesTestIamPermissions | rest | ga | yes | — |
 | Tasks.TasksBatchCreate | rest | ga | yes | — |
@@ -1362,9 +1362,9 @@ _8 cell(s): ga=8 limited=0 preview=0 unsupported=0_
 | CreateExecution | grpc | ga | yes | — |
 | GetExecution | grpc | ga | yes | — |
 | ListExecutions | grpc | ga | yes | — |
-| WorkflowExecution.CancelExecution | rest | ga | no | — |
+| WorkflowExecution.CancelExecution | rest | ga | yes | — |
 | WorkflowExecution.CreateExecution | rest | ga | yes | — |
-| WorkflowExecution.GetExecution | rest | ga | no | — |
+| WorkflowExecution.GetExecution | rest | ga | yes | — |
 | WorkflowExecution.ListExecutions | rest | ga | yes | — |
 
 ## workflows
@@ -1380,9 +1380,9 @@ _15 cell(s): ga=15 limited=0 preview=0 unsupported=0_
 | ListWorkflows | grpc | ga | yes | — |
 | UpdateWorkflow | grpc | ga | yes | — |
 | Workflow.CreateWorkflow | rest | ga | yes | — |
-| Workflow.DeleteOperation | rest | ga | no | — |
+| Workflow.DeleteOperation | rest | ga | yes | — |
 | Workflow.DeleteWorkflow | rest | ga | yes | — |
-| Workflow.GetOperation | rest | ga | no | — |
+| Workflow.GetOperation | rest | ga | yes | — |
 | Workflow.GetWorkflow | rest | ga | yes | — |
 | Workflow.ListOperations | rest | ga | yes | — |
 | Workflow.ListWorkflowRevisions | rest | ga | yes | — |

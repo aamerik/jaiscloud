@@ -181,6 +181,28 @@ func (s *PostgresStore) ListTimeSeries(ctx context.Context, project string) ([]T
 	return result, rows.Err()
 }
 
+// ListAllTimeSeries returns every stored series across all projects (the
+// folders arm of timeSeries.list).
+func (s *PostgresStore) ListAllTimeSeries(ctx context.Context) ([]TimeSeries, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+seriesCols+` FROM jc_monitoring_time_series
+		ORDER BY metric_type, resource_type, series_key
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]TimeSeries, 0)
+	for rows.Next() {
+		ts, err := scanTimeSeries(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, ts)
+	}
+	return result, rows.Err()
+}
+
 // ─── alert policies ───────────────────────────────────────────────────────────
 
 func scanAlertPolicy(scan func(...any) error) (AlertPolicy, error) {

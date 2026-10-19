@@ -54,17 +54,17 @@ fails CI if the committed matrix drifts.
 
 | state | cells |
 | --- | ---: |
-| ga | 967 |
-| limited | 101 |
+| ga | 985 |
+| limited | 106 |
 | preview | 14 |
 | unsupported | 32 |
-| **total** | **1114** |
+| **total** | **1137** |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | ---: | ---: | ---: | ---: |
-| REST (JSON, Discovery-backed) | 525 | 100 | 14 | 12 |
+| REST (JSON, Discovery-backed) | 543 | 105 | 14 | 12 |
 | gRPC (proto descriptors + official-client conformance) | 442 | 1 | 0 | 20 |
 
 gRPC-only wire services (no REST descriptor of their own): **Firestore Admin,
@@ -96,7 +96,7 @@ Each cell carries a **`verified`** signal distinct from its state: a cell is ver
 real recorded evidence backs it — a schema-validated response in the committed conformance
 transcript (REST) or a passing check from the official-client gRPC conformance suite. A `ga`
 cell that is not `verified` is a *registration claim* (implemented, Discovery-mapped, no
-finding, persists), not a response guarantee. Currently **500/623** REST cells and
+finding, persists), not a response guarantee. Currently **630/674** REST cells and
 **442/463** gRPC cells are verified. `make gcp-status` prints the rollup, and
 `make gcp-status-evidence` lists every Discovery-mapped REST operation without a validated
 response. Since the AUD2 audit wave this is **enforced**: `tests/gcpconformance` derives a

@@ -9,41 +9,68 @@ import (
 
 // TestOperationsSurface covers the Eventarc-host long-running-operations surface
 // (reached only under the eventarc host — see adapter.operationsHostService).
-// Eventarc mutations complete inline, so no operation is ever persisted:
-// list is empty, get/delete are NotFound, and cancel is the shared no-op
-// success contract.
+// Every completed mutation's done operation is persisted by the core, so list
+// returns it, get renders it, delete removes it, and an unknown name is NotFound.
 func TestOperationsSurface(t *testing.T) {
 	ctx := context.Background()
 	p, _, _ := newProvider()
 
-	resp, err := p.ListOperations(ctx, newNR(map[string]any{"location": "us-central1"}))
+	resp, err := p.CreateTrigger(ctx, newNR(map[string]any{
+		"location":  "us-central1",
+		"triggerId": "trig",
+		"body": map[string]any{
+			"eventFilters": []any{map[string]any{"attribute": "type", "value": "google.cloud.pubsub.topic.v1.messagePublished"}},
+			"destination":  map[string]any{"cloudRun": map[string]any{"service": "svc", "region": "us-central1"}},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("CreateTrigger: %v", err)
+	}
+	opName, ok := resp.Data["name"].(string)
+	if !ok || opName == "" {
+		t.Fatalf("create response is not an operation: %v", resp.Data)
+	}
+
+	list, err := p.ListOperations(ctx, newNR(map[string]any{"location": "us-central1"}))
 	if err != nil {
 		t.Fatalf("ListOperations: %v", err)
 	}
-	ops, ok := resp.Data["operations"].([]any)
-	if !ok || len(ops) != 0 {
-		t.Fatalf("operations = %v, want an empty list", resp.Data["operations"])
+	ops, ok := list.Data["operations"].([]any)
+	if !ok || len(ops) != 1 {
+		t.Fatalf("operations = %v, want one persisted operation", list.Data["operations"])
 	}
 
+	got, err := p.GetOperation(ctx, newNR(map[string]any{"name": opName}))
+	if err != nil {
+		t.Fatalf("GetOperation: %v", err)
+	}
+	if got.Data["done"] != true {
+		t.Fatalf("operation not done: %v", got.Data)
+	}
+	if resp, ok := got.Data["response"].(map[string]any); !ok || resp["@type"] == nil {
+		t.Fatalf("operation response = %v", got.Data["response"])
+	}
+
+	// Cancel of a settled operation is a no-op that reports it.
+	if _, err := p.CancelOperation(ctx, newNR(map[string]any{"name": opName})); err != nil {
+		t.Fatalf("CancelOperation: %v", err)
+	}
+
+	if _, err := p.DeleteOperation(ctx, newNR(map[string]any{"name": opName})); err != nil {
+		t.Fatalf("DeleteOperation: %v", err)
+	}
 	for _, tc := range []struct {
 		name string
 		fn   func(context.Context, *model.NormalizedRequest) (*model.ProviderResponse, error)
 	}{
 		{"get", p.GetOperation},
 		{"delete", p.DeleteOperation},
+		{"cancel", p.CancelOperation},
 	} {
-		_, err := tc.fn(ctx, newNR(map[string]any{"name": "projects/proj/locations/us-central1/operations/op1"}))
+		_, err := tc.fn(ctx, newNR(map[string]any{"name": opName}))
 		pe, ok := err.(*model.ProviderError)
 		if !ok || pe.HTTPStatus != 404 {
-			t.Errorf("%s: err = %v, want 404 NotFound", tc.name, err)
+			t.Errorf("%s after delete: err = %v, want 404 NotFound", tc.name, err)
 		}
-	}
-
-	// A cancel of a (never-persisted) operation succeeds, mirroring the shared
-	// google.longrunning cancel contract the gRPC operations service uses.
-	if _, err := p.CancelOperation(ctx, newNR(map[string]any{
-		"name": "projects/proj/locations/us-central1/operations/op1",
-	})); err != nil {
-		t.Fatalf("CancelOperation: %v", err)
 	}
 }
