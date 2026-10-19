@@ -110,17 +110,17 @@ func TestVersionEtagFollowsState(t *testing.T) {
 		State:      "ENABLED",
 		CreateTime: time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC),
 	}
-	enabled := VersionEtag(name, timestamp.Canonical(v.CreateTime), v.State)
-	if got := VersionEtag(name, timestamp.Canonical(v.CreateTime), v.State); got != enabled {
+	enabled := VersionEtag(name, timestamp.Canonical(v.CreateTime), v.State, "")
+	if got := VersionEtag(name, timestamp.Canonical(v.CreateTime), v.State, ""); got != enabled {
 		t.Fatalf("version etag not stable across calls")
 	}
 	v.State = "DISABLED"
-	disabled := VersionEtag(name, timestamp.Canonical(v.CreateTime), v.State)
+	disabled := VersionEtag(name, timestamp.Canonical(v.CreateTime), v.State, "")
 	if disabled == enabled {
 		t.Fatalf("version etag did not change on a state transition")
 	}
 	v.State = "DESTROYED"
-	if VersionEtag(name, timestamp.Canonical(v.CreateTime), v.State) == disabled {
+	if VersionEtag(name, timestamp.Canonical(v.CreateTime), v.State, "") == disabled {
 		t.Fatalf("version etag did not change on destroy")
 	}
 }
@@ -143,7 +143,7 @@ func TestCheckEtagSemantics(t *testing.T) {
 	if err := CheckVersionEtag(vname, v, ""); err != nil {
 		t.Errorf("absent version etag should be a no-op, got %v", err)
 	}
-	if err := CheckVersionEtag(vname, v, VersionEtag(vname, timestamp.Canonical(v.CreateTime), v.State)); err != nil {
+	if err := CheckVersionEtag(vname, v, VersionEtag(vname, timestamp.Canonical(v.CreateTime), v.State, "")); err != nil {
 		t.Errorf("current version etag should pass, got %v", err)
 	}
 	aborted(t, CheckVersionEtag(vname, v, "BOGUS="))

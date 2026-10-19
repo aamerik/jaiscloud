@@ -85,14 +85,20 @@ type secretMeta struct {
 	// legacyKmsKeyName is the stored effective key of a record that predates the
 	// modelled policy; it is preserved verbatim so such a record keeps its CMEK.
 	legacyKmsKeyName string
+	// VersionDestroyTTL is the canonical google-duration delayed-destruction
+	// delay ("" when disabled); ExpireTime is when the secret auto-deletes
+	// (zero when it does not expire).
+	VersionDestroyTTL string
+	ExpireTime        time.Time
 }
 
 type versionMeta struct {
-	Name        string `json:"name"`
-	State       string `json:"state"`
-	CreateTime  string `json:"createTime"`
-	DestroyTime string `json:"destroyTime,omitempty"` // only when DESTROYED
-	Data        string `json:"data"`                  // base64 payload (encrypted at rest)
+	Name                 string `json:"name"`
+	State                string `json:"state"`
+	CreateTime           string `json:"createTime"`
+	DestroyTime          string `json:"destroyTime,omitempty"` // only when DESTROYED
+	ScheduledDestroyTime string `json:"scheduledDestroyTime,omitempty"`
+	Data                 string `json:"data"` // base64 payload (encrypted at rest)
 	// KmsKeyVersionName is the full CryptoKeyVersion name (see
 	// secretmanagersvc.KmsKeyVersionName) reported back through
 	// replicationStatus.automatic.customerManagedEncryption; empty when the
@@ -150,6 +156,7 @@ func toStoreSecret(m secretMeta) secretmanagerstore.Secret {
 		CreateTime: tc, NextVer: m.NextVer,
 		Rotation: m.Rotation, VersionAliases: m.VersionAliases,
 		Replication: m.Replication, KmsKeyName: m.legacyKmsKeyName,
+		VersionDestroyTTL: m.VersionDestroyTTL, ExpireTime: m.ExpireTime,
 	}
 	if m.Replication != nil {
 		s.KmsKeyName = m.Replication.WrapKey()
@@ -162,6 +169,7 @@ func fromStoreSecret(nr *model.NormalizedRequest, s secretmanagerstore.Secret) s
 		Name: nr.ResourceID("secret", s.ID), Labels: s.Labels, Annotations: s.Annotations, Topics: s.Topics, NextVer: s.NextVer,
 		Rotation: s.Rotation, VersionAliases: s.VersionAliases,
 		Replication: s.Replication, legacyKmsKeyName: s.KmsKeyName,
+		VersionDestroyTTL: s.VersionDestroyTTL, ExpireTime: s.ExpireTime,
 	}
 	if !s.CreateTime.IsZero() {
 		m.CreateTime = timestamp.Canonical(s.CreateTime)
@@ -264,6 +272,53 @@ func versionAliasesFromBody(body map[string]any) map[string]int {
 	return out
 }
 
+// bodyString reads the first present string field among keys (the REST API
+// spells proto fields camelCase, but a client may send either form).
+func bodyString(body map[string]any, keys ...string) (string, bool) {
+	for _, k := range keys {
+		if raw, ok := body[k]; ok && raw != nil {
+			s, _ := raw.(string)
+			return s, true
+		}
+	}
+	return "", false
+}
+
+// versionDestroyTTLFromBody reads the optional `versionDestroyTtl` delay and
+// stores it in canonical google-duration form. A present-but-empty value is
+// invalid (removal is a masked patch with the field absent).
+func versionDestroyTTLFromBody(body map[string]any) (string, bool, error) {
+	raw, supplied := bodyString(body, "versionDestroyTtl", "version_destroy_ttl")
+	if !supplied {
+		return "", false, nil
+	}
+	d, err := secretmanagersvc.ParseVersionDestroyTTL(raw)
+	if err != nil {
+		return "", false, err
+	}
+	return secretmanagersvc.DurationString(d), true, nil
+}
+
+// expirationFromBody reads the `expireTime`/`ttl` oneof. ttl is input-only and
+// resolves to an absolute instant against now; a body carrying both arms is
+// rejected (they are one proto oneof).
+func expirationFromBody(body map[string]any, now time.Time) (time.Time, bool, error) {
+	rawTTL, ttlSet := bodyString(body, "ttl")
+	rawExpire, expireSet := bodyString(body, "expireTime", "expire_time")
+	if ttlSet && expireSet {
+		return time.Time{}, false, model.NewProviderError("InvalidArgument", "expiration must set exactly one of expireTime or ttl", 400)
+	}
+	switch {
+	case ttlSet:
+		t, err := secretmanagersvc.ParseTTL(rawTTL, now)
+		return t, true, err
+	case expireSet:
+		t, err := secretmanagersvc.ParseExpireTime(rawExpire, now)
+		return t, true, err
+	}
+	return time.Time{}, false, nil
+}
+
 // replicationFromBody parses the `replication` oneof from a request body. It
 // returns (nil, nil) when the body carries no replication policy (the API's
 // default, automatic replication). The shape is validated by
@@ -356,6 +411,9 @@ func fromStoreVersion(nr *model.NormalizedRequest, v secretmanagerstore.Version)
 	if !v.DestroyTime.IsZero() {
 		m.DestroyTime = timestamp.Canonical(v.DestroyTime)
 	}
+	if !v.ScheduledDestroyTime.IsZero() {
+		m.ScheduledDestroyTime = timestamp.Canonical(v.ScheduledDestroyTime)
+	}
 	return m
 }
 
@@ -372,9 +430,10 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		return nil, model.NewProviderError("InvalidRequest", "missing secretId", 400)
 	}
 	body, _ := nr.Params["body"].(map[string]any)
+	now := clock.Now()
 	m := secretMeta{
 		Name:       nr.ResourceID("secret", id),
-		CreateTime: timestamp.Canonical(clock.Now()),
+		CreateTime: timestamp.Canonical(now),
 		NextVer:    1,
 	}
 	if labels, ok := body["labels"].(map[string]any); ok {
@@ -403,6 +462,18 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	}
 	if err := secretmanagersvc.ValidateRotation(m.Rotation, m.Topics, clock.Now(), true); err != nil {
 		return nil, err
+	}
+	// The delayed-destruction delay and the expiration oneof are part of the
+	// Secret's create surface.
+	if ttl, supplied, err := versionDestroyTTLFromBody(body); err != nil {
+		return nil, err
+	} else if supplied {
+		m.VersionDestroyTTL = ttl
+	}
+	if expire, supplied, err := expirationFromBody(body, now); err != nil {
+		return nil, err
+	} else if supplied {
+		m.ExpireTime = expire
 	}
 	if va := versionAliasesFromBody(body); va != nil {
 		m.VersionAliases = va
@@ -436,6 +507,26 @@ func (p *Provider) List(ctx context.Context, nr *model.NormalizedRequest) (*mode
 	if err != nil {
 		return nil, err
 	}
+	// Sweep every secret whose expiration has passed before filtering/paging,
+	// so an expired secret is neither counted nor returned (DC70).
+	now := clock.Now()
+	live := secrets[:0]
+	for _, s := range secrets {
+		if secretmanagersvc.Expired(s, now) {
+			if err := p.expireSecret(ctx, nr, s.ID); err != nil {
+				return nil, err
+			}
+			// The locked sweep may have lost to a concurrent update that
+			// extended the expiration: list the live record rather than
+			// dropping it.
+			if fresh, gerr := p.secrets.GetSecret(ctx, nr.AccountID, s.ID); gerr == nil && !secretmanagersvc.Expired(fresh, now) {
+				live = append(live, fresh)
+			}
+			continue
+		}
+		live = append(live, s)
+	}
+	secrets = live
 	filter, _ := nr.Params["filter"].(string)
 	matched, applied, err := secretmanagersvc.FilterSecrets(nr.AccountID, filter, secrets)
 	if err != nil {
@@ -474,6 +565,14 @@ func (p *Provider) Get(ctx context.Context, nr *model.NormalizedRequest) (*model
 	if err != nil {
 		return nil, mapSecretErr(err)
 	}
+	// A secret past its expireTime is already deleted in real GCP; the emulator
+	// has no background worker, so a read performs the expiry sweep (DC70).
+	if secretmanagersvc.Expired(s, clock.Now()) {
+		if err := p.expireSecret(ctx, nr, id); err != nil {
+			return nil, err
+		}
+		return nil, model.NewProviderError("NotFound", "secret not found", 404)
+	}
 	s = p.maybeRotate(ctx, nr, id, s)
 	return provider.OK(secretToMap(nr, s)), nil
 }
@@ -485,6 +584,12 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	}
 	id := secretID(name)
 	body, _ := nr.Params["body"].(map[string]any)
+
+	// An expired secret is already gone in real GCP; sweep it before applying
+	// the update so the caller sees the documented 404 (DC70).
+	if err := p.rejectExpired(ctx, nr, id); err != nil {
+		return nil, err
+	}
 
 	// The REST patch documents `update_mask` as required. The emulator still
 	// accepts a maskless patch (the console sends none) and then applies every
@@ -524,6 +629,33 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	}
 	topicsTouched := topicsSet && mask.has("topics")
 	now := clock.Now()
+
+	// The delayed-destruction delay and the expiration oneof are request data
+	// too. A mask naming either applies it, and a masked field the body does not
+	// carry clears the stored value (the documented way to remove a delay or an
+	// expiration); a maskless patch only applies a value the body carries. The
+	// mask is a whitelist: a field the mask does not name is never read, so a
+	// labels-only patch carrying a stale read-back expiration cannot rewrite it.
+	versionFieldSelected := mask == nil || mask.hasAny("versionDestroyTtl", "version_destroy_ttl")
+	incomingVersionTTL := ""
+	versionTTLSet := false
+	if versionFieldSelected {
+		incomingVersionTTL, versionTTLSet, err = versionDestroyTTLFromBody(body)
+		if err != nil {
+			return nil, err
+		}
+	}
+	versionTTLClear := versionFieldSelected && !versionTTLSet && mask != nil
+	expirationSelected := mask == nil || mask.hasAny("expireTime", "expire_time", "ttl")
+	incomingExpire := time.Time{}
+	expireSet := false
+	if expirationSelected {
+		incomingExpire, expireSet, err = expirationFromBody(body, now)
+		if err != nil {
+			return nil, err
+		}
+	}
+	expirationClear := expirationSelected && !expireSet && mask != nil
 
 	// UpdateSecretAtomic reads, merges, and writes under one lock, so a
 	// concurrent AddVersion's NextVersion() counter advance can't land between
@@ -568,6 +700,19 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 			}
 			m.Replication = merged
 		}
+		// The lifecycle fields are applied outside the body-presence block: a
+		// masked, bodyless patch (`?updateMask=expire_time` with no body) is the
+		// documented removal form.
+		if versionTTLSet {
+			m.VersionDestroyTTL = incomingVersionTTL
+		} else if versionTTLClear {
+			m.VersionDestroyTTL = ""
+		}
+		if expireSet {
+			m.ExpireTime = incomingExpire
+		} else if expirationClear {
+			m.ExpireTime = time.Time{}
+		}
 		// Validate the merged result: a patch that sets a period on a schedule
 		// with no next rotation time, or removes every topic from a rotating
 		// secret, is INVALID_ARGUMENT at that point even though each half of the
@@ -599,6 +744,38 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 // lock, since the Secret this function receives may have been read well
 // before this call by a caller several frames up).
 var errSkipRotation = errors.New("secret rotation not due")
+
+// expireSecret deletes id when its expireTime has passed, publishing
+// SECRET_DELETE with deleteType EXPIRATION and the metadata as it was before
+// the delete. A secret that is not due (or is already gone) is left alone.
+func (p *Provider) expireSecret(ctx context.Context, nr *model.NormalizedRequest, id string) error {
+	expired, deleted, err := secretmanagersvc.ExpireSecretIfDue(ctx, p.secrets, nr.AccountID, id)
+	if err != nil || !deleted {
+		return err
+	}
+	p.notifySecretDelete(ctx, nr, expired, secretmanagersvc.DeleteTypeExpiration)
+	return nil
+}
+
+// rejectExpired performs the expiry sweep for a secret another handler is about
+// to operate on, returning the documented 404 once it has expired. A missing
+// secret is left for the handler's own lookup to report.
+func (p *Provider) rejectExpired(ctx context.Context, nr *model.NormalizedRequest, id string) error {
+	s, err := p.secrets.GetSecret(ctx, nr.AccountID, id)
+	if err != nil || !secretmanagersvc.Expired(s, clock.Now()) {
+		return nil
+	}
+	if err := p.expireSecret(ctx, nr, id); err != nil {
+		return err
+	}
+	// A concurrent update may have extended the expiration before the locked
+	// delete re-checked it; the operation proceeds on the live record rather
+	// than answering a spurious 404.
+	if _, gerr := p.secrets.GetSecret(ctx, nr.AccountID, id); errors.Is(gerr, secretmanagerstore.ErrNoSuchSecret) {
+		return model.NewProviderError("NotFound", "secret not found", 404)
+	}
+	return nil
+}
 
 // maybeRotate advances a secret's rotation schedule when it is due: it moves
 // nextRotationTime forward by rotationPeriod. Real Secret Manager's rotation
@@ -664,12 +841,33 @@ func (p *Provider) maybeRotate(ctx context.Context, nr *model.NormalizedRequest,
 	return updated
 }
 
+// finalizeScheduledDestroy applies a due delayed destruction (shared with the
+// gRPC service) and publishes SECRET_VERSION_DESTROY when this call performed
+// it. Real Secret Manager destroys the version without client traffic; the
+// emulator has no background worker, so every version read applies the
+// transition lazily (the same compromise as DC71).
+func (p *Provider) finalizeScheduledDestroy(ctx context.Context, nr *model.NormalizedRequest, secretID string, v secretmanagerstore.Version) secretmanagerstore.Version {
+	updated, destroyed := secretmanagersvc.FinalizeScheduledDestroy(ctx, p.secrets, nr.AccountID, secretID, v)
+	if destroyed && p.publisher != nil {
+		if parent, perr := p.secrets.GetSecret(ctx, nr.AccountID, secretID); perr == nil {
+			p.notifyVersion(ctx, nr, secretmanagersvc.EventSecretVersionDestroy, parent,
+				fromStoreVersion(nr, updated), parent.ReplicationPolicy())
+		}
+	}
+	return updated
+}
+
 func (p *Provider) Delete(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	name, err := resourceName(nr)
 	if err != nil {
 		return nil, err
 	}
 	id := secretID(name)
+	// An expired secret is already gone (and its deletion event published), so
+	// a user delete answers the documented 404 rather than deleting it again.
+	if err := p.rejectExpired(ctx, nr, id); err != nil {
+		return nil, err
+	}
 	// The documented `etag` precondition: the delete succeeds only when the
 	// caller's etag matches the currently stored secret (ABORTED otherwise).
 	// The check runs inside the store's atomic delete, so a concurrent update
@@ -687,7 +885,7 @@ func (p *Provider) Delete(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		return nil, mapSecretErr(err)
 	}
 	// SECRET_DELETE carries the metadata as it was before the delete.
-	p.notifySecretDelete(ctx, nr, deleted)
+	p.notifySecretDelete(ctx, nr, deleted, secretmanagersvc.DeleteTypeRequested)
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
 }
 
@@ -774,6 +972,9 @@ func (p *Provider) AddVersion(ctx context.Context, nr *model.NormalizedRequest) 
 	id := secretID(name)
 	body, _ := nr.Params["body"].(map[string]any)
 	payload := ""
+	if err := p.rejectExpired(ctx, nr, id); err != nil {
+		return nil, err
+	}
 	if pl, ok := body["payload"].(map[string]any); ok {
 		if d, _ := pl["data"].(string); d != "" {
 			payload = d
@@ -850,6 +1051,9 @@ func (p *Provider) EnableManagedRotation(ctx context.Context, nr *model.Normaliz
 		return nil, err
 	}
 	id := secretID(name)
+	if err := p.rejectExpired(ctx, nr, id); err != nil {
+		return nil, err
+	}
 	body, _ := nr.Params["body"].(map[string]any)
 	creds, _ := body["cloudSqlSingleUserCredentials"].(map[string]any)
 	if creds == nil {
@@ -897,6 +1101,9 @@ func (p *Provider) RotateSecret(ctx context.Context, nr *model.NormalizedRequest
 		return nil, err
 	}
 	id := secretID(name)
+	if err := p.rejectExpired(ctx, nr, id); err != nil {
+		return nil, err
+	}
 	sec, err := p.secrets.GetSecret(ctx, nr.AccountID, id)
 	if err != nil {
 		return nil, mapSecretErr(err)
@@ -979,6 +1186,9 @@ func (p *Provider) Access(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		return nil, err
 	}
 	secret, version := parseSecretName(name)
+	if err := p.rejectExpired(ctx, nr, secret); err != nil {
+		return nil, err
+	}
 	version, err = p.resolveVersion(ctx, nr.AccountID, secret, version)
 	if err != nil {
 		return nil, mapVersionErr(err)
@@ -987,6 +1197,7 @@ func (p *Provider) Access(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
+	v = p.finalizeScheduledDestroy(ctx, nr, secret, v)
 	if v.State != "ENABLED" {
 		return nil, &model.ProviderError{
 			Code: "FailedPrecondition", HTTPStatus: 400, Status: "FAILED_PRECONDITION",
@@ -1021,6 +1232,9 @@ func (p *Provider) ListVersions(ctx context.Context, nr *model.NormalizedRequest
 		return nil, err
 	}
 	secret, _ := parseSecretName(name)
+	if err := p.rejectExpired(ctx, nr, secret); err != nil {
+		return nil, err
+	}
 	// The parent secret must exist: listing the versions of a missing secret
 	// is a 404 at the parent, not an empty list. Its replication policy shapes
 	// every version's replicationStatus.
@@ -1031,6 +1245,11 @@ func (p *Provider) ListVersions(ctx context.Context, nr *model.NormalizedRequest
 	versions, err := p.secrets.ListVersions(ctx, nr.AccountID, secret)
 	if err != nil {
 		return nil, err
+	}
+	// Apply any delayed destruction that came due since the last read, so the
+	// list (and its state filter) sees the DESTROYED version (DC70).
+	for i := range versions {
+		versions[i] = p.finalizeScheduledDestroy(ctx, nr, secret, versions[i])
 	}
 	filter, _ := nr.Params["filter"].(string)
 	matched, applied, err := secretmanagersvc.FilterVersions(nr.AccountID, secret, filter, versions)
@@ -1062,6 +1281,9 @@ func (p *Provider) GetVersion(ctx context.Context, nr *model.NormalizedRequest) 
 		return nil, err
 	}
 	secret, version := parseSecretName(name)
+	if err := p.rejectExpired(ctx, nr, secret); err != nil {
+		return nil, err
+	}
 	version, err = p.resolveVersion(ctx, nr.AccountID, secret, version)
 	if err != nil {
 		return nil, mapVersionErr(err)
@@ -1070,6 +1292,7 @@ func (p *Provider) GetVersion(ctx context.Context, nr *model.NormalizedRequest) 
 	if err != nil {
 		return nil, mapVersionErr(err)
 	}
+	v = p.finalizeScheduledDestroy(ctx, nr, secret, v)
 	repl, err := secretmanagersvc.ParentReplication(ctx, p.secrets, nr.AccountID, secret)
 	if err != nil {
 		return nil, mapSecretErr(err)
@@ -1122,6 +1345,28 @@ func (p *Provider) setVersionState(ctx context.Context, nr *model.NormalizedRequ
 		return nil, err
 	}
 	secret, version := parseSecretName(name)
+	if err := p.rejectExpired(ctx, nr, secret); err != nil {
+		return nil, err
+	}
+	// The delayed-destruction delay is read from the parent secret before the
+	// transition (the documented semantics: the delay in force at the destroy
+	// attempt applies; a version already scheduled keeps its own instant).
+	parent, err := p.secrets.GetSecret(ctx, nr.AccountID, secret)
+	if err != nil {
+		return nil, mapSecretErr(err)
+	}
+	var destroyDelay time.Duration
+	if parent.VersionDestroyTTL != "" {
+		if d, perr := secretmanagersvc.ParseVersionDestroyTTL(parent.VersionDestroyTTL); perr == nil {
+			destroyDelay = d
+		}
+	}
+	// Apply a delayed destruction that already came due, so enable/disable see
+	// the terminal DESTROYED state instead of resurrecting a destroyed version.
+	if cur, gerr := p.secrets.GetVersion(ctx, nr.AccountID, secret, version); gerr == nil {
+		p.finalizeScheduledDestroy(ctx, nr, secret, cur)
+	}
+	var scheduled, noop bool
 	// The etag precondition and the transition run inside one atomic store
 	// mutate, so a concurrent transition cannot invalidate the etag between the
 	// check and the write.
@@ -1136,10 +1381,32 @@ func (p *Provider) setVersionState(ctx context.Context, nr *model.NormalizedRequ
 				Message: "secret version " + v.VersionID + " is DESTROYED",
 			}
 		}
-		v.State = state
+		now := clock.Now()
 		if state == "DESTROYED" {
-			v.DestroyTime = clock.Now()
+			// A version already scheduled for destruction keeps its instant: a
+			// second destroy is a no-op (no duplicate notification).
+			if !v.ScheduledDestroyTime.IsZero() && now.Before(v.ScheduledDestroyTime) {
+				noop = true
+				return v, nil
+			}
+			if destroyDelay > 0 {
+				// Delayed destruction: the version is disabled now and destroyed
+				// when the delay expires (SECRET_VERSION_DESTROY_SCHEDULED).
+				v.State = "DISABLED"
+				v.ScheduledDestroyTime = now.Add(destroyDelay)
+				v.DestroyTime = time.Time{}
+				scheduled = true
+				return v, nil
+			}
+			v.State = "DESTROYED"
+			v.DestroyTime = now
+			v.ScheduledDestroyTime = time.Time{}
+			return v, nil
 		}
+		// Enabling or disabling a version scheduled for destruction cancels the
+		// schedule (the documented restore path), whatever the target state.
+		v.ScheduledDestroyTime = time.Time{}
+		v.State = state
 		return v, nil
 	})
 	if err != nil {
@@ -1150,10 +1417,12 @@ func (p *Provider) setVersionState(ctx context.Context, nr *model.NormalizedRequ
 		return nil, mapSecretErr(err)
 	}
 	m := fromStoreVersion(nr, v)
-	if p.publisher != nil {
-		if parent, perr := p.secrets.GetSecret(ctx, nr.AccountID, secret); perr == nil {
-			p.notifyVersion(ctx, nr, secretmanagersvc.VersionStateEvent(state), parent, m, repl)
+	if p.publisher != nil && !noop {
+		eventType := secretmanagersvc.VersionStateEvent(state)
+		if scheduled {
+			eventType = secretmanagersvc.EventSecretVersionDestroyScheduled
 		}
+		p.notifyVersion(ctx, nr, eventType, parent, m, repl)
 	}
 	return provider.OK(versionToMap(m, repl)), nil
 }
@@ -1171,6 +1440,9 @@ func (p *Provider) GetIamPolicy(ctx context.Context, nr *model.NormalizedRequest
 		return nil, err
 	}
 	id := secretID(name)
+	if err := p.rejectExpired(ctx, nr, id); err != nil {
+		return nil, err
+	}
 	if err := p.requireSecret(ctx, nr.AccountID, id); err != nil {
 		return nil, err
 	}
@@ -1183,6 +1455,9 @@ func (p *Provider) SetIamPolicy(ctx context.Context, nr *model.NormalizedRequest
 		return nil, err
 	}
 	id := secretID(name)
+	if err := p.rejectExpired(ctx, nr, id); err != nil {
+		return nil, err
+	}
 	if err := p.requireSecret(ctx, nr.AccountID, id); err != nil {
 		return nil, err
 	}
@@ -1200,6 +1475,9 @@ func (p *Provider) TestIamPermissions(ctx context.Context, nr *model.NormalizedR
 		return nil, err
 	}
 	id := secretID(name)
+	if err := p.rejectExpired(ctx, nr, id); err != nil {
+		return nil, err
+	}
 	if err := p.requireSecret(ctx, nr.AccountID, id); err != nil {
 		return nil, err
 	}
@@ -1274,6 +1552,13 @@ func secretToMap(nr *model.NormalizedRequest, s secretmanagerstore.Secret) map[s
 	if m.VersionAliases != nil {
 		out["versionAliases"] = m.VersionAliases
 	}
+	if m.VersionDestroyTTL != "" {
+		out["versionDestroyTtl"] = m.VersionDestroyTTL
+	}
+	if !m.ExpireTime.IsZero() {
+		// expireTime is always returned as a timestamp, never the input `ttl`.
+		out["expireTime"] = timestamp.Canonical(m.ExpireTime)
+	}
 	return out
 }
 
@@ -1314,7 +1599,7 @@ func versionToMap(v versionMeta, repl *secretmanagerstore.Replication) map[strin
 		// etag is the shared Secret Manager version etag: it changes on every
 		// lifecycle transition (the version's only mutable field), so a stale
 		// disable/enable/destroy precondition is detectable.
-		"etag": secretmanagersvc.VersionEtag(v.Name, v.CreateTime, v.State),
+		"etag": secretmanagersvc.VersionEtag(v.Name, v.CreateTime, v.State, v.ScheduledDestroyTime),
 		// replicationStatus mirrors the parent secret's replication policy: the
 		// automatic arm (with the CryptoKeyVersion that wrapped this payload,
 		// DC44) or one status per user-managed replica (DC45).
@@ -1328,6 +1613,9 @@ func versionToMap(v versionMeta, repl *secretmanagerstore.Replication) map[strin
 	}
 	if v.DestroyTime != "" {
 		out["destroyTime"] = v.DestroyTime
+	}
+	if v.ScheduledDestroyTime != "" {
+		out["scheduledDestroyTime"] = v.ScheduledDestroyTime
 	}
 	return out
 }
@@ -1377,9 +1665,10 @@ func (p *Provider) notifySecret(ctx context.Context, nr *model.NormalizedRequest
 		secretmanagersvc.SecretEventAttributes(eventType, nr.ResourceID("secret", s.ID), clock.Now()))
 }
 
-// notifySecretDelete publishes SECRET_DELETE (deleteType REQUESTED) with the
-// metadata as it was before the delete.
-func (p *Provider) notifySecretDelete(ctx context.Context, nr *model.NormalizedRequest, s secretmanagerstore.Secret) {
+// notifySecretDelete publishes SECRET_DELETE (deleteType REQUESTED for a user
+// delete, EXPIRATION for the expiry sweep) with the metadata as it was before
+// the delete.
+func (p *Provider) notifySecretDelete(ctx context.Context, nr *model.NormalizedRequest, s secretmanagerstore.Secret, deleteType string) {
 	if p.publisher == nil || len(s.Topics) == 0 {
 		return
 	}
@@ -1388,7 +1677,7 @@ func (p *Provider) notifySecretDelete(ctx context.Context, nr *model.NormalizedR
 		return
 	}
 	secretmanagersvc.Notify(ctx, p.publisher, nr.AccountID, s.Topics, data,
-		secretmanagersvc.DeleteEventAttributes(nr.ResourceID("secret", s.ID), clock.Now()))
+		secretmanagersvc.DeleteEventAttributes(nr.ResourceID("secret", s.ID), deleteType, clock.Now()))
 }
 
 // notifyVersion publishes a version-scoped event to the parent secret's topics,

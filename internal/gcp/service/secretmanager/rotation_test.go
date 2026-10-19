@@ -51,8 +51,8 @@ func TestRotationPeriodString(t *testing.T) {
 		"3600s":       "3600s",
 		"86400s":      "86400s",
 		"1h0m0s":      "3600s",
-		"3600.5s":     "3600.5s",
-		"1h0m0.5s":    "3600.5s",
+		"3600.5s":     "3600.500s",
+		"1h0m0.5s":    "3600.500s",
 		"24h0m0s":     "86400s",
 		"unparseable": "unparseable",
 	} {

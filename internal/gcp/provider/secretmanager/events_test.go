@@ -475,8 +475,8 @@ func TestRotationValidationREST(t *testing.T) {
 		t.Fatalf("get fractional secret: %v", err)
 	}
 	fracRot, _ := frac.Data["rotation"].(map[string]any)
-	if fracRot["rotationPeriod"] != "3600.5s" {
-		t.Fatalf("fractional rotationPeriod = %v, want 3600.5s", fracRot["rotationPeriod"])
+	if fracRot["rotationPeriod"] != "3600.500s" {
+		t.Fatalf("fractional rotationPeriod = %v, want 3600.500s", fracRot["rotationPeriod"])
 	}
 
 	// Clearing the whole rotation is allowed, and then the topics can go too.

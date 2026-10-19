@@ -73,9 +73,13 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	for rows.Next() {
 		var r secretRow
 		var labels, annotations, topics, rotation, aliases, replication []byte
-		if err := rows.Scan(&r.ProjectID, &r.Secret.ID, &labels, &r.Secret.CreateTime, &r.Secret.NextVer, &rotation, &aliases, &r.Secret.KmsKeyName, &annotations, &replication, &topics); err != nil {
+		var expireTime *time.Time
+		if err := rows.Scan(&r.ProjectID, &r.Secret.ID, &labels, &r.Secret.CreateTime, &r.Secret.NextVer, &rotation, &aliases, &r.Secret.KmsKeyName, &annotations, &replication, &topics, &r.Secret.VersionDestroyTTL, &expireTime); err != nil {
 			rows.Close()
 			return err
+		}
+		if expireTime != nil {
+			r.Secret.ExpireTime = *expireTime
 		}
 		decodeSecretJSON(&r.Secret, labels, annotations, topics, rotation, aliases, replication)
 		secrets = append(secrets, r)
@@ -86,20 +90,23 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 
 	versions := make([]versionRow, 0)
-	vrows, err := s.pool.Query(ctx, `SELECT project_id, secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek, replica_deks FROM jc_sm_versions ORDER BY project_id, secret_id, version_id`)
+	vrows, err := s.pool.Query(ctx, `SELECT project_id, secret_id, version_id, state, create_time, destroy_time, scheduled_destroy_time, data, kms_key_name, wrapped_dek, replica_deks FROM jc_sm_versions ORDER BY project_id, secret_id, version_id`)
 	if err != nil {
 		return err
 	}
 	for vrows.Next() {
 		var r versionRow
-		var destroyTime *time.Time
+		var destroyTime, scheduledDestroyTime *time.Time
 		var replicaDEKs []byte
-		if err := vrows.Scan(&r.ProjectID, &r.SecretID, &r.Version.VersionID, &r.Version.State, &r.Version.CreateTime, &destroyTime, &r.Version.Data, &r.Version.KmsKeyName, &r.Version.WrappedDEK, &replicaDEKs); err != nil {
+		if err := vrows.Scan(&r.ProjectID, &r.SecretID, &r.Version.VersionID, &r.Version.State, &r.Version.CreateTime, &destroyTime, &scheduledDestroyTime, &r.Version.Data, &r.Version.KmsKeyName, &r.Version.WrappedDEK, &replicaDEKs); err != nil {
 			vrows.Close()
 			return err
 		}
 		if destroyTime != nil {
 			r.Version.DestroyTime = *destroyTime
+		}
+		if scheduledDestroyTime != nil {
+			r.Version.ScheduledDestroyTime = *scheduledDestroyTime
 		}
 		if err := decodeReplicaDEKs(replicaDEKs, &r.Version); err != nil {
 			vrows.Close()
@@ -160,8 +167,8 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		if len(r.Secret.Topics) > 0 {
 			topics, _ = json.Marshal(r.Secret.Topics)
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication, topics) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-			r.ProjectID, r.Secret.ID, json.RawMessage(labels), r.Secret.CreateTime, r.Secret.NextVer, nullableJSONBytes(rotation), nullableJSONBytes(aliases), r.Secret.KmsKeyName, nullableJSONBytes(annotations), nullableJSONBytes(replication), nullableJSONBytes(topics)); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication, topics, version_destroy_ttl, expire_time) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			r.ProjectID, r.Secret.ID, json.RawMessage(labels), r.Secret.CreateTime, r.Secret.NextVer, nullableJSONBytes(rotation), nullableJSONBytes(aliases), r.Secret.KmsKeyName, nullableJSONBytes(annotations), nullableJSONBytes(replication), nullableJSONBytes(topics), r.Secret.VersionDestroyTTL, nullableTime(r.Secret.ExpireTime)); err != nil {
 			return err
 		}
 	}
@@ -176,8 +183,8 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, destroy_time, data, kms_key_name, wrapped_dek, replica_deks) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-			r.ProjectID, r.SecretID, r.Version.VersionID, r.Version.State, r.Version.CreateTime, nullableTime(r.Version.DestroyTime), r.Version.Data, r.Version.KmsKeyName, r.Version.WrappedDEK, replicaDEKs); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_versions (project_id, secret_id, version_id, state, create_time, destroy_time, scheduled_destroy_time, data, kms_key_name, wrapped_dek, replica_deks) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			r.ProjectID, r.SecretID, r.Version.VersionID, r.Version.State, r.Version.CreateTime, nullableTime(r.Version.DestroyTime), nullableTime(r.Version.ScheduledDestroyTime), r.Version.Data, r.Version.KmsKeyName, r.Version.WrappedDEK, replicaDEKs); err != nil {
 			return err
 		}
 	}

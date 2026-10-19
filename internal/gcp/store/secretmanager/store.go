@@ -154,6 +154,14 @@ type Secret struct {
 	// because the version-wrap path and records written by older builds read
 	// it; it is never the source of truth for the wire shape.
 	KmsKeyName string
+	// VersionDestroyTTL is the destruction delay applied when a version is
+	// destroyed (the API's `versionDestroyTtl`, stored in its canonical
+	// google-duration form, e.g. "86400s"). Empty disables delayed destruction.
+	VersionDestroyTTL string
+	// ExpireTime is when the secret is automatically deleted; zero means the
+	// secret does not expire. The API's `ttl` input field is resolved to this
+	// instant at write time and never stored.
+	ExpireTime time.Time
 }
 
 // ReplicationPolicy returns the secret's replication policy, reconstructing the
@@ -185,7 +193,11 @@ type Version struct {
 	CreateTime time.Time
 	// DestroyTime is set only when State is DESTROYED (output-only in the API).
 	DestroyTime time.Time
-	Data        string // base64 payload
+	// ScheduledDestroyTime is set when the version was scheduled for delayed
+	// destruction (output-only). The version is DISABLED until this instant,
+	// then becomes DESTROYED. Enabling or disabling the version cancels it.
+	ScheduledDestroyTime time.Time
+	Data                 string // base64 payload
 	// KmsKeyName/WrappedDEK are the version's primary wrap: the first CMEK
 	// binding (automatic arm or first user-managed replica). Access uses them to
 	// unwrap the single payload ciphertext. Empty/nil for Google-managed
