@@ -112,6 +112,7 @@ func TestValidateRotation(t *testing.T) {
 		{"period too short", &secretmanagerstore.Rotation{NextRotationTime: at(time.Hour), RotationPeriod: "3599s"}, topics, true, false},
 		{"period too long", &secretmanagerstore.Rotation{NextRotationTime: at(time.Hour), RotationPeriod: "3153600001s"}, topics, true, false},
 		{"period without next", &secretmanagerstore.Rotation{RotationPeriod: "3600s"}, topics, true, false},
+		{"period not a google duration", &secretmanagerstore.Rotation{NextRotationTime: at(time.Hour), RotationPeriod: "1h"}, topics, true, false},
 		{"next under five minutes", &secretmanagerstore.Rotation{NextRotationTime: at(4 * time.Minute)}, topics, true, false},
 		{"next in the past", &secretmanagerstore.Rotation{NextRotationTime: at(-time.Hour)}, topics, true, false},
 		{"next past 100 years", &secretmanagerstore.Rotation{NextRotationTime: at(101 * 365 * 24 * time.Hour)}, topics, true, false},
@@ -180,6 +181,15 @@ func TestMergedRotation(t *testing.T) {
 	if got == nil || got.NextRotationTime != "" || got.RotationPeriod != "" || got.ManagedRotation == nil {
 		t.Fatalf("clearing a whole rotation = %#v, want the status alone", got)
 	}
+	// A subfield merge onto a secret with no stored schedule starts from an
+	// empty one, and a merge that leaves nothing configured collapses to nil.
+	if got := MergedRotation(nil, &secretmanagerstore.Rotation{NextRotationTime: "2026-11-01T00:00:00Z"}, false, true, false); got == nil || got.NextRotationTime != "2026-11-01T00:00:00Z" {
+		t.Fatalf("merge onto an empty schedule = %#v", got)
+	}
+	if got := MergedRotation(nil, nil, false, false, false); got != nil {
+		t.Fatalf("empty merge = %#v, want nil", got)
+	}
+
 	// Without a managed-rotation status the schedule clears to nil.
 	if got := MergedRotation(&secretmanagerstore.Rotation{NextRotationTime: "2026-11-01T00:00:00Z"}, nil, true, false, false); got != nil {
 		t.Fatalf("clearing an unmanaged rotation = %#v, want nil", got)
