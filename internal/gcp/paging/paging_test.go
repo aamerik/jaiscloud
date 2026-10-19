@@ -469,6 +469,9 @@ func TestProtoFieldName(t *testing.T) {
 		"limit":      "limit",
 		"MaxResults": "max_results",
 		"page2Size":  "page2_size",
+		// Compute Engine's query parameters bind on its `header` message, so its
+		// binding text names the dotted field path (DC68).
+		"header.maxResults": "header.max_results",
 	} {
 		if got := protoFieldName(in); got != want {
 			t.Errorf("protoFieldName(%q) = %q, want %q", in, got, want)

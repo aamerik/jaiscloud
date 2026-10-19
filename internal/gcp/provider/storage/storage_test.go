@@ -456,8 +456,30 @@ func TestObjectsListNegativeMaxResults(t *testing.T) {
 	// negative, fractional, signed, out-of-uint32 or explicitly empty value is
 	// INVALID_ARGUMENT (400, reason invalidParameter). GCS's JSON API rejects
 	// the empty binding on its own — the behaviour the shared resolvers adopt in
-	// DC63 — so this is also the consistency pin for the two surfaces.
+	// DC63 — so this is also the consistency pin for the two surfaces. GCS renders
+	// its own text ("Invalid unsigned integer value: '<v>'.") and also names the
+	// parameter on the errors[] entry (DC68).
 	for _, bad := range []string{"", "-1", "abc", "1.5", "+5", "4294967296"} {
+		wantMsg := "Invalid unsigned integer value: '" + bad + "'."
+		assertInvalid := func(where string, err error) {
+			t.Helper()
+			perr, ok := err.(*model.ProviderError)
+			if !ok || perr.Code != "InvalidRequest" || perr.HTTPStatus != 400 {
+				t.Fatalf("%s maxResults=%q: expected InvalidRequest/400, got %v", where, bad, err)
+			}
+			if perr.Message != wantMsg {
+				t.Fatalf("%s maxResults=%q: message = %q, want %q", where, bad, perr.Message, wantMsg)
+			}
+			if reason, _ := perr.Data["reason"].(string); reason != "invalidParameter" {
+				t.Fatalf("%s maxResults=%q: reason = %q, want invalidParameter", where, bad, reason)
+			}
+			if loc, _ := perr.Data["location"].(string); loc != "maxResults" {
+				t.Fatalf("%s maxResults=%q: location = %q, want maxResults", where, bad, loc)
+			}
+			if locType, _ := perr.Data["locationType"].(string); locType != "parameter" {
+				t.Fatalf("%s maxResults=%q: locationType = %q, want parameter", where, bad, locType)
+			}
+		}
 		for _, tc := range lists {
 			nr = bucketParams()
 			nr.Params["bucket"] = "bkt"
@@ -466,21 +488,30 @@ func TestObjectsListNegativeMaxResults(t *testing.T) {
 				nr.Params[k] = v
 			}
 			_, err := p.ObjectsList(ctx, nr)
-			perr, ok := err.(*model.ProviderError)
-			if !ok || perr.Code != "InvalidRequest" || perr.HTTPStatus != 400 {
-				t.Fatalf("%s listing maxResults=%q: expected InvalidRequest/400, got %v", tc.name, bad, err)
-			}
-			if reason, _ := perr.Data["reason"].(string); reason != "invalidParameter" {
-				t.Fatalf("%s listing maxResults=%q: reason = %q, want invalidParameter", tc.name, bad, reason)
-			}
+			assertInvalid(tc.name+" listing", err)
 		}
 
 		nr = bucketParams()
 		nr.Params["maxResults"] = bad
-		if _, err := p.BucketsList(ctx, nr); err == nil {
-			t.Fatalf("buckets.list maxResults=%q: expected an error, got nil", bad)
-		} else if perr, ok := err.(*model.ProviderError); !ok || perr.Code != "InvalidRequest" || perr.HTTPStatus != 400 {
-			t.Fatalf("buckets.list maxResults=%q: expected InvalidRequest/400, got %v", bad, err)
+		_, err := p.BucketsList(ctx, nr)
+		assertInvalid("buckets.list", err)
+	}
+
+	// A typed (non-string) out-of-range value renders the same text as a string
+	// one, quoting the value plainly (no JSON escaping).
+	for _, tc := range []struct {
+		v    any
+		want string
+	}{{int(-1), "-1"}, {float64(-0.5), "-0.5"}} {
+		nr = bucketParams()
+		nr.Params["maxResults"] = tc.v
+		_, err := p.BucketsList(ctx, nr)
+		perr, ok := err.(*model.ProviderError)
+		if !ok || perr.Code != "InvalidRequest" {
+			t.Fatalf("buckets.list maxResults=%#v: expected InvalidRequest, got %v", tc.v, err)
+		}
+		if want := "Invalid unsigned integer value: '" + tc.want + "'."; perr.Message != want {
+			t.Fatalf("buckets.list maxResults=%#v: message = %q, want %q", tc.v, perr.Message, want)
 		}
 	}
 

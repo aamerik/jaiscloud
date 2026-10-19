@@ -154,7 +154,11 @@ func ParseSizeNamed(v any, name string) (int, error) {
 // (Compute Engine and Cloud SQL's instances/operations lists), where a negative
 // value is not a valid binding at all, and a value above MaxInt32 is still a
 // legal uint32. The caller still owns the range policy (Compute's documented
-// 0-500 clamp, Cloud SQL's documented 1,000 ceiling).
+// 0-500 clamp, Cloud SQL's documented 1,000 ceiling). A service whose frontend
+// binds the parameter under a message path passes that path as the name
+// (Compute Engine sends "header.maxResults", which renders as
+// 'header.max_results'), since the name is also the proto field the error text
+// quotes.
 func ParseUintSizeNamed(v any, name string) (int, error) {
 	return parseBoundSize(v, name, false)
 }
@@ -293,9 +297,10 @@ func negativePageSize() error {
 // client sent it. Probe-confirmed on Cloud DNS, Cloud SQL, Pub/Sub, Cloud
 // Scheduler and Cloud KMS alike (`pageSize`/`maxResults`); GCS's JSON API uses
 // its own "Invalid unsigned integer value" text and has its own binding
-// (provider/storage), and Compute Engine's frontend prefixes the field path
-// with "header." — recorded as DC68. ParseSizeNamed and ParseUintSizeNamed
-// route through it.
+// (provider/storage). Compute Engine's frontend binds the parameter on its
+// `header` message, so its caller passes "header.maxResults" and the text names
+// 'header.max_results' (DC68). ParseSizeNamed and ParseUintSizeNamed route
+// through it.
 func invalidBoundSize(kind, name string, v any) error {
 	return model.NewProviderError("InvalidArgument",
 		"Invalid value at '"+protoFieldName(name)+"' (TYPE_"+strings.ToUpper(kind)+"), "+boundValueText(v), 400)
@@ -313,7 +318,9 @@ func boundValueText(v any) string {
 
 // protoFieldName converts the camelCase query-parameter name `ParseSizeNamed`
 // receives into the snake_case proto field the frontend names in its binding
-// error (`maxResults` -> `max_results`, `pageSize` -> `page_size`).
+// error (`maxResults` -> `max_results`, `pageSize` -> `page_size`). A dotted
+// message path passes through unchanged apart from the case conversion
+// (`header.maxResults` -> `header.max_results`, the Compute Engine carve-out).
 func protoFieldName(name string) string {
 	var b strings.Builder
 	for i, r := range name {
@@ -401,14 +408,16 @@ func (b MaxResultsBinding) Resolve(def, lo, hi int) (int, error) {
 }
 
 // MaxResultsUint32 resolves a maxResults parameter the Discovery document
-// declares unsigned (Compute Engine, Cloud SQL instances.list / operations.list)
-// to its caller's default when absent, nil or zero. A negative value is not a
-// legal binding at all, so it is INVALID_ARGUMENT ("Invalid value at
-// 'max_results' (TYPE_UINT32), \"-1\""), and a value the binding cannot parse —
-// an explicitly empty one included — is the same error rather than a silently
-// absent parameter. Both callers clamp above their own documented ceiling
-// themselves (Compute's 0-500, Cloud SQL's 1,000), which is why this resolver
-// carries no range policy.
+// declares unsigned (Cloud SQL's instances/operations lists) to its caller's
+// default when absent, nil or zero. A negative value is not a legal binding at
+// all, so it is INVALID_ARGUMENT ("Invalid value at 'max_results'
+// (TYPE_UINT32), \"-1\""), and a value the binding cannot parse — an explicitly
+// empty one included — is the same error rather than a silently absent
+// parameter. The caller clamps above its own documented ceiling (Cloud SQL's
+// 1,000), which is why this resolver carries no range policy. `keys` are query
+// parameter names (map keys), never a field path: Compute Engine, whose
+// frontend binds on its `header` message, calls ParseUintSizeNamed directly
+// with "header.maxResults".
 func MaxResultsUint32(params map[string]any, keys []string, def int) (int, error) {
 	return maxResultsParam(params, keys, def, ParseUintSizeNamed)
 }

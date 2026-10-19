@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"sync"
 	"testing"
 
@@ -235,11 +236,14 @@ func TestGCSNegativeMaxResultsRejected(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	for _, bad := range []string{"-1", "abc", "1.5", "+5", "4294967296"} {
+		// Encode the value: a bare "+" in a query string decodes to a space, and
+		// the binding text echoes what the service received (DC68).
+		q := url.QueryEscape(bad)
 		for _, path := range []string{
-			"/storage/v1/b/negmax-bucket/o?maxResults=" + bad,
-			"/storage/v1/b/negmax-bucket/o?delimiter=/&maxResults=" + bad,
-			"/storage/v1/b/negmax-bucket/o?versions=true&maxResults=" + bad,
-			"/storage/v1/b?maxResults=" + bad,
+			"/storage/v1/b/negmax-bucket/o?maxResults=" + q,
+			"/storage/v1/b/negmax-bucket/o?delimiter=/&maxResults=" + q,
+			"/storage/v1/b/negmax-bucket/o?versions=true&maxResults=" + q,
+			"/storage/v1/b?maxResults=" + q,
 		} {
 			resp, body := do(t, "GET", path, nil, nil)
 			require.Equal(t, http.StatusBadRequest, resp.StatusCode, path)
@@ -253,6 +257,11 @@ func TestGCSNegativeMaxResultsRejected(t *testing.T) {
 			first, ok := errs[0].(map[string]any)
 			require.True(t, ok, path)
 			require.Equal(t, "invalidParameter", first["reason"], path)
+			// GCS's own binding text and the parameter it names (DC68).
+			require.Equal(t, "Invalid unsigned integer value: '"+bad+"'.", errObj["message"], path)
+			require.Equal(t, "Invalid unsigned integer value: '"+bad+"'.", first["message"], path)
+			require.Equal(t, "maxResults", first["location"], path)
+			require.Equal(t, "parameter", first["locationType"], path)
 		}
 	}
 
@@ -260,8 +269,15 @@ func TestGCSNegativeMaxResultsRejected(t *testing.T) {
 	resp, _ = do(t, "GET", "/storage/v1/b/missing-bucket/o?maxResults=-1", nil, nil)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 
+	// A bare "+" in a query string decodes to a space, and GCS's text echoes the
+	// value the service received, unescaped.
+	resp, body := do(t, "GET", "/storage/v1/b/negmax-bucket/o?maxResults=+5", nil, nil)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	require.Equal(t, "Invalid unsigned integer value: ' 5'.",
+		jsonMap(t, body)["error"].(map[string]any)["message"])
+
 	// An explicit zero is a literal empty page (real GCS), not the default.
-	_, body := do(t, "GET", "/storage/v1/b/negmax-bucket/o?maxResults=0", nil, nil)
+	_, body = do(t, "GET", "/storage/v1/b/negmax-bucket/o?maxResults=0", nil, nil)
 	page := jsonMap(t, body)
 	require.Empty(t, page["items"])
 	_, hasNext := page["nextPageToken"]
