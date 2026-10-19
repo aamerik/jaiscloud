@@ -15,6 +15,7 @@ type Secret struct {
 	Etag             string            `json:"etag,omitempty"`
 	Labels           map[string]string `json:"labels,omitempty"`
 	Annotations      map[string]string `json:"annotations,omitempty"`
+	Topics           []string          `json:"topics,omitempty"`
 	RotationPeriod   string            `json:"rotationPeriod,omitempty"`
 	NextRotationTime string            `json:"nextRotationTime,omitempty"`
 	KmsKeyName       string            `json:"kmsKeyName,omitempty"`
@@ -32,6 +33,7 @@ type CreateSecretRequest struct {
 	SecretID         string            `json:"secretId"`
 	Labels           map[string]string `json:"labels,omitempty"`
 	Annotations      map[string]string `json:"annotations,omitempty"`
+	Topics           []string          `json:"topics,omitempty"`
 	RotationPeriod   string            `json:"rotationPeriod,omitempty"`
 	NextRotationTime string            `json:"nextRotationTime,omitempty"`
 	KmsKeyName       string            `json:"kmsKeyName,omitempty"`
@@ -42,9 +44,15 @@ type CreateSecretRequest struct {
 type UpdateSecretRequest struct {
 	Labels           map[string]string `json:"labels,omitempty"`
 	Annotations      map[string]string `json:"annotations,omitempty"`
+	Topics           []string          `json:"topics,omitempty"`
 	RotationPeriod   string            `json:"rotationPeriod,omitempty"`
 	NextRotationTime string            `json:"nextRotationTime,omitempty"`
 	KmsKeyName       string            `json:"kmsKeyName,omitempty"`
+	// RemoveRotation sends an empty `rotation` object, which is how the API
+	// removes a schedule (`updateMask=rotation` with `{}`). The two schedule
+	// fields above cannot express it: both empty means "leave the schedule
+	// alone".
+	RemoveRotation bool `json:"removeRotation,omitempty"`
 }
 
 // SecretVersion is the UI summary of a Secret Manager version.

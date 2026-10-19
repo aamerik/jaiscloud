@@ -108,6 +108,7 @@ func TestListSecrets_Flattens(t *testing.T) {
 					"createTime": "2024-01-01T00:00:00Z",
 					"etag":       "e",
 					"labels":     map[string]string{"env": "prod"},
+					"topics":     []any{map[string]any{"name": "projects/p/topics/secret-events"}},
 					"rotation":   map[string]any{"rotationPeriod": "86400s", "nextRotationTime": "2024-01-02T00:00:00Z"},
 				},
 			},
@@ -128,6 +129,9 @@ func TestListSecrets_Flattens(t *testing.T) {
 	if resp.Secrets[0].Labels["env"] != "prod" || resp.Secrets[0].RotationPeriod != "86400s" {
 		t.Fatalf("secret = %+v", resp.Secrets[0])
 	}
+	if len(resp.Secrets[0].Topics) != 1 || resp.Secrets[0].Topics[0] != "projects/p/topics/secret-events" {
+		t.Fatalf("topics = %v", resp.Secrets[0].Topics)
+	}
 }
 
 func TestCreateSecret_SetsIDAndBody(t *testing.T) {
@@ -142,6 +146,64 @@ func TestCreateSecret_SetsIDAndBody(t *testing.T) {
 	body := mock.lastNR.Params["body"].(map[string]any)
 	if labels, ok := body["labels"].(map[string]any); !ok || labels["env"] != "prod" {
 		t.Fatalf("body = %+v", body)
+	}
+}
+
+// TestCreateSecret_TopicsAndRotation: the console's create body carries the
+// event-notification topics and both halves of a rotation schedule, which the
+// API now requires together (DC64/DC65).
+func TestCreateSecret_TopicsAndRotation(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{"name": "projects/p/secrets/db-pass"}}}
+	w := do(t, mock, http.MethodPost, "/secrets", `{
+		"secretId":"db-pass",
+		"topics":["projects/p/topics/secret-events"],
+		"rotationPeriod":"86400s",
+		"nextRotationTime":"2026-11-01T00:00:00Z"
+	}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	body := mock.lastNR.Params["body"].(map[string]any)
+	topics, ok := body["topics"].([]any)
+	if !ok || len(topics) != 1 {
+		t.Fatalf("body topics = %#v", body["topics"])
+	}
+	if topic, _ := topics[0].(map[string]any); topic["name"] != "projects/p/topics/secret-events" {
+		t.Fatalf("topic = %#v", topics[0])
+	}
+	rotation, ok := body["rotation"].(map[string]any)
+	if !ok || rotation["rotationPeriod"] != "86400s" || rotation["nextRotationTime"] != "2026-11-01T00:00:00Z" {
+		t.Fatalf("body rotation = %#v", body["rotation"])
+	}
+}
+
+// TestUpdateSecret_ClearsTopicsWhenOmitted: the console's (pre-filled) topic
+// list is the source of truth, so an update that names no topics clears them.
+func TestUpdateSecret_ClearsTopicsWhenOmitted(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{"name": "projects/p/secrets/db-pass"}}}
+	w := do(t, mock, http.MethodPatch, "/secrets/db-pass", `{"labels":{"env":"dev"}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	body := mock.lastNR.Params["body"].(map[string]any)
+	topics, ok := body["topics"].([]any)
+	if !ok || len(topics) != 0 {
+		t.Fatalf("body topics = %#v, want an empty list", body["topics"])
+	}
+}
+
+// TestUpdateSecret_RemoveRotation: clearing both schedule fields sends the empty
+// rotation object that removes a schedule, which an absent block cannot express.
+func TestUpdateSecret_RemoveRotation(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{"name": "projects/p/secrets/db-pass"}}}
+	w := do(t, mock, http.MethodPatch, "/secrets/db-pass", `{"removeRotation":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	body := mock.lastNR.Params["body"].(map[string]any)
+	rotation, ok := body["rotation"].(map[string]any)
+	if !ok || len(rotation) != 0 {
+		t.Fatalf("body rotation = %#v, want an empty object", body["rotation"])
 	}
 }
 

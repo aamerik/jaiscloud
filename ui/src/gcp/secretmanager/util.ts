@@ -22,6 +22,20 @@ export function formatKeyValueLines(labels?: Record<string, string>): string {
     .join('\n')
 }
 
+/** Parse a comma-separated topic list; returns undefined when empty. */
+export function parseTopicList(text: string): string[] | undefined {
+  const topics = text
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean)
+  return topics.length > 0 ? topics : undefined
+}
+
+/** Render a topic list as comma-separated text for editing. */
+export function formatTopicList(topics?: string[]): string {
+  return topics && topics.length > 0 ? topics.join(', ') : ''
+}
+
 /** Base64-encode UTF-8 text (the wire payload.data encoding). */
 export function toBase64(text: string): string {
   const bytes = new TextEncoder().encode(text)

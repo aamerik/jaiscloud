@@ -4,6 +4,7 @@ package secretmanager
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -31,11 +32,19 @@ type Provider struct {
 	secrets   secretmanagerstore.Store
 	resources store.ResourceStore // IAM policies (control-plane)
 	encryptor crypto.EnvelopeEncryptor
+	// publisher delivers the secret's event notifications (DC64); nil disables
+	// them.
+	publisher secretmanagersvc.Publisher
 }
 
 func New(secrets secretmanagerstore.Store, resources store.ResourceStore, encryptor crypto.EnvelopeEncryptor) *Provider {
 	return &Provider{secrets: secrets, resources: resources, encryptor: encryptor}
 }
+
+// SetEventPublisher wires the Pub/Sub publisher used to deliver a secret's
+// event notifications, the same way the GCS provider receives its notification
+// publisher.
+func (p *Provider) SetEventPublisher(pub secretmanagersvc.Publisher) { p.publisher = pub }
 
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
@@ -63,6 +72,7 @@ type secretMeta struct {
 	Name           string
 	Labels         map[string]string
 	Annotations    map[string]string
+	Topics         []string
 	CreateTime     string
 	NextVer        int
 	Rotation       *secretmanagerstore.Rotation
@@ -136,7 +146,8 @@ func secretID(name string) string {
 func toStoreSecret(m secretMeta) secretmanagerstore.Secret {
 	tc, _ := time.Parse(time.RFC3339Nano, m.CreateTime)
 	s := secretmanagerstore.Secret{
-		ID: secretID(m.Name), Labels: m.Labels, Annotations: m.Annotations, CreateTime: tc, NextVer: m.NextVer,
+		ID: secretID(m.Name), Labels: m.Labels, Annotations: m.Annotations, Topics: m.Topics,
+		CreateTime: tc, NextVer: m.NextVer,
 		Rotation: m.Rotation, VersionAliases: m.VersionAliases,
 		Replication: m.Replication, KmsKeyName: m.legacyKmsKeyName,
 	}
@@ -148,7 +159,7 @@ func toStoreSecret(m secretMeta) secretmanagerstore.Secret {
 
 func fromStoreSecret(nr *model.NormalizedRequest, s secretmanagerstore.Secret) secretMeta {
 	m := secretMeta{
-		Name: nr.ResourceID("secret", s.ID), Labels: s.Labels, Annotations: s.Annotations, NextVer: s.NextVer,
+		Name: nr.ResourceID("secret", s.ID), Labels: s.Labels, Annotations: s.Annotations, Topics: s.Topics, NextVer: s.NextVer,
 		Rotation: s.Rotation, VersionAliases: s.VersionAliases,
 		Replication: s.Replication, legacyKmsKeyName: s.KmsKeyName,
 	}
@@ -189,7 +200,9 @@ func annotationsFromBody(body map[string]any) map[string]string {
 	return out
 }
 
-// rotationFromBody extracts the rotation schedule from a request body.
+// rotationFromBody extracts the rotation schedule from a request body. The
+// period is canonicalised to the API's google-duration JSON form ("3600s"), so
+// a stored schedule always renders the way real GCP renders it.
 func rotationFromBody(body map[string]any) *secretmanagerstore.Rotation {
 	r, ok := body["rotation"].(map[string]any)
 	if !ok {
@@ -200,9 +213,39 @@ func rotationFromBody(body map[string]any) *secretmanagerstore.Rotation {
 		out.NextRotationTime = v
 	}
 	if v, ok := r["rotationPeriod"].(string); ok {
+		// Store the canonical google-duration form when the value is one;
+		// anything else is left verbatim for ValidateRotation to reject (a Go
+		// duration such as "1h" is not the wire format for this field).
 		out.RotationPeriod = v
+		if _, err := secretmanagersvc.ParseRotationDuration(v); err == nil {
+			out.RotationPeriod = secretmanagersvc.RotationPeriodString(v)
+		}
 	}
 	return out
+}
+
+// topicsFromBody extracts the `topics` event-notification list. set reports
+// whether the body carried the field at all: a present-but-empty list removes
+// every topic, while an absent field leaves the stored list alone.
+func topicsFromBody(body map[string]any) (topics []string, set bool, err error) {
+	raw, ok := body["topics"]
+	if !ok || raw == nil {
+		return nil, false, nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, false, model.NewProviderError("InvalidArgument", "topics must be a list", 400)
+	}
+	out := make([]string, 0, len(list))
+	for i, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			return nil, false, model.NewProviderError("InvalidArgument", fmt.Sprintf("topics[%d] must be an object", i), 400)
+		}
+		name, _ := m["name"].(string)
+		out = append(out, name)
+	}
+	return out, true, nil
 }
 
 // versionAliasesFromBody extracts the versionAliases map (alias → version
@@ -345,8 +388,21 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	if annotations := annotationsFromBody(body); annotations != nil {
 		m.Annotations = annotations
 	}
+	topics, topicsSet, err := topicsFromBody(body)
+	if err != nil {
+		return nil, err
+	}
+	if topicsSet {
+		if err := secretmanagersvc.ValidateTopics(topics); err != nil {
+			return nil, err
+		}
+		m.Topics = topics
+	}
 	if r := rotationFromBody(body); r != nil {
 		m.Rotation = r
+	}
+	if err := secretmanagersvc.ValidateRotation(m.Rotation, m.Topics, clock.Now(), true); err != nil {
+		return nil, err
 	}
 	if va := versionAliasesFromBody(body); va != nil {
 		m.VersionAliases = va
@@ -366,6 +422,12 @@ func (p *Provider) Create(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		}
 		return nil, err
 	}
+	// TOPIC_CONFIGURED is the test message a create/update carrying a topic list
+	// sends to every topic before the create/update event itself.
+	if topicsSet {
+		secretmanagersvc.NotifyTopicConfigured(ctx, p.publisher, nr.AccountID, sec.Topics)
+	}
+	p.notifySecret(ctx, nr, secretmanagersvc.EventSecretCreate, sec)
 	return provider.OK(secretToMap(nr, sec)), nil
 }
 
@@ -412,7 +474,7 @@ func (p *Provider) Get(ctx context.Context, nr *model.NormalizedRequest) (*model
 	if err != nil {
 		return nil, mapSecretErr(err)
 	}
-	s = p.maybeRotate(ctx, nr.AccountID, id, s)
+	s = p.maybeRotate(ctx, nr, id, s)
 	return provider.OK(secretToMap(nr, s)), nil
 }
 
@@ -445,6 +507,24 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 		}
 	}
 
+	// Rotation and topics are request data: parse them once, outside the
+	// (retried) atomic mutate, and record which parts of each the mask selects.
+	// A mask naming `rotation.rotation_period` merges that subfield into the
+	// stored schedule instead of replacing it, so a period-only patch keeps the
+	// next rotation time.
+	incomingRotation := rotationFromBody(body)
+	wholeRotation := mask.exact("rotation")
+	rotationNext := mask.hasAny("rotation.nextRotationTime", "rotation.next_rotation_time")
+	rotationPeriod := mask.hasAny("rotation.rotationPeriod", "rotation.rotation_period")
+	rotationTouched := incomingRotation != nil && (wholeRotation || rotationNext || rotationPeriod)
+	nextTimeSupplied := rotationTouched && incomingRotation.NextRotationTime != "" && (wholeRotation || rotationNext)
+	incomingTopics, topicsSet, err := topicsFromBody(body)
+	if err != nil {
+		return nil, err
+	}
+	topicsTouched := topicsSet && mask.has("topics")
+	now := clock.Now()
+
 	// UpdateSecretAtomic reads, merges, and writes under one lock, so a
 	// concurrent AddVersion's NextVersion() counter advance can't land between
 	// our read and our write and get silently rolled back by it.
@@ -471,13 +551,13 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 			if annotations := annotationsFromBody(body); annotations != nil && mask.has("annotations") {
 				m.Annotations = annotations
 			}
-			if r := rotationFromBody(body); r != nil && mask.has("rotation") {
-				// managedRotationStatus is output-only: keep the stored
-				// config/status across a schedule update that doesn't carry it.
-				if m.Rotation != nil {
-					r.ManagedRotation = m.Rotation.ManagedRotation
-				}
-				m.Rotation = r
+			if rotationTouched {
+				// managedRotationStatus is output-only: MergedRotation always
+				// carries the stored config/status across a schedule update.
+				m.Rotation = secretmanagersvc.MergedRotation(current.Rotation, incomingRotation, wholeRotation, rotationNext, rotationPeriod)
+			}
+			if topicsTouched {
+				m.Topics = incomingTopics
 			}
 			if va := versionAliasesFromBody(body); va != nil && mask.hasAny("versionAliases", "version_aliases") {
 				m.VersionAliases = va
@@ -488,11 +568,29 @@ func (p *Provider) Update(ctx context.Context, nr *model.NormalizedRequest) (*mo
 			}
 			m.Replication = merged
 		}
+		// Validate the merged result: a patch that sets a period on a schedule
+		// with no next rotation time, or removes every topic from a rotating
+		// secret, is INVALID_ARGUMENT at that point even though each half of the
+		// request looked valid on its own.
+		if topicsTouched {
+			if err := secretmanagersvc.ValidateTopics(m.Topics); err != nil {
+				return secretmanagerstore.Secret{}, err
+			}
+		}
+		if rotationTouched || topicsTouched {
+			if err := secretmanagersvc.ValidateRotation(m.Rotation, m.Topics, now, nextTimeSupplied); err != nil {
+				return secretmanagerstore.Secret{}, err
+			}
+		}
 		return toStoreSecret(m), nil
 	})
 	if err != nil {
 		return nil, mapSecretErr(err)
 	}
+	if topicsTouched {
+		secretmanagersvc.NotifyTopicConfigured(ctx, p.publisher, nr.AccountID, updated.Topics)
+	}
+	p.notifySecret(ctx, nr, secretmanagersvc.EventSecretUpdate, updated)
 	return provider.OK(secretToMap(nr, updated)), nil
 }
 
@@ -520,7 +618,8 @@ var errSkipRotation = errors.New("secret rotation not due")
 // rotation-schedule advance — is re-done from a fresh read inside
 // UpdateSecretAtomic's locked section, so a concurrent Update/AddVersion/
 // maybeRotate on the same secret can't interleave with this one.
-func (p *Provider) maybeRotate(ctx context.Context, account, id string, s secretmanagerstore.Secret) secretmanagerstore.Secret {
+func (p *Provider) maybeRotate(ctx context.Context, nr *model.NormalizedRequest, id string, s secretmanagerstore.Secret) secretmanagerstore.Secret {
+	account := nr.AccountID
 	if s.Rotation == nil || s.Rotation.NextRotationTime == "" {
 		return s
 	}
@@ -557,6 +656,11 @@ func (p *Provider) maybeRotate(ctx context.Context, account, id string, s secret
 		}
 		return s
 	}
+	// The schedule is notification-only: real Secret Manager publishes
+	// SECRET_ROTATE at nextRotationTime and reschedules. The emulator has no
+	// background worker, so the message goes out when a read observes the due
+	// schedule (DC71).
+	p.notifySecret(ctx, nr, secretmanagersvc.EventSecretRotate, updated)
 	return updated
 }
 
@@ -571,12 +675,19 @@ func (p *Provider) Delete(ctx context.Context, nr *model.NormalizedRequest) (*mo
 	// The check runs inside the store's atomic delete, so a concurrent update
 	// cannot land between the comparison and the removal (which would let a
 	// stale etag through).
+	var deleted secretmanagerstore.Secret
 	err = p.secrets.DeleteSecretIf(ctx, nr.AccountID, id, func(sec secretmanagerstore.Secret) error {
-		return secretmanagersvc.CheckSecretEtag(nr.ResourceID("secret", id), sec, etagParam(nr))
+		if err := secretmanagersvc.CheckSecretEtag(nr.ResourceID("secret", id), sec, etagParam(nr)); err != nil {
+			return err
+		}
+		deleted = sec
+		return nil
 	})
 	if err != nil {
 		return nil, mapSecretErr(err)
 	}
+	// SECRET_DELETE carries the metadata as it was before the delete.
+	p.notifySecretDelete(ctx, nr, deleted)
 	return &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{}}, nil
 }
 
@@ -612,6 +723,15 @@ func restUpdateMask(nr *model.NormalizedRequest) updateMask {
 		}
 	}
 	return mask
+}
+
+// exact reports whether the mask selects field itself, not a nested path under
+// it. A nil mask selects everything.
+func (m updateMask) exact(field string) bool {
+	if m == nil {
+		return true
+	}
+	return m[field]
 }
 
 // has reports whether the mask selects field, exactly or as the root of a
@@ -697,6 +817,7 @@ func (p *Provider) AddVersion(ctx context.Context, nr *model.NormalizedRequest) 
 	if err := p.secrets.CreateVersion(ctx, nr.AccountID, stv); err != nil {
 		return nil, err
 	}
+	p.notifyVersion(ctx, nr, secretmanagersvc.EventSecretVersionAdd, sec, fromStoreVersion(nr, stv), sec.ReplicationPolicy())
 	return provider.OK(versionToMap(fromStoreVersion(nr, stv), sec.ReplicationPolicy())), nil
 }
 
@@ -756,6 +877,12 @@ func (p *Provider) EnableManagedRotation(ctx context.Context, nr *model.Normaliz
 	v, repl, err := p.appendManagedVersion(ctx, nr, id, []byte(password), cfg)
 	if err != nil {
 		return nil, err
+	}
+	// Enabling managed rotation also records the schedule status on the secret,
+	// so the secret itself is modified and SECRET_UPDATE follows the version
+	// event.
+	if updated, gerr := p.secrets.GetSecret(ctx, nr.AccountID, id); gerr == nil {
+		p.notifySecret(ctx, nr, secretmanagersvc.EventSecretUpdate, updated)
 	}
 	return provider.OK(versionToMap(v, repl)), nil
 }
@@ -840,6 +967,9 @@ func (p *Provider) appendManagedVersion(ctx context.Context, nr *model.Normalize
 	if err := p.secrets.CreateVersion(ctx, nr.AccountID, stv); err != nil {
 		return versionMeta{}, nil, err
 	}
+	// Managed rotation adds a version like AddVersion does, so the secret's
+	// topics see the same SECRET_VERSION_ADD.
+	p.notifyVersion(ctx, nr, secretmanagersvc.EventSecretVersionAdd, sec, fromStoreVersion(nr, stv), sec.ReplicationPolicy())
 	return fromStoreVersion(nr, stv), sec.ReplicationPolicy(), nil
 }
 
@@ -1020,6 +1150,11 @@ func (p *Provider) setVersionState(ctx context.Context, nr *model.NormalizedRequ
 		return nil, mapSecretErr(err)
 	}
 	m := fromStoreVersion(nr, v)
+	if p.publisher != nil {
+		if parent, perr := p.secrets.GetSecret(ctx, nr.AccountID, secret); perr == nil {
+			p.notifyVersion(ctx, nr, secretmanagersvc.VersionStateEvent(state), parent, m, repl)
+		}
+	}
 	return provider.OK(versionToMap(m, repl)), nil
 }
 
@@ -1114,13 +1249,20 @@ func secretToMap(nr *model.NormalizedRequest, s secretmanagerstore.Secret) map[s
 	if m.Annotations != nil {
 		out["annotations"] = m.Annotations
 	}
+	if len(m.Topics) > 0 {
+		topics := make([]any, 0, len(m.Topics))
+		for _, t := range m.Topics {
+			topics = append(topics, map[string]any{"name": t})
+		}
+		out["topics"] = topics
+	}
 	if m.Rotation != nil {
 		rot := map[string]any{}
 		if m.Rotation.NextRotationTime != "" {
 			rot["nextRotationTime"] = m.Rotation.NextRotationTime
 		}
 		if m.Rotation.RotationPeriod != "" {
-			rot["rotationPeriod"] = m.Rotation.RotationPeriod
+			rot["rotationPeriod"] = secretmanagersvc.RotationPeriodString(m.Rotation.RotationPeriod)
 		}
 		if m.Rotation.ManagedRotation != nil {
 			rot["managedRotationStatus"] = map[string]any{"state": m.Rotation.ManagedRotation.State}
@@ -1217,4 +1359,48 @@ func versionReplicationStatusToMap(v versionMeta, repl *secretmanagerstore.Repli
 		auto["customerManagedEncryption"] = map[string]any{"kmsKeyVersionName": v.KmsKeyVersionName}
 	}
 	return map[string]any{"automatic": auto}
+}
+
+// ─── event notifications (DC64) ──────────────────────────────────────────────
+
+// notifySecret publishes an event about the secret itself to each of its
+// topics, with the Secret resource as data (proto3 JSON mapping).
+func (p *Provider) notifySecret(ctx context.Context, nr *model.NormalizedRequest, eventType string, s secretmanagerstore.Secret) {
+	if p.publisher == nil || len(s.Topics) == 0 {
+		return
+	}
+	data, err := json.Marshal(secretToMap(nr, s))
+	if err != nil {
+		return
+	}
+	secretmanagersvc.Notify(ctx, p.publisher, nr.AccountID, s.Topics, data,
+		secretmanagersvc.SecretEventAttributes(eventType, nr.ResourceID("secret", s.ID), clock.Now()))
+}
+
+// notifySecretDelete publishes SECRET_DELETE (deleteType REQUESTED) with the
+// metadata as it was before the delete.
+func (p *Provider) notifySecretDelete(ctx context.Context, nr *model.NormalizedRequest, s secretmanagerstore.Secret) {
+	if p.publisher == nil || len(s.Topics) == 0 {
+		return
+	}
+	data, err := json.Marshal(secretToMap(nr, s))
+	if err != nil {
+		return
+	}
+	secretmanagersvc.Notify(ctx, p.publisher, nr.AccountID, s.Topics, data,
+		secretmanagersvc.DeleteEventAttributes(nr.ResourceID("secret", s.ID), clock.Now()))
+}
+
+// notifyVersion publishes a version-scoped event to the parent secret's topics,
+// with the SecretVersion resource as data.
+func (p *Provider) notifyVersion(ctx context.Context, nr *model.NormalizedRequest, eventType string, parent secretmanagerstore.Secret, m versionMeta, repl *secretmanagerstore.Replication) {
+	if p.publisher == nil || len(parent.Topics) == 0 {
+		return
+	}
+	data, err := json.Marshal(versionToMap(m, repl))
+	if err != nil {
+		return
+	}
+	secretmanagersvc.Notify(ctx, p.publisher, nr.AccountID, parent.Topics, data,
+		secretmanagersvc.VersionEventAttributes(eventType, nr.ResourceID("secret", parent.ID), m.Name, clock.Now()))
 }

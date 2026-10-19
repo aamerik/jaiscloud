@@ -55,10 +55,31 @@ func secretFromMap(m map[string]any) Secret {
 		Etag:             uihelper.Str(m, "etag"),
 		Labels:           uihelper.StringMapAt(m, "labels"),
 		Annotations:      uihelper.StringMapAt(m, "annotations"),
+		Topics:           topicsFromMap(m),
 		RotationPeriod:   uihelper.Str(rotation, "rotationPeriod"),
 		NextRotationTime: uihelper.Str(rotation, "nextRotationTime"),
 		KmsKeyName:       kmsKeyNameFromMap(m),
 	}
+}
+
+// topicsFromMap flattens the Secret's `topics` array to the topic resource
+// names the console edits.
+func topicsFromMap(m map[string]any) []string {
+	items := uihelper.AsSlice(m["topics"])
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		t, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name := uihelper.Str(t, "name"); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // kmsKeyNameFromMap pulls the CMEK name out of the nested replication object:
@@ -98,7 +119,7 @@ func versionFromMap(m map[string]any) SecretVersion {
 	}
 }
 
-func secretBody(labels, annotations map[string]string, rotationPeriod, nextRotationTime, kmsKeyName string) map[string]any {
+func secretBody(labels, annotations map[string]string, topics []string, rotationPeriod, nextRotationTime string, removeRotation bool, kmsKeyName string) map[string]any {
 	body := map[string]any{}
 	if len(labels) > 0 {
 		body["labels"] = uihelper.StringMapToAny(labels)
@@ -106,7 +127,19 @@ func secretBody(labels, annotations map[string]string, rotationPeriod, nextRotat
 	if len(annotations) > 0 {
 		body["annotations"] = uihelper.StringMapToAny(annotations)
 	}
-	if rotationPeriod != "" || nextRotationTime != "" {
+	// topics is always sent, so the console's (pre-filled) list is the source of
+	// truth: an empty list removes every event notification.
+	topicList := make([]any, 0, len(topics))
+	for _, t := range topics {
+		topicList = append(topicList, map[string]any{"name": t})
+	}
+	body["topics"] = topicList
+	switch {
+	case removeRotation:
+		// An empty rotation object on the (maskless) patch clears the schedule;
+		// the provider keeps the output-only managedRotationStatus.
+		body["rotation"] = map[string]any{}
+	case rotationPeriod != "" || nextRotationTime != "":
 		rotation := map[string]any{}
 		if rotationPeriod != "" {
 			rotation["rotationPeriod"] = rotationPeriod
@@ -189,7 +222,7 @@ func (h *Handler) CreateSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	nr := uihelper.NR(r.Context(), h.cfg, "secretmanager", "SecretManager.CreateSecret", "global", h.account(r))
 	nr.Params["secretId"] = req.SecretID
-	nr.Params["body"] = secretBody(req.Labels, req.Annotations, req.RotationPeriod, req.NextRotationTime, req.KmsKeyName)
+	nr.Params["body"] = secretBody(req.Labels, req.Annotations, req.Topics, req.RotationPeriod, req.NextRotationTime, false, req.KmsKeyName)
 
 	resp, err := h.provider.Create(r.Context(), nr)
 	if err != nil {
@@ -229,7 +262,7 @@ func (h *Handler) UpdateSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	nr := uihelper.NR(r.Context(), h.cfg, "secretmanager", "SecretManager.UpdateSecret", "global", h.account(r))
 	nr.Params["name"] = name
-	nr.Params["body"] = secretBody(req.Labels, req.Annotations, req.RotationPeriod, req.NextRotationTime, req.KmsKeyName)
+	nr.Params["body"] = secretBody(req.Labels, req.Annotations, req.Topics, req.RotationPeriod, req.NextRotationTime, req.RemoveRotation, req.KmsKeyName)
 
 	resp, err := h.provider.Update(r.Context(), nr)
 	if err != nil {

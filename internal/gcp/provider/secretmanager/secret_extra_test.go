@@ -6,7 +6,9 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
+	"jaiscloud/internal/clock"
 	"jaiscloud/internal/gcp/crypto"
 	"jaiscloud/internal/gcp/store/kms"
 	secretmanagerstore "jaiscloud/internal/gcp/store/secretmanager"
@@ -295,6 +297,13 @@ func TestSecretRotationAndAliases(t *testing.T) {
 	ctx := context.Background()
 	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
 
+	// Freeze the clock: a rotation schedule must be at least five minutes in
+	// the future when it is set (DC65), so a due schedule is produced by moving
+	// time forward rather than by creating one in the past.
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
+
 	// Create with aliases (rotation unset).
 	create := newNR(map[string]any{
 		"secretId": "s",
@@ -313,9 +322,11 @@ func TestSecretRotationAndAliases(t *testing.T) {
 		t.Fatalf("addVersion: %v", err)
 	}
 
-	// Enable rotation, already due, and update the alias to the new version.
+	// Enable rotation, due in an hour, and update the alias to the new version.
+	due := t0.Add(time.Hour)
 	upd := newNR(map[string]any{"name": "secrets/s", "body": map[string]any{
-		"rotation":       map[string]any{"nextRotationTime": "2000-01-01T00:00:00Z", "rotationPeriod": "3600s"},
+		"topics":         []any{map[string]any{"name": "projects/proj/topics/rot"}},
+		"rotation":       map[string]any{"nextRotationTime": due.Format(time.RFC3339), "rotationPeriod": "3600s"},
 		"versionAliases": map[string]any{"latest": float64(2)},
 	}})
 	resp, err = p.Update(ctx, upd)
@@ -326,13 +337,14 @@ func TestSecretRotationAndAliases(t *testing.T) {
 		t.Error("expected rotation in update response")
 	}
 
-	// Get triggers lazy rotation (nextRotationTime is in the past).
+	// Get once the schedule is due triggers lazy rotation.
+	clock.SetGlobalClock(clock.FixedClock{T: due.Add(time.Minute)})
 	resp, err = p.Get(ctx, newNR(map[string]any{"name": "secrets/s"}))
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	rot, _ := resp.Data["rotation"].(map[string]any)
-	if rot["nextRotationTime"] == "2000-01-01T00:00:00Z" {
+	if rot["nextRotationTime"] == due.Format(time.RFC3339) {
 		t.Error("expected nextRotationTime to advance after rotation")
 	}
 
@@ -354,11 +366,16 @@ func TestSecretRotationNotDue(t *testing.T) {
 	ctx := context.Background()
 	p := New(secretmanagerstore.NewMemoryStore(), store.NewMemoryResourceStore(), crypto.NewEnvelopeEncryptor(kms.NewMemoryStore()))
 
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock.SetGlobalClock(clock.FixedClock{T: t0})
+	t.Cleanup(func() { clock.SetGlobalClock(clock.RealClock{}) })
+
 	create := newNR(map[string]any{
 		"secretId": "s",
 		"body": map[string]any{
+			"topics": []any{map[string]any{"name": "projects/proj/topics/rot"}},
 			"rotation": map[string]any{
-				"nextRotationTime": "2999-01-01T00:00:00Z",
+				"nextRotationTime": t0.Add(24 * time.Hour).Format(time.RFC3339),
 				"rotationPeriod":   "3600s",
 			},
 		},
@@ -890,7 +907,13 @@ func TestManagedRotation(t *testing.T) {
 	// A schedule update must not clobber the managed-rotation status.
 	if _, err := p.Update(ctx, newNR(map[string]any{
 		"name": name,
-		"body": map[string]any{"rotation": map[string]any{"rotationPeriod": "3600s"}},
+		"body": map[string]any{
+			"topics": []any{map[string]any{"name": "projects/proj/topics/rot"}},
+			"rotation": map[string]any{
+				"nextRotationTime": clock.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
+				"rotationPeriod":   "3600s",
+			},
+		},
 	})); err != nil {
 		t.Fatalf("update rotation period: %v", err)
 	}
@@ -947,7 +970,13 @@ func TestManagedRotationConcurrentReads(t *testing.T) {
 	// Seed a rotation schedule so reads return a non-nil Rotation.
 	if _, err := p.Update(ctx, newNR(map[string]any{
 		"name": name,
-		"body": map[string]any{"rotation": map[string]any{"rotationPeriod": "3600s"}},
+		"body": map[string]any{
+			"topics": []any{map[string]any{"name": "projects/proj/topics/rot"}},
+			"rotation": map[string]any{
+				"nextRotationTime": clock.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
+				"rotationPeriod":   "3600s",
+			},
+		},
 	})); err != nil {
 		t.Fatalf("seed rotation: %v", err)
 	}

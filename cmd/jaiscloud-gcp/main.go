@@ -318,6 +318,9 @@ func startCmd() *cobra.Command {
 			// provider only sees the interface, so it never imports the Pub/Sub
 			// provider (no provider→provider dependency).
 			storageP.SetEventPublisher(pubsubP)
+			// Secret Manager's control-plane event notifications (DC64) ride the
+			// same Pub/Sub publish path, for both transports.
+			secretP.SetEventPublisher(pubsubP)
 			firestoreP := firestoreprovider.New(stores.documents, stores.resources)
 
 			// Cloud Datastore's transport-neutral core is shared by the REST
@@ -887,6 +890,7 @@ func startCmd() *cobra.Command {
 			firestoreAdminGRPC := grpcfirestoreadmin.NewService(firestoreP.Service, cfg.ProjectID)
 			pubsubGRPC := grpcpubsub.NewService(stores.resources, stores.messages, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
 			secretGRPC := grpcsecretmanager.NewService(stores.secrets, stores.resources, crypto.NewEnvelopeEncryptor(stores.keys), cfg.ProjectID)
+			secretGRPC.SetEventPublisher(pubsubP)
 			kmsGRPC := grpckms.NewService(kmsCore, cfg.ProjectID)
 			loggingGRPC := grpclogging.NewService(loggingCore, cfg.ProjectID)
 			loggingConfigGRPC := grpclogging.NewConfigService(loggingCore, cfg.ProjectID)

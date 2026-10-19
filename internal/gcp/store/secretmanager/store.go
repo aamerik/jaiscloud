@@ -134,9 +134,13 @@ func GeneratePassword() (string, error) {
 
 // Secret is Secret Manager secret metadata.
 type Secret struct {
-	ID             string
-	Labels         map[string]string
-	Annotations    map[string]string
+	ID          string
+	Labels      map[string]string
+	Annotations map[string]string
+	// Topics are the Pub/Sub topics the secret's control-plane event
+	// notifications are published to (`projects/{p}/topics/{t}`, at most 10).
+	// Empty when the secret has no event notifications configured.
+	Topics         []string
 	CreateTime     time.Time
 	NextVer        int
 	Rotation       *Rotation      // nil when rotation is disabled
