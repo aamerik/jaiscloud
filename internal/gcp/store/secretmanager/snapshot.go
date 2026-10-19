@@ -72,12 +72,12 @@ func (s *PostgresStore) Snapshot(ctx context.Context, w io.Writer) error {
 	}
 	for rows.Next() {
 		var r secretRow
-		var labels, annotations, rotation, aliases, replication []byte
-		if err := rows.Scan(&r.ProjectID, &r.Secret.ID, &labels, &r.Secret.CreateTime, &r.Secret.NextVer, &rotation, &aliases, &r.Secret.KmsKeyName, &annotations, &replication); err != nil {
+		var labels, annotations, topics, rotation, aliases, replication []byte
+		if err := rows.Scan(&r.ProjectID, &r.Secret.ID, &labels, &r.Secret.CreateTime, &r.Secret.NextVer, &rotation, &aliases, &r.Secret.KmsKeyName, &annotations, &replication, &topics); err != nil {
 			rows.Close()
 			return err
 		}
-		decodeSecretJSON(&r.Secret, labels, annotations, rotation, aliases, replication)
+		decodeSecretJSON(&r.Secret, labels, annotations, topics, rotation, aliases, replication)
 		secrets = append(secrets, r)
 	}
 	rows.Close()
@@ -144,7 +144,7 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 	}
 	for _, r := range snap.Secrets {
 		labels, _ := json.Marshal(r.Secret.Labels)
-		var rotation, aliases, annotations, replication []byte
+		var topics, rotation, aliases, annotations, replication []byte
 		if r.Secret.Rotation != nil {
 			rotation, _ = json.Marshal(r.Secret.Rotation)
 		}
@@ -157,8 +157,11 @@ func (s *PostgresStore) Restore(ctx context.Context, r io.Reader) error {
 		if r.Secret.Replication != nil {
 			replication, _ = json.Marshal(r.Secret.Replication)
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-			r.ProjectID, r.Secret.ID, json.RawMessage(labels), r.Secret.CreateTime, r.Secret.NextVer, nullableJSONBytes(rotation), nullableJSONBytes(aliases), r.Secret.KmsKeyName, nullableJSONBytes(annotations), nullableJSONBytes(replication)); err != nil {
+		if len(r.Secret.Topics) > 0 {
+			topics, _ = json.Marshal(r.Secret.Topics)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication, topics) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			r.ProjectID, r.Secret.ID, json.RawMessage(labels), r.Secret.CreateTime, r.Secret.NextVer, nullableJSONBytes(rotation), nullableJSONBytes(aliases), r.Secret.KmsKeyName, nullableJSONBytes(annotations), nullableJSONBytes(replication), nullableJSONBytes(topics)); err != nil {
 			return err
 		}
 	}

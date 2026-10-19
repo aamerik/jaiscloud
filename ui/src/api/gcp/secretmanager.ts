@@ -11,6 +11,8 @@ export interface Secret {
   etag?: string
   labels?: Record<string, string>
   annotations?: Record<string, string>
+  /** Pub/Sub topics that receive this secret's control-plane events. */
+  topics?: string[]
   rotationPeriod?: string
   nextRotationTime?: string
   kmsKeyName?: string
@@ -26,6 +28,7 @@ export interface CreateSecretRequest {
   secretId: string
   labels?: Record<string, string>
   annotations?: Record<string, string>
+  topics?: string[]
   rotationPeriod?: string
   nextRotationTime?: string
   kmsKeyName?: string
@@ -34,8 +37,11 @@ export interface CreateSecretRequest {
 export interface UpdateSecretRequest {
   labels?: Record<string, string>
   annotations?: Record<string, string>
+  topics?: string[]
   rotationPeriod?: string
   nextRotationTime?: string
+  /** Send an empty rotation object to remove the schedule (DC65). */
+  removeRotation?: boolean
   kmsKeyName?: string
 }
 

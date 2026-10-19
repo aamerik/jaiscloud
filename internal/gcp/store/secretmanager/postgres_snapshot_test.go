@@ -47,7 +47,8 @@ func TestPostgresStoreSnapshotPreservesCMEK(t *testing.T) {
 		}},
 		{Location: "us-central1"},
 	}}}
-	umSecret := Secret{ID: "um", CreateTime: created, NextVer: 1}
+	umSecret := Secret{ID: "um", CreateTime: created, NextVer: 1,
+		Topics: []string{"projects/proj/topics/secret-events"}}
 	umSecret.SetReplication(userManaged)
 	if err := s.CreateSecret(ctx, "proj", "s", Secret{
 		ID: "s", CreateTime: created, NextVer: 2, KmsKeyName: key,
@@ -93,6 +94,9 @@ func TestPostgresStoreSnapshotPreservesCMEK(t *testing.T) {
 	}
 	if restoredUM.KmsKeyName != userManaged.WrapKey() {
 		t.Fatalf("restored effective key = %q, want %q", restoredUM.KmsKeyName, userManaged.WrapKey())
+	}
+	if !reflect.DeepEqual(restoredUM.Topics, umSecret.Topics) {
+		t.Fatalf("restored topics = %#v, want %#v", restoredUM.Topics, umSecret.Topics)
 	}
 	v, err := s.GetVersion(ctx, "proj", "s", "1")
 	if err != nil {

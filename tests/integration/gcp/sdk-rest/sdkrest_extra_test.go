@@ -253,8 +253,12 @@ func TestSDKSecretManagerRotation(t *testing.T) {
 	svc, err := secretmanager.NewService(ctx, opts()...)
 	require.NoError(t, err)
 
+	// A rotation schedule requires at least one topic (DC65), so the fixture
+	// carries one; the topic itself need not exist for the schedule to be set.
+	topic := "projects/proj/topics/" + unique("rot-events")
 	secret, err := svc.Projects.Secrets.Create("projects/proj", &secretmanager.Secret{
 		Replication: &secretmanager.Replication{Automatic: &secretmanager.Automatic{}},
+		Topics:      []*secretmanager.Topic{{Name: topic}},
 		Rotation: &secretmanager.Rotation{
 			NextRotationTime: "2030-01-01T00:00:00Z",
 			RotationPeriod:   "86400s",
@@ -263,6 +267,8 @@ func TestSDKSecretManagerRotation(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, secret.Rotation)
 	require.Equal(t, "86400s", secret.Rotation.RotationPeriod)
+	require.Len(t, secret.Topics, 1)
+	require.Equal(t, topic, secret.Topics[0].Name)
 
 	got, err := svc.Projects.Secrets.Get(secret.Name).Do()
 	require.NoError(t, err)
@@ -279,6 +285,93 @@ func TestSDKSecretManagerRotation(t *testing.T) {
 	got, err = svc.Projects.Secrets.Get(secret.Name).Do()
 	require.NoError(t, err)
 	require.Equal(t, "2031-01-01T00:00:00Z", got.Rotation.NextRotationTime)
+}
+
+// TestSDKSecretManagerEventNotifications verifies the Secret Manager event
+// notifications reach the secret's Pub/Sub topic end to end (DC64): a create
+// sends TOPIC_CONFIGURED then SECRET_CREATE, and adding a version sends
+// SECRET_VERSION_ADD with the version's full name.
+func TestSDKSecretManagerEventNotifications(t *testing.T) {
+	ctx := context.Background()
+	sm, err := secretmanager.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	ps, err := pubsub.NewService(ctx, opts()...)
+	require.NoError(t, err)
+
+	topic := "projects/proj/topics/" + unique("sm-events")
+	_, err = ps.Projects.Topics.Create(topic, &pubsub.Topic{Name: topic}).Do()
+	require.NoError(t, err)
+	sub := "projects/proj/subscriptions/" + unique("sm-events-sub")
+	_, err = ps.Projects.Subscriptions.Create(sub, &pubsub.Subscription{Name: sub, Topic: topic}).Do()
+	require.NoError(t, err)
+
+	secret, err := sm.Projects.Secrets.Create("projects/proj", &secretmanager.Secret{
+		Replication: &secretmanager.Replication{Automatic: &secretmanager.Automatic{}},
+		Topics:      []*secretmanager.Topic{{Name: topic}},
+	}).SecretId(unique("notify")).Do()
+	require.NoError(t, err)
+
+	pull := func() []*pubsub.ReceivedMessage {
+		t.Helper()
+		resp, err := ps.Projects.Subscriptions.Pull(sub, &pubsub.PullRequest{MaxMessages: 10}).Do()
+		require.NoError(t, err)
+		return resp.ReceivedMessages
+	}
+
+	// TOPIC_CONFIGURED (test message, no body) precedes SECRET_CREATE.
+	msgs := pull()
+	require.Len(t, msgs, 2)
+	require.Equal(t, "TOPIC_CONFIGURED", msgs[0].Message.Attributes["eventType"])
+	require.Empty(t, msgs[0].Message.Data)
+	require.Equal(t, "SECRET_CREATE", msgs[1].Message.Attributes["eventType"])
+	require.Equal(t, secret.Name, msgs[1].Message.Attributes["secretId"])
+	require.Equal(t, "JSON_API_V1", msgs[1].Message.Attributes["dataFormat"])
+	decoded, err := base64.StdEncoding.DecodeString(msgs[1].Message.Data)
+	require.NoError(t, err)
+	require.Contains(t, string(decoded), secret.Name, "SECRET_CREATE data carries the secret resource")
+	require.Contains(t, string(decoded), topic, "SECRET_CREATE data carries the topic list")
+
+	version, err := sm.Projects.Secrets.AddVersion(secret.Name, &secretmanager.AddSecretVersionRequest{
+		Payload: &secretmanager.SecretPayload{Data: b64("s3cret")},
+	}).Do()
+	require.NoError(t, err)
+
+	msgs = pull()
+	require.Len(t, msgs, 1)
+	require.Equal(t, "SECRET_VERSION_ADD", msgs[0].Message.Attributes["eventType"])
+	require.Equal(t, secret.Name, msgs[0].Message.Attributes["secretId"])
+	require.Equal(t, version.Name, msgs[0].Message.Attributes["versionId"])
+}
+
+// TestSDKSecretManagerRotationScheduleValidation verifies the documented
+// rotation constraints answer 400 rather than being stored (DC65).
+func TestSDKSecretManagerRotationScheduleValidation(t *testing.T) {
+	ctx := context.Background()
+	sm, err := secretmanager.NewService(ctx, opts()...)
+	require.NoError(t, err)
+
+	topic := "projects/proj/topics/" + unique("rot-invalid")
+	for _, tc := range []struct {
+		name   string
+		secret *secretmanager.Secret
+	}{
+		{"period under an hour", &secretmanager.Secret{
+			Topics:   []*secretmanager.Topic{{Name: topic}},
+			Rotation: &secretmanager.Rotation{NextRotationTime: "2030-01-01T00:00:00Z", RotationPeriod: "3599s"},
+		}},
+		{"period without next rotation time", &secretmanager.Secret{
+			Topics:   []*secretmanager.Topic{{Name: topic}},
+			Rotation: &secretmanager.Rotation{RotationPeriod: "3600s"},
+		}},
+		{"schedule without topics", &secretmanager.Secret{
+			Rotation: &secretmanager.Rotation{NextRotationTime: "2030-01-01T00:00:00Z"},
+		}},
+	} {
+		_, err := sm.Projects.Secrets.Create("projects/proj", tc.secret).SecretId(unique("rot-bad")).Do()
+		var ae *googleapi.Error
+		require.True(t, errors.As(err, &ae), "%s: expected googleapi.Error, got %v", tc.name, err)
+		require.Equal(t, 400, ae.Code, "%s: status", tc.name)
+	}
 }
 
 // TestSDKSecretManagerDeleteNotFound verifies secret deletion plus 404 on get.

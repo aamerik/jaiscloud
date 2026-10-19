@@ -135,6 +135,10 @@ export function SecretDetailPage() {
             </Typography>
             <Typography variant="body2" color="text.secondary">
               Rotation: {detail.data.rotationPeriod || '—'}
+              {detail.data.nextRotationTime ? ` (next ${detail.data.nextRotationTime})` : ''}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Event topics: {detail.data.topics && detail.data.topics.length > 0 ? detail.data.topics.join(', ') : '—'}
             </Typography>
             {detail.data.kmsKeyName && (
               <Typography variant="body2" color="text.secondary">
@@ -251,7 +255,9 @@ export function SecretDetailPage() {
         open={editOpen}
         secret={secret}
         labels={detail.data?.labels}
+        topics={detail.data?.topics}
         rotationPeriod={detail.data?.rotationPeriod}
+        nextRotationTime={detail.data?.nextRotationTime}
         onClose={() => setEditOpen(false)}
       />
 

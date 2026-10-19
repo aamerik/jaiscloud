@@ -36,9 +36,12 @@ func nullableJSON(v any) any {
 
 // decodeSecretJSON fills the JSONB-backed fields of sec from the raw column
 // values every jc_sm_secrets SELECT returns.
-func decodeSecretJSON(sec *Secret, labels, annotations, rotation, aliases, replication []byte) {
+func decodeSecretJSON(sec *Secret, labels, annotations, topics, rotation, aliases, replication []byte) {
 	json.Unmarshal(labels, &sec.Labels)
 	json.Unmarshal(annotations, &sec.Annotations)
+	if len(topics) > 0 {
+		json.Unmarshal(topics, &sec.Topics)
+	}
 	if len(rotation) > 0 {
 		json.Unmarshal(rotation, &sec.Rotation)
 	}
@@ -51,7 +54,7 @@ func decodeSecretJSON(sec *Secret, labels, annotations, rotation, aliases, repli
 	}
 }
 
-const secretColumns = `secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication`
+const secretColumns = `secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication, topics`
 
 func (s *PostgresStore) CreateSecret(ctx context.Context, projectID, id string, sec Secret) error {
 	if sec.CreateTime.IsZero() {
@@ -59,9 +62,9 @@ func (s *PostgresStore) CreateSecret(ctx context.Context, projectID, id string, 
 	}
 	labels, _ := json.Marshal(sec.Labels)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-	`, projectID, id, json.RawMessage(labels), sec.CreateTime, sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases), sec.KmsKeyName, nullableJSON(sec.Annotations), nullableJSON(sec.Replication))
+		INSERT INTO jc_sm_secrets (project_id, secret_id, labels, create_time, next_ver, rotation, version_aliases, kms_key_name, annotations, replication, topics)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	`, projectID, id, json.RawMessage(labels), sec.CreateTime, sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases), sec.KmsKeyName, nullableJSON(sec.Annotations), nullableJSON(sec.Replication), nullableJSON(sec.Topics))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -74,25 +77,25 @@ func (s *PostgresStore) CreateSecret(ctx context.Context, projectID, id string, 
 
 func (s *PostgresStore) GetSecret(ctx context.Context, projectID, id string) (Secret, error) {
 	var sec Secret
-	var labels, annotations, rotation, aliases, replication []byte
+	var labels, annotations, topics, rotation, aliases, replication []byte
 	err := s.pool.QueryRow(ctx, `SELECT `+secretColumns+` FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2`,
-		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication)
+		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication, &topics)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Secret{}, ErrNoSuchSecret
 	}
 	if err != nil {
 		return Secret{}, err
 	}
-	decodeSecretJSON(&sec, labels, annotations, rotation, aliases, replication)
+	decodeSecretJSON(&sec, labels, annotations, topics, rotation, aliases, replication)
 	return sec, nil
 }
 
 func (s *PostgresStore) UpdateSecret(ctx context.Context, projectID, id string, sec Secret) error {
 	labels, _ := json.Marshal(sec.Labels)
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6, kms_key_name=$7, annotations=$8, replication=$9
+		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6, kms_key_name=$7, annotations=$8, replication=$9, topics=$10
 		WHERE project_id=$1 AND secret_id=$2
-	`, projectID, id, json.RawMessage(labels), sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases), sec.KmsKeyName, nullableJSON(sec.Annotations), nullableJSON(sec.Replication))
+	`, projectID, id, json.RawMessage(labels), sec.NextVer, nullableJSON(sec.Rotation), nullableJSON(sec.VersionAliases), sec.KmsKeyName, nullableJSON(sec.Annotations), nullableJSON(sec.Replication), nullableJSON(sec.Topics))
 	if err != nil {
 		return err
 	}
@@ -124,16 +127,16 @@ func (s *PostgresStore) updateSecretAtomicOnce(ctx context.Context, projectID, i
 	defer tx.Rollback(ctx)
 
 	var sec Secret
-	var labels, annotations, rotation, aliases, replication []byte
+	var labels, annotations, topics, rotation, aliases, replication []byte
 	err = tx.QueryRow(ctx, `SELECT `+secretColumns+` FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2 FOR UPDATE`,
-		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication)
+		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication, &topics)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Secret{}, ErrNoSuchSecret
 	}
 	if err != nil {
 		return Secret{}, err
 	}
-	decodeSecretJSON(&sec, labels, annotations, rotation, aliases, replication)
+	decodeSecretJSON(&sec, labels, annotations, topics, rotation, aliases, replication)
 
 	next, err := mutate(sec)
 	if err != nil {
@@ -142,9 +145,9 @@ func (s *PostgresStore) updateSecretAtomicOnce(ctx context.Context, projectID, i
 
 	newLabels, _ := json.Marshal(next.Labels)
 	if _, err := tx.Exec(ctx, `
-		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6, kms_key_name=$7, annotations=$8, replication=$9
+		UPDATE jc_sm_secrets SET labels=$3, next_ver=$4, rotation=$5, version_aliases=$6, kms_key_name=$7, annotations=$8, replication=$9, topics=$10
 		WHERE project_id=$1 AND secret_id=$2
-	`, projectID, id, json.RawMessage(newLabels), next.NextVer, nullableJSON(next.Rotation), nullableJSON(next.VersionAliases), next.KmsKeyName, nullableJSON(next.Annotations), nullableJSON(next.Replication)); err != nil {
+	`, projectID, id, json.RawMessage(newLabels), next.NextVer, nullableJSON(next.Rotation), nullableJSON(next.VersionAliases), next.KmsKeyName, nullableJSON(next.Annotations), nullableJSON(next.Replication), nullableJSON(next.Topics)); err != nil {
 		return Secret{}, err
 	}
 
@@ -186,16 +189,16 @@ func (s *PostgresStore) deleteSecretIfOnce(ctx context.Context, projectID, id st
 	defer tx.Rollback(ctx)
 
 	var sec Secret
-	var labels, annotations, rotation, aliases, replication []byte
+	var labels, annotations, topics, rotation, aliases, replication []byte
 	err = tx.QueryRow(ctx, `SELECT `+secretColumns+` FROM jc_sm_secrets WHERE project_id=$1 AND secret_id=$2 FOR UPDATE`,
-		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication)
+		projectID, id).Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication, &topics)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNoSuchSecret
 	}
 	if err != nil {
 		return err
 	}
-	decodeSecretJSON(&sec, labels, annotations, rotation, aliases, replication)
+	decodeSecretJSON(&sec, labels, annotations, topics, rotation, aliases, replication)
 
 	if cond != nil {
 		if err := cond(sec); err != nil {
@@ -220,11 +223,11 @@ func (s *PostgresStore) ListSecrets(ctx context.Context, projectID string) ([]Se
 	var result []Secret
 	for rows.Next() {
 		var sec Secret
-		var labels, annotations, rotation, aliases, replication []byte
-		if err := rows.Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication); err != nil {
+		var labels, annotations, topics, rotation, aliases, replication []byte
+		if err := rows.Scan(&sec.ID, &labels, &sec.CreateTime, &sec.NextVer, &rotation, &aliases, &sec.KmsKeyName, &annotations, &replication, &topics); err != nil {
 			return nil, err
 		}
-		decodeSecretJSON(&sec, labels, annotations, rotation, aliases, replication)
+		decodeSecretJSON(&sec, labels, annotations, topics, rotation, aliases, replication)
 		result = append(result, sec)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })

@@ -11,7 +11,7 @@ import {
   TextField,
 } from '@mui/material'
 import { createSecret } from '../../api/gcp/secretmanager'
-import { parseKeyValueLines } from './util'
+import { parseKeyValueLines, parseTopicList } from './util'
 
 export interface CreateSecretDialogProps {
   open: boolean
@@ -23,13 +23,17 @@ export function CreateSecretDialog({ open, onClose }: CreateSecretDialogProps) {
   const queryClient = useQueryClient()
   const [secretId, setSecretId] = useState('')
   const [labels, setLabels] = useState('')
+  const [topics, setTopics] = useState('')
   const [rotationPeriod, setRotationPeriod] = useState('')
+  const [nextRotationTime, setNextRotationTime] = useState('')
 
   useEffect(() => {
     if (open) {
       setSecretId('')
       setLabels('')
+      setTopics('')
       setRotationPeriod('')
+      setNextRotationTime('')
     }
   }, [open])
 
@@ -38,7 +42,9 @@ export function CreateSecretDialog({ open, onClose }: CreateSecretDialogProps) {
       createSecret({
         secretId,
         labels: parseKeyValueLines(labels),
+        topics: parseTopicList(topics),
         rotationPeriod: rotationPeriod || undefined,
+        nextRotationTime: nextRotationTime || undefined,
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['gcp', 'secretmanager'] })
@@ -73,10 +79,27 @@ export function CreateSecretDialog({ open, onClose }: CreateSecretDialogProps) {
             fullWidth
           />
           <TextField
+            label="Pub/Sub topics (comma-separated, optional)"
+            value={topics}
+            onChange={(e) => setTopics(e.target.value)}
+            placeholder="projects/my-project/topics/secret-events"
+            helperText="Up to 10 topics. A rotation schedule requires at least one."
+            fullWidth
+          />
+          <TextField
             label="Rotation period (optional)"
             value={rotationPeriod}
             onChange={(e) => setRotationPeriod(e.target.value)}
             placeholder="7776000s"
+            helperText="Whole seconds, at least 3600s."
+            fullWidth
+          />
+          <TextField
+            label="Next rotation time (optional)"
+            value={nextRotationTime}
+            onChange={(e) => setNextRotationTime(e.target.value)}
+            placeholder="2026-11-01T00:00:00Z"
+            helperText="RFC 3339, at least 5 minutes in the future. Required with a rotation period."
             fullWidth
           />
         </Stack>

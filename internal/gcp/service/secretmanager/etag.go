@@ -38,6 +38,7 @@ type secretEtagContent struct {
 	CreateTime     string                          `json:"createTime"`
 	Labels         map[string]string               `json:"labels,omitempty"`
 	Annotations    map[string]string               `json:"annotations,omitempty"`
+	Topics         []string                        `json:"topics,omitempty"`
 	Rotation       *secretmanagerstore.Rotation    `json:"rotation,omitempty"`
 	VersionAliases map[string]int                  `json:"versionAliases,omitempty"`
 	Replication    *secretmanagerstore.Replication `json:"replication,omitempty"`
@@ -50,6 +51,7 @@ func SecretEtag(name string, s secretmanagerstore.Secret) string {
 		CreateTime:     timestamp.Canonical(s.CreateTime),
 		Labels:         s.Labels,
 		Annotations:    s.Annotations,
+		Topics:         s.Topics,
 		Rotation:       s.Rotation,
 		VersionAliases: s.VersionAliases,
 		Replication:    s.ReplicationPolicy(),

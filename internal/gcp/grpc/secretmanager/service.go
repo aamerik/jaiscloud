@@ -28,6 +28,7 @@ import (
 	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -51,6 +52,9 @@ type Service struct {
 	resources   store.ResourceStore // IAM policies (control-plane)
 	encryptor   crypto.EnvelopeEncryptor
 	defaultProj string
+	// publisher delivers the secret's event notifications (DC64); nil disables
+	// them.
+	publisher secretmanagersvc.Publisher
 }
 
 // NewService returns a Secret Manager gRPC service backed by the shared stores.
@@ -58,6 +62,10 @@ type Service struct {
 func NewService(secrets secretmanagerstore.Store, resources store.ResourceStore, encryptor crypto.EnvelopeEncryptor, defaultProj string) *Service {
 	return &Service{secrets: secrets, resources: resources, encryptor: encryptor, defaultProj: defaultProj}
 }
+
+// SetEventPublisher wires the Pub/Sub publisher used to deliver a secret's
+// event notifications, mirroring the REST provider's setter.
+func (s *Service) SetEventPublisher(pub secretmanagersvc.Publisher) { s.publisher = pub }
 
 func mapError(err error) error { return grpcutil.GRPCStatus(err) }
 
@@ -164,6 +172,8 @@ func (s *Service) CreateSecret(ctx context.Context, req *secretmanagerpb.CreateS
 	if proto != nil {
 		sec.Labels = proto.GetLabels()
 		sec.Annotations = proto.GetAnnotations()
+		topics, _ := topicsFromSecret(proto)
+		sec.Topics = topics
 		if r := proto.GetRotation(); r != nil {
 			sec.Rotation = rotationFromProto(r)
 		}
@@ -182,6 +192,12 @@ func (s *Service) CreateSecret(ctx context.Context, req *secretmanagerpb.CreateS
 		}
 		sec.SetReplication(replication)
 	}
+	if err := secretmanagersvc.ValidateTopics(sec.Topics); err != nil {
+		return nil, mapError(err)
+	}
+	if err := secretmanagersvc.ValidateRotation(sec.Rotation, sec.Topics, clock.Now(), true); err != nil {
+		return nil, mapError(err)
+	}
 
 	if err := s.secrets.CreateSecret(ctx, project, id, sec); err != nil {
 		if errors.Is(err, secretmanagerstore.ErrAlreadyExists) {
@@ -189,6 +205,10 @@ func (s *Service) CreateSecret(ctx context.Context, req *secretmanagerpb.CreateS
 		}
 		return nil, mapError(err)
 	}
+	if len(sec.Topics) > 0 {
+		secretmanagersvc.NotifyTopicConfigured(ctx, s.publisher, project, sec.Topics)
+	}
+	s.notifySecret(ctx, project, id, secretmanagersvc.EventSecretCreate, sec)
 	return secretToProto(project, sec), nil
 }
 
@@ -238,6 +258,24 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 		}
 	}
 
+	// Rotation and topics are request data: parse them once, outside the
+	// (retried) atomic mutate. A mask naming `rotation.next_rotation_time` or
+	// `rotation.rotation_period` merges that subfield into the stored schedule
+	// instead of replacing it, so a period-only patch keeps the next rotation
+	// time.
+	incomingRotation := rotationFromProto(proto.GetRotation())
+	wholeRotation := applyAll || fields["rotation"]
+	rotationNext := fields["rotation.next_rotation_time"]
+	rotationPeriod := fields["rotation.rotation_period"]
+	rotationTouched := proto.GetRotation() != nil && (wholeRotation || rotationNext || rotationPeriod)
+	nextTimeSupplied := rotationTouched && incomingRotation.NextRotationTime != "" && (wholeRotation || rotationNext)
+	incomingTopics, topicsSet := topicsFromSecret(proto)
+	// A mask naming topics applies the list as sent (an empty list clears it);
+	// a maskless update applies only a list the client actually populated,
+	// mirroring the labels/annotations presence rule above.
+	topicsTouched := selected("topics") && (topicsSet || !applyAll)
+	now := clock.Now()
+
 	// UpdateSecretAtomic reads, merges, and writes under one lock, so a
 	// concurrent AddVersion's NextVersion() counter advance can't land
 	// between our read and our write and get silently rolled back by it.
@@ -258,16 +296,13 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 				cur.Annotations = annotations
 			}
 		}
-		if selected("rotation") {
-			if r := proto.GetRotation(); r != nil {
-				nr := rotationFromProto(r)
-				// managed_rotation_status is output-only: keep the stored
-				// config/status across a schedule update that doesn't carry it.
-				if cur.Rotation != nil {
-					nr.ManagedRotation = cur.Rotation.ManagedRotation
-				}
-				cur.Rotation = nr
-			}
+		if rotationTouched {
+			// managed_rotation_status is output-only: MergedRotation always
+			// carries the stored config/status across a schedule update.
+			cur.Rotation = secretmanagersvc.MergedRotation(cur.Rotation, incomingRotation, wholeRotation, rotationNext, rotationPeriod)
+		}
+		if topicsTouched {
+			cur.Topics = incomingTopics
 		}
 		if selected("version_aliases") {
 			if va := proto.GetVersionAliases(); va != nil {
@@ -291,11 +326,29 @@ func (s *Service) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateS
 				cur.SetReplication(merged)
 			}
 		}
+		// Validate the merged result: a patch that sets a period on a schedule
+		// with no next rotation time, or removes every topic from a rotating
+		// secret, is INVALID_ARGUMENT even though each half of the request
+		// looked valid on its own.
+		if topicsTouched {
+			if err := secretmanagersvc.ValidateTopics(cur.Topics); err != nil {
+				return secretmanagerstore.Secret{}, err
+			}
+		}
+		if rotationTouched || topicsTouched {
+			if err := secretmanagersvc.ValidateRotation(cur.Rotation, cur.Topics, now, nextTimeSupplied); err != nil {
+				return secretmanagerstore.Secret{}, err
+			}
+		}
 		return cur, nil
 	})
 	if err != nil {
 		return nil, mapSecretErr(err)
 	}
+	if topicsTouched && len(updated.Topics) > 0 {
+		secretmanagersvc.NotifyTopicConfigured(ctx, s.publisher, project, updated.Topics)
+	}
+	s.notifySecret(ctx, project, id, secretmanagersvc.EventSecretUpdate, updated)
 	return secretToProto(project, updated), nil
 }
 
@@ -307,12 +360,19 @@ func (s *Service) DeleteSecret(ctx context.Context, req *secretmanagerpb.DeleteS
 	// The documented `etag` precondition (same contract as the REST provider),
 	// checked inside the store's atomic delete so a concurrent update cannot
 	// land between the comparison and the removal.
+	var deleted secretmanagerstore.Secret
 	err := s.secrets.DeleteSecretIf(ctx, project, id, func(sec secretmanagerstore.Secret) error {
-		return secretmanagersvc.CheckSecretEtag(secretName(project, id), sec, req.GetEtag())
+		if err := secretmanagersvc.CheckSecretEtag(secretName(project, id), sec, req.GetEtag()); err != nil {
+			return err
+		}
+		deleted = sec
+		return nil
 	})
 	if err != nil {
 		return nil, mapSecretErr(err)
 	}
+	// SECRET_DELETE carries the metadata as it was before the delete.
+	s.notifySecretDelete(ctx, project, id, deleted)
 	return &emptypb.Empty{}, nil
 }
 
@@ -358,7 +418,9 @@ func (s *Service) AddSecretVersion(ctx context.Context, req *secretmanagerpb.Add
 	if err := s.secrets.CreateVersion(ctx, project, stv); err != nil {
 		return nil, mapError(err)
 	}
-	return versionToProto(project, stv, sec.ReplicationPolicy()), nil
+	out := versionToProto(project, stv, sec.ReplicationPolicy())
+	s.notifyVersion(ctx, project, sec, secretmanagersvc.EventSecretVersionAdd, out)
+	return out, nil
 }
 
 func (s *Service) AccessSecretVersion(ctx context.Context, req *secretmanagerpb.AccessSecretVersionRequest) (*secretmanagerpb.AccessSecretVersionResponse, error) {
@@ -524,7 +586,13 @@ func (s *Service) setVersionState(ctx context.Context, name, state, etag string)
 	if err != nil {
 		return nil, mapSecretErr(err)
 	}
-	return versionToProto(project, v, repl), nil
+	out := versionToProto(project, v, repl)
+	if s.publisher != nil {
+		if parent, perr := s.secrets.GetSecret(ctx, project, secret); perr == nil {
+			s.notifyVersion(ctx, project, parent, secretmanagersvc.VersionStateEvent(state), out)
+		}
+	}
+	return out, nil
 }
 
 // ─── Cloud SQL managed rotation ──────────────────────────────────────────────
@@ -580,7 +648,17 @@ func (s *Service) EnableManagedRotation(ctx context.Context, req *secretmanagerp
 		}
 	}
 	cfg := &secretmanagerstore.ManagedRotation{State: "ACTIVE", InstanceID: creds.GetInstanceId(), Username: creds.GetUsername()}
-	return s.appendManagedVersion(ctx, project, id, []byte(password), cfg)
+	version, err := s.appendManagedVersion(ctx, project, id, []byte(password), cfg)
+	if err != nil {
+		return nil, err
+	}
+	// Enabling managed rotation also records the schedule status on the secret,
+	// so the secret itself is modified and SECRET_UPDATE follows the version
+	// event.
+	if updated, gerr := s.secrets.GetSecret(ctx, project, id); gerr == nil {
+		s.notifySecret(ctx, project, id, secretmanagersvc.EventSecretUpdate, updated)
+	}
+	return version, nil
 }
 
 // RotateSecret performs a managed rotation for a secret whose managed rotation
@@ -658,7 +736,11 @@ func (s *Service) appendManagedVersion(ctx context.Context, project, id string, 
 	if err := s.secrets.CreateVersion(ctx, project, stv); err != nil {
 		return nil, mapError(err)
 	}
-	return versionToProto(project, stv, sec.ReplicationPolicy()), nil
+	// Managed rotation adds a version like AddSecretVersion does, so the
+	// secret's topics see the same SECRET_VERSION_ADD.
+	out := versionToProto(project, stv, sec.ReplicationPolicy())
+	s.notifyVersion(ctx, project, sec, secretmanagersvc.EventSecretVersionAdd, out)
+	return out, nil
 }
 
 // maybeRotate advances a secret's rotation schedule when it is due: it moves
@@ -666,9 +748,8 @@ func (s *Service) appendManagedVersion(ctx context.Context, project, id string, 
 // schedule is notification-only — it publishes a SECRET_ROTATE message to the
 // secret's Pub/Sub topics and reschedules the next one; it never creates a
 // SecretVersion (only *managed* rotation adds versions, see RotateSecret). The
-// emulator evaluates the schedule lazily on read (mirrors the REST provider),
-// and does not deliver the notification yet (the `topics` field is unmodelled,
-// recorded as DC64).
+// emulator evaluates the schedule lazily on read (mirrors the REST provider), so
+// SECRET_ROTATE goes out when a read observes the due schedule (DC71).
 func (s *Service) maybeRotate(ctx context.Context, account, id string, sec secretmanagerstore.Secret) secretmanagerstore.Secret {
 	if sec.Rotation == nil || sec.Rotation.NextRotationTime == "" {
 		return sec
@@ -708,6 +789,7 @@ func (s *Service) maybeRotate(ctx context.Context, account, id string, sec secre
 		}
 		return sec
 	}
+	s.notifySecret(ctx, account, id, secretmanagersvc.EventSecretRotate, updated)
 	return updated
 }
 
@@ -775,6 +857,12 @@ func secretToProto(project string, s secretmanagerstore.Secret) *secretmanagerpb
 	}
 	if s.Annotations != nil {
 		out.Annotations = s.Annotations
+	}
+	if len(s.Topics) > 0 {
+		out.Topics = make([]*secretmanagerpb.Topic, 0, len(s.Topics))
+		for _, t := range s.Topics {
+			out.Topics = append(out.Topics, &secretmanagerpb.Topic{Name: t})
+		}
 	}
 	if s.Rotation != nil {
 		out.Rotation = rotationToProto(s.Rotation)
@@ -869,7 +957,10 @@ func rotationFromProto(r *secretmanagerpb.Rotation) *secretmanagerstore.Rotation
 		out.NextRotationTime = timestamp.Canonical(r.GetNextRotationTime().AsTime())
 	}
 	if r.GetRotationPeriod() != nil {
-		out.RotationPeriod = r.GetRotationPeriod().AsDuration().String()
+		// Store the API's google-duration JSON form ("3600s"), not Go's duration
+		// syntax ("1h0m0s"): the two transports share this record, and REST
+		// renders the stored string verbatim.
+		out.RotationPeriod = secretmanagersvc.RotationPeriodString(r.GetRotationPeriod().AsDuration().String())
 	}
 	return out
 }
@@ -1047,4 +1138,63 @@ func toStrings(v any) []string {
 		}
 	}
 	return out
+}
+
+// ─── event notifications (DC64) ──────────────────────────────────────────────
+
+// topicsFromSecret reads a proto Secret's topics list. A nil slice means the
+// field was unset; an empty (non-nil) slice means the client sent an empty list
+// (which clears the stored topics on a masked update).
+func topicsFromSecret(p *secretmanagerpb.Secret) ([]string, bool) {
+	raw := p.GetTopics()
+	if raw == nil {
+		return nil, false
+	}
+	out := make([]string, 0, len(raw))
+	for _, t := range raw {
+		out = append(out, t.GetName())
+	}
+	return out, true
+}
+
+// notifySecret publishes an event about the secret itself to each of its
+// topics, with the Secret resource (proto3 JSON) as data.
+func (s *Service) notifySecret(ctx context.Context, project, id, eventType string, sec secretmanagerstore.Secret) {
+	if s.publisher == nil || len(sec.Topics) == 0 {
+		return
+	}
+	data, err := protojson.Marshal(secretToProto(project, sec))
+	if err != nil {
+		return
+	}
+	secretmanagersvc.Notify(ctx, s.publisher, project, sec.Topics, data,
+		secretmanagersvc.SecretEventAttributes(eventType, secretName(project, id), clock.Now()))
+}
+
+// notifySecretDelete publishes SECRET_DELETE (deleteType REQUESTED) with the
+// metadata as it was before the delete.
+func (s *Service) notifySecretDelete(ctx context.Context, project, id string, sec secretmanagerstore.Secret) {
+	if s.publisher == nil || len(sec.Topics) == 0 {
+		return
+	}
+	data, err := protojson.Marshal(secretToProto(project, sec))
+	if err != nil {
+		return
+	}
+	secretmanagersvc.Notify(ctx, s.publisher, project, sec.Topics, data,
+		secretmanagersvc.DeleteEventAttributes(secretName(project, id), clock.Now()))
+}
+
+// notifyVersion publishes a version-scoped event to the parent secret's topics,
+// with the SecretVersion resource (proto3 JSON) as data.
+func (s *Service) notifyVersion(ctx context.Context, project string, parent secretmanagerstore.Secret, eventType string, v *secretmanagerpb.SecretVersion) {
+	if s.publisher == nil || len(parent.Topics) == 0 {
+		return
+	}
+	data, err := protojson.Marshal(v)
+	if err != nil {
+		return
+	}
+	secretmanagersvc.Notify(ctx, s.publisher, project, parent.Topics, data,
+		secretmanagersvc.VersionEventAttributes(eventType, secretName(project, parent.ID), v.GetName(), clock.Now()))
 }
