@@ -135,7 +135,8 @@ func TestSDKKMS(t *testing.T) {
 	keyName := krName + "/cryptoKeys/" + keyID
 
 	enc, err := svc.Projects.Locations.KeyRings.CryptoKeys.Encrypt(keyName, &cloudkms.EncryptRequest{
-		Plaintext: "aGVsbG8=",
+		Plaintext:       "aGVsbG8=",
+		PlaintextCrc32c: crc32c([]byte("hello")),
 	}).Do()
 	require.NoError(t, err)
 	require.NotEmpty(t, enc.Ciphertext)

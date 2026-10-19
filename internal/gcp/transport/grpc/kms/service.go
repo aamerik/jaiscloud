@@ -174,6 +174,7 @@ func (s *Service) CreateCryptoKey(ctx context.Context, req *kmspb.CreateCryptoKe
 		}
 		in.ImportOnly = ck.GetImportOnly()
 	}
+	in.SkipInitialVersion = req.GetSkipInitialVersionCreation()
 	in.Purpose = purpose
 	in.Algorithm = algorithm
 	ck, err := s.core.CreateCryptoKey(ctx, project, loc, kr, key, in)
@@ -567,7 +568,7 @@ func (s *Service) GetPublicKey(ctx context.Context, req *kmspb.GetPublicKeyReque
 	if !ok {
 		return nil, mapError(model.NewProviderError("InvalidArgument", "invalid resource name", 400))
 	}
-	res, err := s.core.GetPublicKey(ctx, project, loc, kr, key, version)
+	res, err := s.core.GetPublicKey(ctx, project, loc, kr, key, version, req.GetPublicKeyFormat().String())
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -583,7 +584,11 @@ func (s *Service) GetPublicKey(ctx context.Context, req *kmspb.GetPublicKeyReque
 	case "XWING_RAW_BYTES":
 		out.PublicKeyFormat = kmspb.PublicKey_XWING_RAW_BYTES
 		out.PublicKey = &kmspb.ChecksummedData{Data: res.Raw, Crc32CChecksum: wrapperspb.Int64(crc32cOf(res.Raw))}
+	case "DER":
+		out.PublicKeyFormat = kmspb.PublicKey_DER
+		out.PublicKey = &kmspb.ChecksummedData{Data: res.Raw, Crc32CChecksum: wrapperspb.Int64(crc32cOf(res.Raw))}
 	default:
+		out.PublicKeyFormat = kmspb.PublicKey_PEM
 		out.Pem = res.PEM
 		out.PemCrc32C = wrapperspb.Int64(crc32cOf([]byte(res.PEM)))
 	}
@@ -667,6 +672,7 @@ func (s *Service) Decapsulate(ctx context.Context, req *kmspb.DecapsulateRequest
 		SharedSecret:             ss,
 		SharedSecretCrc32C:       &crc,
 		VerifiedCiphertextCrc32C: req.GetCiphertextCrc32C() != nil,
+		ProtectionLevel:          kmspb.ProtectionLevel_SOFTWARE,
 	}, nil
 }
 
@@ -868,12 +874,16 @@ func cryptoKeyToProto(project string, k kmsstore.CryptoKey, primaryVersion kmsst
 	out := &kmspb.CryptoKey{
 		Name:       kmscore.CryptoKeyName(project, k.Location, k.KeyRingID, k.ID),
 		Purpose:    purposeToProto(k.Purpose),
-		Primary:    primary,
 		ImportOnly: k.ImportOnly,
 		VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
 			Algorithm:       algorithmToProto(k.Algorithm),
 			ProtectionLevel: pl,
 		},
+	}
+	// Discovery: only ENCRYPT_DECRYPT keys carry a primary; an import-only key
+	// has no version until the first import.
+	if k.Purpose == "ENCRYPT_DECRYPT" && k.PrimaryVersion != "" {
+		out.Primary = primary
 	}
 	if !k.CreateTime.IsZero() {
 		out.CreateTime = timestamp.Proto(k.CreateTime)

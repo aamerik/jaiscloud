@@ -23,6 +23,9 @@ type CryptoKeyInput struct {
 	NextRotationTime *time.Time
 	ProtectionLevel  string
 	ImportOnly       bool
+	// SkipInitialVersion is CreateCryptoKeyRequest.skip_initial_version_creation:
+	// the key is created without the implicit first version.
+	SkipInitialVersion bool
 }
 
 // CryptoKeyUpdate carries a masked UpdateCryptoKey. UpdateMask is the request's
@@ -137,7 +140,7 @@ type PublicKeyResult struct {
 	Algorithm string
 	PEM       string
 	Raw       []byte
-	Format    string // "" (PEM) or "NIST_PQC" / "XWING_RAW_BYTES"
+	Format    string // "PEM", "DER", "NIST_PQC" or "XWING_RAW_BYTES"
 }
 
 // ─── KeyRings ─────────────────────────────────────────────────────────────────
@@ -201,13 +204,19 @@ func (s *Service) CreateCryptoKey(ctx context.Context, project, location, kr, id
 		return kmsstore.CryptoKey{}, err
 	}
 	now := clock.Now()
+	primary, withInitialVersion := "1", true
+	if in.ImportOnly || in.SkipInitialVersion {
+		// Cloud KMS creates no version for an import-only key or when the
+		// caller skips it; the first ImportCryptoKeyVersion becomes version 1.
+		primary, withInitialVersion = "", false
+	}
 	ck := kmsstore.CryptoKey{
 		Location: location, KeyRingID: kr, ID: id, Purpose: purpose, CreateTime: now,
-		PrimaryVersion: "1", Algorithm: algorithm, Labels: in.Labels,
+		PrimaryVersion: primary, Algorithm: algorithm, Labels: in.Labels,
 		RotationPeriod: in.RotationPeriod, NextRotationTime: nrt,
 		ProtectionLevel: in.ProtectionLevel, ImportOnly: in.ImportOnly,
 	}
-	if err := s.keys.CreateCryptoKey(ctx, project, location, kr, id, ck); err != nil {
+	if err := s.keys.CreateCryptoKeyWithVersion(ctx, project, location, kr, id, ck, withInitialVersion); err != nil {
 		if errorsIsAlreadyExists(err) {
 			return kmsstore.CryptoKey{}, alreadyExists("crypto key already exists")
 		}
@@ -366,7 +375,7 @@ func (s *Service) CreateVersion(ctx context.Context, project, location, kr, id s
 		return kmsstore.Version{}, failedPrecondition("CryptoKey is import-only; versions must be created by import")
 	}
 	now := clock.Now()
-	version, err := s.keys.CreateVersion(ctx, project, location, kr, id, kmsstore.Version{CreateTime: now, Algorithm: ck.Algorithm, ProtectionLevel: ck.ProtectionLevel, HsmTrusted: ck.ProtectionLevel == "HSM" || ck.ProtectionLevel == "HSM_SINGLE_TENANT"})
+	version, err := s.keys.CreateVersion(ctx, project, location, kr, id, kmsstore.Version{CreateTime: now, Algorithm: ck.Algorithm, ProtectionLevel: ck.ProtectionLevel, HsmTrusted: ck.Purpose == "AES_WRAPPING" && ck.ProtectionLevel == "HSM_SINGLE_TENANT"})
 	if err != nil {
 		return kmsstore.Version{}, versionErr(err)
 	}
@@ -667,9 +676,12 @@ func (s *Service) MacVerify(ctx context.Context, project, location, kr, key, ver
 	return kmsstore.HMACVerify(mat, data, mac, v.Algorithm), nil
 }
 
-// GetPublicKey returns a version's public key. Asymmetric keys return PEM; KEM
-// keys return the raw NIST-PQC / X-Wing encapsulation key.
-func (s *Service) GetPublicKey(ctx context.Context, project, location, kr, key, version string) (PublicKeyResult, error) {
+// GetPublicKey returns a version's public key in the requested format. format
+// is the caller's GetPublicKeyRequest.public_key_format: PEM (the default) or
+// DER for asymmetric keys, and the algorithm's PQC format for KEM keys, where
+// Cloud KMS requires it and returns INVALID_ARGUMENT when it is omitted or
+// names another format.
+func (s *Service) GetPublicKey(ctx context.Context, project, location, kr, key, version, format string) (PublicKeyResult, error) {
 	if err := s.authorizeCryptoKey(ctx, project, location, kr, key, policy.PermCryptoKeyViewPublicKey); err != nil {
 		return PublicKeyResult{}, err
 	}
@@ -680,18 +692,26 @@ func (s *Service) GetPublicKey(ctx context.Context, project, location, kr, key, 
 	if v.State != "ENABLED" {
 		return PublicKeyResult{}, versionNotEnabledErr(version, v.State)
 	}
+	wantFormat := publicKeyFormatForAlgorithm(v.Algorithm)
+	if format == "" || format == "PUBLIC_KEY_FORMAT_UNSPECIFIED" {
+		if wantFormat != "PEM" {
+			return PublicKeyResult{}, invalidArgument("public_key_format is required for PQC algorithms")
+		}
+		format = "PEM"
+	}
+	if format != wantFormat && (wantFormat != "PEM" || (format != "PEM" && format != "DER")) {
+		return PublicKeyResult{}, invalidArgument("public_key_format " + format + " is not supported for algorithm " + v.Algorithm)
+	}
 	pub, err := s.keys.PublicKey(ctx, project, location, kr, key, version)
 	if err != nil {
 		return PublicKeyResult{}, versionErr(err)
 	}
-	res := PublicKeyResult{Version: version, Algorithm: v.Algorithm}
-	switch {
-	case v.Algorithm == "ML_KEM_768" || v.Algorithm == "ML_KEM_1024":
+	res := PublicKeyResult{Version: version, Algorithm: v.Algorithm, Format: format}
+	switch format {
+	case "DER":
 		res.Raw = pub
-		res.Format = "NIST_PQC"
-	case v.Algorithm == "KEM_XWING":
+	case "NIST_PQC", "XWING_RAW_BYTES":
 		res.Raw = pub
-		res.Format = "XWING_RAW_BYTES"
 	default:
 		pemStr, err := kmsstore.PublicKeyPEM(pub)
 		if err != nil {
@@ -700,6 +720,19 @@ func (s *Service) GetPublicKey(ctx context.Context, project, location, kr, key, 
 		res.PEM = pemStr
 	}
 	return res, nil
+}
+
+// publicKeyFormatForAlgorithm returns the format Cloud KMS uses for an
+// algorithm's public key: the raw PQC format for KEM algorithms, PEM otherwise.
+func publicKeyFormatForAlgorithm(algorithm string) string {
+	switch algorithm {
+	case "ML_KEM_768", "ML_KEM_1024":
+		return "NIST_PQC"
+	case "KEM_XWING":
+		return "XWING_RAW_BYTES"
+	default:
+		return "PEM"
+	}
 }
 
 // errorsIsAlreadyExists reports whether err is the store's AlreadyExists.

@@ -189,9 +189,9 @@ func TestCryptoKeyVersionListNumericOrder(t *testing.T) {
 	}
 }
 
-// TestCryptoKeyPrimaryAlgorithm verifies the primary-version algorithm is
-// surfaced in the CryptoKey response (the version-template algorithm, which is
-// the primary version's algorithm).
+// TestCryptoKeyPrimaryAlgorithm verifies the version-template algorithm is
+// surfaced and that Discovery's primary rule holds: only ENCRYPT_DECRYPT keys
+// carry a primary version, every other purpose omits it.
 func TestCryptoKeyPrimaryAlgorithm(t *testing.T) {
 	ctx := context.Background()
 	p := newTestProvider()
@@ -200,7 +200,7 @@ func TestCryptoKeyPrimaryAlgorithm(t *testing.T) {
 		t.Fatalf("keyring create: %v", err)
 	}
 
-	// MAC defaults to HMAC_SHA256 (a non-default algorithm).
+	// MAC defaults to HMAC_SHA256 and must not expose a primary version.
 	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
 		"name":        "locations/global/keyRings/kr",
 		"cryptoKeyId": "mac-key",
@@ -208,17 +208,12 @@ func TestCryptoKeyPrimaryAlgorithm(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("cryptokey create: %v", err)
 	}
-
 	resp, err := p.CryptoKeyGet(ctx, newNR(map[string]any{"name": "locations/global/keyRings/kr/cryptoKeys/mac-key"}))
 	if err != nil {
 		t.Fatalf("cryptokey get: %v", err)
 	}
-	primary, _ := resp.Data["primary"].(map[string]any)
-	if alg, _ := primary["algorithm"].(string); alg != "HMAC_SHA256" {
-		t.Errorf("primary.algorithm = %q, want HMAC_SHA256", alg)
-	}
-	if state, _ := primary["state"].(string); state != "ENABLED" {
-		t.Errorf("primary.state = %q, want ENABLED", state)
+	if _, ok := resp.Data["primary"]; ok {
+		t.Errorf("MAC key must omit primary, got %v", resp.Data["primary"])
 	}
 	vt, _ := resp.Data["versionTemplate"].(map[string]any)
 	if alg, _ := vt["algorithm"].(string); alg != "HMAC_SHA256" {
@@ -226,6 +221,26 @@ func TestCryptoKeyPrimaryAlgorithm(t *testing.T) {
 	}
 	if pl, _ := vt["protectionLevel"].(string); pl != "SOFTWARE" {
 		t.Errorf("versionTemplate.protectionLevel = %q, want SOFTWARE", pl)
+	}
+
+	// An ENCRYPT_DECRYPT key carries its primary version.
+	if _, err := p.CryptoKeyCreate(ctx, newNR(map[string]any{
+		"name":        "locations/global/keyRings/kr",
+		"cryptoKeyId": "sym-key",
+		"body":        map[string]any{"purpose": "ENCRYPT_DECRYPT"},
+	})); err != nil {
+		t.Fatalf("cryptokey create(sym): %v", err)
+	}
+	symResp, err := p.CryptoKeyGet(ctx, newNR(map[string]any{"name": "locations/global/keyRings/kr/cryptoKeys/sym-key"}))
+	if err != nil {
+		t.Fatalf("cryptokey get(sym): %v", err)
+	}
+	primary, _ := symResp.Data["primary"].(map[string]any)
+	if alg, _ := primary["algorithm"].(string); alg != "GOOGLE_SYMMETRIC_ENCRYPTION" {
+		t.Errorf("primary.algorithm = %q, want GOOGLE_SYMMETRIC_ENCRYPTION", alg)
+	}
+	if state, _ := primary["state"].(string); state != "ENABLED" {
+		t.Errorf("primary.state = %q, want ENABLED", state)
 	}
 }
 

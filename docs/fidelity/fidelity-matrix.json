@@ -129,11 +129,11 @@
     "evidence": {
       "verified": {
         "grpc": 442,
-        "rest": 581
+        "rest": 599
       },
       "unverified": {
         "grpc": 21,
-        "rest": 93
+        "rest": 75
       }
     },
     "grpc_only_services": [
@@ -7320,7 +7320,7 @@
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 29 transcript entries)"
+        "verified=true (rest, 39 transcript entries)"
       ]
     },
     {
@@ -7342,12 +7342,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.delete",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.delete",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -7449,12 +7449,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.updatePrimaryVersion",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.updatePrimaryVersion",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -7463,11 +7463,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.asymmetricDecrypt",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.asymmetricDecrypt",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -7476,11 +7476,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.asymmetricSign",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.asymmetricSign",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -7494,7 +7494,7 @@
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 15 transcript entries)"
+        "verified=true (rest, 16 transcript entries)"
       ]
     },
     {
@@ -7503,11 +7503,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.decapsulate",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.decapsulate",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -7516,12 +7516,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.delete",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.delete",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -7530,11 +7530,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.destroy",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.destroy",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -7543,12 +7543,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.exportTrustedKeyWrappedCryptoKeyVersion",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.exportTrustedKeyWrappedCryptoKeyVersion",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -7557,11 +7557,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.get",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.get",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -7570,11 +7570,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.getPublicKey",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.getPublicKey",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {
@@ -7583,12 +7583,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.import",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.import",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -7597,12 +7597,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.importTrustedKeyWrappedCryptoKeyVersion",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.importTrustedKeyWrappedCryptoKeyVersion",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -7624,11 +7624,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.macSign",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.macSign",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -7637,11 +7637,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.macVerify",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.macVerify",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -7650,11 +7650,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.rawDecrypt",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.rawDecrypt",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -7663,11 +7663,11 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.rawEncrypt",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.rawEncrypt",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -7676,12 +7676,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.restore",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.restore",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {
@@ -7690,12 +7690,12 @@
       "transport": "rest",
       "state": "ga",
       "discovery": "cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.patch",
-      "verified": false,
+      "verified": true,
       "evidence": [
         "discovery=cloudkms.projects.locations.keyRings.cryptoKeys.cryptoKeyVersions.patch",
         "mutating",
         "postgres=yes",
-        "verified=false (rest, no validated transcript response)"
+        "verified=true (rest, 2 transcript entries)"
       ]
     },
     {
@@ -7722,7 +7722,7 @@
         "discovery=cloudkms.projects.locations.keyRings.importJobs.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 5 transcript entries)"
+        "verified=true (rest, 7 transcript entries)"
       ]
     },
     {
@@ -7806,7 +7806,7 @@
         "discovery=cloudkms.projects.locations.keyRings.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 41 transcript entries)"
+        "verified=true (rest, 42 transcript entries)"
       ]
     },
     {

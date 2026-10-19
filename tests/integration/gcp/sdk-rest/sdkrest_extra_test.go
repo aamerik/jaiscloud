@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"hash/crc32"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,11 @@ import (
 
 // b64 base64-encodes a string (the wire encoding for all GCP binary payloads).
 func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+
+// crc32c is the Castagnoli checksum Cloud KMS request fields carry.
+func crc32c(v []byte) int64 {
+	return int64(crc32.Checksum(v, crc32.MakeTable(crc32.Castagnoli)))
+}
 
 // requireNotFound asserts err is a GCP 404 (googleapi.Error) rather than some
 // other failure mode.
@@ -478,7 +484,10 @@ func TestSDKKMSAsymmetricSignVerify(t *testing.T) {
 	msg := []byte("hello asymmetric")
 	digest := sha256.Sum256(msg)
 	sig, err := svc.Projects.Locations.KeyRings.CryptoKeys.CryptoKeyVersions.AsymmetricSign(verName,
-		&cloudkms.AsymmetricSignRequest{Digest: &cloudkms.Digest{Sha256: base64.StdEncoding.EncodeToString(digest[:])}}).Do()
+		&cloudkms.AsymmetricSignRequest{
+			Digest:       &cloudkms.Digest{Sha256: base64.StdEncoding.EncodeToString(digest[:])},
+			DigestCrc32c: crc32c(digest[:]),
+		}).Do()
 	require.NoError(t, err)
 	require.NotEmpty(t, sig.Signature)
 	require.True(t, sig.VerifiedDigestCrc32c)
@@ -506,7 +515,7 @@ func TestSDKKMSMacSignVerify(t *testing.T) {
 	verName := keyName + "/cryptoKeyVersions/1"
 
 	signed, err := svc.Projects.Locations.KeyRings.CryptoKeys.CryptoKeyVersions.MacSign(verName,
-		&cloudkms.MacSignRequest{Data: b64("payload")}).Do()
+		&cloudkms.MacSignRequest{Data: b64("payload"), DataCrc32c: crc32c([]byte("payload"))}).Do()
 	require.NoError(t, err)
 	require.NotEmpty(t, signed.Mac)
 	require.True(t, signed.VerifiedDataCrc32c)
