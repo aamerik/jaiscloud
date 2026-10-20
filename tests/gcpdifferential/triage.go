@@ -45,7 +45,7 @@ func (r TriageRule) matches(d Divergence) bool {
 
 // triageRules is the shipped allowlist of accepted divergences. It contains
 // ONLY differences that are (a) explicitly declared by the published fidelity
-// contract (docs/GA.md, docs/fidelity/fidelity-matrix.md), or (b) additive /
+// contract (docs/gcp-wire-contract.md, docs/fidelity/fidelity-matrix.md), or (b) additive /
 // wording-only and therefore unable to break an official client. Every entry
 // states WHY the difference is acceptable; anything that would break or
 // mislead a client is deliberately left OUT so it stays in the open list.
@@ -56,7 +56,7 @@ var triageRules = []TriageRule{
 	// ── Additive fields ──────────────────────────────────────────────────────
 	// The emulator may return fields real GCP omits. JSON clients ignore
 	// unknown members, so an extra field is additive and cannot break or
-	// mislead one (GA.md §5 records the same class of finding as non-fatal).
+	// mislead one (the wire contract §4 records the same class of finding as non-fatal).
 	{
 		Kind:   "extra_field",
 		Reason: "emulator emits a superset of the real response; official JSON clients ignore unknown fields, so an additive field cannot break them",
@@ -300,7 +300,7 @@ var triageRules = []TriageRule{
 		Reason:   "cosmetic output-only list URL; no official client requires it",
 	},
 
-	// ── Authz paths: not enforced by design (G1, docs/GA.md §10) ─────────────
+	// ── Authz paths: not enforced by design (G1, docs/gcp-wire-contract.md §8) ─────────────
 	// Each *_noauth scenario is sent without an Authorization header. Real GCP
 	// rejects it (401 UNAUTHENTICATED) while the emulator serves the request, so
 	// the status and the whole body differ. This is the documented accepted
@@ -310,27 +310,27 @@ var triageRules = []TriageRule{
 	{
 		Service: "storage",
 		Op:      "storage_buckets_list_noauth",
-		Reason:  "authz is not enforced by design (G1, docs/GA.md §10): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
+		Reason:  "authz is not enforced by design (G1, accepted risk: identity authz is not enforced; see docs/gcp-wire-contract.md §8): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
 	},
 	{
 		Service: "compute",
 		Op:      "compute_instances_list_noauth",
-		Reason:  "authz is not enforced by design (G1, docs/GA.md §10): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
+		Reason:  "authz is not enforced by design (G1, accepted risk: identity authz is not enforced; see docs/gcp-wire-contract.md §8): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
 	},
 	{
 		Service: "sqladmin",
 		Op:      "sql_instances_list_noauth",
-		Reason:  "authz is not enforced by design (G1, docs/GA.md §10): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
+		Reason:  "authz is not enforced by design (G1, accepted risk: identity authz is not enforced; see docs/gcp-wire-contract.md §8): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
 	},
 	{
 		Service: "redis",
 		Op:      "redis_instances_list_noauth",
-		Reason:  "authz is not enforced by design (G1, docs/GA.md §10): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
+		Reason:  "authz is not enforced by design (G1, accepted risk: identity authz is not enforced; see docs/gcp-wire-contract.md §8): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
 	},
 	{
 		Service: "container",
 		Op:      "container_clusters_list_noauth",
-		Reason:  "authz is not enforced by design (G1, docs/GA.md §10): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
+		Reason:  "authz is not enforced by design (G1, accepted risk: identity authz is not enforced; see docs/gcp-wire-contract.md §8): real GCP returns 401 UNAUTHENTICATED while the emulator serves the request; the divergence is the accepted-risk record, not a bug",
 	},
 	{
 		Service: "serviceusage",

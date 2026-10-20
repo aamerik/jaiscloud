@@ -6,8 +6,9 @@ against real GCP**. An **AWS → GCP mapping** is included for reference.
 
 It is a companion to, not a replacement for:
 
-- [`docs/GA.md`](GA.md) — the GA contract: what `ga`/`limited`/`preview`/`unsupported`
-  mean, stability, CI gates, client compatibility.
+- [`docs/gcp-wire-contract.md`](gcp-wire-contract.md) — the wire contract: what
+  `ga`/`limited`/`preview`/`unsupported` mean, stability, CI gates, client
+  compatibility, accepted risks.
 - [`README-GCP.md`](../README-GCP.md) — the service overview and the authoritative
   [Known Limitations](../README-GCP.md#known-limitations) list.
 - [`docs/fidelity/fidelity-matrix.md`](fidelity/fidelity-matrix.md) — the **source of
@@ -424,7 +425,7 @@ answers like real GCP), while this proves an official client can drive a
 - **`ga` service** = a service whose fidelity-matrix cells include at least one
   `ga` cell and **no `preview` cell**. This is a deliberately **mechanical, raw
   matrix rule** — a direct reading of the per-operation/per-transport states in
-  `docs/GA.md`, with **no overrides**. It is *not* §2's curated tier above: §2
+  `docs/gcp-wire-contract.md`, with **no overrides**. It is *not* §2's curated tier above: §2
   applies hand-picked overrides (e.g. `functions`→Yellow, `kms`→Green) and its
   snapshot is stale, so the inventory does not claim to reproduce it. A service
   may carry a few explicit `unsupported` stubs (`container`, `dataproc`,

@@ -1214,7 +1214,7 @@ gcp-status-finalize: ## Finalize a completed plan doc: PLAN=plan_docs/<doc>.md I
 	  if [ -n "$(OPS)" ]; then $(MAKE) --no-print-directory gcp-matrix-diff REF=upstream/gcp; fi; \
 	fi
 
-# One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/GA.md.
+# One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/gcp-wire-contract.md.
 # The gRPC and gcloud targets each build + boot an ephemeral emulator on :8080/:8081 and stop it;
 # gcloud self-skips when it is not on PATH. The offline persistence coverage gate
 # (test-gcp-persistence-parity) is included; the Docker/Postgres-backed persistence

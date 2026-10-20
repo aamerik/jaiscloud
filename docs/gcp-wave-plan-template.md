@@ -61,7 +61,7 @@ Rules:
 
 | file / area | sessions |
 |---|---|
-| `cmd/jaiscloud-gcp/main.go`, `tests/gcpconformance/grpc_enumerate.go`, `docs/fidelity/*`, `docs/GA.md`, `go.mod` | all |
+| `cmd/jaiscloud-gcp/main.go`, `tests/gcpconformance/grpc_enumerate.go`, `docs/fidelity/*`, `docs/gcp-wire-contract.md`, `go.mod` | all |
 | `internal/gcp/adapter/router.go`, `jsoncodec.go` | <sessions> |
 | `<service> store schema` | <sessions> |
 
@@ -83,14 +83,14 @@ GA contribution: <service>.<op> <transport> <state> -> ga.
 
 ## 5. Out of scope / do not change
 
-- Services/methods deliberately excluded (with `docs/GA.md §7` reference).
+- Services/methods deliberately excluded (with a `docs/gcp-wire-contract.md §5` reference).
 - TEST-NON-COMPLIANT rows (real GCP wins) — do **not** change the emulator.
 
 ## 6. Exit checklist (preview → GA plans)
 
 - [ ] every target cell derives `ga` in `make gen-gcp-fidelity-matrix`
 - [ ] no remaining downgrade for the service in `docs/fidelity-overrides.yaml`
-- [ ] `docs/GA.md` §2 rollup + §7 and `README-GCP.md` limitations updated
+- [ ] `docs/gcp-wire-contract.md` + `README-GCP.md` limitations updated (the rollup is generated)
 - [ ] wire + gRPC conformance cover the new ops; `make ga-check` green
 - [ ] official SDK compatibility gate green
 - [ ] `make check-gcp-fidelity-matrix` green (matrix regenerated)

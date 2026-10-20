@@ -1,7 +1,7 @@
 # JaisCloud for GCP
 
 > **Early Development Notice**
-> `jaiscloud-gcp` is under active development on the `gcp` branch (current version **v1.1.0**) and has not yet been released as a packaged binary (see the [main README](README.md), which currently lists GCP as "In pipeline"). Build it from source. Some operations may have incomplete implementations, behavioural differences from real GCP, or known bugs — see [Known Limitations](#known-limitations) below, and please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) for anything not already listed there.
+> `jaiscloud-gcp` is under active development on the `gcp` branch and has not yet been released as a packaged binary (see the [main README](README.md), which currently lists GCP as "In pipeline"). Build it from source. Some operations may have incomplete implementations, behavioural differences from real GCP, or known bugs — see [Known Limitations](#known-limitations) below, and please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) for anything not already listed there.
 
 **JaisCloud — a free GCP emulator for developers and CI.** It implements real GCP wire protocols — both the REST/JSON APIs and the native gRPC APIs official Google clients use (Storage, Pub/Sub, Firestore, Datastore, KMS, Secret Manager, Logging, Monitoring, Dataproc, Eventarc, Functions, Managed Kafka, Metastore, Service Usage, Workflows, Workflow Executions, Resource Manager, IAM, Cloud Scheduler, Cloud Tasks, GKE, Cloud Run) — no SDK shims, no proxy rewrites. Point an official Google client library at it and it works. Where real GCP is REST-only (Compute, Cloud SQL, Cloud DNS, BigQuery, BigLake Iceberg, Memorystore), only REST is exposed; each service row below states its transports.
 
@@ -66,20 +66,21 @@ can't drift from the code:
 Regenerate with `make gen-gcp-fidelity-matrix`; CI fails (`make check-gcp-fidelity-matrix`) if the
 committed matrix drifts.
 
-### GA readiness
+### Fidelity & testing
 
-The published GA contract — what `ga` means here, the rollup, the CI gates, client
-compatibility, deploy artifacts, and the surfaces that are explicitly non-GA — is
-[`docs/GA.md`](docs/GA.md). The one-command aggregate gate is `make ga-check`.
+The published wire contract — what `ga` means here, the pinned API artifacts, client
+compatibility, the CI gates, and the surfaces that are explicitly non-`ga` — is
+[`docs/gcp-wire-contract.md`](docs/gcp-wire-contract.md). The one-command aggregate gate is
+`make ga-check`.
 
 [`docs/GCP-TESTABILITY.md`](docs/GCP-TESTABILITY.md) is the per-service local-testability
 contract: what a local run proves, and what must be verified on real GCP.
 
-The release decisions and explicitly **accepted risks** for v1.1.0 — identity authz not enforced
+The explicitly **accepted risks** — identity authz not enforced
 (Cloud KMS crypto ops honor a default-permissive cryptoKey policy), LROs complete synchronously by
 default (an opt-in async mode is available for local testing),
 the metadata-only tier, and the real-GCP smoke requirement for Yellow/Red surfaces — are recorded
-in [GA.md §10](docs/GA.md#10-release-decisions-and-accepted-risks-v110).
+in [gcp-wire-contract.md §8](docs/gcp-wire-contract.md#8-accepted-risks).
 
 ---
 
@@ -472,7 +473,7 @@ The schedule **is** executed, lazily on read (the emulator has no background sch
 
 The gRPC KMS surface also implements the delete side (`DeleteCryptoKeyVersion`, `DeleteCryptoKey`, plus the `RetiredResource` records that block name reuse), the raw AES-GCM primitives (`RawEncrypt`/`RawDecrypt`, purpose `RAW_ENCRYPT_DECRYPT`), and the full key-import surface. `ImportJob`s (`CreateImportJob`/`GetImportJob`/`ListImportJobs`) expose the wrapping key; `ImportCryptoKeyVersion` unwraps caller-supplied material (RSA-OAEP, optionally with an AES-KWP RFC 5649 layer, or the post-quantum HPKE-KEM methods) and creates a version; the `ImportTrustedKeyWrappedCryptoKeyVersion`/`ExportTrustedKeyWrappedCryptoKeyVersion` pair wraps and unwraps key material with an HSM AES-256-KWP key for EKM trusted wrapping; and `Decapsulate` recovers shared secrets for the KEM key types (`ML_KEM_768`, `ML_KEM_1024`, `KEM_XWING`), with `GetPublicKey` returning the raw NIST-PQC / X-Wing encapsulation key. These are served on **both** transports (REST `cryptoKeyVersions:import`/`:decapsulate`/`:importTrustedKeyWrappedCryptoKeyVersion`/`:exportTrustedKeyWrappedCryptoKeyVersion` and `importJobs`). Still out of scope: EKM connection/instance control planes (`ekmConnections`, `singleTenantHsmInstances`) and Cloud KMS **managed/external** rotation — an imported/created key's material is emulated in software regardless of the requested protection level.
 
-A cryptoKey's IAM policy is enforced on its crypto operations (`encrypt`/`decrypt`/`asymmetricSign`/`asymmetricDecrypt`/`macSign`/`macVerify`/`getPublicKey`), **default-permissively**: a key with no policy — or with no bindings — allows every operation, and only a policy scoped to roles that omit the required `cloudkms.cryptoKeyVersions.useTo*` permission returns `403 PERMISSION_DENIED`. Binding **members** and **conditions** are not evaluated (the emulator does not resolve the caller's identity), mirroring the AWS KMS emulator's key-policy check. Identity IAM remains shape-only (see [GA.md §10](docs/GA.md#10-release-decisions-and-accepted-risks-v110)).
+A cryptoKey's IAM policy is enforced on its crypto operations (`encrypt`/`decrypt`/`asymmetricSign`/`asymmetricDecrypt`/`macSign`/`macVerify`/`getPublicKey`), **default-permissively**: a key with no policy — or with no bindings — allows every operation, and only a policy scoped to roles that omit the required `cloudkms.cryptoKeyVersions.useTo*` permission returns `403 PERMISSION_DENIED`. Binding **members** and **conditions** are not evaluated (the emulator does not resolve the caller's identity), mirroring the AWS KMS emulator's key-policy check. Identity IAM remains shape-only (see [gcp-wire-contract.md §8](docs/gcp-wire-contract.md#8-accepted-risks)).
 
 ### Secret Manager: rotation is stored, managed rotation is emulated without a Cloud SQL data plane
 

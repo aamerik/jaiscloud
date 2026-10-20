@@ -2238,7 +2238,7 @@ func generatePlan(svc, effort string, force bool, matrixPath, templatePath strin
 	fmt.Fprintf(&b, "# %s preview → GA — wave plan\n\n", svc)
 	fmt.Fprintf(&b, "Scaffolded by `make gcp-plan-new SERVICE=%s EFFORT=%s` from `%s` (`%d` non-ga cells across `%d` operations).\n\n", svc, effort, matrixPath, nonGA, len(order))
 	fmt.Fprintf(&b, "Provenance: `%s`. Fill in impact/effort and group operations into sensible sessions before starting.\n", matrixPath)
-	fmt.Fprintf(&b, "Exit criteria: `%s` has 0 preview/limited cells; no `%s` downgrade in `docs/fidelity-overrides.yaml`; `docs/GA.md` §2/§7 + README updated; `make gen-gcp-fidelity-matrix` + `make ga-check` green.\n\n", svc, svcLower)
+	fmt.Fprintf(&b, "Exit criteria: `%s` has 0 preview/limited cells; no `%s` downgrade in `docs/fidelity-overrides.yaml`; `docs/gcp-wire-contract.md` + README updated; `make gen-gcp-fidelity-matrix` + `make ga-check` green.\n\n", svc, svcLower)
 	fmt.Fprintf(&b, "Plan family (Series): `%s` (from the filename). Order with `make gcp-status-next SERIES=\"java-compat,%s\"` (or the reverse).\n\n", family, family)
 
 	b.WriteString("## 1. Index\n\n")

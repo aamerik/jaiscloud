@@ -112,7 +112,7 @@ type Broker interface {
 type Service struct {
 	store mkstore.Store
 	// lroMode controls operation timing. The zero value is synchronous: every
-	// operation is stored done=true inline, matching the v1.1.0 contract. An
+	// operation is stored done=true inline, matching the default synchronous contract. An
 	// enabled mode stores operations done=false and settles them lazily on read.
 	lroMode lro.Mode
 	// tracker publishes the one-time "operation settled" event when a lazily

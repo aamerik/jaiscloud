@@ -107,7 +107,7 @@ type matrixServiceFacts struct {
 // serviceIsGA reports whether a service counts as a `ga` service for the DoD.
 // The rule is deliberately mechanical and raw: a service is `ga` when the
 // fidelity matrix has at least one `ga` cell and no `preview` cell — derived
-// only from the per-operation/per-transport states, matching docs/GA.md's
+// only from the per-operation/per-transport states, matching docs/gcp-wire-contract.md's
 // per-operation model. It is NOT docs/GCP-TESTABILITY.md §2's curated *tier*
 // (which applies hand-picked overrides and a stale snapshot); it intentionally
 // has no overrides. The rule is stricter than "has any ga cell" (a preview
@@ -503,7 +503,7 @@ func renderCoverageSection(b *strings.Builder, rows []coverageRow, exemptions ma
 	fmt.Fprintf(b, "> Raw-REST probes that drive no official client (e.g. `serviceusage` in\n")
 	fmt.Fprintf(b, "> `lro_async_test.go`) do not satisfy the DoD.\n")
 	fmt.Fprintf(b, ">\n> `ga` = the raw matrix rule: ≥1 `ga` cell and no `preview` cell (a deliberately mechanical,\n")
-	fmt.Fprintf(b, "> override-free reading of the per-operation states in `docs/GA.md`, not the curated\n")
+	fmt.Fprintf(b, "> override-free reading of the per-operation states in `docs/gcp-wire-contract.md`, not the curated\n")
 	fmt.Fprintf(b, "> GCP-TESTABILITY §2 tier). `limited`-only services (`bigquery`, `compute`, `clouddns`,\n")
 	fmt.Fprintf(b, "> `cloudsql`, `memorystore`) and `preview` services (`iceberg`) are exempt.\n")
 	fmt.Fprintf(b, "> `%d/%d` `ga` services have a suite", gaCovered, gaTotal)
