@@ -68,19 +68,21 @@ committed matrix drifts.
 
 ### Fidelity & testing
 
-The published wire contract — what `ga` means here, the pinned API artifacts, client
-compatibility, the CI gates, and the surfaces that are explicitly non-`ga` — is
-[`docs/gcp-wire-contract.md`](docs/gcp-wire-contract.md). The one-command aggregate gate is
+The GCP reference docs live under [`docs/gcp/`](docs/gcp/README.md) (that index lists
+each one and what it covers). The published wire contract — what `ga` means here, the
+pinned API artifacts, client compatibility, the CI gates, and the surfaces that are
+explicitly non-`ga` — is
+[`docs/gcp/wire-contract.md`](docs/gcp/wire-contract.md). The one-command aggregate gate is
 `make ga-check`.
 
-[`docs/GCP-TESTABILITY.md`](docs/GCP-TESTABILITY.md) is the per-service local-testability
+[`docs/gcp/testability.md`](docs/gcp/testability.md) is the per-service local-testability
 contract: what a local run proves, and what must be verified on real GCP.
 
 The explicitly **accepted risks** — identity authz not enforced
 (Cloud KMS crypto ops honor a default-permissive cryptoKey policy), LROs complete synchronously by
 default (an opt-in async mode is available for local testing),
 the metadata-only tier, and the real-GCP smoke requirement for Yellow/Red surfaces — are recorded
-in [gcp-wire-contract.md §8](docs/gcp-wire-contract.md#8-accepted-risks).
+in [wire-contract.md §8](docs/gcp/wire-contract.md#8-accepted-risks).
 
 ---
 
@@ -473,7 +475,7 @@ The schedule **is** executed, lazily on read (the emulator has no background sch
 
 The gRPC KMS surface also implements the delete side (`DeleteCryptoKeyVersion`, `DeleteCryptoKey`, plus the `RetiredResource` records that block name reuse), the raw AES-GCM primitives (`RawEncrypt`/`RawDecrypt`, purpose `RAW_ENCRYPT_DECRYPT`), and the full key-import surface. `ImportJob`s (`CreateImportJob`/`GetImportJob`/`ListImportJobs`) expose the wrapping key; `ImportCryptoKeyVersion` unwraps caller-supplied material (RSA-OAEP, optionally with an AES-KWP RFC 5649 layer, or the post-quantum HPKE-KEM methods) and creates a version; the `ImportTrustedKeyWrappedCryptoKeyVersion`/`ExportTrustedKeyWrappedCryptoKeyVersion` pair wraps and unwraps key material with an HSM AES-256-KWP key for EKM trusted wrapping; and `Decapsulate` recovers shared secrets for the KEM key types (`ML_KEM_768`, `ML_KEM_1024`, `KEM_XWING`), with `GetPublicKey` returning the raw NIST-PQC / X-Wing encapsulation key. These are served on **both** transports (REST `cryptoKeyVersions:import`/`:decapsulate`/`:importTrustedKeyWrappedCryptoKeyVersion`/`:exportTrustedKeyWrappedCryptoKeyVersion` and `importJobs`). Still out of scope: EKM connection/instance control planes (`ekmConnections`, `singleTenantHsmInstances`) and Cloud KMS **managed/external** rotation — an imported/created key's material is emulated in software regardless of the requested protection level.
 
-A cryptoKey's IAM policy is enforced on its crypto operations (`encrypt`/`decrypt`/`asymmetricSign`/`asymmetricDecrypt`/`macSign`/`macVerify`/`getPublicKey`), **default-permissively**: a key with no policy — or with no bindings — allows every operation, and only a policy scoped to roles that omit the required `cloudkms.cryptoKeyVersions.useTo*` permission returns `403 PERMISSION_DENIED`. Binding **members** and **conditions** are not evaluated (the emulator does not resolve the caller's identity), mirroring the AWS KMS emulator's key-policy check. Identity IAM remains shape-only (see [gcp-wire-contract.md §8](docs/gcp-wire-contract.md#8-accepted-risks)).
+A cryptoKey's IAM policy is enforced on its crypto operations (`encrypt`/`decrypt`/`asymmetricSign`/`asymmetricDecrypt`/`macSign`/`macVerify`/`getPublicKey`), **default-permissively**: a key with no policy — or with no bindings — allows every operation, and only a policy scoped to roles that omit the required `cloudkms.cryptoKeyVersions.useTo*` permission returns `403 PERMISSION_DENIED`. Binding **members** and **conditions** are not evaluated (the emulator does not resolve the caller's identity), mirroring the AWS KMS emulator's key-policy check. Identity IAM remains shape-only (see [wire-contract.md §8](docs/gcp/wire-contract.md#8-accepted-risks)).
 
 ### Secret Manager: rotation is stored, managed rotation is emulated without a Cloud SQL data plane
 
@@ -489,7 +491,7 @@ A cluster may be created with a `virtualClusterConfig` (Dataproc-on-GKE) instead
 
 Jobs, however, get a real placement/isolation boundary in K8s executor mode: each cluster runs in its own Kubernetes namespace — the caller's `kubernetesClusterConfig.kubernetesNamespace` when supplied, else a deterministic derived name (`gcp-dataproc-<project>-<cluster>-<hash8>`) — provisioned on cluster create and removed on cluster delete or `/_jaiscloud/reset` **only when the emulator created it** (a pre-existing namespace is adopted and left in place; its jobs are still reaped on cluster delete, while reset reclaims only emulator-owned namespaces). When the emulator's ServiceAccount cannot manage cluster-scoped namespaces, or in mock execution mode, the cluster falls back to the process-wide `JAISCLOUD_K8S_NAMESPACE`. The effective namespace and its ownership are recorded on the cluster record (`namespace`/`namespaceOwned`). The required RBAC — the `jaiscloud-executor` ClusterRole and a per-namespace RoleBinding, plus the `jaiscloud-namespace-admin` ClusterRole for namespace create/delete — is in `deploy/k8s/rbac.yaml`.
 
-The **docker executor** is the k8s-free path (`JAISCLOUD_SPARK_EXECUTOR_MODE=docker`, or `JAISCLOUD_EXECUTOR_MODE=docker`): each job runs as a one-shot container on the local Docker daemon, where the configured Spark image (`JAISCLOUD_K8S_SPARK_IMAGE`) executes `spark-submit --master local[*]` in client mode with the same GCS-connector env/`--conf`s the k8s driver pods receive. The emulator host is reachable from the container as `host.docker.internal` (a loopback `STORAGE_EMULATOR_HOST` is rewritten for the container), or, when the emulator itself is containerized (`JAISCLOUD_DOCKER_MODE=container`), by its name on `JAISCLOUD_DOCKER_NETWORK`, which the driver joins (CDE1). The driver's stdout/stderr is streamed from the container log into the job's `driverOutputResourceUri`, and cancel, cluster delete and `/_jaiscloud/reset` reap the container. Like the Cloud Run/Lambda/ECS executors it dials `/var/run/docker.sock` (ignoring `DOCKER_HOST`) and falls back to mock when no daemon is reachable. Docker and k8s are interchangeable implementations of one executor seam and change no wire surface — the executor choice never affects a fidelity tier (`docs/GCP-TESTABILITY.md` §8). Verified by `make test-e2e-dataproc-docker` (`tests/persistent_mode/gcp/dataproc/`, local Docker).
+The **docker executor** is the k8s-free path (`JAISCLOUD_SPARK_EXECUTOR_MODE=docker`, or `JAISCLOUD_EXECUTOR_MODE=docker`): each job runs as a one-shot container on the local Docker daemon, where the configured Spark image (`JAISCLOUD_K8S_SPARK_IMAGE`) executes `spark-submit --master local[*]` in client mode with the same GCS-connector env/`--conf`s the k8s driver pods receive. The emulator host is reachable from the container as `host.docker.internal` (a loopback `STORAGE_EMULATOR_HOST` is rewritten for the container), or, when the emulator itself is containerized (`JAISCLOUD_DOCKER_MODE=container`), by its name on `JAISCLOUD_DOCKER_NETWORK`, which the driver joins (CDE1). The driver's stdout/stderr is streamed from the container log into the job's `driverOutputResourceUri`, and cancel, cluster delete and `/_jaiscloud/reset` reap the container. Like the Cloud Run/Lambda/ECS executors it dials `/var/run/docker.sock` (ignoring `DOCKER_HOST`) and falls back to mock when no daemon is reachable. Docker and k8s are interchangeable implementations of one executor seam and change no wire surface — the executor choice never affects a fidelity tier (`docs/gcp/testability.md` §8). Verified by `make test-e2e-dataproc-docker` (`tests/persistent_mode/gcp/dataproc/`, local Docker).
 
 ### Dataproc: asynchronous cluster/job state machine
 

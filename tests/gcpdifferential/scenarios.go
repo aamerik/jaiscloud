@@ -78,7 +78,7 @@ type Scenario struct {
 	// NoAuth, when true, sends the scenario without an Authorization header.
 	// Record mode then captures real GCP's unauthenticated (UNAUTHENTICATED /
 	// PERMISSION_DENIED) response while replay captures the emulator's — whose
-	// authz is not enforced by design (docs/gcp-wire-contract.md §8). The resulting
+	// authz is not enforced by design (docs/gcp/wire-contract.md §8). The resulting
 	// divergence is accepted by a triage rule, making the authz gap explicit.
 	NoAuth bool
 	// Save maps a variable name to a dotted path into the response JSON whose
@@ -963,7 +963,7 @@ func Scenarios(project, suffix string) []Scenario {
 	// principal is unavailable; the only authz differential it can capture is an
 	// unauthenticated call. Real GCP rejects it (401 UNAUTHENTICATED) while the
 	// emulator serves it — authz is documented as not enforced (G1,
-	// docs/gcp-wire-contract.md §8). The divergences are accepted, with that reason, by the
+	// docs/gcp/wire-contract.md §8). The divergences are accepted, with that reason, by the
 	// triage rules in triage.go, making the accepted risk explicit and gated.
 	sc = append(sc,
 		Scenario{Op: "storage_buckets_list_noauth", Service: "storage", Method: "GET",

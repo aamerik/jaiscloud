@@ -1,7 +1,7 @@
 // Package sdk_eventarc_test — behavioural depth (p2–p5) for the Eventarc v1
 // surface, driven by the official apiary clients (eventarc and pubsub) against
 // the emulator. Where sdk_eventarc_test.go proves the baseline lifecycle (p1),
-// this file exercises the behaviour classes docs/GCP-TESTABILITY.md §10 names:
+// this file exercises the behaviour classes docs/gcp/testability.md §10 names:
 //
 //	p2 concurrency      — trigger create/delete churn on the trigger store while
 //	                      events are being delivered, with the client driving

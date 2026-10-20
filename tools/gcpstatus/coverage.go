@@ -107,8 +107,8 @@ type matrixServiceFacts struct {
 // serviceIsGA reports whether a service counts as a `ga` service for the DoD.
 // The rule is deliberately mechanical and raw: a service is `ga` when the
 // fidelity matrix has at least one `ga` cell and no `preview` cell — derived
-// only from the per-operation/per-transport states, matching docs/gcp-wire-contract.md's
-// per-operation model. It is NOT docs/GCP-TESTABILITY.md §2's curated *tier*
+// only from the per-operation/per-transport states, matching docs/gcp/wire-contract.md's
+// per-operation model. It is NOT docs/gcp/testability.md §2's curated *tier*
 // (which applies hand-picked overrides and a stale snapshot); it intentionally
 // has no overrides. The rule is stricter than "has any ga cell" (a preview
 // service is not ga) and looser than "every cell is ga" (a service may carry a
@@ -503,8 +503,8 @@ func renderCoverageSection(b *strings.Builder, rows []coverageRow, exemptions ma
 	fmt.Fprintf(b, "> Raw-REST probes that drive no official client (e.g. `serviceusage` in\n")
 	fmt.Fprintf(b, "> `lro_async_test.go`) do not satisfy the DoD.\n")
 	fmt.Fprintf(b, ">\n> `ga` = the raw matrix rule: ≥1 `ga` cell and no `preview` cell (a deliberately mechanical,\n")
-	fmt.Fprintf(b, "> override-free reading of the per-operation states in `docs/gcp-wire-contract.md`, not the curated\n")
-	fmt.Fprintf(b, "> GCP-TESTABILITY §2 tier). `limited`-only services (`bigquery`, `compute`, `clouddns`,\n")
+	fmt.Fprintf(b, "> override-free reading of the per-operation states in `docs/gcp/wire-contract.md`, not the curated\n")
+	fmt.Fprintf(b, "> `docs/gcp/testability.md` §2 tier). `limited`-only services (`bigquery`, `compute`, `clouddns`,\n")
 	fmt.Fprintf(b, "> `cloudsql`, `memorystore`) and `preview` services (`iceberg`) are exempt.\n")
 	fmt.Fprintf(b, "> `%d/%d` `ga` services have a suite", gaCovered, gaTotal)
 	if len(exemptions) > 0 {
@@ -515,7 +515,7 @@ func renderCoverageSection(b *strings.Builder, rows []coverageRow, exemptions ma
 		fmt.Fprintf(b, ">\n> **Gate violations — `ga` services with no suite and no exemption (%d): %s**\n",
 			len(violations), strings.Join(violations, ", "))
 	}
-	fmt.Fprintf(b, ">\n> **Behavioural depth** (`p1`–`p5`, docs/GCP-TESTABILITY.md §10): `p1` = the\n")
+	fmt.Fprintf(b, ">\n> **Behavioural depth** (`p1`–`p5`, docs/gcp/testability.md §10): `p1` = the\n")
 	fmt.Fprintf(b, "> lifecycle baseline; `p2` concurrency/OCC, `p3` errors/negatives, `p4` listing/paging,\n")
 	fmt.Fprintf(b, "> `p5` scale/boundary. Each `ga` service records every class as `✓` (asserted by an\n")
 	fmt.Fprintf(b, "> official-client suite) or `exempt` (reasoned + dated), gated by\n")

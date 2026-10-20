@@ -122,7 +122,7 @@ var gcpServices = []ServiceDescriptor{
 		// Terraform/gcloud use. The codec lives with the REST transport package
 		// that adapts it to the shared core. REST only — GKE's native transport
 		// is gRPC, but the emulator deliberately exposes the REST metadata
-		// surface (see docs/gcp-wire-contract.md §5).
+		// surface (see docs/gcp/wire-contract.md §5).
 		ServiceName:    "container",
 		PathPrefixes:   []string{"/container/"},
 		ProviderPrefix: "Container",

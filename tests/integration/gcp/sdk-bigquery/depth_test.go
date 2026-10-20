@@ -1,7 +1,7 @@
 // Package sdk_bigquery_test — behavioural depth (p2–p5) for the BigQuery v2
 // surface, driven by the official apiary client against the emulator. Where
 // bigquery_test.go/sql_test.go prove the baseline lifecycle and the executed-SQL
-// subset, this file exercises the behaviour classes docs/GCP-TESTABILITY.md §10
+// subset, this file exercises the behaviour classes docs/gcp/testability.md §10
 // names:
 //
 //	p3 errors & negatives  — duplicate dataset/table 409, unknown dataset/table

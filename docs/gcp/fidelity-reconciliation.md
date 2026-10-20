@@ -109,7 +109,7 @@ the proto/Discovery:
 - Cloud SQL / Compute / Cloud DNS / Memorystore providers are `ResourceStore`-only
   (no `blobfs`, no executor, no control/data plane) — the metadata-only reason
   holds.
-- BigQuery's SQL-subset caveat (`docs/gcp-bigquery-sql-engine.md`) holds; the
+- BigQuery's SQL-subset caveat (`docs/gcp/bigquery-sql-engine.md`) holds; the
   service-wide override is deliberate.
 - Logging `TailLogEntries` has no deterministic conformance assertion — holds.
 - The plan doc's "kms 4, secretmanager 2" limited cells are long gone (promoted);

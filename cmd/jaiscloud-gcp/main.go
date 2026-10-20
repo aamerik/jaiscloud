@@ -689,7 +689,7 @@ func startCmd() *cobra.Command {
 
 			// Google Kubernetes Engine (GKE) v1's metadata-only control plane.
 			// REST only — GKE's native transport is gRPC, but the emulator
-			// deliberately exposes the REST metadata surface (docs/gcp-wire-contract.md §5).
+			// deliberately exposes the REST metadata surface (docs/gcp/wire-contract.md §5).
 			// The core sits behind a ClusterManager seam whose only
 			// implementation is the mock: a cluster is a stored record, not a
 			// real Kubernetes control plane.

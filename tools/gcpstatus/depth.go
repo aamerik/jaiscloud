@@ -12,7 +12,7 @@
 //
 // The record lives one file per service under docs/test-depth/<canonical>.yaml
 // (not a single central file) so per-service sessions can extend their own
-// record without colliding — see docs/GCP-TESTABILITY.md §10.
+// record without colliding — see docs/gcp/testability.md §10.
 package main
 
 import (
@@ -31,7 +31,7 @@ import (
 const defaultDepthDir = "docs/test-depth"
 
 // depthClasses are the behaviour classes recorded beyond the `p1` lifecycle
-// baseline. They are fixed by docs/GCP-TESTABILITY.md §10; a record naming any
+// baseline. They are fixed by docs/gcp/testability.md §10; a record naming any
 // other key fails loud.
 var depthClasses = []string{"p2", "p3", "p4", "p5"}
 

@@ -76,6 +76,6 @@ unknown client wrapper is diagnosable rather than silently mismatched.
   becomes a `suites:` entry in a `docs/test-depth/*.yaml` record.
 - **Not a real-GCP verifier.** It asserts what a local client must observe; the
   authority for the expected envelope stays the Discovery document/proto and the
-  captured differentials (`tests/gcpdifferential`, `docs/GCP-TESTABILITY.md` §7).
+  captured differentials (`tests/gcpdifferential`, `docs/gcp/testability.md` §7).
 - **Not a scale harness.** `p5` (streaming, large payload, lineage) stays with
   the suite that owns the surface.
