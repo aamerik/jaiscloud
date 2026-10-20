@@ -181,7 +181,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-const version = "1.1.0"
+var version = "dev"
 
 const defaultHost = "http://localhost:8080"
 
@@ -245,7 +245,7 @@ func startCmd() *cobra.Command {
 
 			// Long-running-operation timing is an opt-in, cross-service mode.
 			// The default (env unset) keeps every operation synchronously done,
-			// matching the v1.1.0 contract and the conformance transcripts;
+			// matching the default synchronous LRO contract and the conformance transcripts;
 			// JAISCLOUD_LRO_MODE=async stores operations in flight and settles
 			// them lazily when a client polls Operations.GetOperation.
 			lroMode := lro.FromEnv()
@@ -689,7 +689,7 @@ func startCmd() *cobra.Command {
 
 			// Google Kubernetes Engine (GKE) v1's metadata-only control plane.
 			// REST only — GKE's native transport is gRPC, but the emulator
-			// deliberately exposes the REST metadata surface (docs/GA.md §7).
+			// deliberately exposes the REST metadata surface (docs/gcp-wire-contract.md §5).
 			// The core sits behind a ClusterManager seam whose only
 			// implementation is the mock: a cluster is a stored record, not a
 			// real Kubernetes control plane.
@@ -1039,7 +1039,7 @@ func startCmd() *cobra.Command {
 				// registered only in the opt-in async mode: in sync mode every
 				// operation is returned done inline so nothing polls, and
 				// omitting it leaves Functions' existing top-level NotFound (the
-				// v1.1.0 contract) unchanged. Mirrors the REST fallback wiring.
+				// default synchronous LRO contract) unchanged. Mirrors the REST fallback wiring.
 				if lroMode.Async() && transports.GRPCFor("serviceusage") && serviceUsageCore != nil {
 					opsResolvers = append(opsResolvers, serviceUsageGRPC)
 				}

@@ -123,7 +123,7 @@ type Service struct {
 	gate *concurrencyGate
 	// lroMode controls long-running-operation timing. The zero value is
 	// synchronous: every mutation operation is stored done=true inline,
-	// matching the v1.1.0 contract. An enabled mode stores operations
+	// matching the default synchronous contract. An enabled mode stores operations
 	// done=false and settles them lazily on read (see settle).
 	lroMode lro.Mode
 	// tracker publishes the one-time "operation settled" event when a lazily

@@ -115,7 +115,7 @@ the proto/Discovery:
 - The plan doc's "kms 4, secretmanager 2" limited cells are long gone (promoted);
   no cell was promotable now.
 
-So no cell was promoted; the reasons were confirmed and the stale plan/GA.md
+So no cell was promoted; the reasons were confirmed and the stale plan/wire-contract
 counts corrected.
 
 ### 4. Transport classification confirmed (one gap recorded)

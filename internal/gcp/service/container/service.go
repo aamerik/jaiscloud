@@ -5,7 +5,7 @@
 // future transport share one instance, so they cannot drift.
 //
 // The emulator deliberately has no real control plane: clusters are stored
-// records, not schedulable Kubernetes API endpoints (see docs/GA.md §7). The
+// records, not schedulable Kubernetes API endpoints (see docs/gcp-wire-contract.md §5). The
 // small ClusterManager seam exists so a real engine can attach later; only the
 // mock implementation ships today.
 package container

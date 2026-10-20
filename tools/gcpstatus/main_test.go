@@ -60,7 +60,7 @@ func TestParseDocState(t *testing.T) {
 		want    string
 	}{
 		{"non-compliant section", []string{"check the thing"}, "TEST-NON-COMPLIANT — do NOT change", "deferred"},
-		{"out of scope section", []string{"cloud run"}, "Not planned (out of scope per GA.md §7)", "deferred"},
+		{"out of scope section", []string{"cloud run"}, "Not planned (out of scope per wire contract §5)", "deferred"},
 		{"unimplemented", []string{"Unimplemented"}, "", "open"},
 		{"still open", []string{"still open"}, "", "open"},
 		{"done", []string{"DONE (#127)"}, "", "done"},

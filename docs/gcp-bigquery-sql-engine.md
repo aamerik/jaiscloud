@@ -13,7 +13,7 @@ Date: 2026-09-29 · Backlog ID: **BQ0** · Branch: `spike/gcp-bigquery-sql-engin
 ## 1. Problem
 
 At BQ0, BigQuery was the only `preview` GCP service in jaiscloud: all 23 cells were
-"metadata + stored rows only, **no SQL engine**" (`docs/GA.md` §7,
+"metadata + stored rows only, **no SQL engine**" (`docs/gcp-wire-contract.md` §5,
 `docs/fidelity/fidelity-matrix.md`), and `jobs.query` stored the query and returned
 `jobComplete=true` with an empty result, so any client that evaluated SQL locally got a
 successful-looking wrong answer. `docs/GCP-TESTABILITY.md` §4 graded `bigquery` 🔴
@@ -120,14 +120,14 @@ subset, plus the encoding to the Discovery result shape. Results:
 - **`routines`/`models`/`rowAccessPolicies`** — remain documented `501`.
 - **Real DB data planes for other services** (Cloud SQL/Memorystore) — a
   different problem (wire protocol + real server), not helped by this engine.
-- **Authz, real LRO timing, quotas** — unchanged accepted risks (`docs/GA.md` §10).
+- **Authz, real LRO timing, quotas** — unchanged accepted risks (`docs/gcp-wire-contract.md` §8).
 
 ## 7. Consequences / follow-ups
 
 - **BQ1** implements the subset → SQLite translator + scratch hydration and
   SELECT execution. **BQ2** adds DDL/DML + catalog sync + result encoding.
   **BQ3** wires SDK/wire conformance and re-grades the cells `preview` →
-  `limited` (not `ga`), updating `docs/GA.md` §1/§7, `docs/GCP-TESTABILITY.md` §4,
+  `limited` (not `ga`), updating `docs/gcp-wire-contract.md` §1/§5, `docs/GCP-TESTABILITY.md` §4,
   README-GCP and the matrix overrides. **BQ4** proves memory/`--dsn` parity,
   snapshot/export safety and lakehouse scale.
 

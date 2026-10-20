@@ -24,8 +24,8 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
 
 Deliberately **excluded** because it makes `apply` fail (and abort the run):
 
-- **Cloud Run v2** — not implemented; declared out of scope for v1.0 in
-  `docs/GA.md` §7.
+- **Cloud Run v2** — not implemented; declared out of scope in
+  `docs/gcp-wire-contract.md` §5.
 
 Keep `main.tf` in sync with the emulator's supported surface: one unimplemented
 resource aborts the whole `apply`, so nothing else runs.
