@@ -6,12 +6,12 @@ against real GCP**. An **AWS → GCP mapping** is included for reference.
 
 It is a companion to, not a replacement for:
 
-- [`docs/gcp-wire-contract.md`](gcp-wire-contract.md) — the wire contract: what
+- [`docs/gcp/wire-contract.md`](wire-contract.md) — the wire contract: what
   `ga`/`limited`/`preview`/`unsupported` mean, stability, CI gates, client
   compatibility, accepted risks.
-- [`README-GCP.md`](../README-GCP.md) — the service overview and the authoritative
-  [Known Limitations](../README-GCP.md#known-limitations) list.
-- [`docs/fidelity/fidelity-matrix.md`](fidelity/fidelity-matrix.md) — the **source of
+- [`README-GCP.md`](../../README-GCP.md) — the service overview and the authoritative
+  [Known Limitations](../../README-GCP.md#known-limitations) list.
+- [`docs/fidelity/fidelity-matrix.md`](../fidelity/fidelity-matrix.md) — the **source of
   truth** for per-operation state and reasons. This document derives every number from
   it; where they disagree, the matrix wins.
 
@@ -81,7 +81,7 @@ rather than a raw `ga` ratio.
 
 ## 3. Coverage snapshot
 
-Read from [`docs/fidelity/fidelity-matrix.md`](fidelity/fidelity-matrix.md) at the time
+Read from [`docs/fidelity/fidelity-matrix.md`](../fidelity/fidelity-matrix.md) at the time
 of writing:
 
 | Layer | Cells | `ga` | `limited` | `preview` | `unsupported` | `ga` share |
@@ -105,8 +105,8 @@ function/Cloud Run data-plane URLs).
 
 **How to refresh.** The matrix is generated, not hand-edited. Run
 `make gen-gcp-fidelity-matrix`, then re-read
-[`docs/fidelity/fidelity-matrix.md`](fidelity/fidelity-matrix.md) (or the canonical
-[`fidelity-matrix.json`](fidelity/fidelity-matrix.json)) and update the numbers here.
+[`docs/fidelity/fidelity-matrix.md`](../fidelity/fidelity-matrix.md) (or the canonical
+[`fidelity-matrix.json`](../fidelity/fidelity-matrix.json)) and update the numbers here.
 `make check-gcp-fidelity-matrix` fails CI if the committed matrix has drifted.
 
 ---
@@ -217,7 +217,7 @@ behind a wire-conformant API.
 | --- | --- | --- | --- |
 | SQS | **Pub/Sub** | 🟢 `ga` (45/45) | High — full surface. |
 | S3 | **Cloud Storage** | 🟢 `ga` (52/52) | High — full read surface (`ReadObject` + `BidiReadObject`). |
-| DynamoDB | **Firestore** / Datastore | 🟢 `ga` (Firestore 60/60, Firestore Admin 27/32, Datastore 16/16) | High — watch transaction/OCC caveats ([Known Limitations](../README-GCP.md#known-limitations)). |
+| DynamoDB | **Firestore** / Datastore | 🟢 `ga` (Firestore 60/60, Firestore Admin 27/32, Datastore 16/16) | High — watch transaction/OCC caveats ([Known Limitations](../../README-GCP.md#known-limitations)). |
 | Lambda | **Cloud Functions** | 🟡 `limited` (38/38) | Control plane + GCS-referenced source execution (Docker/K8s); v2 `gcloud functions deploy --gen2` end-to-end (upload → create → poll); per-deploy revisions (Cloud Run shape) and the v2 1st→2nd gen upgrade/traffic control plane over REST; event triggers deliver Pub/Sub / GCS / Eventarc events with retry + dead-letter records (a Pub/Sub or GCS trigger's platform-provisioned backing subscription carries a user-configurable `deadLetterPolicy`). |
 | KMS | **Cloud KMS** | 🟢 `ga` (56/60) | High; 4 hard crypto leftovers (`ImportCryptoKeyVersion`, trusted-key wraps, `Decapsulate`). |
 | Secrets Manager | **Secret Manager** | 🟢 `ga` (30/32) | High; managed rotation needs Cloud SQL. |
@@ -380,7 +380,7 @@ time-driven: delivery runs on the producing event with real HTTP timeouts, so it
 has no tick engine to freeze.
 
 Additional service-specific caveats live in
-[`README-GCP.md` → Known Limitations](../README-GCP.md#known-limitations); read the
+[`README-GCP.md` → Known Limitations](../../README-GCP.md#known-limitations); read the
 section for every service you touch.
 
 ---
@@ -416,7 +416,7 @@ in production packages.
 
 **The contract.** Every **`ga` service** must be exercised by **at least one
 official-client behavioural suite**, or carry a **reasoned exemption** in
-[`docs/gcpstatus-coverage-exemptions.yaml`](gcpstatus-coverage-exemptions.yaml).
+[`docs/gcpstatus-coverage-exemptions.yaml`](../gcpstatus-coverage-exemptions.yaml).
 This is the behavioural-depth counterpart to the wire-shape layers in §1–§5: the
 conformance / differential / parity harnesses prove the *shape* (the emulator
 answers like real GCP), while this proves an official client can drive a
@@ -425,7 +425,7 @@ answers like real GCP), while this proves an official client can drive a
 - **`ga` service** = a service whose fidelity-matrix cells include at least one
   `ga` cell and **no `preview` cell**. This is a deliberately **mechanical, raw
   matrix rule** — a direct reading of the per-operation/per-transport states in
-  `docs/gcp-wire-contract.md`, with **no overrides**. It is *not* §2's curated tier above: §2
+  `docs/gcp/wire-contract.md`, with **no overrides**. It is *not* §2's curated tier above: §2
   applies hand-picked overrides (e.g. `functions`→Yellow, `kms`→Green) and its
   snapshot is stale, so the inventory does not claim to reproduce it. A service
   may carry a few explicit `unsupported` stubs (`container`, `dataproc`,
@@ -446,7 +446,7 @@ answers like real GCP), while this proves an official client can drive a
   (`sdk`, `sdk-rest`, `sdk-gcs-grpc`) that imports a service's official client
   and drives it counts too.
 - **A reasoned exemption** = an entry in
-  [`docs/gcpstatus-coverage-exemptions.yaml`](gcpstatus-coverage-exemptions.yaml)
+  [`docs/gcpstatus-coverage-exemptions.yaml`](../gcpstatus-coverage-exemptions.yaml)
   naming the service and *why* no `tests/integration/gcp` module is warranted —
   a stateless surface already covered by the IAM + conformance suites
   (`iamcredentials`). The gate accepts a service with either a suite **or** an
@@ -549,7 +549,7 @@ none of them). A class that is neither present nor exempt is **unaccounted for**
 and fails the gate.
 
 **The record — one file per service, derived + validated.** The record lives at
-[`docs/test-depth/<canonical>.yaml`](test-depth/), conventionally one
+[`docs/test-depth/<canonical>.yaml`](../test-depth/), conventionally one
 `<canonical>.yaml` file per service (not a single central file, so per-service
 sessions extend their own record without colliding). Each `p2`–`p5` cell is
 either:
@@ -587,7 +587,7 @@ cells as the depth lands.
 
 **The shared depth-test kit (DC2).** The Wave-2 depth cells are closed through a
 small, service-agnostic kit at
-[`tests/integration/gcp/testdepth/`](../tests/integration/gcp/testdepth/) — a
+[`tests/integration/gcp/testdepth/`](../../tests/integration/gcp/testdepth/) — a
 separate module (`jaiscloud-gcp-testdepth`, deps pinned to the oldest in-tree
 versions so MVS never forces a bump) that the suites import, never edit. It has
 three parts: a **list/paging contract** driver (`AssertPaging`/`Walk`/`CheckPages`
@@ -623,7 +623,7 @@ The profile is aggregated per package (statements with a non-zero execution
 count over total statements), and a per-package table is printed — wrapped in a
 collapsed GitHub Actions `::group::` in CI.
 
-**The floor.** [`docs/gcp-coverage-floor.yaml`](gcp-coverage-floor.yaml) records,
+**The floor.** [`docs/gcp-coverage-floor.yaml`](../gcp-coverage-floor.yaml) records,
 per repo-relative package dir, the statement-coverage percentage at the time it
 was last ratcheted. It is a **ratchet, not a target**: it starts at today's
 measured value and only moves up. `make test-gcp-coverage-update` rewrites it
@@ -697,7 +697,7 @@ the local default is the fast non-instrumented binary.
 **Why it is not in PR CI.** Mirroring the documented decision for the k3d/Docker
 e2e gates, a 100-way soak does not belong on a hosted per-PR runner. It runs
 locally (`make test-gcp-load`) and on a **weekly + manual** workflow
-([`.github/workflows/gcp-load.yml`](../.github/workflows/gcp-load.yml)) — like
+([`.github/workflows/gcp-load.yml`](../../.github/workflows/gcp-load.yml)) — like
 the Terraform/OpenTofu compat workflow, it is `workflow_dispatch` with a
 schedule. The harness mechanics — the metric parser, the worker pool, and the
 growth checks — are unit-tested server-free in `loadtest/harness_test.go`, with

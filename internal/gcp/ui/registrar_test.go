@@ -462,7 +462,7 @@ func TestRegistrar_ResourceManagerAdvertisedAndMounted(t *testing.T) {
 }
 
 // TestRegistrar_TiersPinnedToImplementationMatrix pins every descriptor's tier
-// to the documented behavioural depth (docs/GCP-TESTABILITY.md §5), which the
+// to the documented behavioural depth (docs/gcp/testability.md §5), which the
 // console renders as the per-service emulation-status badge. Shape-only services
 // use the `stub` tier and every non-full service must carry a note. Changing
 // this set is an intentional capability change.

@@ -1,7 +1,7 @@
 // Package sdk_dataproc_test — behavioural depth (p2–p5) for the Cloud Dataproc
 // v1 surface, driven by the official apiary client against the emulator. Where
 // sdk_dataproc_test.go proves the baseline lifecycle (p1), this file exercises
-// the behaviour classes docs/GCP-TESTABILITY.md §10 names:
+// the behaviour classes docs/gcp/testability.md §10 names:
 //
 //	p2 concurrency      — parallel submits with the same jobId (exactly one
 //	                      winner, losers 409), parallel distinct submits and

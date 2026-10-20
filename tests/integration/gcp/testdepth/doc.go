@@ -2,7 +2,7 @@
 // official-client suites (plan DC2,
 // plan_docs/gcp-depth-closure-wave-plan.md).
 //
-// The depth record introduced by the test-depth wave (docs/GCP-TESTABILITY.md
+// The depth record introduced by the test-depth wave (docs/gcp/testability.md
 // §10) has three classes that are client-observable contract, and this kit
 // asserts exactly those three, once, instead of re-deriving them per service:
 //

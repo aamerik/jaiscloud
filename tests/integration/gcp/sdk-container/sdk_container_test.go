@@ -2,7 +2,7 @@
 // Kubernetes Engine (GKE) v1 metadata control plane
 // (container.googleapis.com/v1) through the official Google REST apiary client.
 // Real GKE's native transport is gRPC, but the emulator deliberately exposes
-// the REST metadata surface (see docs/gcp-wire-contract.md §5), so the apiary client is the
+// the REST metadata surface (see docs/gcp/wire-contract.md §5), so the apiary client is the
 // transport-matching official REST client here.
 //
 // The canonical /v1/projects/{project}/locations/{location}/clusters path is
