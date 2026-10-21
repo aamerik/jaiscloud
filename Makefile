@@ -148,7 +148,7 @@ IMAGE             := jaiscloud-aws
 # (make docker first) by passing JAISCLOUD_IMAGE=jaiscloud-aws:latest to make.
 JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
 
-.PHONY: lint lint-gcp lint-pagination help build build-all build-ui build-ui-gcp docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools test-gcp-coverage test-gcp-coverage-update clean \
+.PHONY: lint lint-gcp lint-pagination help build build-all build-ui build-ui-gcp docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools test-release test-gcp-coverage test-gcp-coverage-update clean \
         server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         server-ui server-ui-gcp stop-server up-docker down-docker up-k8s down-k8s \
@@ -311,6 +311,9 @@ test-dataproc-streaming: ## Dataproc streaming/restart contract tests (schedulin
 
 test-gcp-tools: ## Unit tests for the GCP dev tools (gcpstatus, paginationcheck)
 	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/...
+
+test-release: ## Release artifact smoke tests for jaiscloud-gcp (needs a goreleaser snapshot in dist/)
+	go test -count=1 -tags release ./tests/release/...
 
 test-gcp-coverage: ## GCP statement-coverage measurement + per-package ratchet (internal/gcp/...)
 	@mkdir -p bin
