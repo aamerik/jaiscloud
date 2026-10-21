@@ -22,9 +22,10 @@ FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG CLOUD=aws
-# Version stamped into the binary (`jaiscloud-<cloud> version`). Passed by CI
-# (docker-publish.yml) and `make docker-%`; the default keeps a bare
-# `docker build` reporting "dev" instead of an empty string.
+# Version stamped into the binary (read by `jaiscloud-aws version` and
+# `jaiscloud-gcp version`; the azure main declares a const and ignores -X).
+# Passed by CI (docker-publish.yml) and `make docker-%`; the default keeps a
+# bare `docker build` reporting "dev" instead of an empty string.
 ARG VERSION=dev
 
 # ca-certificates needed for TLS to external registries during `go mod download`

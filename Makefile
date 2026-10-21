@@ -35,9 +35,9 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || \
 
 CLOUDS := aws azure gcp
 
-# REST port each image EXPOSEs (baked into `docker build --build-arg PORT`):
-# aws/azure listen on 4566, gcp on 8080. Override per call, e.g.
-# `make docker-gcp DOCKER_PORT_gcp=9090`.
+# Port EXPOSEd by the image (docker build --build-arg PORT), i.e. metadata
+# only: the listener comes from the binary's --port. aws/azure expose 4566,
+# gcp exposes 8080.
 DOCKER_PORT_aws   ?= 4566
 DOCKER_PORT_azure ?= 4566
 DOCKER_PORT_gcp   ?= 8080

@@ -4,8 +4,11 @@
 # and PORT its default listen port. No per-cloud fork needed.
 #
 #   jaiscloud-aws -> BINARY=jaiscloud-aws, PORT=4566
-#   jaiscloud-gcp -> BINARY=jaiscloud-gcp, PORT=8080  (gRPC 8081, UI 4567 are
-#                    reached with explicit -p; EXPOSE documents the REST port)
+#   jaiscloud-gcp -> BINARY=jaiscloud-gcp, PORT=8080
+# PORT is the default REST listener and the port EXPOSEd here; the binary's own
+# --port flag still wins at runtime. gRPC (:8081) and the UI portal (:4567, only
+# with `start --ui`; /ui/ is also served on the REST port) are reached with an
+# explicit -p.
 FROM gcr.io/distroless/static:nonroot
 
 ARG TARGETPLATFORM
