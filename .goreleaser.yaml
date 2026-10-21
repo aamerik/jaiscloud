@@ -187,8 +187,10 @@ scoops:
   # Future: add a scoops entry for jaiscloud-azure
 
 # ── DOCKER IMAGES ──────────────────────────────────────────────────────────────
-# Single dockers_v2 entry replaces the old dockers + docker_manifests pair.
-# Buildx handles linux/amd64 and linux/arm64 in one shot via the multi-stage Dockerfile.
+# One dockers_v2 entry per cloud replaces the old dockers + docker_manifests pair.
+# Both reuse Dockerfile.goreleaser, which selects the binary and its default port
+# through BINARY/PORT build args (the image context is <os>/<arch>/<binary>).
+# Buildx handles linux/amd64 and linux/arm64 in one shot.
 # Requires DOCKERHUB_USERNAME env var (set in release.yml) and prior `docker login`.
 # TODO: once out of alpha, remove "latest" tag for prereleases by changing it to:
 #   "{{ if not .Prerelease }}latest{{ end }}"
@@ -200,8 +202,35 @@ dockers_v2:
       - "{{ .Version }}"
       - "latest"
     dockerfile: Dockerfile.goreleaser
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    build_args:
+      BINARY: jaiscloud-aws
+      PORT: "4566"
     labels:
       "org.opencontainers.image.title": "jaiscloud-aws"
+      "org.opencontainers.image.version": "{{ .Version }}"
+      "org.opencontainers.image.created": "{{ .Date }}"
+      "org.opencontainers.image.revision": "{{ .Commit }}"
+      "org.opencontainers.image.source": "https://github.com/jaisrajms/jaiscloud"
+
+  - id: gcp
+    ids: [jaiscloud-gcp]
+    images:
+      - "{{ .Env.DOCKERHUB_USERNAME }}/jaiscloud-gcp"
+    tags:
+      - "{{ .Version }}"
+      - "latest"
+    dockerfile: Dockerfile.goreleaser
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    build_args:
+      BINARY: jaiscloud-gcp
+      PORT: "8080"
+    labels:
+      "org.opencontainers.image.title": "jaiscloud-gcp"
       "org.opencontainers.image.version": "{{ .Version }}"
       "org.opencontainers.image.created": "{{ .Date }}"
       "org.opencontainers.image.revision": "{{ .Commit }}"

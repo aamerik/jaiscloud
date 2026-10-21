@@ -35,6 +35,13 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || \
 
 CLOUDS := aws azure gcp
 
+# REST port each image EXPOSEs (baked into `docker build --build-arg PORT`):
+# aws/azure listen on 4566, gcp on 8080. Override per call, e.g.
+# `make docker-gcp DOCKER_PORT_gcp=9090`.
+DOCKER_PORT_aws   ?= 4566
+DOCKER_PORT_azure ?= 4566
+DOCKER_PORT_gcp   ?= 8080
+
 REGISTRY ?=
 
 # ─── Container images ─────────────────────────────────────────────────────────
@@ -248,6 +255,7 @@ docker-%:  ## Build jaiscloud-<cloud> Docker image
 	docker build \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg CLOUD=$* \
+		--build-arg PORT=$(or $(DOCKER_PORT_$*),4566) \
 		--tag jaiscloud-$*:$(VERSION) \
 		--tag jaiscloud-$*:latest \
 		--file Dockerfile .
