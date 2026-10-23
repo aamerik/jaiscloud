@@ -480,7 +480,8 @@ The real jobs in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) an
 | `test-gcp-conformance` | records a fresh wire transcript, validates every response (and the error envelope) against the Discovery schemas — failing on any high-severity divergence — runs the gRPC message-level suite, the REST↔gRPC cross-transport parity suite, and the gcloud CLI suite, and fails if the fidelity matrix is stale |
 | `test-gcp-persistence` | with a Postgres service container, runs the `gcp_persistence` suite proving state survives process restarts |
 | `test-aws` | AWS + shared unit/integration tests (`internal/gcp/...` excluded — the GCP package must never import `internal/aws/`) |
-| `docker-build` | the shared `Dockerfile` builds for `linux/amd64` (no push) |
+| `docker-build` | the shared `Dockerfile` builds for `linux/amd64` (no push) **for both clouds** (`CLOUD=aws` on 4566 and `CLOUD=gcp` on 8080), then runs each image: the `VERSION` build arg reaches `version`, `/_jaiscloud/health` answers on the cloud's REST port, and `/ui/` answers 200 on 4567 with `--ui` (proves the UI build stage + `-tags ui`) |
+| `release-config` | `goreleaser check` plus a `goreleaser release --snapshot` (no docker, no publish) and `make test-release`: the six `jaiscloud-gcp` archives, the deb/rpm packages, one version across `dist/`, `jaiscloud-gcp version` reporting the archive version, and the archive binary serving REST + the embedded console |
 
 The conformance job is the wire-contract gate; integration and persistence prove the client
 surface and durability. The behavioural-coverage gate (in `test-gcp-unit`) is the

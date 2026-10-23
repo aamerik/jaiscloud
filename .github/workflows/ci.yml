@@ -78,28 +78,123 @@ jobs:
           if [ -f server.pid ]; then kill $(cat server.pid) || true; fi
 
   # ─── Docker build smoke-test ───────────────────────────────────────────────
-  # Builds the image for linux/amd64 on every PR to catch Dockerfile errors early.
-  # Images are not pushed — push happens only on merge to main or on a version tag
-  # (see docker-publish.yml).
+  # Builds both cloud images for linux/amd64 on every PR to catch Dockerfile
+  # errors early, then runs each image: the version stamp (VERSION build arg),
+  # /_jaiscloud/health on the cloud's REST port, and the embedded console on
+  # 4567 (proves `-tags ui` + the UI build stage). Images are not pushed — push
+  # happens only on merge to main or on a version tag (see docker-publish.yml).
   docker-build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # aws first so the long-standing arm of the matrix keeps its slot.
+          - cloud: aws
+            port: 4566
+          - cloud: gcp
+            port: 8080
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build jaiscloud (linux/amd64, no push)
+      - name: Build jaiscloud-${{ matrix.cloud }} (linux/amd64, no push)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           push: false
+          load: true
           platforms: linux/amd64
-          build-args: VERSION=ci-${{ github.sha }}
-          tags: jaiscloud:ci
-          cache-from: type=gha,scope=jaiscloud
-          cache-to: type=gha,mode=max,scope=jaiscloud
+          build-args: |
+            CLOUD=${{ matrix.cloud }}
+            VERSION=ci-${{ github.sha }}
+            PORT=${{ matrix.port }}
+          tags: jaiscloud-${{ matrix.cloud }}:ci
+          cache-from: type=gha,scope=jaiscloud-${{ matrix.cloud }}
+          cache-to: type=gha,mode=max,scope=jaiscloud-${{ matrix.cloud }}
+
+      - name: Smoke-test jaiscloud-${{ matrix.cloud }} image
+        env:
+          IMAGE: jaiscloud-${{ matrix.cloud }}:ci
+          CLOUD: ${{ matrix.cloud }}
+          PORT: ${{ matrix.port }}
+          VERSION: ci-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          version_out=$(docker run --rm "$IMAGE" version)
+          printf '%s\n' "$version_out"
+          grep -qF "$VERSION" <<<"$version_out"
+          docker rm -f "ci-$CLOUD" >/dev/null 2>&1 || true
+          # Anonymous host ports: the runner may already be using 4566/8080/4567.
+          docker run -d --name "ci-$CLOUD" \
+            -p "127.0.0.1::${PORT}" -p 127.0.0.1::4567 \
+            "$IMAGE" start --ui
+          # Logs on failure are the whole point of the smoke, so clean up on exit.
+          trap 'docker logs "ci-$CLOUD" || true; docker rm -f "ci-$CLOUD" >/dev/null 2>&1 || true' EXIT
+          rest=$(docker port "ci-$CLOUD" "${PORT}/tcp" | head -1)
+          ui=$(docker port "ci-$CLOUD" 4567/tcp | head -1)
+          for _ in $(seq 1 30); do
+            if curl -fsS --connect-timeout 2 --max-time 3 "http://${rest}/_jaiscloud/health" >/dev/null &&
+               [ "$(curl -s --connect-timeout 2 --max-time 3 -o /dev/null -w '%{http_code}' "http://${ui}/ui/")" = "200" ]; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS --connect-timeout 2 --max-time 3 "http://${rest}/_jaiscloud/health"
+          ui_code=$(curl -s --connect-timeout 2 --max-time 3 -o /dev/null -w '%{http_code}' "http://${ui}/ui/")
+          echo "GET /ui/ -> ${ui_code}"
+          test "${ui_code}" = "200"
+
+  # ─── Release config + artifact smoke ───────────────────────────────────────
+  # release.yml only runs on a tag, so without this job a broken
+  # .goreleaser.yaml, a missing `-tags ui` build or a dropped version ldflag is
+  # only discovered when the release is published. Builds a snapshot (no
+  # docker, no publish) and runs the release artifact tests against it.
+  release-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # snapshot version comes from git describe
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
+
+      - name: Build UI assets
+        working-directory: ui
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          install-only: true
+
+      - name: Validate GoReleaser config
+        run: goreleaser check
+
+      - name: Build snapshot artifacts (no docker, no publish)
+        run: goreleaser release --snapshot --clean --skip=publish,docker
+
+      - name: Release artifact smoke tests
+        run: make test-release
 
   # ─── UI lint + build ───────────────────────────────────────────────────────
   ui:
