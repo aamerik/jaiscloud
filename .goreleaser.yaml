@@ -139,9 +139,9 @@ homebrew_casks:
     license: Apache-2.0
     hooks:
       post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/jaiscloud-aws"]
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/jaiscloud-aws"]
           end
 
   - ids: [gcp]
@@ -156,9 +156,9 @@ homebrew_casks:
     license: Apache-2.0
     hooks:
       post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/jaiscloud-gcp"]
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/jaiscloud-gcp"]
           end
 
   # Future: add a homebrew_casks entry for jaiscloud-azure
