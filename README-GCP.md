@@ -1,7 +1,7 @@
 # JaisCloud for GCP
 
 > **Early Development Notice**
-> `jaiscloud-gcp` is under active development on the `gcp` branch and has not yet been released as a packaged binary (see the [main README](README.md), which currently lists GCP as "In pipeline"). Build it from source. Some operations may have incomplete implementations, behavioural differences from real GCP, or known bugs — see [Known Limitations](#known-limitations) below, and please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) for anything not already listed there.
+> `jaiscloud-gcp` is published from **`v0.2.0`** onward: that release carries the GCP binary, archives, deb/rpm packages, Homebrew cask, Scoop manifest and container image alongside the AWS ones. GCP services are tiered — some are `preview` or `limited` in the [fidelity matrix](docs/fidelity/fidelity-matrix.md), some operations may have incomplete implementations, behavioural differences from real GCP, or known bugs. What the emulator's fidelity matrix actually promises is the [wire contract](docs/gcp/wire-contract.md) ([§1](docs/gcp/wire-contract.md#1-what-ga-means-in-the-matrix) for what `ga` means, [§8](docs/gcp/wire-contract.md#8-accepted-risks) for the accepted risks) — and those two sections are the release notes of record. See [Known Limitations](#known-limitations) below, and please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) for anything not already listed there.
 
 **JaisCloud — a free GCP emulator for developers and CI.** It implements real GCP wire protocols — both the REST/JSON APIs and the native gRPC APIs official Google clients use (Storage, Pub/Sub, Firestore, Datastore, KMS, Secret Manager, Logging, Monitoring, Dataproc, Eventarc, Functions, Managed Kafka, Metastore, Service Usage, Workflows, Workflow Executions, Resource Manager, IAM, Cloud Scheduler, Cloud Tasks, GKE, Cloud Run) — no SDK shims, no proxy rewrites. Point an official Google client library at it and it works. Where real GCP is REST-only (Compute, Cloud SQL, Cloud DNS, BigQuery, BigLake Iceberg, Memorystore), only REST is exposed; each service row below states its transports.
 
@@ -86,9 +86,63 @@ in [wire-contract.md §8](docs/gcp/wire-contract.md#8-accepted-risks).
 
 ---
 
+## Install
+
+Every release from `v0.2.0` on publishes `jaiscloud-gcp` next to `jaiscloud-aws` from the same tag.
+
+### Docker
+
+```bash
+# Docker Hub (or ghcr.io/jaisrajms/jaiscloud-gcp:latest)
+docker pull jaisraj/jaiscloud-gcp:latest
+docker run --rm -p 8080:8080 -p 8081:8081 -p 4567:4567 \
+  jaisraj/jaiscloud-gcp:latest start --ui
+
+curl -s localhost:8080/_jaiscloud/health      # {"status":"ok"}
+open http://localhost:4567/ui/                # embedded console
+```
+
+Ports: `8080` REST/admin, `8081` gRPC (h2c), `4567` console with `--ui`. The image declares
+`8080`; publish `8081`/`4567` explicitly as above. Pin a version instead of `latest` in CI
+(`jaisraj/jaiscloud-gcp:0.2.0`); `jaiscloud-gcp version` prints the tag the image was built from.
+
+### Homebrew (macOS) and Scoop (Windows)
+
+```bash
+brew tap jaisrajms/homebrew-tap && brew install --cask jaiscloud-gcp
+```
+
+```powershell
+scoop bucket add jaiscloud https://github.com/jaisrajms/scoop-jaiscloud
+scoop install jaiscloud-gcp
+```
+
+### Download binary (no Go required)
+
+| Platform | Download |
+|----------|----------|
+| macOS arm64 (Apple Silicon) | `jaiscloud-gcp_<version>_darwin_arm64.tar.gz` |
+| macOS amd64 (Intel) | `jaiscloud-gcp_<version>_darwin_amd64.tar.gz` |
+| Linux amd64 | `jaiscloud-gcp_<version>_linux_amd64.tar.gz` · `.deb` · `.rpm` |
+| Linux arm64 | `jaiscloud-gcp_<version>_linux_arm64.tar.gz` · `.deb` · `.rpm` |
+| Windows amd64 | `jaiscloud-gcp_<version>_windows_amd64.zip` |
+| Windows arm64 | `jaiscloud-gcp_<version>_windows_arm64.zip` |
+
+```bash
+VERSION=0.2.0
+curl -LO https://github.com/jaisrajms/jaiscloud/releases/download/v$VERSION/jaiscloud-gcp_${VERSION}_linux_amd64.tar.gz
+tar -xzf jaiscloud-gcp_${VERSION}_linux_amd64.tar.gz && sudo mv jaiscloud-gcp /usr/local/bin/
+```
+
+Pre-built binaries embed the console (`-tags ui`), so `start --ui` works without a Node/pnpm
+build. `checksums.txt` is published alongside every release. Release tags are cut on `main`; the
+tag/semver/latest policy is in [wire-contract.md §3](docs/gcp/wire-contract.md#3-stability--versioning).
+
+---
+
 ## Quick Start
 
-### 1. Build
+### 1. Build from source
 
 ```bash
 git clone https://github.com/jaisrajms/jaiscloud.git && cd jaiscloud
@@ -260,7 +314,7 @@ go build -tags ui -o jaiscloud-gcp ./cmd/jaiscloud-gcp/   # or: make build-ui-gc
 ./jaiscloud-gcp start --ui --ui-open                      # also open a browser
 ```
 
-The console is a single React app embedded in the binary (no separate server or external service). When `meta.cloud` is `gcp` it renders the Material console (`ui/src/gcp/**`); the AWS/Azure binaries keep the Cloudscape console that matches the AWS Management Console. It is under active development alongside the wire services.
+The console is a single React app embedded in the binary (no separate server or external service). Release artifacts are built with `-tags ui`, so the published binary/Docker image serve it as-is — the flags below are for a source build. When `meta.cloud` is `gcp` it renders the Material console (`ui/src/gcp/**`); the AWS/Azure binaries keep the Cloudscape console that matches the AWS Management Console. It is under active development alongside the wire services.
 
 **Current GCP surface:**
 

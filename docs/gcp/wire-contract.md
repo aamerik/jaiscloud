@@ -123,6 +123,23 @@ schema by `TestTranscriptsConform`.
 - **Unsupported surfaces fail loud**, so a client gets a clear error rather than a plausible but
   wrong response.
 
+### Release policy
+
+The emulator ships as one release carrying every cloud binary, so this section is the release
+contract a tag has to satisfy (it is what `README-GCP.md` install instructions point at):
+
+| decision | policy |
+| --- | --- |
+| **Tag target** | **`main`**, after `gcp` is merged into `main` — not on the `gcp` branch. One tag then publishes `jaiscloud-aws` **and** `jaiscloud-gcp` artifacts, images and packages from the same commit. |
+| **Version** | Semver, next minor for the first GCP release (**`v0.2.0`**; `v0.1.0` is the newest published tag). `release.yml` fires on any `v*` tag. |
+| **Prerelease** | `prerelease: auto` in `.goreleaser.yaml`: a bare `vX.Y.Z` tag is a full GitHub release, a `vX.Y.Z-rc.N` tag is flagged prerelease. |
+| **Image tags** | Docker Hub `jaisraj/jaiscloud-gcp` and `jaisraj/jaiscloud-aws` each get `{{ .Version }}` and `latest`; GHCR (`ghcr.io/<owner>/jaiscloud-gcp`) is pushed from `main` by `docker-publish.yml`. `latest` follows the newest **full** release; a prerelease should be tagged by version only (`.goreleaser.yaml` currently tags `latest` unconditionally with a TODO to gate it — flip that before cutting a prerelease). |
+| **Artifacts** | `jaiscloud-gcp_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows), `.deb`/`.rpm` for linux amd64/arm64, Homebrew cask `jaiscloud-gcp`, Scoop `jaiscloud-gcp`, `checksums.txt`; every binary is built with `-tags ui` so the console is embedded. |
+
+Both binaries must report the tag via `<binary> version`, and the release is only cut once
+`ci.yml`'s `release-config` and the artifact suite (`make test-release`) are green on the merged
+commit.
+
 ---
 
 ## 4. Client compatibility
