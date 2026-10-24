@@ -5,10 +5,28 @@ import SearchIcon from '@mui/icons-material/Search'
 import { useFavorites } from '../../hooks/useFavorites'
 import { useServices } from '../../hooks/useServices'
 import {
+  filterResources,
+  RESOURCE_SEARCH_MIN_LENGTH,
+  type SearchableResource,
+} from '../common/resourceSearch'
+import {
   buildSearchGroups,
+  withResourceGroup,
   type SearchOption,
 } from './navModel'
 import { rememberRecentService, useRecentServices } from './recentServices'
+import { useResourceIndex } from './useResourceIndex'
+
+/** Search result caption for a resource: type, service, then its location or
+ * parent when the loader supplied one. */
+function resourceDescription(
+  resource: SearchableResource,
+  serviceLabels: Map<string, string>,
+): string {
+  const service = serviceLabels.get(resource.service) ?? resource.service
+  const detail = resource.detail ? ` · ${resource.detail}` : ''
+  return `${resource.type} · ${service}${detail}`
+}
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
@@ -17,8 +35,9 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * GCP console global search over the service catalog. Favorites and recents
- * lead, then every service grouped by category. `/` (or Cmd/Ctrl+K) focuses it.
+ * GCP console global search: the service catalog plus the project's resources.
+ * Favorites and recents lead, then matching resources, then every service
+ * grouped by category. `/` (or Cmd/Ctrl+K) focuses it.
  */
 export function GcpGlobalSearch() {
   const navigate = useNavigate()
@@ -27,11 +46,25 @@ export function GcpGlobalSearch() {
   const { favorites } = useFavorites()
   const [query, setQuery] = useState('')
   const recent = useRecentServices()
+  const resourceIndex = useResourceIndex(query.trim().length >= RESOURCE_SEARCH_MIN_LENGTH)
 
   const services = useMemo(() => data?.services ?? [], [data])
-  const groups = useMemo(
+  const serviceGroups = useMemo(
     () => buildSearchGroups(services, favorites, recent, query),
     [services, favorites, recent, query],
+  )
+  const resourceOptions = useMemo(() => {
+    const labels = new Map(services.map((service) => [service.id, service.label]))
+    return filterResources(resourceIndex.data ?? [], query).map((resource) => ({
+      id: resource.id,
+      label: resource.label,
+      description: resourceDescription(resource, labels),
+      path: resource.path,
+    }))
+  }, [resourceIndex.data, query, services])
+  const groups = useMemo(
+    () => withResourceGroup(serviceGroups, resourceOptions),
+    [serviceGroups, resourceOptions],
   )
 
   useEffect(() => {
@@ -57,17 +90,26 @@ export function GcpGlobalSearch() {
       }}
       filterOptions={(options) => options}
       getOptionLabel={(option) => option.label}
+      // Option ids are stable and unique (resource ids carry their scope), so a
+      // topic and a subscription sharing a display name keep distinct rows.
+      getOptionKey={(option) => option.id}
       inputValue={query}
       onInputChange={(_, value, reason) => {
         if (reason !== 'reset') setQuery(value)
       }}
       onChange={(_, option) => {
         if (!option) return
-        rememberRecentService(option.id)
+        // Only services belong in the recents list; resources are transient.
+        if (services.some((service) => service.id === option.id)) {
+          rememberRecentService(option.id)
+        }
         setQuery('')
         navigate(option.path)
       }}
       size="small"
+      loading={resourceIndex.isFetching}
+      loadingText="Searching resources…"
+      noOptionsText="No matching services or resources"
       sx={{ width: '100%', maxWidth: 600 }}
       renderGroup={(params) => (
         <li key={params.key}>
@@ -97,7 +139,7 @@ export function GcpGlobalSearch() {
           {...params}
           size="small"
           inputRef={inputRef}
-          placeholder="Search JaisCloud"
+          placeholder="Search services and resources"
           slotProps={{
             ...params.slotProps,
             input: {
@@ -125,7 +167,10 @@ export function GcpGlobalSearch() {
                 },
               }),
             },
-            htmlInput: { ...params.slotProps.htmlInput, 'aria-label': 'Search services' },
+            htmlInput: {
+              ...params.slotProps.htmlInput,
+              'aria-label': 'Search services and resources',
+            },
           }}
         />
       )}

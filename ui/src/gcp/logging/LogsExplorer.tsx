@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import {
   Alert,
   Box,
@@ -25,10 +26,14 @@ import { useAccount } from '../../context/AccountContext'
 import { lastSegment, payloadPreview, severityColor, shortDate } from './util'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 
-/** Cloud Logging Logs Explorer: filter, browse and inspect log entries. */
+/** Cloud Logging Logs Explorer: filter, browse and inspect log entries. A
+ * `?logName=` parameter (used by the global search's Log results) presets the
+ * filter to that log. */
 export function LogsExplorer() {
   const { accountId } = useAccount()
-  const [filter, setFilter] = useState('')
+  const [params] = useSearchParams()
+  const logName = params.get('logName')
+  const [filter, setFilter] = useState(logName ? `logName="${logName}"` : '')
   const [orderBy, setOrderBy] = useState('timestamp desc')
   const [expanded, setExpanded] = useState<number | null>(null)
 
