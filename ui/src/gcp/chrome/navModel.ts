@@ -170,6 +170,25 @@ export function buildSearchGroups(
   }))
 }
 
+/**
+ * Slot resource results into the service groups: after the Favorites and Recent
+ * shortcuts, before the category groups. An empty resource list leaves the
+ * groups untouched, so a search that matches no resource looks exactly as it
+ * did before resource indexing existed.
+ */
+export function withResourceGroup(
+  groups: SearchGroup[],
+  resources: SearchOption[],
+): SearchGroup[] {
+  if (resources.length === 0) return groups
+  const shortcut = (group: SearchGroup) => group.label === 'Favorites' || group.label === 'Recent'
+  return [
+    ...groups.filter(shortcut),
+    { label: 'Resources', options: resources },
+    ...groups.filter((group) => !shortcut(group)),
+  ]
+}
+
 export interface Crumb {
   label: string
   to?: string

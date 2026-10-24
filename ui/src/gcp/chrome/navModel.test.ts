@@ -7,6 +7,7 @@ import {
   pageTitleFor,
   pushRecent,
   readRecent,
+  withResourceGroup,
   type StorageLike,
 } from './navModel'
 
@@ -122,6 +123,39 @@ describe('buildNavGroups', () => {
     const groups = buildNavGroups(services, ['iam'], [], 'storage')
     expect(groups.map((g) => g.label)).not.toContain('Favorites')
     expect(groups.flatMap((g) => g.entries).map((e) => e.id)).toEqual(['storage'])
+  })
+})
+
+describe('withResourceGroup', () => {
+  const resources = [
+    { id: 'storage:Bucket:b1', label: 'b1', description: 'Bucket · Cloud Storage', path: '/x' },
+  ]
+
+  it('slots resources after the shortcuts and before the categories', () => {
+    const groups = buildSearchGroups(services, ['iam'], ['pubsub'], '')
+    expect(withResourceGroup(groups, resources).map((g) => g.label)).toEqual([
+      'Favorites',
+      'Recent',
+      'Resources',
+      'Storage',
+      'Integration',
+      'Security',
+    ])
+  })
+
+  it('leads with resources when there are no shortcuts', () => {
+    const groups = buildSearchGroups(services, [], [], '')
+    expect(withResourceGroup(groups, resources).map((g) => g.label)).toEqual([
+      'Resources',
+      'Storage',
+      'Integration',
+      'Security',
+    ])
+  })
+
+  it('leaves the service groups untouched without resource matches', () => {
+    const groups = buildSearchGroups(services, [], [], '')
+    expect(withResourceGroup(groups, [])).toBe(groups)
   })
 })
 
