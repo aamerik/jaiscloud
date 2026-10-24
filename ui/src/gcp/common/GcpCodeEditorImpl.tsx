@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import ace from 'ace-builds'
 import 'ace-builds/src-noconflict/mode-json'
 import 'ace-builds/src-noconflict/mode-yaml'
@@ -10,6 +10,8 @@ import {
   aceEditorOptions,
   DEFAULT_MAX_LINES,
   DEFAULT_MIN_LINES,
+  LINT_DEBOUNCE_MS,
+  lintJson,
   type GcpCodeLanguage,
 } from './codeEditor'
 
@@ -24,6 +26,8 @@ export interface GcpCodeEditorImplProps {
   language?: GcpCodeLanguage
   readOnly?: boolean
   disabled?: boolean
+  /** Inline JSON lint (default: on for `language="json"`). */
+  lint?: boolean
   /** Minimum visible lines; the editor grows with its content up to maxLines. */
   minRows?: number
   /** Focus the editor when it mounts, mirroring a TextField's autoFocus. */
@@ -48,6 +52,7 @@ export function GcpCodeEditorImpl({
   language = 'json',
   readOnly = false,
   disabled = false,
+  lint = language === 'json',
   minRows = DEFAULT_MIN_LINES,
   autoFocus = false,
   ariaLabel,
@@ -55,6 +60,7 @@ export function GcpCodeEditorImpl({
   const theme = useTheme()
   const themeMode = theme.palette.mode === 'dark' ? 'dark' : 'light'
   const helperId = useId()
+  const [lintError, setLintError] = useState<string | null>(null)
 
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<AceEditor | null>(null)
@@ -109,10 +115,30 @@ export function GcpCodeEditorImpl({
     suppressRef.current = false
   }, [value])
 
-  const showHelper = Boolean(error || helperText)
+  // Inline JSON lint (UI69). Debounced so typing stays smooth; the ace gutter
+  // shows the marker and the first message is mirrored into the helper slot so
+  // it is readable without hovering.
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    if (disabled || !lint || language !== 'json') {
+      editor.session.clearAnnotations()
+      setLintError(null)
+      return
+    }
+    const timer = window.setTimeout(() => {
+      const annotations = lintJson(value)
+      editor.session.setAnnotations(annotations)
+      setLintError(annotations[0]?.text ?? null)
+    }, LINT_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [value, language, lint, disabled])
+
+  const shownError = error || lintError || null
+  const showHelper = Boolean(shownError || helperText)
 
   return (
-    <FormControl fullWidth error={Boolean(error)} disabled={disabled}>
+    <FormControl fullWidth error={Boolean(shownError)} disabled={disabled}>
       {label ? (
         <FormLabel
           id={`${helperId}-label`}
@@ -124,7 +150,7 @@ export function GcpCodeEditorImpl({
       <Box
         sx={{
           border: '1px solid',
-          borderColor: error ? 'error.main' : 'divider',
+          borderColor: shownError ? 'error.main' : 'divider',
           borderRadius: 1,
           overflow: 'hidden',
           bgcolor: 'background.paper',
@@ -159,7 +185,7 @@ export function GcpCodeEditorImpl({
         />
       </Box>
       {showHelper ? (
-        <FormHelperText id={helperId}>{error || helperText}</FormHelperText>
+        <FormHelperText id={helperId}>{shownError || helperText}</FormHelperText>
       ) : null}
     </FormControl>
   )
