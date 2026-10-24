@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"context"
 	"sort"
+	"strings"
 
 	"jaiscloud/internal/gcp/policy"
 	functionscore "jaiscloud/internal/gcp/service/functions"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
+	"jaiscloud/internal/model"
 )
 
 // ProviderInterface is the subset of *functionscore.Service used by the
@@ -27,6 +29,14 @@ type ProviderInterface interface {
 	// CreateFunction deploys a function from the create-form input.
 	CreateFunction(ctx context.Context, project, location string, in CreateInput) (functionsstore.Function, error)
 
+	// GenerateUploadURL provisions a GCS-backed source upload target (the real
+	// v2 generateUploadUrl flow).
+	GenerateUploadURL(ctx context.Context, project, location string) (functionscore.UploadTarget, error)
+
+	// PutSourceArchive stores the zip the browser uploaded for an issued
+	// storageSource target (the PUT half of the deploy flow).
+	PutSourceArchive(ctx context.Context, project, location, object string, data []byte) error
+
 	// DeleteFunction removes a function.
 	DeleteFunction(ctx context.Context, project, location, id string) error
 
@@ -44,15 +54,30 @@ type ProviderInterface interface {
 	ListDeliveries(ctx context.Context, project, location, id string) ([]functionsstore.Delivery, error)
 }
 
+// SourceUploader writes a function's source archive to Cloud Storage. The
+// console transport for the generateUploadUrl flow is its own API origin (the
+// UI server listens on a different port from the emulator gateway), so the
+// browser PUTs the zip to the console API and this seam stores it in the same
+// GCS bucket/object generateUploadUrl issued. Implemented by the GCS provider
+// (which owns object encryption) and injected by main.go.
+type SourceUploader interface {
+	PutObjectBytes(ctx context.Context, project, bucket, object, contentType string, data []byte) error
+}
+
 // Provider adapts the transport-neutral Functions core onto ProviderInterface,
 // discarding the synchronous mutation operations and the wire version (the
 // console renders the modern v2 shape).
 type Provider struct {
-	svc *functionscore.Service
+	svc      *functionscore.Service
+	uploader SourceUploader
 }
 
-// NewProvider returns a UI provider over the Functions core.
-func NewProvider(svc *functionscore.Service) *Provider { return &Provider{svc: svc} }
+// NewProvider returns a UI provider over the Functions core. uploader may be nil
+// (metadata-only console, e.g. unit tests without storage), in which case the
+// source-upload endpoint fails with FailedPrecondition.
+func NewProvider(svc *functionscore.Service, uploader SourceUploader) *Provider {
+	return &Provider{svc: svc, uploader: uploader}
+}
 
 var _ ProviderInterface = (*Provider)(nil)
 
@@ -123,9 +148,51 @@ func (p *Provider) CreateFunction(ctx context.Context, project, location string,
 		return functionsstore.Function{}, err
 	}
 	fin.SourceArchive = archive
+	if (in.SourceBucket == "") != (in.SourceObject == "") {
+		return functionsstore.Function{}, model.NewProviderError("InvalidArgument", "sourceBucket and sourceObject must be supplied together", 400)
+	}
+	// A console upload stores the archive as a GCS object first (the real
+	// generateUploadUrl PUT-then-deploy flow); echo its storageSource so the
+	// core fetches the archive through the injected SourceFetcher. An inline
+	// file wins when both are supplied, matching the core's resolveSource.
+	if len(archive) == 0 && in.SourceBucket != "" && in.SourceObject != "" {
+		fin.SourceBucket = in.SourceBucket
+		fin.SourceObject = in.SourceObject
+		fin.SourceArchiveURL = "gs://" + in.SourceBucket + "/" + in.SourceObject
+	}
 
 	f, _, err := p.svc.CreateFunction(ctx, project, location, in.ID, fin, functionscore.V2)
 	return f, err
+}
+
+// GenerateUploadURL implements ProviderInterface. The core still builds the
+// absolute GCS upload URL (used by gcloud), but the console transfers the bytes
+// through its own API origin — the UI server is a separate listener from the
+// emulator gateway, so a cross-origin browser PUT would need bucket CORS. Only
+// the issued storageSource (bucket/object) is used.
+func (p *Provider) GenerateUploadURL(ctx context.Context, project, location string) (functionscore.UploadTarget, error) {
+	return p.svc.GenerateUploadURL(ctx, project, location, "")
+}
+
+// PutSourceArchive implements ProviderInterface. The bucket is derived from the
+// project/location (never trusted from the client), so the console can only
+// write into the generateUploadUrl source bucket. The data lands through the
+// GCS provider's PutObjectBytes seam, the same cross-service path Dataproc uses
+// to stage driver output; unlike the XML API PUT it does not compute md5Hash or
+// apply a bucket-default CMEK key/versioning, which the deploy path never reads.
+func (p *Provider) PutSourceArchive(ctx context.Context, project, location, object string, data []byte) error {
+	if p.uploader == nil {
+		return model.NewProviderError("FailedPrecondition", "source storage is not configured", 400)
+	}
+	if location == "" || object == "" {
+		return model.NewProviderError("InvalidArgument", "location and object are required", 400)
+	}
+	// Only the object names generateUploadUrl issues are accepted ("source-<uuid>.zip"),
+	// so an upload cannot overwrite another function's staged archive.
+	if !strings.HasPrefix(object, "source-") || !strings.HasSuffix(object, ".zip") || strings.ContainsAny(object, "/\\") {
+		return model.NewProviderError("InvalidArgument", "object must be a generateUploadUrl source archive name", 400)
+	}
+	return p.uploader.PutObjectBytes(ctx, project, functionscore.SourceBucket(project, location), object, "application/zip", data)
 }
 
 // DeleteFunction implements ProviderInterface; the delete LRO is discarded.

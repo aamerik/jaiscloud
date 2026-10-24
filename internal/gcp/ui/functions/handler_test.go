@@ -12,6 +12,7 @@ import (
 	"jaiscloud/internal/clock"
 	"jaiscloud/internal/config"
 	"jaiscloud/internal/gcp/policy"
+	functionscore "jaiscloud/internal/gcp/service/functions"
 	functionsstore "jaiscloud/internal/gcp/store/functions"
 )
 
@@ -35,6 +36,8 @@ type mockProvider struct {
 	gotData     string
 	gotIamBody  map[string]any
 	gotFunction string
+	gotObject   string
+	gotArchive  []byte
 	deleted     bool
 }
 
@@ -81,6 +84,20 @@ func (m *mockProvider) SetIamPolicy(_ context.Context, project, location, id str
 func (m *mockProvider) ListDeliveries(_ context.Context, project, location, id string) ([]functionsstore.Delivery, error) {
 	m.gotProject, m.gotLocation, m.gotFunction = project, location, id
 	return m.records, m.err
+}
+
+func (m *mockProvider) GenerateUploadURL(_ context.Context, project, location string) (functionscore.UploadTarget, error) {
+	m.gotProject, m.gotLocation = project, location
+	if m.err != nil {
+		return functionscore.UploadTarget{}, m.err
+	}
+	bucket := functionscore.SourceBucket(project, location)
+	return functionscore.UploadTarget{Bucket: bucket, Object: "source-1.zip"}, nil
+}
+
+func (m *mockProvider) PutSourceArchive(_ context.Context, project, location, object string, data []byte) error {
+	m.gotProject, m.gotLocation, m.gotObject, m.gotArchive = project, location, object, data
+	return m.err
 }
 
 func testCfg() *config.Config {
@@ -238,6 +255,78 @@ func TestCreateFunction_CreatedAndPassesInput(t *testing.T) {
 	}
 	if mock.gotInput.SourceInline == "" {
 		t.Fatalf("inline source not passed: %+v", mock.gotInput)
+	}
+}
+
+func TestCreateFunction_PassesStorageSource(t *testing.T) {
+	mock := &mockProvider{function: function("f1", "us-central1")}
+	body := `{"id":"f1","location":"us-central1","runtime":"nodejs20","entryPoint":"handler",` +
+		`"sourceBucket":"gcf-v2-sources-p-us-central1","sourceObject":"source-1.zip"}`
+	w := do(t, mock, http.MethodPost, "/functions", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	if mock.gotInput.SourceBucket != "gcf-v2-sources-p-us-central1" || mock.gotInput.SourceObject != "source-1.zip" {
+		t.Fatalf("storageSource not passed: %+v", mock.gotInput)
+	}
+}
+
+func TestGenerateUploadURL_ReturnsIssuedTarget(t *testing.T) {
+	mock := &mockProvider{}
+	w := do(t, mock, http.MethodPost, "/functions/upload", `{"location":"us-central1"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if mock.gotLocation != "us-central1" || mock.gotProject != "test-project" {
+		t.Fatalf("resolved target = %q/%q", mock.gotProject, mock.gotLocation)
+	}
+	var got SourceUploadTarget
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Bucket != functionscore.SourceBucket("test-project", "us-central1") || got.Object != "source-1.zip" {
+		t.Fatalf("target = %+v", got)
+	}
+}
+
+func TestGenerateUploadURL_RequiresLocation(t *testing.T) {
+	w := do(t, &mockProvider{}, http.MethodPost, "/functions/upload", `{}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestUploadSource_StoresArchive(t *testing.T) {
+	mock := &mockProvider{}
+	w := do(t, mock, http.MethodPut, "/functions/upload?location=us-central1&object=source-1.zip", "PK\x03\x04zip")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204: %s", w.Code, w.Body.String())
+	}
+	if mock.gotLocation != "us-central1" || mock.gotObject != "source-1.zip" {
+		t.Fatalf("resolved target = %q/%q", mock.gotLocation, mock.gotObject)
+	}
+	if string(mock.gotArchive) != "PK\x03\x04zip" {
+		t.Fatalf("archive = %q", mock.gotArchive)
+	}
+}
+
+func TestUploadSource_TooLarge(t *testing.T) {
+	orig := maxSourceUploadBytes
+	maxSourceUploadBytes = 4
+	defer func() { maxSourceUploadBytes = orig }()
+
+	w := do(t, &mockProvider{}, http.MethodPut, "/functions/upload?location=us-central1&object=source-1.zip", "12345")
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUploadSource_RequiresTargetAndBody(t *testing.T) {
+	if w := do(t, &mockProvider{}, http.MethodPut, "/functions/upload?object=source-1.zip", "zip"); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing location: status = %d, want 400", w.Code)
+	}
+	if w := do(t, &mockProvider{}, http.MethodPut, "/functions/upload?location=us-central1&object=source-1.zip", ""); w.Code != http.StatusBadRequest {
+		t.Fatalf("empty body: status = %d, want 400", w.Code)
 	}
 }
 

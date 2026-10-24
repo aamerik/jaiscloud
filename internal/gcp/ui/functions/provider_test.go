@@ -17,7 +17,7 @@ import (
 func newProvider() (*Provider, functionsstore.Store) {
 	mem := functionsstore.NewMemoryStore()
 	svc := functionscore.NewService(mem, store.NewMemoryResourceStore(), functionscore.WithBlobs(blobfs.NewMemoryBlobStore()))
-	return NewProvider(svc), mem
+	return NewProvider(svc, nil), mem
 }
 
 func TestProvider_CreateListGetFunction(t *testing.T) {
@@ -168,5 +168,160 @@ func TestInlineArchive_EmptySource(t *testing.T) {
 	b, err := inlineArchive("code", "")
 	if err != nil || len(b) == 0 {
 		t.Fatalf("inline archive = %d bytes, err %v", len(b), err)
+	}
+}
+
+// fakeFetcher stands in for the GCS provider's SourceFetcher.
+type fakeFetcher struct {
+	bucket, object string
+	data           []byte
+	calls          int
+}
+
+func (f *fakeFetcher) FetchObjectBytes(_ context.Context, bucket, object string) ([]byte, error) {
+	f.calls++
+	f.bucket, f.object = bucket, object
+	return f.data, nil
+}
+
+// newProviderWithFetcher builds a UI provider over a core wired with a source
+// fetcher, i.e. the production source-upload path.
+func newProviderWithFetcher(fetcher functionscore.SourceFetcher) *Provider {
+	mem := functionsstore.NewMemoryStore()
+	svc := functionscore.NewService(mem, store.NewMemoryResourceStore(),
+		functionscore.WithBlobs(blobfs.NewMemoryBlobStore()),
+		functionscore.WithSourceFetcher(fetcher),
+	)
+	return NewProvider(svc, nil)
+}
+
+func TestProvider_GenerateUploadURL(t *testing.T) {
+	ctx := context.Background()
+	p := newProviderWithFetcher(nil)
+	up, err := p.GenerateUploadURL(ctx, "test-project", "us-central1")
+	if err != nil {
+		t.Fatalf("generate upload url: %v", err)
+	}
+	if up.Bucket != functionscore.SourceBucket("test-project", "us-central1") {
+		t.Fatalf("bucket = %q", up.Bucket)
+	}
+	if up.Object == "" {
+		t.Fatalf("target = %+v", up)
+	}
+}
+
+// fakeUploader stands in for the GCS provider's PutObjectBytes.
+type fakeUploader struct {
+	bucket, object, contentType string
+	project                     string
+	data                        []byte
+}
+
+func (f *fakeUploader) PutObjectBytes(_ context.Context, project, bucket, object, contentType string, data []byte) error {
+	f.project, f.bucket, f.object, f.contentType, f.data = project, bucket, object, contentType, data
+	return nil
+}
+
+func TestProvider_PutSourceArchive(t *testing.T) {
+	ctx := context.Background()
+	up := &fakeUploader{}
+	p := NewProvider(functionscore.NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+		functionscore.WithBlobs(blobfs.NewMemoryBlobStore())), up)
+
+	zip := []byte("PK\x03\x04source")
+	if err := p.PutSourceArchive(ctx, "test-project", "us-central1", "source-1.zip", zip); err != nil {
+		t.Fatalf("put source: %v", err)
+	}
+	// The bucket is derived from the project/location, never the client.
+	if up.bucket != "gcf-v2-sources-test-project-us-central1" || up.object != "source-1.zip" {
+		t.Fatalf("target = %q/%q", up.bucket, up.object)
+	}
+	if up.contentType != "application/zip" || string(up.data) != string(zip) || up.project != "test-project" {
+		t.Fatalf("upload = %+v", up)
+	}
+}
+
+func TestProvider_PutSourceArchive_Validation(t *testing.T) {
+	ctx := context.Background()
+	up := &fakeUploader{}
+	p := NewProvider(functionscore.NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore(),
+		functionscore.WithBlobs(blobfs.NewMemoryBlobStore())), up)
+
+	for _, tc := range []struct{ location, object string }{
+		{"", "source-1.zip"},
+		{"us-central1", ""},
+		{"us-central1", "nested/source-1.zip"},
+		{"us-central1", "source-1.tar.gz"}, // only .zip archives are accepted
+		{"us-central1", "other-1.zip"},     // only generateUploadUrl-issued names
+	} {
+		if err := p.PutSourceArchive(ctx, "test-project", tc.location, tc.object, []byte("zip")); err == nil {
+			t.Fatalf("expected validation error for %q/%q", tc.location, tc.object)
+		}
+	}
+	// No uploader (metadata-only console) is a precondition failure, not a panic.
+	noStore := NewProvider(functionscore.NewService(functionsstore.NewMemoryStore(), store.NewMemoryResourceStore()), nil)
+	if err := noStore.PutSourceArchive(ctx, "test-project", "us-central1", "source-1.zip", []byte("zip")); err == nil {
+		t.Fatal("expected error without a source uploader")
+	}
+}
+
+func TestProvider_CreateStorageSourceValidation(t *testing.T) {
+	ctx := context.Background()
+	fetcher := &fakeFetcher{data: []byte("PK\x03\x04zip-bytes")}
+	p := newProviderWithFetcher(fetcher)
+
+	// Only one half of the storageSource pair is a malformed request, not a
+	// silent metadata-only deploy.
+	if _, err := p.CreateFunction(ctx, "test-project", "us-central1", CreateInput{
+		ID: "half", Location: "us-central1", Runtime: "nodejs20", SourceBucket: "b",
+	}); err == nil {
+		t.Fatal("expected error for a bucket without an object")
+	}
+	if fetcher.calls != 0 {
+		t.Fatalf("fetcher called for an invalid input: %d", fetcher.calls)
+	}
+
+	// An inline file wins over a storageSource, matching the core's precedence.
+	created, err := p.CreateFunction(ctx, "test-project", "us-central1", CreateInput{
+		ID:             "inline-wins",
+		Location:       "us-central1",
+		Runtime:        "nodejs20",
+		SourceInline:   "exports.handler = () => 'ok'",
+		SourceFilename: "index.js",
+		SourceBucket:   "gcf-v2-sources-test-project-us-central1",
+		SourceObject:   "source-1.zip",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if fetcher.calls != 0 || created.SourceBlobKey == "" {
+		t.Fatalf("inline source did not take precedence: %+v (fetcher %d)", created, fetcher.calls)
+	}
+}
+
+func TestProvider_CreateFetchesStorageSource(t *testing.T) {
+	ctx := context.Background()
+	fetcher := &fakeFetcher{data: []byte("PK\x03\x04zip-bytes")}
+	p := newProviderWithFetcher(fetcher)
+
+	created, err := p.CreateFunction(ctx, "test-project", "us-central1", CreateInput{
+		ID:           "uploaded",
+		Location:     "us-central1",
+		Runtime:      "nodejs20",
+		EntryPoint:   "handler",
+		SourceBucket: "gcf-v2-sources-test-project-us-central1",
+		SourceObject: "source-1.zip",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if fetcher.calls != 1 || fetcher.bucket != "gcf-v2-sources-test-project-us-central1" || fetcher.object != "source-1.zip" {
+		t.Fatalf("fetch = %d calls, %q/%q", fetcher.calls, fetcher.bucket, fetcher.object)
+	}
+	if created.SourceBlobKey == "" || created.SourceSize != int64(len(fetcher.data)) {
+		t.Fatalf("storage source not persisted: %+v", created)
+	}
+	if created.SourceArchiveURL != "gs://gcf-v2-sources-test-project-us-central1/source-1.zip" {
+		t.Fatalf("sourceArchiveUrl = %q", created.SourceArchiveURL)
 	}
 }

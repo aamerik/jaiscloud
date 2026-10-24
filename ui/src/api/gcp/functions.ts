@@ -1,4 +1,4 @@
-import { api } from '../client'
+import { api, putBlob } from '../client'
 
 const BASE = '/api/ui/v1/gcp/functions'
 
@@ -49,8 +49,10 @@ export interface ListFunctionsResponse {
 
 /**
  * The create-function form body. Location, id and runtime are required. Source
- * is optional: a gs:// sourceArchiveUrl, or an inline file
- * (sourceFilename + sourceInline) the server packages into an archive.
+ * is optional: a gs:// sourceArchiveUrl, an inline file
+ * (sourceFilename + sourceInline) the server packages into an archive, or the
+ * storageSource (sourceBucket + sourceObject) returned by the generateUploadUrl
+ * flow after the archive has been PUT to the upload URL.
  */
 export interface CreateFunctionInput {
   id: string
@@ -71,8 +73,16 @@ export interface CreateFunctionInput {
   sourceArchiveUrl?: string
   sourceInline?: string
   sourceFilename?: string
+  sourceBucket?: string
+  sourceObject?: string
   labels?: Record<string, string>
   environmentVariables?: Record<string, string>
+}
+
+/** The v2 generateUploadUrl target: PUT the zip to the console upload route with this bucket/object, then send them on create. */
+export interface SourceUploadTarget {
+  bucket: string
+  object: string
 }
 
 /** One persisted event-delivery record (the emulator-only Executions tab). */
@@ -120,6 +130,23 @@ export const getFunction = (location: string, fn: string) =>
 
 export const createFunction = (input: CreateFunctionInput) =>
   api.post<GcpFunction>(`${BASE}/functions`, input)
+
+/**
+ * Provision the GCS upload target for a source archive (the real v2
+ * generateUploadUrl flow): PUT the zip with `uploadFunctionSource`, then pass
+ * `bucket`/`object` back as sourceBucket/sourceObject on create.
+ */
+export const generateUploadUrl = (location: string) =>
+  api.post<SourceUploadTarget>(`${BASE}/functions/upload`, { location })
+
+/**
+ * PUT the source zip to the target issued by `generateUploadUrl`. The console
+ * transfers the bytes through its own API origin (the UI server is a separate
+ * listener from the emulator gateway); the backend stores them in the emitted
+ * GCS bucket/object, which the create call then reads as its storageSource.
+ */
+export const uploadFunctionSource = (location: string, object: string, zip: Blob) =>
+  putBlob(`${BASE}/functions/upload`, { location, object }, zip, 'application/zip')
 
 export const deleteFunction = (location: string, fn: string) =>
   api.delete<void>(functionPath(location, fn))

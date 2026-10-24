@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
@@ -18,11 +18,15 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { createFunction, type CreateFunctionInput } from '../../api/gcp/functions'
+import CloudUploadIcon from '@mui/icons-material/CloudUpload'
+import { createFunction, generateUploadUrl, uploadFunctionSource, type CreateFunctionInput } from '../../api/gcp/functions'
 import { GcpCodeEditor } from '../common/GcpCodeEditor'
 import { parseKV } from './util'
 
-type SourceMode = 'none' | 'archive' | 'inline'
+type SourceMode = 'none' | 'archive' | 'upload' | 'inline'
+
+/** Cloud Functions' documented zipped-source limit. */
+const MAX_SOURCE_UPLOAD_BYTES = 100 * 1024 * 1024
 
 function emptyInput(): CreateFunctionInput {
   return {
@@ -50,8 +54,10 @@ export function FunctionDialog({ open, onClose, onSaved }: FunctionDialogProps) 
   const [sourceMode, setSourceMode] = useState<SourceMode>('none')
   const [sourceInline, setSourceInline] = useState('')
   const [sourceFilename, setSourceFilename] = useState('index.js')
+  const [sourceFile, setSourceFile] = useState<File | null>(null)
   const [labelsText, setLabelsText] = useState('')
   const [envText, setEnvText] = useState('')
+  const fileInput = useRef<HTMLInputElement>(null)
 
   const set = <K extends keyof CreateFunctionInput>(key: K, value: CreateFunctionInput[K]) =>
     setInput((cur) => ({ ...cur, [key]: value }))
@@ -61,12 +67,28 @@ export function FunctionDialog({ open, onClose, onSaved }: FunctionDialogProps) 
     setSourceMode('none')
     setSourceInline('')
     setSourceFilename('index.js')
+    setSourceFile(null)
     setLabelsText('')
     setEnvText('')
   }
 
   const save = useMutation({
-    mutationFn: (body: CreateFunctionInput) => createFunction(body),
+    mutationFn: async (body: CreateFunctionInput) => {
+      // Source upload follows the real v2 deploy flow: generateUploadUrl, PUT
+      // the archive to the issued storageSource, then create with that
+      // storageSource (bucket/object).
+      if (sourceMode === 'upload') {
+        if (!sourceFile) throw new Error('Choose a source archive to upload')
+        if (sourceFile.size === 0) throw new Error('The chosen source archive is empty')
+        if (sourceFile.size > MAX_SOURCE_UPLOAD_BYTES) {
+          throw new Error('The source archive exceeds the 100 MB upload limit')
+        }
+        const target = await generateUploadUrl(body.location)
+        await uploadFunctionSource(body.location, target.object, sourceFile)
+        return createFunction({ ...body, sourceBucket: target.bucket, sourceObject: target.object })
+      }
+      return createFunction(body)
+    },
     onSuccess: (saved) => {
       void queryClient.invalidateQueries({ queryKey: ['gcp', 'functions'] })
       onSaved?.(saved.id)
@@ -79,7 +101,8 @@ export function FunctionDialog({ open, onClose, onSaved }: FunctionDialogProps) 
   const valid =
     Boolean(input.id && input.location && input.runtime) &&
     (!isEvent || Boolean(input.eventType)) &&
-    (sourceMode !== 'inline' || sourceInline.trim().length > 0)
+    (sourceMode !== 'inline' || sourceInline.trim().length > 0) &&
+    (sourceMode !== 'upload' || sourceFile !== null)
 
   const handleSave = () => {
     const body: CreateFunctionInput = {
@@ -99,7 +122,7 @@ export function FunctionDialog({ open, onClose, onSaved }: FunctionDialogProps) 
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           {save.isError && (
-            <Alert severity="error">Could not create the function: {(save.error as Error).message}</Alert>
+            <Alert severity="error">Could not deploy the function: {(save.error as Error).message}</Alert>
           )}
           <Stack direction="row" spacing={2}>
             <TextField
@@ -215,6 +238,7 @@ export function FunctionDialog({ open, onClose, onSaved }: FunctionDialogProps) 
               >
                 <MenuItem value="none">No source (metadata-only)</MenuItem>
                 <MenuItem value="archive">gs:// archive URL</MenuItem>
+                <MenuItem value="upload">Upload a source archive (.zip)</MenuItem>
                 <MenuItem value="inline">Inline file</MenuItem>
               </Select>
             </FormControl>
@@ -226,6 +250,37 @@ export function FunctionDialog({ open, onClose, onSaved }: FunctionDialogProps) 
                 placeholder="gs://my-bucket/source.zip"
                 fullWidth
               />
+            )}
+            {sourceMode === 'upload' && (
+              <Stack spacing={1}>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept=".zip,application/zip"
+                  hidden
+                  onChange={(e) => {
+                    setSourceFile(e.target.files?.[0] ?? null)
+                    e.target.value = ''
+                  }}
+                />
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                  <Button
+                    variant="outlined"
+                    startIcon={<CloudUploadIcon />}
+                    onClick={() => fileInput.current?.click()}
+                  >
+                    Choose archive
+                  </Button>
+                  <Typography variant="body2" color="text.secondary">
+                    {sourceFile ? `${sourceFile.name} · ${Math.ceil(sourceFile.size / 1024)} KiB` : 'No file selected'}
+                  </Typography>
+                </Stack>
+                <Typography variant="caption" color="text.secondary">
+                  The archive is uploaded to the emulator's Cloud Storage source bucket via the
+                  generateUploadUrl flow, then the function is created from that storage source — the
+                  same PUT-then-deploy sequence as <code>gcloud functions deploy --gen2</code>.
+                </Typography>
+              </Stack>
             )}
             {sourceMode === 'inline' && (
               <Stack spacing={1}>

@@ -1489,7 +1489,7 @@ func startCmd() *cobra.Command {
 				// not be boxed into the interface or the catalog would list it).
 				var functionsUI functionsui.ProviderInterface
 				if functionsCore != nil {
-					functionsUI = functionsui.NewProvider(functionsCore)
+					functionsUI = functionsui.NewProvider(functionsCore, storageP)
 				}
 				// Dataproc is advertised only when the service is enabled
 				// (otherwise dataprocCore is nil, and a typed nil must not be

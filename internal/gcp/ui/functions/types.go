@@ -64,10 +64,11 @@ type ListFunctionsResponse struct {
 }
 
 // CreateInput is the create-function form body. Location, id, and runtime are
-// required. Source is optional and supplied either as a gs:// source archive
-// URL or as an inline source file (SourceInline/SourceFilename), which the
-// server packages into an archive. The console source-upload flow
-// (generateUploadUrl) is deliberately out of scope.
+// required. Source is optional and supplied as a gs:// source archive URL, an
+// inline source file (SourceInline/SourceFilename), which the server packages
+// into an archive, or the storageSource returned by the generateUploadUrl flow
+// (SourceBucket/SourceObject) after the browser PUTs the archive to the upload
+// URL.
 type CreateInput struct {
 	ID            string `json:"id"`
 	Location      string `json:"location"`
@@ -89,6 +90,8 @@ type CreateInput struct {
 	SourceArchiveURL string `json:"sourceArchiveUrl,omitempty"`
 	SourceInline     string `json:"sourceInline,omitempty"`
 	SourceFilename   string `json:"sourceFilename,omitempty"`
+	SourceBucket     string `json:"sourceBucket,omitempty"`
+	SourceObject     string `json:"sourceObject,omitempty"`
 
 	Labels               map[string]string `json:"labels,omitempty"`
 	EnvironmentVariables map[string]string `json:"environmentVariables,omitempty"`
@@ -123,6 +126,24 @@ type ListDeliveriesResponse struct {
 // CallInput is the body of POST /functions/{location}/{function}/call.
 type CallInput struct {
 	Data string `json:"data"`
+}
+
+// UploadInput is the body of POST /functions/upload. The location determines
+// the GCS bucket (gcf-v2-sources-{project}-{location}) the archive is uploaded
+// to, matching real Cloud Functions' generateUploadUrl.
+type UploadInput struct {
+	Location string `json:"location"`
+}
+
+// SourceUploadTarget is the POST /functions/upload response: the storageSource
+// (bucket/object) the browser then PUTs the zip to and echoes back on create.
+// This is the v2 generateUploadUrl contract; the console transfers the bytes
+// through its own API origin (the UI server is a separate listener from the
+// emulator gateway), so the target is addressed here rather than as an
+// absolute GCS URL.
+type SourceUploadTarget struct {
+	Bucket string `json:"bucket"`
+	Object string `json:"object"`
 }
 
 // CallResponse is the synchronous result of a function invocation. An executor
