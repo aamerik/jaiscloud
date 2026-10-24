@@ -13,6 +13,8 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 
 	r.Get("/functions", h.ListFunctions)
 	r.Post("/functions", h.CreateFunction)
+	r.Post("/functions/upload", h.GenerateUploadURL)
+	r.Put("/functions/upload", h.UploadSource)
 	r.Get("/functions/{location}/{function}", h.GetFunction)
 	r.Delete("/functions/{location}/{function}", h.DeleteFunction)
 	r.Post("/functions/{location}/{function}/call", h.CallFunction)

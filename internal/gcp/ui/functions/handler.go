@@ -2,6 +2,8 @@ package functionsui
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -149,6 +151,65 @@ func (h *Handler) ListFunctions(w http.ResponseWriter, r *http.Request) {
 		out = append(out, renderFunction(project, f))
 	}
 	uihelper.WriteJSON(w, ListFunctionsResponse{Functions: out, Total: len(out)})
+}
+
+// POST /functions/upload
+//
+// Provisions the GCS upload target for a browser source upload (the real v2
+// generateUploadUrl flow). The console PUTs the archive to the same route, then
+// sends the returned bucket/object as storageSource on create.
+func (h *Handler) GenerateUploadURL(w http.ResponseWriter, r *http.Request) {
+	in, ok := decodeInput[UploadInput](w, r)
+	if !ok {
+		return
+	}
+	if in.Location == "" {
+		uihelper.UIError(w, "InvalidArgument", "location is required", http.StatusBadRequest)
+		return
+	}
+	up, err := h.provider.GenerateUploadURL(r.Context(), h.account(r), in.Location)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, SourceUploadTarget{Bucket: up.Bucket, Object: up.Object})
+}
+
+// maxSourceUploadBytes caps the browser source archive at Cloud Functions'
+// documented zipped-source limit (100 MB). It is a var so tests can exercise
+// the cap without allocating the full archive.
+var maxSourceUploadBytes int64 = 100 << 20
+
+// PUT /functions/upload?location=..&object=..  (raw body = source zip)
+//
+// Stores the archive the browser uploads for an issued storageSource target (the
+// PUT half of the generateUploadUrl flow). The bucket is derived server-side.
+func (h *Handler) UploadSource(w http.ResponseWriter, r *http.Request) {
+	location := r.URL.Query().Get("location")
+	object := r.URL.Query().Get("object")
+	if location == "" || object == "" {
+		uihelper.UIError(w, "BadRequest", "location and object are required", http.StatusBadRequest)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxSourceUploadBytes))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			uihelper.UIError(w, "OutOfRange", "source archive exceeds the 100 MB upload limit", http.StatusRequestEntityTooLarge)
+			return
+		}
+		uihelper.UIError(w, "InvalidArgument", "failed to read source archive", http.StatusBadRequest)
+		return
+	}
+	if len(body) == 0 {
+		uihelper.UIError(w, "InvalidArgument", "source archive is empty", http.StatusBadRequest)
+		return
+	}
+	if err := h.provider.PutSourceArchive(r.Context(), h.account(r), location, object, body); err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // POST /functions
