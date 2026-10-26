@@ -2,12 +2,14 @@
 
 ## Project
 
-JaisCloud is a local cloud emulator written in Go. Each cloud ships as its own self-contained binary (`jaiscloud-aws`, `jaiscloud-azure`, `jaiscloud-gcp`). The binary IS the cloud — there is no runtime `--cloud` flag and no shared provider logic between clouds. AWS wire protocols (Query/XML, JSON/Target, REST) are implemented so any AWS SDK can point at `jaiscloud-aws` without modification.
+JaisCloud is a local cloud emulator written in Go. Each cloud ships as its own self-contained binary (`jaiscloud-aws`, `jaiscloud-gcp`, `jaiscloud-azure`). The binary IS the cloud — there is no runtime `--cloud` flag and no shared provider logic between clouds. AWS wire protocols (Query/XML, JSON/Target, REST) are implemented so any AWS SDK can point at `jaiscloud-aws` without modification; GCP exposes both its REST/JSON APIs and the native gRPC APIs the official Google clients use.
 
 **Design decision: per-cloud binaries, not a cloud-agnostic core.**
-Every cloud has its own adapter, its own provider implementations, and its own entry point. Only infrastructure utilities are shared (`gateway`, `store`, `model`, `admin`, `blobfs`, `clock`, `events`, `executor`, `config`). When Azure or GCP services are implemented, they will live entirely in `internal/azure/` or `internal/gcp/` — no provider code will be shared with AWS.
+Every cloud has its own adapter, its own provider implementations, and its own entry point. Only infrastructure utilities are shared (`gateway`, `store`, `model`, `admin`, `blobfs`, `clock`, `events`, `executor`, `config`). A new cloud's logic lives entirely in `internal/<cloud>/` — no provider code is shared with AWS.
 
 **Implemented AWS services:** SQS, SNS, IAM/STS, DynamoDB (+ Streams), S3, Lambda, KMS, SecretsManager, SSM, API Gateway, CloudFormation, EMR (on EC2), EMR on EKS, EventBridge, CloudWatch, EKS, EC2, Route53, RDS, ElastiCache, ECS, Glue.
+
+**GCP:** implemented from `v0.2.0` (26 services, REST + gRPC; per-service tiers in the fidelity matrix — see `README-GCP.md` and `docs/gcp/wire-contract.md`). **Azure** is still a stub.
 
 ---
 
@@ -26,7 +28,7 @@ go 1.26.3
 cmd/
   jaiscloud-aws/main.go    # AWS binary — full provider wiring, Cobra CLI
   jaiscloud-azure/main.go  # Azure binary stub (501 for all ops)
-  jaiscloud-gcp/main.go    # GCP binary stub (501 for all ops)
+  jaiscloud-gcp/main.go    # GCP binary — dual REST + gRPC wiring, Cobra CLI
 docs/                      # Architecture, LLD, design documents
 internal/
   # ── SHARED INFRASTRUCTURE (cloud-neutral utilities) ──────────────────────
@@ -107,14 +109,24 @@ internal/
   azure/
     adapter/               # AzureAdapter stub
 
-  # ── GCP-SPECIFIC (stub, returns 501) ─────────────────────────────────────
+  # ── GCP-SPECIFIC (implemented; REST + gRPC) ──────────────────────────────
   gcp/
-    adapter/               # GCPAdapter stub
+    adapter/               # wire codec routing per service
+    transport/rest/        # thin REST/JSON adapters over the service cores
+    transport/grpc/        # thin gRPC adapters over the same service cores
+    service/               # transport-neutral per-service core (business logic)
+    provider/              # providers (resource CRUD, IAM, LRO, paging)
+    store/                 # GCP resource stores (memory + postgres)
+    gcperr/                # GCP status-code error mapping
+    transportcfg/          # transport selection/overrides (--transports)
+    ui/                    # GCP console API surface
 
 tests/
   integration/          # End-to-end tests using aws-sdk-go-v2 (SQS, IAM, SNS, DynamoDB, S3, Lambda)
   persistent_mode/aws/  # Persistent-mode e2e tests (build-tagged): lambda, cfn, kms, emr, emrcontainers,
                         # eventbridge, dpc, iceberg
+  gcpconformance/       # Offline REST/gRPC conformance (vendored Discovery + transcripts)
+  gcpdifferential/      # Real-GCP differential record/replay goldens
 ```
 
 ---
@@ -128,7 +140,7 @@ Each binary is self-contained:
 ```
 jaiscloud-aws    = internal/aws/adapter + internal/aws/provider/* + shared infra
 jaiscloud-azure  = internal/azure/adapter (stub) + shared infra
-jaiscloud-gcp    = internal/gcp/adapter (stub) + shared infra
+jaiscloud-gcp    = internal/gcp/{adapter,service,transport,provider} + shared infra
 ```
 
 `internal/aws/` may import `internal/*` (shared). `internal/*` (shared) must **never** import `internal/aws/` — this is enforced by `go build`.
@@ -165,7 +177,7 @@ type CloudAdapter interface {
 }
 ```
 
-`ServiceToProvider` maps wire service name (e.g. `"sqs"`) to provider registry prefix (e.g. `"Queue"`). AWS delegates to `serviceProviderMap` from `services.go`; Azure/GCP stubs return the service name unchanged.
+`ServiceToProvider` maps wire service name (e.g. `"sqs"`) to provider registry prefix (e.g. `"Queue"`). AWS delegates to `serviceProviderMap` from `services.go`; the Azure stub returns the service name unchanged, and GCP resolves it through its own adapter.
 
 ### Service → Provider mapping (AWS)
 

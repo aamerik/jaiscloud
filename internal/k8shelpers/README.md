@@ -133,8 +133,8 @@ Pod/Service matching a label selector (capped, paginated, best-effort). The Pod 
 `corev1.Pod` the caller builds — cloud-specific policy (image, env, labels, ports,
 restart policy, readiness) stays with the caller. Consumers: Managed Kafka
 (`k8sBroker`), Cloud Run revisions (`internal/gcp/runexec`), and the shared Lambda /
-Cloud Functions executor (`internal/executor/lambda`). All are unit-tested with
-`kubernetes/fake` by injecting the readiness `Probe`.
+Cloud Functions executors (`internal/executor/awslambda`, `internal/executor/gcf`). All
+are unit-tested with `kubernetes/fake` by injecting the readiness `Probe`.
 
 ### Namespace lifecycle (per-resource isolation)
 Engine-bearing, cluster-shaped resources can own one namespace each instead of sharing the

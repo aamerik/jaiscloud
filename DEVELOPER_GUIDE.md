@@ -1,6 +1,6 @@
 # Developer Guide
 
-JaisCloud ships one self-contained binary per cloud provider. Each binary speaks the exact wire protocol for that cloud — no shared adapter, no runtime flag to switch clouds. The AWS binary (`jaiscloud-aws`) is the reference implementation; Azure and GCP stubs follow the same structure.
+JaisCloud ships one self-contained binary per cloud provider. Each binary speaks the exact wire protocol for that cloud — no shared adapter, no runtime flag to switch clouds. The AWS binary (`jaiscloud-aws`) is the reference implementation; Azure is still a stub, and GCP is implemented with its own guide ([README-GCP.md](README-GCP.md)).
 
 This guide covers the AWS binary. It walks you from a fresh clone to a running server, then through progressively more realistic setups: in-memory for unit tests, PostgreSQL-backed for persistence, and real Spark jobs submitted to a Kubernetes cluster.
 
