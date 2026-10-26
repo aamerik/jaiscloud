@@ -81,7 +81,7 @@ METRIC_TYPE = "custom.googleapis.com/crypto_medallion/trades_per_min"
 ALERT_POLICY = "cm-trades-alert"
 NOTIFICATION_CHANNEL = "cm-incidents"
 
-DOCKER_REGISTRY = os.environ.get("GCP_REGISTRY", "10.0.100.21:5050")
+DOCKER_REGISTRY = os.environ.get("GCP_REGISTRY", "").strip()
 IMAGE_TAG = os.environ.get("DEMO_IMAGE_TAG", "demo")
 
 # jars staged on GCS for the Spark job (design §3 / SPK1 / SPK2).
@@ -565,6 +565,11 @@ def build_image(name: str, dockerfile: Path, context: Path, sources: list) -> st
     digest = hashlib.sha1()
     for src in sources:
         digest.update(Path(src).read_bytes())
+    if not DOCKER_REGISTRY:
+        raise SystemExit(
+            "GCP_REGISTRY is not set: point it at a container registry the demo "
+            "cluster can pull from (e.g. localhost:5000 or <host>:5050), then re-run"
+        )
     image = f"{DOCKER_REGISTRY}/{name}:demo-{digest.hexdigest()[:12]}"
     log(f"build+push {image}")
     run(["docker", "build", "-t", image, "-f", str(dockerfile), str(context)],

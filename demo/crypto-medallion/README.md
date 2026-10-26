@@ -77,6 +77,10 @@ Each stage is also a direct call, e.g.
 
 ## Notes
 
+- **Registry.** The demo images are built and pushed to `GCP_REGISTRY` (a
+  registry the cluster can pull from, e.g. `localhost:5000` for a local
+  registry or `<host>:5050` for a k3d registry). There is no default — set it
+  before running any stage that builds images.
 - **Replay fallback.** The bridge tries the live feed and falls back to the
   bundled capture (`feed/replay.jsonl.gz`, regenerate with
   `scripts/gen_replay.py`) if no trade arrives in `LIVENESS_SECONDS`. Force it
