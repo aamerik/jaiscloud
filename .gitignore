@@ -108,3 +108,7 @@ __pycache__/
 
 .astra/
 .astraignore
+
+# Optional interop harness (localgcp/floci scratch tooling). Kept on disk,
+# never committed — see AGENTS.md and the header of run-gcp-compat.sh.
+tools/compat/
