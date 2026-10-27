@@ -1,7 +1,7 @@
 # JaisCloud for GCP
 
 > **Early Development Notice**
-> `jaiscloud-gcp` is published from **`v0.2.0`** onward: that release carries the GCP binary, archives, deb/rpm packages, Homebrew cask, Scoop manifest and container image alongside the AWS ones. GCP services are tiered — some are `preview` or `limited` in the [fidelity matrix](docs/fidelity/fidelity-matrix.md), some operations may have incomplete implementations, behavioural differences from real GCP, or known bugs. What the emulator's fidelity matrix actually promises is the [wire contract](docs/gcp/wire-contract.md) ([§1](docs/gcp/wire-contract.md#1-what-ga-means-in-the-matrix) for what `ga` means, [§8](docs/gcp/wire-contract.md#8-accepted-risks) for the accepted risks) — and those two sections are the release notes of record. See [Known Limitations](#known-limitations) below, and please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) for anything not already listed there.
+> `jaiscloud-gcp` is published from **`v0.1.1`** onward: that release carries the GCP binary, archives, deb/rpm packages, Homebrew cask, Scoop manifest and container image alongside the AWS ones. GCP services are tiered — some are `preview` or `limited` in the [fidelity matrix](docs/fidelity/fidelity-matrix.md), some operations may have incomplete implementations, behavioural differences from real GCP, or known bugs. What the emulator's fidelity matrix actually promises is the [wire contract](docs/gcp/wire-contract.md) ([§1](docs/gcp/wire-contract.md#1-what-ga-means-in-the-matrix) for what `ga` means, [§8](docs/gcp/wire-contract.md#8-accepted-risks) for the accepted risks) — and those two sections are the release notes of record. See [Known Limitations](#known-limitations) below, and please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) for anything not already listed there.
 
 **JaisCloud — a free GCP emulator for developers and CI.** It implements real GCP wire protocols — both the REST/JSON APIs and the native gRPC APIs official Google clients use (Storage, Pub/Sub, Firestore, Datastore, KMS, Secret Manager, Logging, Monitoring, Dataproc, Eventarc, Functions, Managed Kafka, Metastore, Service Usage, Workflows, Workflow Executions, Resource Manager, IAM, Cloud Scheduler, Cloud Tasks, GKE, Cloud Run) — no SDK shims, no proxy rewrites. Point an official Google client library at it and it works. Where real GCP is REST-only (Compute, Cloud SQL, Cloud DNS, BigQuery, BigLake Iceberg, Memorystore), only REST is exposed; each service row below states its transports.
 
@@ -88,7 +88,7 @@ in [wire-contract.md §8](docs/gcp/wire-contract.md#8-accepted-risks).
 
 ## Install
 
-Every release from `v0.2.0` on publishes `jaiscloud-gcp` next to `jaiscloud-aws` from the same tag.
+Every release from `v0.1.1` on publishes `jaiscloud-gcp` next to `jaiscloud-aws` from the same tag.
 
 ### Docker
 
@@ -104,7 +104,7 @@ open http://localhost:4567/ui/                # embedded console
 
 Ports: `8080` REST/admin, `8081` gRPC (h2c), `4567` console with `--ui`. The image declares
 `8080`; publish `8081`/`4567` explicitly as above. Pin a version instead of `latest` in CI
-(`jaisraj/jaiscloud-gcp:0.2.0`); `jaiscloud-gcp version` prints the tag the image was built from.
+(`jaisraj/jaiscloud-gcp:0.1.1`); `jaiscloud-gcp version` prints the tag the image was built from.
 
 ### Homebrew (macOS) and Scoop (Windows)
 
@@ -129,7 +129,7 @@ scoop install jaiscloud-gcp
 | Windows arm64 | `jaiscloud-gcp_<version>_windows_arm64.zip` |
 
 ```bash
-VERSION=0.2.0
+VERSION=0.1.1
 curl -LO https://github.com/jaisrajms/jaiscloud/releases/download/v$VERSION/jaiscloud-gcp_${VERSION}_linux_amd64.tar.gz
 tar -xzf jaiscloud-gcp_${VERSION}_linux_amd64.tar.gz && sudo mv jaiscloud-gcp /usr/local/bin/
 ```

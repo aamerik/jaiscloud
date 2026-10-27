@@ -9,7 +9,7 @@
 
 **JaisCloud — free, open-source cloud emulators for developers and CI. One self-contained binary per cloud. Runs anywhere: laptop, CI, or Kubernetes.**
 
-JaisCloud emulates real cloud APIs so you can test cloud applications locally without touching real cloud infrastructure. It implements the exact wire protocols — no SDK shims, no proxy rewrites — so your existing code works against JaisCloud unmodified. AWS is the reference implementation, a drop-in LocalStack alternative with zero runtime dependencies; GCP ships from `v0.2.0` (REST and gRPC, official Google clients); Azure is in the pipeline.
+JaisCloud emulates real cloud APIs so you can test cloud applications locally without touching real cloud infrastructure. It implements the exact wire protocols — no SDK shims, no proxy rewrites — so your existing code works against JaisCloud unmodified. AWS is the reference implementation, a drop-in LocalStack alternative with zero runtime dependencies; GCP ships from `v0.1.1` (REST and gRPC, official Google clients); Azure is in the pipeline.
 
 **One binary per cloud.** Each binary is fully self-contained. There is no `--cloud` flag. This page covers the AWS binary — the GCP binary has its own guide, [README-GCP.md](README-GCP.md).
 
@@ -17,7 +17,7 @@ JaisCloud emulates real cloud APIs so you can test cloud applications locally wi
 |---|---|---|
 | AWS | `jaiscloud-aws` | Full implementation |
 | Azure | `jaiscloud-azure` | In pipeline |
-| GCP | `jaiscloud-gcp` | Released from `v0.2.0` — see the [GCP guide](README-GCP.md) |
+| GCP | `jaiscloud-gcp` | Released from `v0.1.1` — see the [GCP guide](README-GCP.md) |
 
 ---
 
@@ -246,7 +246,7 @@ go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
 
 ### Other clouds (GCP)
 
-Every release from `v0.2.0` publishes `jaiscloud-gcp` from the same tag, as archives, `.deb`/`.rpm`, a Homebrew cask, a Scoop manifest and a container image. It listens on **8080** (REST/admin), **8081** (gRPC) and **4567** (console with `--ui`).
+Every release from `v0.1.1` publishes `jaiscloud-gcp` from the same tag, as archives, `.deb`/`.rpm`, a Homebrew cask, a Scoop manifest and a container image. It listens on **8080** (REST/admin), **8081** (gRPC) and **4567** (console with `--ui`).
 
 ```bash
 # macOS
