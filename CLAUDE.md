@@ -2,12 +2,14 @@
 
 ## Project
 
-JaisCloud is a local cloud emulator written in Go. Each cloud ships as its own self-contained binary (`jaiscloud-aws`, `jaiscloud-azure`, `jaiscloud-gcp`). The binary IS the cloud — there is no runtime `--cloud` flag and no shared provider logic between clouds. AWS wire protocols (Query/XML, JSON/Target, REST) are implemented so any AWS SDK can point at `jaiscloud-aws` without modification.
+JaisCloud is a local cloud emulator written in Go. Each cloud ships as its own self-contained binary (`jaiscloud-aws`, `jaiscloud-gcp`, `jaiscloud-azure`). The binary IS the cloud — there is no runtime `--cloud` flag and no shared provider logic between clouds. AWS wire protocols (Query/XML, JSON/Target, REST) are implemented so any AWS SDK can point at `jaiscloud-aws` without modification; GCP exposes both its REST/JSON APIs and the native gRPC APIs the official Google clients use.
 
 **Design decision: per-cloud binaries, not a cloud-agnostic core.**
-Every cloud has its own adapter, its own provider implementations, and its own entry point. Only infrastructure utilities are shared (`gateway`, `store`, `model`, `admin`, `blobfs`, `clock`, `events`, `executor`, `config`). When Azure or GCP services are implemented, they will live entirely in `internal/azure/` or `internal/gcp/` — no provider code will be shared with AWS.
+Every cloud has its own adapter, its own provider implementations, and its own entry point. Only infrastructure utilities are shared (`gateway`, `store`, `model`, `admin`, `blobfs`, `clock`, `events`, `executor`, `config`). A new cloud's logic lives entirely in `internal/<cloud>/` — no provider code is shared with AWS.
 
 **Implemented AWS services:** SQS, SNS, IAM/STS, DynamoDB (+ Streams), S3, Lambda, KMS, SecretsManager, SSM, API Gateway, CloudFormation, EMR (on EC2), EMR on EKS, EventBridge, CloudWatch, EKS, EC2, Route53, RDS, ElastiCache, ECS, Glue.
+
+**GCP:** implemented from `v0.2.0` (26 services, REST + gRPC; per-service tiers in the fidelity matrix — see `README-GCP.md` and `docs/gcp/wire-contract.md`). **Azure** is still a stub.
 
 ---
 
@@ -26,7 +28,7 @@ go 1.26.3
 cmd/
   jaiscloud-aws/main.go    # AWS binary — full provider wiring, Cobra CLI
   jaiscloud-azure/main.go  # Azure binary stub (501 for all ops)
-  jaiscloud-gcp/main.go    # GCP binary stub (501 for all ops)
+  jaiscloud-gcp/main.go    # GCP binary — dual REST + gRPC wiring, Cobra CLI
 docs/                      # Architecture, LLD, design documents
 internal/
   # ── SHARED INFRASTRUCTURE (cloud-neutral utilities) ──────────────────────
@@ -107,14 +109,24 @@ internal/
   azure/
     adapter/               # AzureAdapter stub
 
-  # ── GCP-SPECIFIC (stub, returns 501) ─────────────────────────────────────
+  # ── GCP-SPECIFIC (implemented; REST + gRPC) ──────────────────────────────
   gcp/
-    adapter/               # GCPAdapter stub
+    adapter/               # wire codec routing per service
+    transport/rest/        # thin REST/JSON adapters over the service cores
+    transport/grpc/        # thin gRPC adapters over the same service cores
+    service/               # transport-neutral per-service core (business logic)
+    provider/              # providers (resource CRUD, IAM, LRO, paging)
+    store/                 # GCP resource stores (memory + postgres)
+    gcperr/                # GCP status-code error mapping
+    transportcfg/          # transport selection/overrides (--transports)
+    ui/                    # GCP console API surface
 
 tests/
   integration/          # End-to-end tests using aws-sdk-go-v2 (SQS, IAM, SNS, DynamoDB, S3, Lambda)
   persistent_mode/aws/  # Persistent-mode e2e tests (build-tagged): lambda, cfn, kms, emr, emrcontainers,
                         # eventbridge, dpc, iceberg
+  gcpconformance/       # Offline REST/gRPC conformance (vendored Discovery + transcripts)
+  gcpdifferential/      # Real-GCP differential record/replay goldens
 ```
 
 ---
@@ -128,7 +140,7 @@ Each binary is self-contained:
 ```
 jaiscloud-aws    = internal/aws/adapter + internal/aws/provider/* + shared infra
 jaiscloud-azure  = internal/azure/adapter (stub) + shared infra
-jaiscloud-gcp    = internal/gcp/adapter (stub) + shared infra
+jaiscloud-gcp    = internal/gcp/{adapter,service,transport,provider} + shared infra
 ```
 
 `internal/aws/` may import `internal/*` (shared). `internal/*` (shared) must **never** import `internal/aws/` — this is enforced by `go build`.
@@ -165,7 +177,7 @@ type CloudAdapter interface {
 }
 ```
 
-`ServiceToProvider` maps wire service name (e.g. `"sqs"`) to provider registry prefix (e.g. `"Queue"`). AWS delegates to `serviceProviderMap` from `services.go`; Azure/GCP stubs return the service name unchanged.
+`ServiceToProvider` maps wire service name (e.g. `"sqs"`) to provider registry prefix (e.g. `"Queue"`). AWS delegates to `serviceProviderMap` from `services.go`; the Azure stub returns the service name unchanged, and GCP resolves it through its own adapter.
 
 ### Service → Provider mapping (AWS)
 
@@ -370,6 +382,21 @@ proposed change (exit 2 = already done, 3 = in flight),
 `Pri`, then impact), and `make gcp-status-coverage` fails if any doc has status
 markers but produced no ledger rows. See [AGENTS.md](AGENTS.md).
 
+### GCP source of truth: real GCP, never a sibling emulator
+
+For GCP wire behavior the authority order is: the service's Discovery document
+/ proto and official Google docs → real client-SDK wire behavior → the AWS
+reference implementation (repo conventions only) → jaiscloud's own code →
+jaiscloud's own tests. **floci-gcp and localgcp are optional smoke/interop
+harnesses, never the spec.** When a floci/localgcp expectation disagrees with
+the Discovery document — an emulator-only response field (`keyId` on
+`ServiceAccountKey`), a recognizable token prefix, a response shape — real GCP
+wins. Do not add emulator-only fields or values to make a floci assertion pass:
+classify the assertion TEST-NON-COMPLIANT and record it. The compliance gate is
+the offline conformance harness (`tests/gcpconformance`: vendored Discovery +
+committed transcripts, the official gRPC clients, and the `gcloud`/Python client
+suites), not a sibling emulator's suite.
+
 ### Resource IDs: use nr.ResourceID, never hardcode ARN formats
 
 Providers must use `nr.ResourceID("type", name)` — never `fmt.Sprintf("arn:aws:...")`.
@@ -418,6 +445,13 @@ time.Until(x)                 →    x.Sub(clock.Now())
 - `provider/ecr/registry_proxy.go` — ECR registry proxy container readiness polling
 - `k8shelpers/` — Spark job execution wall time tracking
 - `internal/clock/clock.go` — `OffsetClock` and `RealClock` implementations (the clock package itself)
+
+`gcplint` enforces the split: the `clock` rule rejects bare
+`time.Now()`/`time.Since`/`time.Until`, and the `clock-realnow` rule flags a
+`clock.Now()` that drives a wall-clock wait (a poll-loop condition, a derived
+deadline compared inside a loop, or an argument to
+`time.Sleep`/`After`/`NewTimer`/`NewTicker`/`Tick`/`context.WithDeadline`).
+Documented exceptions go in `tools/lint/gcplint/allowlist.txt`.
 
 ### DynamoDB x-amz-crc32
 
@@ -469,4 +503,5 @@ EMR/EMRContainers providers capture `handlerCtx{cloud, region, accountID}` at ha
 | `/_jaiscloud/clock` | POST | Set clock mode: `{"mode":"fixed","time":"..."}` / `{"mode":"offset","time":"..."}` / `{"mode":"real"}` |
 | `/_jaiscloud/ttl-sweep` | POST | Synchronous DynamoDB TTL sweep (for deterministic tests) |
 | `/_jaiscloud/eb-tick` | POST | Synchronous EventBridge scheduler evaluation (for deterministic tests) |
+| `/_jaiscloud/monitoring-tick` | POST | Synchronous Cloud Monitoring alert-policy evaluation (for deterministic tests) |
 | `/metrics` | GET | Prometheus (requires `--metrics`) |

@@ -5,19 +5,19 @@
 </p>
 
 > **Early Development Notice**
-> JaisCloud is under active development. While core services are functional and tested, some operations may have incomplete implementations, behavioural differences from AWS, or known bugs. If you encounter an issue, please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) with a minimal reproduction — your report directly shapes what gets fixed next.
+> JaisCloud is under active development. While core services are functional and tested, some operations may have incomplete implementations, behavioural differences from the real cloud APIs, or known bugs. If you encounter an issue, please [open a GitHub issue](https://github.com/jaisrajms/jaiscloud/issues) with a minimal reproduction — your report directly shapes what gets fixed next.
 
-**JaisCloud — Free AWS emulator for developers and CI. Single Go binary. Runs anywhere: laptop, CI, or Kubernetes.**
+**JaisCloud — free, open-source cloud emulators for developers and CI. One self-contained binary per cloud. Runs anywhere: laptop, CI, or Kubernetes.**
 
-JaisCloud is a free, open-source AWS emulator that lets developers test AWS applications locally without touching real cloud infrastructure. It implements the exact AWS wire protocols — no SDK shims, no proxy rewrites — so your existing code works against JaisCloud unmodified. Use it as a drop-in LocalStack alternative with zero runtime dependencies.
+JaisCloud emulates real cloud APIs so you can test cloud applications locally without touching real cloud infrastructure. It implements the exact wire protocols — no SDK shims, no proxy rewrites — so your existing code works against JaisCloud unmodified. AWS is the reference implementation, a drop-in LocalStack alternative with zero runtime dependencies; GCP ships from `v0.2.0` (REST and gRPC, official Google clients); Azure is in the pipeline.
 
-**One binary per cloud.** Each binary is fully self-contained. There is no `--cloud` flag.
+**One binary per cloud.** Each binary is fully self-contained. There is no `--cloud` flag. This page covers the AWS binary — the GCP binary has its own guide, [README-GCP.md](README-GCP.md).
 
 | Cloud | Binary | Status |
 |---|---|---|
 | AWS | `jaiscloud-aws` | Full implementation |
 | Azure | `jaiscloud-azure` | In pipeline |
-| GCP | `jaiscloud-gcp` | In pipeline — see the [GCP guide](README-GCP.md) |
+| GCP | `jaiscloud-gcp` | Released from `v0.2.0` — see the [GCP guide](README-GCP.md) |
 
 ---
 
@@ -88,11 +88,13 @@ JAISCLOUD_EXECUTOR_MODE=docker jaiscloud-aws start
 
 ### Everything Free — No Subscription Required
 
-JaisCloud has no tiers, no license keys, and no usage limits. Every feature in this table is Apache-2.0 open-source.
+JaisCloud has no tiers, no license keys, and no usage limits. Every feature is Apache-2.0 open-source.
 
 ---
 
 ## Supported AWS Services
+
+These are the AWS surfaces. The GCP services and their per-transport tiers are in [README-GCP.md](README-GCP.md#supported-gcp-services).
 
 ### Full implementations
 
@@ -242,9 +244,27 @@ go build -o jaiscloud-aws ./cmd/jaiscloud-aws/
 ./jaiscloud-aws start
 ```
 
+### Other clouds (GCP)
+
+Every release from `v0.2.0` publishes `jaiscloud-gcp` from the same tag, as archives, `.deb`/`.rpm`, a Homebrew cask, a Scoop manifest and a container image. It listens on **8080** (REST/admin), **8081** (gRPC) and **4567** (console with `--ui`).
+
+```bash
+# macOS
+brew tap jaisrajms/homebrew-tap && brew install --cask jaiscloud-gcp
+
+# Windows
+scoop bucket add jaiscloud https://github.com/jaisrajms/scoop-jaiscloud
+scoop install jaiscloud-gcp
+
+# Docker (REST + gRPC)
+docker run --rm -p 8080:8080 -p 8081:8081 jaisraj/jaiscloud-gcp:latest
+```
+
+Full download table, client setup and known limitations: [README-GCP.md](README-GCP.md#install).
+
 ---
 
-## Connect your SDK
+## Connect your AWS SDK
 
 Point any SDK at `http://localhost:4566` with dummy credentials — no code changes required.
 
@@ -393,11 +413,13 @@ func resetState(t *testing.T) {
 }
 ```
 
+The GCP binary drops into the same service-container pattern: image `jaisraj/jaiscloud-gcp` (or `ghcr.io/jaisrajms/jaiscloud-gcp`), ports `8080` REST/`8081` gRPC, health at `http://localhost:8080/_jaiscloud/health`, and the usual `*_EMULATOR_HOST` variables for the official Google clients — see [README-GCP.md](README-GCP.md).
+
 ---
 
 ## Configuration
 
-The most common flags — all have an equivalent `JAISCLOUD_*` env var.
+The most common flags — all have an equivalent `JAISCLOUD_*` env var. The names are shared by both binaries; defaults differ per cloud (the GCP binary listens on `8080`/`8081` and keys state by project instead of account/region — see [README-GCP.md](README-GCP.md#configuration)).
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
@@ -437,6 +459,8 @@ For the full configuration reference including Kubernetes, Spark, and platform o
 
 ## CLI Reference
 
+The same verbs exist on `jaiscloud-gcp`, with GCP-specific flags (`--grpc-port`, `--transports`, `--hms-port`, `--gcp-metadata`); see [README-GCP.md](README-GCP.md#cli-reference).
+
 ```bash
 jaiscloud-aws start                             # start the emulator
 jaiscloud-aws version                           # print version, commit, build date
@@ -457,7 +481,7 @@ jaiscloud-aws snapshot inspect <name>          # show snapshot metadata
 
 ## Admin API
 
-All endpoints are available at the emulator's base URL (default `http://localhost:4566`).
+All endpoints are available at the emulator's base URL (default `http://localhost:4566`; `http://localhost:8080` for the GCP binary).
 
 | Endpoint | Method | Description |
 |---|---|---|
@@ -481,19 +505,21 @@ All endpoints are available at the emulator's base URL (default `http://localhos
 
 ## UI Console
 
-> **Coming Soon** — Under active development; shipping in an upcoming release. **Free and open-source.**
+The JaisCloud UI Console is a browser-based interface that mirrors the management console of the cloud it serves — without the bill. It ships inside each binary: no separate server, no external service, no subscription.
 
-The JaisCloud UI Console is a browser-based interface that mirrors the AWS Management Console experience — without the AWS bill. It ships as part of the single binary: no separate server, no external service, no subscription.
+```bash
+jaiscloud-aws start --ui               # console on http://localhost:4567/ui/
+jaiscloud-aws start --ui --ui-open     # also open a browser
+```
 
-**Planned capabilities:**
+Release artifacts are built with the UI embedded (`-tags ui`), so the published binary and Docker image serve it as-is.
 
-- **Resource browser** — list, inspect, create, update, and delete any emulated resource (queues, tables, buckets, Lambda functions, secrets, parameters, and more) across all accounts and regions from a single view
+- **Resource browser** — list, inspect, create, update, and delete emulated resources (queues, tables, buckets, Lambda functions, secrets, parameters, and more) across all accounts and regions from a single view
 - **Multi-account switcher** — toggle between emulated AWS accounts and see per-account ARN scopes, exactly as you would in the AWS Console
 - **State management** — trigger reset, export, import, and named snapshot operations from the UI instead of the CLI; share snapshots directly from the browser
 - **CloudWatch dashboard** — visualise metric data, alarm states, and log groups without configuring a separate Prometheus or Grafana instance
 
-
-Watch the [GitHub releases page](https://github.com/jaisrajms/jaiscloud/releases) for the announcement.
+> The AWS binary renders a **Cloudscape** console that matches the AWS Management Console. The GCP binary renders its own **Material Design** console — see the [GCP guide](README-GCP.md#ui-console).
 
 ---
 
