@@ -9,9 +9,9 @@ above is the source of truth for what to do next.
 
 The command first ran `make gcp-session-start`: it aborts on a dirty checkout
 (uncommitted files from a previous or concurrent session) and otherwise fetches
-`upstream` and fast-forwards the local `gcp` base. If it aborted, no ledger is
+`upstream` and fast-forwards the local `main` base. If it aborted, no ledger is
 shown — stop and report the uncommitted files; do not start an item. When it
-proceeds, branch the item's `Branch` off the refreshed `gcp`.
+proceeds, branch the item's `Branch` off the refreshed `main`.
 
 - If arguments were given (`$ARGUMENTS`), assess them with
   `make gcp-status-check Q="$ARGUMENTS"`. Otherwise take the first `NEXT` item
@@ -39,4 +39,4 @@ proceeds, branch the item's `Branch` off the refreshed `gcp`.
   `make gcp-status-coverage`; finalize the plan doc with
   `make gcp-status-finalize PLAN=plan_docs/<doc>.md ID=<ID>` (put the backlog ID in the
   commit/PR title). If the session changed operations, also run
-  `make gcp-matrix-diff REF=upstream/gcp`.
+  `make gcp-matrix-diff REF=upstream/main`.

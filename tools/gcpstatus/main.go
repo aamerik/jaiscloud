@@ -219,7 +219,7 @@ func main() {
 	out := flag.String("out", "plan_docs/STATUS.md", "markdown ledger output ('' to skip)")
 	jsonOut := flag.String("json", "plan_docs/status.json", "json ledger output ('' to skip)")
 	prRepo := flag.String("pr-repo", "jaisrajms/jaiscloud", "GitHub repo for PR state ('' = current checkout)")
-	includePRs := flag.Bool("pr", true, "backfill every base-gcp PR not already represented as a row")
+	includePRs := flag.Bool("pr", true, "backfill every PR not already represented as a row (GCP work now targets main)")
 	prPrefixes := flag.String("pr-prefixes", "", "comma-separated branch prefixes to keep for PR-only rows (default all)")
 	query := flag.String("query", "", "assess a proposed change: free-text match over id/service/gap/verdict")
 	service := flag.String("service", "", "filter query by service")

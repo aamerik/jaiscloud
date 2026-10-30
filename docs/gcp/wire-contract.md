@@ -130,7 +130,7 @@ contract a tag has to satisfy (it is what `README-GCP.md` install instructions p
 
 | decision | policy |
 | --- | --- |
-| **Tag target** | **`main`**, after `gcp` is merged into `main` — not on the `gcp` branch. One tag then publishes `jaiscloud-aws` **and** `jaiscloud-gcp` artifacts, images and packages from the same commit. |
+| **Tag target** | **`main`** — releases are tagged on `main` (the former long-lived `gcp` branch was merged there via #610 and `v0.1.1` was cut from it). One tag publishes `jaiscloud-aws` **and** `jaiscloud-gcp` artifacts, images and packages from the same commit. |
 | **Version** | Semver (**`v0.1.1`**; `v0.1.0` is the prior published tag). `release.yml` fires on any `v*` tag. |
 | **Prerelease** | `prerelease: auto` in `.goreleaser.yaml`: a bare `vX.Y.Z` tag is a full GitHub release, a `vX.Y.Z-rc.N` tag is flagged prerelease. |
 | **Image tags** | Docker Hub `jaisraj/jaiscloud-gcp` and `jaisraj/jaiscloud-aws` each get `{{ .Version }}` and `latest`; GHCR (`ghcr.io/<owner>/jaiscloud-gcp`) is pushed from `main` by `docker-publish.yml`. `latest` follows the newest **full** release; a prerelease should be tagged by version only (`.goreleaser.yaml` currently tags `latest` unconditionally with a TODO to gate it — flip that before cutting a prerelease). |
