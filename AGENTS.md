@@ -24,6 +24,11 @@ it TEST-NON-COMPLIANT and record it. The compliance gate is the offline
 conformance harness (`tests/gcpconformance`: vendored Discovery + committed
 transcripts, the official gRPC clients, and the `gcloud`/Python client suites).
 
+**Review protocol:** two lenses (GCP architect for wire parity, senior developer
+for conventions/quality) with a Discovery-doc brief, cross-audit, and a
+calibrated triage — `docs/gcp/review-checklist.md`, with worked briefs under
+`docs/gcp/review-briefs/`.
+
 **e2e environment:** the provided dev environment has a working k3d cluster and
 a Docker daemon, so cluster-/image-based gates (`*-k3d`, k8s executor modes) and
 docker-executor gates (`test-e2e-*-docker`, `test-e2e-cloudrun-docker`) are
