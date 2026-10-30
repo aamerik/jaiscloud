@@ -5,12 +5,10 @@
 
 ## GCP parity work — check the status ledger before you plan
 
-**Toolchain:** OpenCode sessions do not have `go` on `PATH`. Before any `go`,
-`gofmt`, or `make gcp-status*` command, run
-`export PATH=/tmp/opencode/go/bin:$HOME/.local/bin:$PATH` (`go` is
-`/tmp/opencode/go/bin/go`). For the **optional** floci Java interop suite also
-export `JAVA_HOME=/tmp/opencode/toolchain/jdk-21.0.12.1+1` and
-`/tmp/opencode/toolchain/maven/bin`.
+**Toolchain:** `go` is on `PATH`; the `make gcp-status*` targets (which shell
+out to `go build`) and any `go`/`gofmt` work need it. The `/gcp:*` slash
+commands prepend their own toolchain dir when they run. The **optional** floci
+Java interop suite also needs `JAVA_HOME` and `mvn` on `PATH`.
 
 **GCP source of truth — real GCP, not a sibling emulator.** The authority order
 for GCP wire behavior is: the service's Discovery document / proto and official
@@ -27,9 +25,9 @@ transcripts, the official gRPC clients, and the `gcloud`/Python client suites).
 **e2e environment:** the provided dev environment has a working k3d cluster and
 a Docker daemon, so cluster-/image-based gates (`*-k3d`, k8s executor modes) and
 docker-executor gates (`test-e2e-*-docker`, `test-e2e-cloudrun-docker`) are
-runnable — the contexts and commands are in the `gcp-phase-workflow` skill's
-Environment section. The `docker` CLI's active context is `remote` (SSH to the
-build host) for image builds; the emulator and the docker-executor gates use the
+runnable — the exact commands are the `test-e2e-*` / `*-k3d` targets in the
+`Makefile`. The `docker` CLI's active context is `remote` (SSH to the build
+host) for image builds; the emulator and the docker-executor gates use the
 **local** daemon at `/var/run/docker.sock` (`docker --context default`), so the
 invoking shell must be in the `docker` group (or `sg docker -c '…'`).
 
