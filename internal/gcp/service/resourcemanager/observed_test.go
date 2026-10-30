@@ -2,6 +2,7 @@ package resourcemanager
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"jaiscloud/internal/store"
@@ -143,4 +144,129 @@ func TestListObservedProjectsSortsByLastSeen(t *testing.T) {
 // projectIDForIndex builds a distinct, grammar-valid id per index.
 func projectIDForIndex(i int) string {
 	return "observed-proj-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+}
+
+// errStore wraps a real store and fails selected operations, so the registry's
+// error paths (which must never fail a request) are covered.
+type errStore struct {
+	store.ResourceStore
+	failList   bool
+	failUpsert bool
+	failDelete bool
+}
+
+var errInjected = errors.New("injected store failure")
+
+func (e *errStore) List(ctx context.Context, account, region, resourceType, prefix string) ([]store.ResourceEntry, error) {
+	if e.failList {
+		return nil, errInjected
+	}
+	return e.ResourceStore.List(ctx, account, region, resourceType, prefix)
+}
+
+func (e *errStore) Upsert(ctx context.Context, account, region string, entry store.ResourceEntry) error {
+	if e.failUpsert {
+		return errInjected
+	}
+	return e.ResourceStore.Upsert(ctx, account, region, entry)
+}
+
+func (e *errStore) Delete(ctx context.Context, account, region, resourceType, id string) error {
+	if e.failDelete {
+		return errInjected
+	}
+	return e.ResourceStore.Delete(ctx, account, region, resourceType, id)
+}
+
+// TestObservedWithoutStore covers the no-store guard: observation, listing and
+// reset must all stay inert instead of panicking.
+func TestObservedWithoutStore(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(nil, WithKnownProjects("default-proj", nil))
+
+	s.ObserveAccount(ctx, "acme-e2e", "storage")
+	got := s.ListObservedProjects(ctx)
+	if len(got) != 1 || got[0].ProjectID != "acme-e2e" {
+		t.Fatalf("observed = %v, want [acme-e2e]", got)
+	}
+	if err := s.ResetObserved(ctx); err != nil {
+		t.Fatalf("reset without store: %v", err)
+	}
+	if got := s.ListObservedProjects(ctx); len(got) != 0 {
+		t.Fatalf("observed after reset = %v, want none", got)
+	}
+}
+
+// TestObservedListErrorRetries covers a store listing failure: the read is
+// swallowed (the console must not fail over it) and the next call retries.
+func TestObservedListErrorRetries(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemoryResourceStore()
+	seed := NewService(mem, WithKnownProjects("default-proj", nil))
+	seed.ObserveAccount(ctx, "acme-e2e", "storage")
+
+	broken := &errStore{ResourceStore: mem, failList: true}
+	s := NewService(broken, WithKnownProjects("default-proj", nil))
+	if got := s.ListObservedProjects(ctx); len(got) != 0 {
+		t.Fatalf("observed with failing store = %v, want none", got)
+	}
+
+	broken.failList = false
+	got := s.ListObservedProjects(ctx)
+	if len(got) != 1 || got[0].ProjectID != "acme-e2e" {
+		t.Fatalf("observed after retry = %v, want [acme-e2e]", got)
+	}
+}
+
+// TestObservedFlushErrorIsSwallowed covers a failing write: the in-memory
+// registry still answers (discovery is best-effort), and nothing is persisted.
+func TestObservedFlushErrorIsSwallowed(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemoryResourceStore()
+	broken := &errStore{ResourceStore: mem, failUpsert: true}
+	s := NewService(broken, WithKnownProjects("default-proj", nil))
+
+	s.ObserveAccount(ctx, "acme-e2e", "storage")
+
+	got := s.ListObservedProjects(ctx)
+	if len(got) != 1 || got[0].ProjectID != "acme-e2e" {
+		t.Fatalf("observed = %v, want the in-memory entry", got)
+	}
+	if n := observedCount(t, mem); n != 0 {
+		t.Fatalf("store records = %d, want 0 (flush failed)", n)
+	}
+}
+
+// TestResetObservedSurfacesStoreError covers a failing delete during reset.
+func TestResetObservedSurfacesStoreError(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemoryResourceStore()
+	seed := NewService(mem, WithKnownProjects("default-proj", nil))
+	seed.ObserveAccount(ctx, "acme-e2e", "storage")
+
+	broken := &errStore{ResourceStore: mem, failDelete: true}
+	s := NewService(broken, WithKnownProjects("default-proj", nil))
+	if err := s.ResetObserved(ctx); !errors.Is(err, errInjected) {
+		t.Fatalf("reset err = %v, want the injected store error", err)
+	}
+	// The in-memory registry is cleared regardless.
+	if got := s.ListObservedProjects(ctx); len(got) != 0 {
+		t.Fatalf("observed after failed reset = %v, want none", got)
+	}
+}
+
+// TestObservedEvictionIgnoresDeleteError covers eviction when the store copy
+// cannot be deleted: the cap still holds in memory.
+func TestObservedEvictionIgnoresDeleteError(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemoryResourceStore()
+	broken := &errStore{ResourceStore: mem, failDelete: true}
+	s := NewService(broken, WithKnownProjects("default-proj", nil))
+
+	for i := 0; i < observedCap+3; i++ {
+		s.ObserveAccount(ctx, projectIDForIndex(i), "storage")
+	}
+	if got := len(s.ListObservedProjects(ctx)); got != observedCap {
+		t.Fatalf("observed = %d, want cap %d", got, observedCap)
+	}
 }

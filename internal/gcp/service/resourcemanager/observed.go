@@ -142,6 +142,9 @@ func (s *Service) ResetObserved(ctx context.Context) error {
 	s.observed.byID = map[string]*observedEntry{}
 	s.observed.mu.Unlock()
 
+	if s.resources == nil {
+		return nil
+	}
 	for _, id := range ids {
 		if err := s.resources.Delete(ctx, id, store.GlobalRegion, rtObservedProject, id); err != nil && !errors.Is(err, store.ErrNotFound) {
 			return err

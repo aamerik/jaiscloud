@@ -3,6 +3,7 @@ package projectsui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,6 +16,7 @@ import (
 // fakeProvider is a scripted Resource Manager core.
 type fakeProvider struct {
 	registered []resourcemanagercore.Project
+	secondPage []resourcemanagercore.Project
 	observed   []resourcemanagercore.ObservedProject
 	err        error
 }
@@ -23,10 +25,17 @@ func (f *fakeProvider) ListProjects(_ context.Context, _ int, pageToken string, 
 	if f.err != nil {
 		return nil, "", f.err
 	}
-	if pageToken != "" {
-		return nil, "", nil
+	switch pageToken {
+	case "":
+		next := ""
+		if len(f.secondPage) > 0 {
+			next = "p2"
+		}
+		return f.registered, next, nil
+	case "p2":
+		return f.secondPage, "", nil
 	}
-	return f.registered, "", nil
+	return nil, "", nil
 }
 
 func (f *fakeProvider) ListObservedProjects(context.Context) []resourcemanagercore.ObservedProject {
@@ -118,5 +127,33 @@ func TestListEmptyConfig(t *testing.T) {
 	}
 	if len(out.Projects) != 0 {
 		t.Fatalf("projects = %v, want none", out.Projects)
+	}
+}
+
+func TestListPaginatesRegisteredProjects(t *testing.T) {
+	cfg := &config.Config{ProjectID: "jaiscloud-project"}
+	provider := &fakeProvider{
+		registered: []resourcemanagercore.Project{{ProjectID: "page-one", State: "ACTIVE"}},
+		secondPage: []resourcemanagercore.Project{{ProjectID: "page-two", State: "ACTIVE"}},
+	}
+	code, out := get(t, BuildRouter(provider, cfg))
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	ids := map[string]bool{}
+	for _, p := range out.Projects {
+		ids[p.ID] = true
+	}
+	if !ids["page-one"] || !ids["page-two"] {
+		t.Fatalf("projects = %+v, want both pages", out.Projects)
+	}
+}
+
+func TestListProviderError(t *testing.T) {
+	cfg := &config.Config{ProjectID: "jaiscloud-project"}
+	provider := &fakeProvider{err: errors.New("boom")}
+	code, _ := get(t, BuildRouter(provider, cfg))
+	if code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", code)
 	}
 }

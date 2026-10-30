@@ -279,6 +279,8 @@ packages:
     min_percent: 66.25
   - package: internal/gcp/ui/monitoring
     min_percent: 51.72
+  - package: internal/gcp/ui/projects
+    min_percent: 97.92
   - package: internal/gcp/ui/pubsub
     min_percent: 75.24
   - package: internal/gcp/ui/resourcemanager
