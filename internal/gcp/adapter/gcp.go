@@ -9,6 +9,7 @@ package gcp
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -38,6 +39,9 @@ type GCPAdapter struct {
 	// always implements gateway.RequestFilter, but FilterRequest returns nil
 	// while this is nil, so the default run is unaffected.
 	throttle *throttle.Injector
+	// accountObserver is the optional sink for served (project, service) pairs,
+	// used by the console's observed-project discovery. Nil disables it.
+	accountObserver func(ctx context.Context, account, service string)
 }
 
 // New returns a GCPAdapter with the default codec set and a blank default

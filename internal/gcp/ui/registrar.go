@@ -27,6 +27,7 @@ import (
 	loggingui "jaiscloud/internal/gcp/ui/logging"
 	managedkafkaui "jaiscloud/internal/gcp/ui/managedkafka"
 	monitoringui "jaiscloud/internal/gcp/ui/monitoring"
+	projectsui "jaiscloud/internal/gcp/ui/projects"
 	pubsubui "jaiscloud/internal/gcp/ui/pubsub"
 	resourcemanagerui "jaiscloud/internal/gcp/ui/resourcemanager"
 	runui "jaiscloud/internal/gcp/ui/run"
@@ -493,6 +494,15 @@ func (r *Registrar) MountRoutes(router chi.Router) {
 	// Host engine liveness for the admin Runtime view. Not gated on a service
 	// provider — it reports the host the emulator runs on.
 	router.Get("/api/ui/v1/gcp/runtime", buildRuntimeHealthHandler())
+
+	// Project discovery: configured ∪ created ∪ observed-on-the-wire projects.
+	// Always mounted (configured projects alone are useful), with the Resource
+	// Manager core contributing the other two kinds when the service is enabled.
+	var projectsProvider projectsui.ProviderInterface
+	if r.resourcemanager != nil {
+		projectsProvider = r.resourcemanager
+	}
+	router.Mount("/api/ui/v1/gcp/projects", projectsui.BuildRouter(projectsProvider, r.cfg))
 
 	if r.storage != nil {
 		router.Mount("/api/ui/v1/gcp/storage", storageui.BuildRouter(r.storage, r.cfg))

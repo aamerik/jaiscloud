@@ -403,6 +403,13 @@ func (s *Server) processCloudRequest(ctx context.Context, r *http.Request, body 
 	// Attach labels for Prometheus metrics middleware.
 	ctx = middleware.WithRequestLabels(ctx, string(nr.Cloud), nr.Service, nr.Action)
 
+	// Opt-in account/project observation (GCP console project discovery).
+	// Type-asserted off the adapter like RequestFilter, so clouds that do not
+	// implement it are unaffected.
+	if observer, ok := s.cloudAdapter.(AccountObserver); ok && accountID != "" && nr.Service != "" {
+		observer.ObserveAccount(ctx, accountID, nr.Service)
+	}
+
 	// Opt-in request filter (e.g. GCP throttle/quota injection). Type-asserted
 	// off the adapter like BatchHandler, so clouds that do not implement it are
 	// unaffected. The service's own codec encodes the error, so the envelope

@@ -1,10 +1,27 @@
 package gateway
 
 import (
+	"context"
 	"net/http"
 
 	"jaiscloud/internal/model"
 )
+
+// AccountObserver is an optional interface a CloudAdapter may implement to be
+// told, for every request it serves, which account (AWS) or project (GCP) and
+// which service were addressed. It follows the same optional-capability pattern
+// as RequestFilter: the gateway type-asserts the adapter, so a cloud that does
+// not implement it is unaffected.
+//
+// GCP uses it for console project discovery (internal/gcp/service/
+// resourcemanager): a client that writes to a project the console never
+// registered would otherwise leave no trace, and the operator could not find
+// where the workload's resources went.
+type AccountObserver interface {
+	// ObserveAccount records a served request. It runs after EnrichRequest, so
+	// the account/project and service are already resolved on nr.
+	ObserveAccount(ctx context.Context, account, service string)
+}
 
 // RequestFilter is an optional interface a CloudAdapter may implement to refuse
 // requests before dispatch and to adjust the encoded error response. It follows
