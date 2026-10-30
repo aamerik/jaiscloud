@@ -1275,6 +1275,15 @@ func startCmd() *cobra.Command {
 			}
 
 			cloudAdapter := gcpadapter.NewAdapter(cfg.GCPServiceAccount)
+			// Project discovery: the gateway reports every served (project,
+			// service) pair and the Resource Manager core records projects the
+			// console never registered, so the console can show where a workload
+			// actually wrote. Reset clears the in-memory registry on
+			// /_jaiscloud/reset alongside the store wipe.
+			if resourceManagerCore != nil {
+				cloudAdapter.SetAccountObserver(resourceManagerCore.ObserveAccount)
+				adminHandler.RegisterResetter(resourceManagerCore)
+			}
 			// The injector is wired unconditionally (a disabled injector is a
 			// no-op) so POST /_jaiscloud/throttle can arm/retune it at runtime
 			// without an emulator restart. The adapter exposes it to the gateway

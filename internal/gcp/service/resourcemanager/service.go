@@ -77,6 +77,9 @@ type Service struct {
 	// tracker publishes the one-time "operation settled" event when a lazily
 	// settled operation completes. Nil (no bus) makes it inert.
 	tracker *lro.Tracker
+	// observed is the observed-project registry (see observed.go): projects the
+	// wire served without them being created or configured.
+	observed observedCache
 }
 
 // Option configures Service.
@@ -112,7 +115,7 @@ func WithEventBus(bus *events.EventBus) Option {
 
 // NewService returns a Service backed by the shared ResourceStore.
 func NewService(resources store.ResourceStore, opts ...Option) *Service {
-	s := &Service{resources: resources}
+	s := &Service{resources: resources, observed: observedCache{byID: map[string]*observedEntry{}}}
 	for _, o := range opts {
 		o(s)
 	}
