@@ -1203,10 +1203,10 @@ gcp-status-lint-plans: ## Fail if any plan-shaped file under plan_docs has no pa
 	@go build -o bin/gcpstatus ./tools/gcpstatus
 	@bin/gcpstatus -docs plan_docs -lint-plans $(if $(include-archive),-include-archive,)
 
-gcp-matrix-diff: ## Fail if the fidelity matrix regressed vs REF (default upstream/gcp)
+gcp-matrix-diff: ## Fail if the fidelity matrix regressed vs REF (default upstream/main)
 	@mkdir -p bin
 	@go build -o bin/gcpstatus ./tools/gcpstatus
-	@bin/gcpstatus -matrix-diff "$(if $(REF),$(REF),upstream/gcp)" -matrix docs/fidelity/fidelity-matrix.json
+	@bin/gcpstatus -matrix-diff "$(if $(REF),$(REF),upstream/main)" -matrix docs/fidelity/fidelity-matrix.json
 
 gcp-plan-new: ## Scaffold a preview->GA wave plan from the fidelity matrix: SERVICE=<svc> [EFFORT=ga] [FORCE=1]
 	@test -n "$(SERVICE)" || { echo 'usage: make gcp-plan-new SERVICE=<service> [EFFORT=ga]'; exit 2; }
@@ -1222,7 +1222,7 @@ gcp-status-finalize: ## Finalize a completed plan doc: PLAN=plan_docs/<doc>.md I
 	@bin/gcpstatus -finalize "$(PLAN)" -id "$(ID)" -finalize-pr "$(if $(PR),$(PR),0)" $(if $(SLUG),-slug "$(SLUG)",) $(if $(DRY),-dry,)
 	@if [ -z "$(DRY)" ]; then \
 	  $(MAKE) --no-print-directory gcp-status gcp-status-lint-plans gcp-status-coverage; \
-	  if [ -n "$(OPS)" ]; then $(MAKE) --no-print-directory gcp-matrix-diff REF=upstream/gcp; fi; \
+	  if [ -n "$(OPS)" ]; then $(MAKE) --no-print-directory gcp-matrix-diff REF=upstream/main; fi; \
 	fi
 
 # One aggregate GA gate: the deterministic, infrastructure-free checks that back docs/gcp/wire-contract.md.

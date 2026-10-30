@@ -9,7 +9,7 @@ Every cloud has its own adapter, its own provider implementations, and its own e
 
 **Implemented AWS services:** SQS, SNS, IAM/STS, DynamoDB (+ Streams), S3, Lambda, KMS, SecretsManager, SSM, API Gateway, CloudFormation, EMR (on EC2), EMR on EKS, EventBridge, CloudWatch, EKS, EC2, Route53, RDS, ElastiCache, ECS, Glue.
 
-**GCP:** implemented from `v0.2.0` (26 services, REST + gRPC; per-service tiers in the fidelity matrix — see `README-GCP.md` and `docs/gcp/wire-contract.md`). **Azure** is still a stub.
+**GCP:** implemented from `v0.1.1` (26 services, REST + gRPC; per-service tiers in the fidelity matrix — see `README-GCP.md` and `docs/gcp/wire-contract.md`). **Azure** is still a stub.
 
 ---
 
@@ -374,7 +374,7 @@ Integration tests call `POST /_jaiscloud/reset` between each test via `resetStat
 The GCP backlog spans many plan docs; don't decide "what's implemented" from
 memory. `make gcp-status` rebuilds `plan_docs/STATUS.md` + `status.json` from
 every `plan_docs/**/*.md` table plus git/GitHub state and a row for every
-base-`gcp` PR. `make gcp-status-check Q="<service> <keywords>"` assesses a
+base-`main` PR. `make gcp-status-check Q="<service> <keywords>"` assesses a
 proposed change (exit 2 = already done, 3 = in flight),
 `make gcp-status-audit` classifies not-done items (`oversight?` / `unowned` /
 `stale-doc` / `abandoned` / `claimed-done` vs `scheduled`/`unscheduled`/`intentional`),

@@ -7,10 +7,13 @@
 #      previous or concurrent session's work must be committed or stashed first.
 #      The guard runs before any fetch/checkout, so refs are never touched over
 #      dirty work.
-#   2. Fast-forward the local `gcp` base branch from `upstream/gcp` (the
-#      canonical remote; `origin` is a fork and its `gcp` is stale). `--ff-only`
-#      means a diverged base fails loudly instead of resetting local commits.
-#   3. Leave the checkout on `gcp`; the session branches the item's Branch off it.
+#   2. Fast-forward the local `main` base branch from `upstream/main` (the
+#      canonical remote; `origin` is a fork and its branches are stale).
+#      `--ff-only` means a diverged base fails loudly instead of resetting local
+#      commits. Override the base with GCP_SESSION_BASE=<branch>; the old `gcp`
+#      branch is frozen (merged into main via #610) and must not be the base.
+#   3. Leave the checkout on the base branch; the session branches the item's
+#      Branch off it.
 #
 # Exits non-zero on a dirty checkout or a failed fetch/fast-forward so the caller
 # can abort the session.
@@ -30,12 +33,14 @@ fi
 echo "gcp-session-start: fetching upstream..."
 git fetch upstream --prune
 
-if git show-ref --verify --quiet refs/heads/gcp; then
-  git checkout gcp
-  git merge --ff-only upstream/gcp
+BASE="${GCP_SESSION_BASE:-main}"
+
+if git show-ref --verify --quiet "refs/heads/$BASE"; then
+  git checkout "$BASE"
+  git merge --ff-only "upstream/$BASE"
 else
-  echo "gcp-session-start: creating local 'gcp' tracking upstream/gcp"
-  git checkout -b gcp --track upstream/gcp
+  echo "gcp-session-start: creating local '$BASE' tracking upstream/$BASE"
+  git checkout -b "$BASE" --track "upstream/$BASE"
 fi
 
-echo "gcp-session-start: base gcp at $(git rev-parse --short HEAD) — $(git log --oneline -1 --format=%s)"
+echo "gcp-session-start: base $BASE at $(git rev-parse --short HEAD) — $(git log --oneline -1 --format=%s)"

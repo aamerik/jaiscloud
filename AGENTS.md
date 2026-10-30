@@ -36,11 +36,12 @@ invoking shell must be in the `docker` group (or `sg docker -c '…'`).
 **Starting a session (`/gcp:new`):** the command first runs
 `make gcp-session-start`, which aborts if the current checkout has uncommitted
 changes (commit or stash a previous or concurrent session's work first),
-otherwise `git fetch upstream --prune` and fast-forwards the local `gcp` base
-from `upstream/gcp` (`--ff-only`, so a diverged base fails loudly rather than
+otherwise `git fetch upstream --prune` and fast-forwards the local `main` base
+from `upstream/main` (`--ff-only`, so a diverged base fails loudly rather than
 resetting), then rebuilds the ledger. Branch the item's `Branch` off the
-refreshed `gcp`. Always refresh from `upstream` — `origin` is a fork and its
-`gcp` is stale.
+refreshed `main`. Always refresh from `upstream` — `origin` is a fork and its
+branches are stale. The old `gcp` branch is frozen: it was merged into `main`
+(#610, released as `v0.1.1`), so nothing new targets it.
 
 The GCP backlog spans many plan docs and PRs. Do not rely on memory or chat
 history to decide what is implemented.
@@ -65,7 +66,7 @@ parseable index/detail.
    "what's actually left" list; docs without tables fall back to a prose scan of
    their status bullets, and the wave plan emits one row per W-session), joining
    it with git branch + GitHub PR state,
-   and adding a **PR-history row for every base-`gcp` PR** not otherwise
+   and adding a **PR-history row for every PR into the tracked base branch** not otherwise
    represented — so merged work is never invisible.
    `merged` / `branch` / `pr` come from git/GitHub and are authoritative; `todo`
    / `done?` are doc-derived (`done?` = a doc claims done but no merged
@@ -100,7 +101,7 @@ parseable index/detail.
    commit/PR title (e.g. `fix(gcp/datastore): … (J1)`) so the next run links it.
    One step: `make gcp-status-finalize PLAN=plan_docs/<doc>.md ID=<J-id>`
    (`SLUG=…` to override the slug, `DRY=1` to preview, `OPS=1` to also run
-   `make gcp-matrix-diff REF=upstream/gcp`); it moves the doc and runs
+   `make gcp-matrix-diff REF=upstream/main`); it moves the doc and runs
    `gcp-status` + `gcp-status-lint-plans` + `gcp-status-coverage` for you.
    **Record deferrals:** for every item you deferred or left unimplemented (a
    REST/gRPC-only limitation, an unsupported parameter, a code `TODO`), add a row
@@ -108,7 +109,7 @@ parseable index/detail.
    `no fix` / `out of scope` to close it (operation-level gaps are auto-covered by
    the matrix). Then run `make gcp-status` plus `make gcp-status-lint-plans` and
    `make gcp-status-coverage`. If the session changed operations, also run
-   `make gcp-matrix-diff REF=upstream/gcp` (fails on a `ga`→worse regression).
+   `make gcp-matrix-diff REF=upstream/main` (fails on a `ga`→worse regression).
 
 `plan_docs/` is gitignored local scratch; `tools/gcpstatus` and this file are
 committed.
