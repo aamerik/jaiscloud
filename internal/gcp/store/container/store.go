@@ -142,6 +142,22 @@ type NetworkPolicy struct {
 	Enabled  bool   `json:"enabled,omitempty"`
 }
 
+// Autopilot is the persisted subset of google.container.v1.Autopilot. The mock
+// carries the flag so a Dataproc-on-GKE create can refuse an Autopilot cluster
+// the way real Dataproc does (it requires a standard cluster); there is no
+// Autopilot behaviour behind it.
+type Autopilot struct {
+	Enabled bool `json:"enabled,omitempty"`
+}
+
+// WorkloadIdentityConfig is the persisted subset of
+// google.container.v1.WorkloadIdentityConfig. Real Dataproc-on-GKE requires
+// Workload Identity on the target cluster, so the mock records the workload
+// pool (defaulting to <project>.svc.id.goog) and a Dataproc create checks it.
+type WorkloadIdentityConfig struct {
+	WorkloadPool string `json:"workloadPool,omitempty"`
+}
+
 // MaintenancePolicy is the persisted subset of
 // google.container.v1.MaintenancePolicy.
 type MaintenancePolicy struct {
@@ -213,6 +229,12 @@ type Cluster struct {
 	NetworkPolicy     *NetworkPolicy     `json:"networkPolicy,omitempty"`
 	MaintenancePolicy *MaintenancePolicy `json:"maintenancePolicy,omitempty"`
 	Locations         []string           `json:"locations,omitempty"`
+	// Autopilot and WorkloadIdentityConfig are the cluster-level settings a
+	// Dataproc-on-GKE virtual cluster is validated against (it requires a
+	// standard, Workload-Identity-enabled cluster). Both are echoed on read.
+	Autopilot              *Autopilot              `json:"autopilot,omitempty"`
+	WorkloadIdentityConfig *WorkloadIdentityConfig `json:"workloadIdentityConfig,omitempty"`
+
 	// AdminUsername is masterAuth.username (SetMasterAuth SET_USERNAME). The
 	// admin password is never echoed, matching real GKE.
 	AdminUsername string `json:"adminUsername,omitempty"`

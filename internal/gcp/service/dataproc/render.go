@@ -63,6 +63,10 @@ func ClusterJSON(c dpstore.Cluster) map[string]any {
 	if len(c.VirtualClusterConfig) > 0 {
 		var vcc map[string]any
 		if json.Unmarshal(c.VirtualClusterConfig, &vcc) == nil && len(vcc) > 0 {
+			// nodePoolConfig is input-only: "It will not be returned by the API."
+			// The stored wire object keeps it (so a later reconcile sees the
+			// caller's shape), but no read echoes it.
+			stripGKENodePoolConfig(vcc)
 			out["virtualClusterConfig"] = vcc
 		}
 	}
@@ -329,6 +333,29 @@ func (s *Service) finishClusterOperation(ctx context.Context, op dpstore.Operati
 		slog.Warn("dataproc: finishClusterOperation failed", "operation", op.ID, "err", err)
 	}
 	return op
+}
+
+// stripGKENodePoolConfig removes the input-only nodePoolConfig from every
+// nodePoolTarget of a rendered virtualClusterConfig. A read never echoes it; a
+// create may still send it, and the stored object keeps it for reconciliation.
+func stripGKENodePoolConfig(vcc map[string]any) {
+	kcc, ok := vcc["kubernetesClusterConfig"].(map[string]any)
+	if !ok {
+		return
+	}
+	gke, ok := kcc["gkeClusterConfig"].(map[string]any)
+	if !ok {
+		return
+	}
+	targets, ok := gke["nodePoolTarget"].([]any)
+	if !ok {
+		return
+	}
+	for _, t := range targets {
+		if m, ok := t.(map[string]any); ok {
+			delete(m, "nodePoolConfig")
+		}
+	}
 }
 
 // sweepOperations lazily deletes completed operations older than the retention

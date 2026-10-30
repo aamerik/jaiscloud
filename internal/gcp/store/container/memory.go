@@ -127,6 +127,14 @@ func cloneCluster(c Cluster) Cluster {
 		v := *c.LegacyAbac
 		c.LegacyAbac = &v
 	}
+	if c.Autopilot != nil {
+		v := *c.Autopilot
+		c.Autopilot = &v
+	}
+	if c.WorkloadIdentityConfig != nil {
+		v := *c.WorkloadIdentityConfig
+		c.WorkloadIdentityConfig = &v
+	}
 	if c.NetworkPolicy != nil {
 		v := *c.NetworkPolicy
 		c.NetworkPolicy = &v

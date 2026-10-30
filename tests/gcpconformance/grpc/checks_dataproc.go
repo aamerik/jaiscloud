@@ -3,6 +3,9 @@ package grpcconformance
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 
 	dataproc "cloud.google.com/go/dataproc/v2/apiv1"
 	dataprocpb "cloud.google.com/go/dataproc/v2/apiv1/dataprocpb"
@@ -28,8 +31,8 @@ import (
 func dataprocChecks() []Check {
 	return []Check{
 		{Service: "dataproc", RPC: "CreateCluster", Method: "CreateCluster", KeyField: "LRO done + RUNNING cluster", Run: checkDPCreateCluster},
-		{Service: "dataproc", RPC: "GetCluster", Method: "GetCluster", KeyField: "clusterName round-trip", Run: checkDPGetCluster},
-		{Service: "dataproc", RPC: "ListClusters", Method: "ListClusters", KeyField: "created cluster present", Run: checkDPListClusters},
+		{Service: "dataproc", RPC: "CreateCluster (on GKE, unknown target)", Method: "CreateCluster", KeyField: "NotFound for an unresolvable gkeClusterTarget", Run: checkDPCreateClusterGKEUnknownTarget},
+		{Service: "dataproc", RPC: "GetCluster", Method: "GetCluster", KeyField: "clusterName round-trip", Run: checkDPGetCluster}, {Service: "dataproc", RPC: "ListClusters", Method: "ListClusters", KeyField: "created cluster present", Run: checkDPListClusters},
 		{Service: "dataproc", RPC: "UpdateCluster", Method: "UpdateCluster", KeyField: "labels updated via LRO", Run: checkDPUpdateCluster},
 		{Service: "dataproc", RPC: "StopCluster", Method: "StopCluster", KeyField: "STOPPED cluster returned", Run: checkDPStopCluster},
 		{Service: "dataproc", RPC: "StartCluster", Method: "StartCluster", KeyField: "RUNNING cluster returned", Run: checkDPStartCluster},
@@ -161,6 +164,49 @@ func checkDPCreateCluster(ctx context.Context, cfg Config) error {
 	}
 	if cluster.GetStatus().GetState() != dataprocpb.ClusterStatus_RUNNING {
 		return fmt.Errorf("cluster state = %v, want RUNNING", cluster.GetStatus().GetState())
+	}
+	return nil
+}
+
+// checkDPCreateClusterGKEUnknownTarget verifies a Dataproc-on-GKE create
+// resolves gkeClusterTarget through the GKE service on both transports: an
+// unknown target is NotFound, not a silently-accepted metadata-only cluster.
+func checkDPCreateClusterGKEUnknownTarget(ctx context.Context, cfg Config) error {
+	client, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := cfg.ResourceName("gcpc-grpc-dp-gke-missing")
+	_, err = client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster: &dataprocpb.Cluster{
+			ClusterName: id,
+			VirtualClusterConfig: &dataprocpb.VirtualClusterConfig{
+				StagingBucket: "dataproc-staging-" + cfg.Project,
+				InfrastructureConfig: &dataprocpb.VirtualClusterConfig_KubernetesClusterConfig{
+					KubernetesClusterConfig: &dataprocpb.KubernetesClusterConfig{
+						Config: &dataprocpb.KubernetesClusterConfig_GkeClusterConfig{
+							GkeClusterConfig: &dataprocpb.GkeClusterConfig{
+								GkeClusterTarget: "projects/" + cfg.Project + "/locations/" + dataprocRegion + "/clusters/gcpc-missing-gke",
+								NodePoolTarget: []*dataprocpb.GkeNodePoolTarget{{
+									NodePool: "default-pool",
+									Roles:    []dataprocpb.GkeNodePoolTarget_Role{dataprocpb.GkeNodePoolTarget_DEFAULT},
+								}},
+							},
+						},
+						KubernetesSoftwareConfig: &dataprocpb.KubernetesSoftwareConfig{
+							ComponentVersion: map[string]string{"SPARK": "3.5"},
+						},
+					},
+				},
+			},
+		},
+	})
+	if status.Code(err) != codes.NotFound {
+		return fmt.Errorf("CreateCluster with an unknown gkeClusterTarget: got %v, want NotFound", err)
 	}
 	return nil
 }
@@ -636,15 +682,48 @@ func gkeVirtualClusterConfig(target string) *dataprocpb.VirtualClusterConfig {
 	}
 }
 
-// dpGkeTarget is the GKE cluster target the probes reference (metadata only; the
-// emulator has no GKE control plane).
+// dpGkeTarget is the GKE cluster target the probes reference. Dataproc on GKE
+// resolves it through the emulated GKE service, so the GKE cluster is a real
+// prerequisite (see ensureProbeGKECluster), not just a name.
 func dpGkeTarget(cfg Config) string {
-	return "projects/" + cfg.Project + "/locations/" + dataprocRegion + "/clusters/gke-1"
+	return "projects/" + cfg.Project + "/locations/" + dataprocRegion + "/clusters/" + cfg.ResourceName("gcpc-gke")
+}
+
+// ensureProbeGKECluster creates the probe's prerequisite GKE cluster over the
+// emulator's GKE REST surface (cfg.RESTEndpoint): a standard,
+// Workload-Identity-enabled cluster, which is what Dataproc on GKE accepts. The
+// GKE metadata control plane is REST-only in the emulator, so the prerequisite
+// is deployed there, mirroring the real sequence of creating the GKE cluster
+// first and the virtual cluster second. An existing cluster (409) is success, so
+// repeated probes in one run are idempotent.
+func ensureProbeGKECluster(ctx context.Context, cfg Config) error {
+	url := fmt.Sprintf("%s/container/v1/projects/%s/locations/%s/clusters",
+		strings.TrimRight(cfg.RESTEndpoint, "/"), cfg.Project, dataprocRegion)
+	body := fmt.Sprintf(`{"cluster":{"name":%q,"workloadIdentityConfig":{"workloadPool":%q}}}`,
+		cfg.ResourceName("gcpc-gke"), cfg.Project+".svc.id.goog")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build create-GKE-cluster request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("create GKE cluster: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusConflict {
+		return fmt.Errorf("create GKE cluster: HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // Check 15: a GKE-backed cluster keeps its virtualClusterConfig through gRPC and
 // never invents a GCE config.
 func checkDPVirtualClusterConfig(ctx context.Context, cfg Config) error {
+	if err := ensureProbeGKECluster(ctx, cfg); err != nil {
+		return err
+	}
 	client, err := newDataprocClusterClient(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
@@ -687,6 +766,9 @@ func checkDPMetastoreAttachment(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("new metastore client: %w", err)
 	}
 	defer mc.Close()
+	if err := ensureProbeGKECluster(ctx, cfg); err != nil {
+		return err
+	}
 	svcName, err := ensureMetastoreService(ctx, mc, cfg)
 	if err != nil {
 		return err
