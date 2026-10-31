@@ -229,12 +229,11 @@ provider "google" {
 }
 ```
 
-`google_dataproc_cluster` with `virtual_cluster_config` plans, applies and re-reads with no diff, and the node pools it reconciles are readable through the GKE API — that is the path `make test-gcp-terraform` gates. Point `gke_cluster_target` at an existing GKE cluster: `gcloud container clusters create` works against the emulator with `CLOUDSDK_API_ENDPOINT_OVERRIDES_CONTAINER=http://localhost:8080/container/` (or a direct `POST /container/v1/projects/{p}/locations/{l}/clusters` with a `workloadIdentityConfig`, which Dataproc-on-GKE requires).
+`google_dataproc_cluster` with `virtual_cluster_config` plans, applies and re-reads with no diff, and the node pools it reconciles are readable through the GKE API — that is the path `make test-gcp-terraform` gates. The plain `cluster_config` (Compute-Engine) shape applies and re-reads cleanly too: the read carries the service defaults real Dataproc reports (`config.softwareConfig.imageVersion`, the instance groups and a zone — see [Dataproc: Compute-Engine cluster read defaults](#dataproc-compute-engine-cluster-read-defaults)), so the provider no longer panics flattening an absent `software_config`. Point `gke_cluster_target` at an existing GKE cluster: `gcloud container clusters create` works against the emulator with `CLOUDSDK_API_ENDPOINT_OVERRIDES_CONTAINER=http://localhost:8080/container/` (or a direct `POST /container/v1/projects/{p}/locations/{l}/clusters` with a `workloadIdentityConfig`, which Dataproc-on-GKE requires).
 
-Two provider paths do **not** work yet, because the emulator's reads omit nested messages the provider dereferences unconditionally — not because of the Dataproc resource:
+One provider path does **not** work yet, because the emulator's read omits nested messages the provider dereferences unconditionally — not because of the Dataproc resource:
 
 - `google_container_cluster` — the cluster read omits `legacyAbac`/`networkConfig`/`shieldedNodes`/`defaultMaxPodsConstraint` and the provider panics in its read-back (DPG37), so create the prerequisite out of band as above.
-- `google_dataproc_cluster` with a plain `cluster_config` (Compute-Engine clusters) — the read omits `config.softwareConfig`, which the provider flattens without a nil check (DPG38). The `virtual_cluster_config` shape is unaffected.
 
 The provider's own schema also requires `kubernetes_cluster_config.kubernetes_namespace` and `node_pool_config.locations`, which the API marks optional, so a real-GCP config that omits them needs them added. There is no `google_dataproc_cluster` data source and no import support upstream, so inspection is `terraform state show`, `terraform plan -refresh-only`, or the REST API.
 
