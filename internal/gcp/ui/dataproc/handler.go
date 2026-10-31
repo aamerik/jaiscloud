@@ -83,13 +83,29 @@ func renderCluster(project string, c dpstore.Cluster, full bool) Cluster {
 		UpdateTime:    formatTime(c.UpdateTime),
 	}
 	if full {
-		out.Config = c.Config
+		out.Config = renderedClusterConfig(c)
 		out.VirtualClusterConfig = c.VirtualClusterConfig
 		out.Namespace = c.Namespace
 		out.NamespaceOwned = c.NamespaceOwned
 		out.KubernetesNamespace = dataproccore.KubernetesNamespaceFromVirtualClusterConfig(c.VirtualClusterConfig)
 	}
 	return out
+}
+
+// renderedClusterConfig returns the config a REST/gRPC read renders for c — the
+// core's ClusterJSON, which fills the documented read-time defaults (image
+// version, instance groups, zone) — so the console shows the same shape a client
+// receives instead of the bare stored request. A GKE-backed cluster has none.
+func renderedClusterConfig(c dpstore.Cluster) json.RawMessage {
+	cfg, ok := dataproccore.ClusterJSON(c)["config"]
+	if !ok {
+		return nil
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return c.Config
+	}
+	return b
 }
 
 // renderJob flattens a stored job into the console row. The type-specific body

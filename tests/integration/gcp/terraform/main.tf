@@ -292,6 +292,24 @@ resource "google_dataproc_cluster" "gke" {
   }
 }
 
+# ── Dataproc on Compute Engine (config) ───────────────────────────────────────
+# The plain cluster_config shape is the one that used to panic the provider: its
+# read-back flattens config.software_config without a nil check, so the emulator
+# must report the service defaults a real cluster always carries (image version,
+# instance groups, zone) instead of omitting config.softwareConfig (DPG38). A
+# clean apply + refresh with no diff is the assertion.
+resource "google_dataproc_cluster" "gce" {
+  name   = "jaiscloud-tf-dataproc-gce"
+  region = var.region
+  labels = { env = "compat-test" }
+
+  cluster_config {
+    worker_config {
+      num_instances = 2
+    }
+  }
+}
+
 # ── Outputs (consumed by run.sh spot checks) ──────────────────────────────────
 output "bucket_name" {
   value = google_storage_bucket.compat.name
@@ -347,4 +365,8 @@ output "metastore_federation_name" {
 
 output "dataproc_gke_cluster_name" {
   value = google_dataproc_cluster.gke.name
+}
+
+output "dataproc_gce_cluster_name" {
+  value = google_dataproc_cluster.gce.name
 }

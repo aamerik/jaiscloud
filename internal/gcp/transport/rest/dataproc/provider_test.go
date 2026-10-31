@@ -2,6 +2,7 @@ package dataproc
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"strings"
 	"sync"
@@ -112,6 +113,74 @@ func TestCreateCluster_AlreadyExists(t *testing.T) {
 	pe, ok := err.(*model.ProviderError)
 	if !ok || pe.HTTPStatus != 409 {
 		t.Fatalf("expected 409 AlreadyExists, got %v", err)
+	}
+}
+
+// TestGetCluster_GCEConfigDefaults pins the wire shape a real Dataproc read
+// always carries for a Compute-Engine cluster, even when the create request sent
+// no config at all: config.softwareConfig.imageVersion plus the documented
+// instance-group and zone defaults. The hashicorp/google provider reads
+// config.softwareConfig.imageVersion without a nil check on the read-back of a
+// google_dataproc_cluster with a plain cluster_config, so leaving it absent
+// panics the provider (DPG38).
+func TestGetCluster_GCEConfigDefaults(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	// An empty cluster_config is the shape a real client sends when it pins
+	// nothing (Terraform omits every computed field, gcloud sends the flags it
+	// was given); the service fills in the rest.
+	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body": map[string]any{
+			"projectId":   "proj",
+			"clusterName": "c1",
+			"config":      map[string]any{},
+		},
+	})); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := p.GetCluster(ctx, testNR(map[string]any{"region": "us-central1", "clusterName": "c1"}))
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	// Compare the wire body: the response is JSON-encoded, so this also pins the
+	// field names and numeric shapes clients receive.
+	raw, err := json.Marshal(c.Data)
+	if err != nil {
+		t.Fatalf("marshal cluster: %v", err)
+	}
+	var body struct {
+		Config struct {
+			SoftwareConfig struct {
+				ImageVersion string `json:"imageVersion"`
+			} `json:"softwareConfig"`
+			GceClusterConfig struct {
+				ZoneUri string `json:"zoneUri"`
+			} `json:"gceClusterConfig"`
+			MasterConfig struct {
+				NumInstances   int    `json:"numInstances"`
+				MachineTypeUri string `json:"machineTypeUri"`
+			} `json:"masterConfig"`
+			WorkerConfig struct {
+				NumInstances int `json:"numInstances"`
+			} `json:"workerConfig"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("unmarshal cluster: %v", err)
+	}
+	if body.Config.SoftwareConfig.ImageVersion == "" {
+		t.Fatalf("config.softwareConfig.imageVersion missing: %s", raw)
+	}
+	if body.Config.GceClusterConfig.ZoneUri == "" {
+		t.Fatalf("config.gceClusterConfig.zoneUri missing: %s", raw)
+	}
+	if body.Config.MasterConfig.NumInstances != 1 || body.Config.WorkerConfig.NumInstances != 2 {
+		t.Fatalf("instance group counts = %d/%d, want 1/2", body.Config.MasterConfig.NumInstances, body.Config.WorkerConfig.NumInstances)
+	}
+	wantMachine := "https://www.googleapis.com/compute/v1/projects/proj/zones/us-central1-a/machineTypes/n1-standard-4"
+	if body.Config.MasterConfig.MachineTypeUri != wantMachine {
+		t.Fatalf("masterConfig.machineTypeUri = %q, want %q", body.Config.MasterConfig.MachineTypeUri, wantMachine)
 	}
 }
 

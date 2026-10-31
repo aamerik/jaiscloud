@@ -126,6 +126,7 @@ SQL_USER="$(out sql_user_name)"
 ENABLED_SERVICE="$(out enabled_service)"
 FED_NAME="$(out metastore_federation_name)"
 GKE_CLUSTER_DP="$(out dataproc_gke_cluster_name)"
+GCE_CLUSTER_DP="$(out dataproc_gce_cluster_name)"
 
 echo "== spot checks"
 check "GCS bucket created" "$ENDPOINT/storage/v1/b/jaiscloud-tf-bucket" \
@@ -225,6 +226,22 @@ check "Dataproc created its shaped node pool in the GKE API" \
 check "Dataproc created its named-only node pool with the 1/10 defaults" \
   "$GKE_POOLS/jaiscloud-tf-dataproc-spark" \
   '"minNodeCount":1' '"maxNodeCount":10'
+
+# The plain cluster_config shape: the provider's read-back flattens
+# config.software_config without a nil check, so the emulator must carry the
+# service defaults real Dataproc reports (DPG38). Apply + refresh above must
+# have completed without a panic or a diff for the resource to survive.
+check "Compute-Engine cluster reads back the default image version" \
+  "$ENDPOINT/v1/projects/$PROJECT/regions/$REGION/clusters/$GCE_CLUSTER_DP" \
+  '"softwareConfig":{"imageVersion":"2.3.3-debian12"}'
+DP_GCE_MACHINE="https://www.googleapis.com/compute/v1/projects/$PROJECT/zones/$REGION-a/machineTypes/n1-standard-4"
+check "Compute-Engine cluster reads back the default zone and machine type" \
+  "$ENDPOINT/v1/projects/$PROJECT/regions/$REGION/clusters/$GCE_CLUSTER_DP" \
+  "\"zoneUri\":\"https://www.googleapis.com/compute/v1/projects/$PROJECT/zones/$REGION-a\"" \
+  "\"machineTypeUri\":\"$DP_GCE_MACHINE\""
+check "Compute-Engine cluster reads back the default instance groups" \
+  "$ENDPOINT/v1/projects/$PROJECT/regions/$REGION/clusters/$GCE_CLUSTER_DP" \
+  '"numInstances":1' '"numInstances":2'
 
 echo "== destroy"
 destroy

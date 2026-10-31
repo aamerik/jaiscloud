@@ -80,6 +80,14 @@ func TestGetCluster_RoundTrip(t *testing.T) {
 	if cl.GetProjectId() != "proj" || cl.GetClusterName() != "c1" || cl.GetLabels()["env"] != "dev" {
 		t.Fatalf("cluster = %+v", cl)
 	}
+	// Both transports render the same core response, so the GCE read defaults
+	// (DPG38) must appear over gRPC too.
+	if cl.GetConfig().GetSoftwareConfig().GetImageVersion() == "" {
+		t.Fatalf("gRPC cluster read lost the default image version: %+v", cl.GetConfig())
+	}
+	if cl.GetConfig().GetMasterConfig().GetNumInstances() != 1 || cl.GetConfig().GetWorkerConfig().GetNumInstances() != 2 {
+		t.Fatalf("gRPC cluster read lost the default instance groups: %+v", cl.GetConfig())
+	}
 }
 
 func TestListClusters_IncludesCreated(t *testing.T) {

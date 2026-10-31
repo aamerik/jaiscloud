@@ -19,7 +19,8 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
 - Pub/Sub (topic + subscription + topic/subscription IAM members)
 - Cloud SQL for PostgreSQL (instance + database + user)
 - Dataproc Metastore (federation + database IAM member)
-- Dataproc (a Dataproc-on-GKE virtual cluster with two node-pool targets)
+- Dataproc (a Dataproc-on-GKE virtual cluster with two node-pool targets, plus a
+  Compute-Engine `cluster_config` cluster)
 - Cloud Resource Manager project-level IAM
   (`/v1/projects/{project}:getIamPolicy`) and project lookup
 - Service Usage (`/v1/projects/{project}/services`)
@@ -36,11 +37,11 @@ Deliberately **excluded** because it makes `apply` fail (and abort the run):
   its name in (`var.gke_cluster`); the mock gap is recorded as **DPG37** in
   `plan_docs/gcp-dataproc-gke-wave-plan.md`, and the GKE half of the cross-API
   contract is gated by the conformance, gRPC and SDK suites instead.
-- **`google_dataproc_cluster` with a plain `cluster_config`** (Compute-Engine
-  clusters) — the emulator's GCE cluster read omits `config.softwareConfig`,
-  which the provider flattens without a nil check and so panics
-  (`flattenSoftwareConfig`); recorded as **DPG38**. Only the
-  `virtual_cluster_config` shape is exercised here.
+
+The plain `cluster_config` (Compute-Engine) shape is included: it used to panic
+the provider's read-back (`flattenSoftwareConfig` on an absent
+`config.softwareConfig`, DPG38), so the emulator now reports the service
+defaults a real cluster always carries and `run.sh` asserts them.
 
 Keep `main.tf` in sync with the emulator's supported surface: one unimplemented
 resource aborts the whole `apply`, so nothing else runs.
