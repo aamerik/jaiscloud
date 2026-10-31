@@ -269,6 +269,65 @@ func pollJob(t *testing.T, svc *dataproc.Service, project, region, jobID string)
 	}
 }
 
+// TestSDKDataprocGCEConfigDefaults verifies that a Compute-Engine cluster
+// created with an empty cluster_config reads back the defaults a real Dataproc
+// cluster always reports (dataproc.v1.SoftwareConfig.imageVersion, the 1-master
+// / 2-worker instance groups, and a zone in the region). The hashicorp/google
+// provider dereferences config.softwareConfig without a nil check when it
+// refreshes a google_dataproc_cluster with a plain cluster_config, so an absent
+// softwareConfig is not just a parity gap — it panics the provider (DPG38).
+func TestSDKDataprocGCEConfigDefaults(t *testing.T) {
+	ctx := context.Background()
+	svc, err := dataproc.NewService(ctx, opts()...)
+	require.NoError(t, err)
+
+	const project = "proj"
+	const region = "us-central1"
+	clusterName := unique("c-def")
+
+	op, err := svc.Projects.Regions.Clusters.Create(project, region, &dataproc.Cluster{
+		ProjectId:   project,
+		ClusterName: clusterName,
+		Config:      &dataproc.ClusterConfig{},
+	}).Do()
+	require.NoError(t, err)
+	require.True(t, pollOperation(t, svc, op.Name).Done)
+
+	cluster, err := svc.Projects.Regions.Clusters.Get(project, region, clusterName).Do()
+	require.NoError(t, err)
+	require.NotNil(t, cluster.Config, "a GCE cluster read must always carry config")
+	require.NotNil(t, cluster.Config.SoftwareConfig, "config.softwareConfig must be present")
+	require.Equal(t, "2.3.3-debian12", cluster.Config.SoftwareConfig.ImageVersion)
+	require.NotNil(t, cluster.Config.MasterConfig)
+	require.Equal(t, int64(1), cluster.Config.MasterConfig.NumInstances)
+	require.NotNil(t, cluster.Config.WorkerConfig)
+	require.Equal(t, int64(2), cluster.Config.WorkerConfig.NumInstances)
+	require.NotNil(t, cluster.Config.GceClusterConfig)
+	require.Contains(t, cluster.Config.GceClusterConfig.ZoneUri, "/zones/us-central1-a")
+
+	// A caller-pinned image version is reported verbatim, not replaced by the
+	// default.
+	pinnedName := unique("c-pin")
+	pinnedOp, err := svc.Projects.Regions.Clusters.Create(project, region, &dataproc.Cluster{
+		ProjectId:   project,
+		ClusterName: pinnedName,
+		Config: &dataproc.ClusterConfig{
+			SoftwareConfig: &dataproc.SoftwareConfig{ImageVersion: "2.2-debian12"},
+		},
+	}).Do()
+	require.NoError(t, err)
+	require.True(t, pollOperation(t, svc, pinnedOp.Name).Done)
+	pinned, err := svc.Projects.Regions.Clusters.Get(project, region, pinnedName).Do()
+	require.NoError(t, err)
+	require.Equal(t, "2.2-debian12", pinned.Config.SoftwareConfig.ImageVersion)
+
+	for _, name := range []string{clusterName, pinnedName} {
+		del, err := svc.Projects.Regions.Clusters.Delete(project, region, name).Do()
+		require.NoError(t, err)
+		require.True(t, pollOperation(t, svc, del.Name).Done)
+	}
+}
+
 // pollOperation polls operations.get until the named operation reports done.
 func pollOperation(t *testing.T, svc *dataproc.Service, name string) *dataproc.Operation {
 	t.Helper()
