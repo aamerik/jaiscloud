@@ -178,6 +178,12 @@ func checkDPCreateCluster(ctx context.Context, cfg Config) error {
 	if cluster.GetStatus().GetState() != dataprocpb.ClusterStatus_RUNNING {
 		return fmt.Errorf("cluster state = %v, want RUNNING", cluster.GetStatus().GetState())
 	}
+	// A caller names the zone by short name; a read answers the absolute
+	// Compute self-link (DPG40).
+	wantZone := "https://www.googleapis.com/compute/v1/projects/" + cfg.Project + "/zones/us-central1-a"
+	if got := cluster.GetConfig().GetGceClusterConfig().GetZoneUri(); got != wantZone {
+		return fmt.Errorf("gceClusterConfig.zoneUri = %q, want %q", got, wantZone)
+	}
 	return nil
 }
 

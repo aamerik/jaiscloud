@@ -89,9 +89,11 @@ func TestClusterJSON_GCEConfigDefaultsMaterialised(t *testing.T) {
 	}
 }
 
-// TestClusterJSON_GCEConfigDefaultsDoNotOverride verifies a caller's own values
-// survive: the read defaults only fill what is missing.
-func TestClusterJSON_GCEConfigDefaultsDoNotOverride(t *testing.T) {
+// TestClusterJSON_GCEConfigKeepsCallerValuesAndCanonicalisesLinks verifies a
+// caller's own values survive — the read defaults only fill what is missing —
+// while the Compute Engine links they did send come back as the absolute
+// self-links a real get returns (DPG40), not in the spelling they were sent in.
+func TestClusterJSON_GCEConfigKeepsCallerValuesAndCanonicalisesLinks(t *testing.T) {
 	config := renderedConfig(t, gceCluster(`{
 		"gceClusterConfig":{"zoneUri":"projects/proj/zones/us-central1-f","internalIpOnly":true},
 		"softwareConfig":{"imageVersion":"2.2-debian12","properties":{"spark:spark.executor.memory":"4g"}},
@@ -101,8 +103,8 @@ func TestClusterJSON_GCEConfigDefaultsDoNotOverride(t *testing.T) {
 	}`))
 
 	gcc := child(t, config, "gceClusterConfig")
-	if gcc["zoneUri"] != "projects/proj/zones/us-central1-f" {
-		t.Fatalf("caller zoneUri rewritten: %v", gcc["zoneUri"])
+	if want := "https://www.googleapis.com/compute/v1/projects/proj/zones/us-central1-f"; gcc["zoneUri"] != want {
+		t.Fatalf("gceClusterConfig.zoneUri = %v, want %s", gcc["zoneUri"], want)
 	}
 	if gcc["internalIpOnly"] != true {
 		t.Fatalf("caller field lost: %v", gcc)
@@ -115,8 +117,8 @@ func TestClusterJSON_GCEConfigDefaultsDoNotOverride(t *testing.T) {
 		t.Fatalf("caller properties lost: %v", props)
 	}
 	master := child(t, config, "masterConfig")
-	if master["machineTypeUri"] != "n1-highmem-8" || master["numInstances"] != float64(1) {
-		t.Fatalf("caller masterConfig overwritten: %v", master)
+	if want := "https://www.googleapis.com/compute/v1/projects/proj/zones/us-central1-f/machineTypes/n1-highmem-8"; master["machineTypeUri"] != want || master["numInstances"] != float64(1) {
+		t.Fatalf("caller masterConfig = %v, want machineTypeUri %s and numInstances 1", master, want)
 	}
 	if disk := child(t, master, "diskConfig"); disk["bootDiskSizeGb"] != float64(100) {
 		t.Fatalf("caller diskConfig overwritten: %v", disk)
@@ -255,6 +257,129 @@ func TestClusterJSON_DoesNotMutateStoredConfig(t *testing.T) {
 	sw := child(t, child(t, first, "config"), "softwareConfig")
 	if sw["imageVersion"] != defaultGCEImageVersion {
 		t.Fatalf("softwareConfig.imageVersion not defaulted: %v", sw)
+	}
+}
+
+// TestClusterJSON_CanonicalisesCallerLinks covers the spellings a client may
+// send for the Compute Engine links in a GCE cluster config: real Dataproc
+// answers the absolute self-link on every read regardless, and the emulator must
+// not echo a short name or a partial resource name back (DPG40). An
+// unparseable value is left exactly as sent rather than replaced by a guess.
+func TestClusterJSON_CanonicalisesCallerLinks(t *testing.T) {
+	const base = "https://www.googleapis.com/compute/v1/projects/proj/"
+	for _, tc := range []struct {
+		name   string
+		config string
+		field  []string // path to the rendered value
+		want   string
+	}{
+		{
+			name:   "short zone",
+			config: `{"gceClusterConfig":{"zoneUri":"us-east1-b"}}`,
+			field:  []string{"gceClusterConfig", "zoneUri"},
+			want:   base + "zones/us-east1-b",
+		},
+		{
+			name:   "partial zone",
+			config: `{"gceClusterConfig":{"zoneUri":"projects/proj/zones/us-east1-b"}}`,
+			field:  []string{"gceClusterConfig", "zoneUri"},
+			want:   base + "zones/us-east1-b",
+		},
+		{
+			name:   "full zone self-link",
+			config: `{"gceClusterConfig":{"zoneUri":"` + base + `zones/us-east1-b"}}`,
+			field:  []string{"gceClusterConfig", "zoneUri"},
+			want:   base + "zones/us-east1-b",
+		},
+		{
+			name:   "short network",
+			config: `{"gceClusterConfig":{"networkUri":"default"}}`,
+			field:  []string{"gceClusterConfig", "networkUri"},
+			want:   base + "global/networks/default",
+		},
+		{
+			name:   "partial network",
+			config: `{"gceClusterConfig":{"networkUri":"global/networks/my-net"}}`,
+			field:  []string{"gceClusterConfig", "networkUri"},
+			want:   base + "global/networks/my-net",
+		},
+		{
+			name:   "full network self-link keeps its project",
+			config: `{"gceClusterConfig":{"networkUri":"https://www.googleapis.com/compute/v1/projects/other/global/networks/my-net"}}`,
+			field:  []string{"gceClusterConfig", "networkUri"},
+			want:   "https://www.googleapis.com/compute/v1/projects/other/global/networks/my-net",
+		},
+		{
+			name:   "short subnetwork takes the cluster region",
+			config: `{"gceClusterConfig":{"subnetworkUri":"my-subnet"}}`,
+			field:  []string{"gceClusterConfig", "subnetworkUri"},
+			want:   base + "regions/us-central1/subnetworks/my-subnet",
+		},
+		{
+			name:   "partial subnetwork",
+			config: `{"gceClusterConfig":{"subnetworkUri":"regions/us-east1/subnetworks/my-subnet"}}`,
+			field:  []string{"gceClusterConfig", "subnetworkUri"},
+			want:   base + "regions/us-east1/subnetworks/my-subnet",
+		},
+		{
+			name:   "full subnetwork self-link keeps its (host) project",
+			config: `{"gceClusterConfig":{"subnetworkUri":"https://www.googleapis.com/compute/v1/projects/host-project/regions/us-east1/subnetworks/shared-subnet"}}`,
+			field:  []string{"gceClusterConfig", "subnetworkUri"},
+			want:   "https://www.googleapis.com/compute/v1/projects/host-project/regions/us-east1/subnetworks/shared-subnet",
+		},
+		{
+			name:   "machine type short name",
+			config: `{"gceClusterConfig":{"zoneUri":"us-east1-b"},"workerConfig":{"machineTypeUri":"n2-standard-8"}}`,
+			field:  []string{"workerConfig", "machineTypeUri"},
+			want:   base + "zones/us-east1-b/machineTypes/n2-standard-8",
+		},
+		{
+			name:   "machine type partial name",
+			config: `{"gceClusterConfig":{"zoneUri":"us-east1-b"},"masterConfig":{"machineTypeUri":"zones/us-east1-b/machineTypes/n2-standard-8"}}`,
+			field:  []string{"masterConfig", "machineTypeUri"},
+			want:   base + "zones/us-east1-b/machineTypes/n2-standard-8",
+		},
+		{
+			name:   "machine type zone beats the region default",
+			config: `{"masterConfig":{"machineTypeUri":"zones/us-east1-b/machineTypes/n2-standard-8"}}`,
+			field:  []string{"masterConfig", "machineTypeUri"},
+			want:   base + "zones/us-east1-b/machineTypes/n2-standard-8",
+		},
+		{
+			name:   "machine type full self-link",
+			config: `{"gceClusterConfig":{"zoneUri":"us-east1-b"},"workerConfig":{"machineTypeUri":"https://www.googleapis.com/compute/v1/projects/proj/zones/us-east1-b/machineTypes/n2-standard-8"}}`,
+			field:  []string{"workerConfig", "machineTypeUri"},
+			want:   base + "zones/us-east1-b/machineTypes/n2-standard-8",
+		},
+		{
+			name:   "secondary worker machine type",
+			config: `{"gceClusterConfig":{"zoneUri":"us-east1-b"},"secondaryWorkerConfig":{"machineTypeUri":"n2-standard-2","numInstances":3}}`,
+			field:  []string{"secondaryWorkerConfig", "machineTypeUri"},
+			want:   base + "zones/us-east1-b/machineTypes/n2-standard-2",
+		},
+		{
+			name:   "unparseable zone is left as sent",
+			config: `{"gceClusterConfig":{"zoneUri":"not-a-zone"}}`,
+			field:  []string{"gceClusterConfig", "zoneUri"},
+			want:   "not-a-zone",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := renderedConfig(t, gceCluster(tc.config))
+			var obj = config
+			for _, key := range tc.field[:len(tc.field)-1] {
+				obj = child(t, obj, key)
+			}
+			if got := obj[tc.field[len(tc.field)-1]]; got != tc.want {
+				t.Fatalf("%v = %v, want %s", tc.field, got, tc.want)
+			}
+		})
+	}
+
+	// A group the caller never sent stays absent: canonicalisation only rewrites
+	// values that are there.
+	if _, ok := renderedConfig(t, gceCluster(`{"gceClusterConfig":{"zoneUri":"us-east1-b"}}`))["secondaryWorkerConfig"]; ok {
+		t.Fatal("secondaryWorkerConfig must not be materialised by the read")
 	}
 }
 
