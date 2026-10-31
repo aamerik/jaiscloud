@@ -119,6 +119,14 @@ parseable index/detail.
    the matrix). Then run `make gcp-status` plus `make gcp-status-lint-plans` and
    `make gcp-status-coverage`. If the session changed operations, also run
    `make gcp-matrix-diff REF=upstream/main` (fails on a `ga`→worse regression).
+6. **Do not finish on a red PR.** Run `make gcp-ci-preflight` before pushing (it
+   mirrors CI's offline GCP gates; a stale `docs/fidelity` — any new/changed
+   conformance check or evidence string — is the most common CI failure, fixed by
+   `make gen-gcp-fidelity-matrix` + committing `docs/fidelity`). After opening the
+   PR, `make gcp-ci-wait PR=<n>` blocks until the checks settle and prints the
+   failing jobs' logs; fix, push, and repeat until every check is green. A check
+   may only be dismissed as runner infrastructure, and then only after
+   `gh run rerun <run-id>` comes back green.
 
 `plan_docs/` is gitignored local scratch; `tools/gcpstatus` and this file are
 committed.

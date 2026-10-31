@@ -55,8 +55,27 @@ Say so when a branch was created, because the series' PRs target it instead of
   `parity-fix-workflow.md` beside it) and follow it, together with `AGENTS.md` /
   `CLAUDE.md` (transport-neutral core owns logic, `gcperr` errors, REST + gRPC
   parity, serialized shared hotspots, never import `internal/aws`).
-- Close out: run `make gcp-status`, `make gcp-status-lint-plans` and
-  `make gcp-status-coverage`; finalize the plan doc with
-  `make gcp-status-finalize PLAN=plan_docs/<doc>.md ID=<ID>` (put the backlog ID in the
-  commit/PR title). If the session changed operations, also run
-  `make gcp-matrix-diff REF=upstream/main`.
+- Close out — the session is **not** finished when the PR is opened, only when its
+  CI is green:
+  1. `make gcp-status`, `make gcp-status-lint-plans` and
+     `make gcp-status-coverage`; finalize the plan doc with
+     `make gcp-status-finalize PLAN=plan_docs/<doc>.md ID=<ID>` (put the backlog
+     ID in the commit/PR title). If the session changed operations, also run
+     `make gcp-matrix-diff REF=upstream/main`.
+  2. `make gcp-ci-preflight` before pushing: it mirrors the offline gates of CI's
+     `test-gcp-unit` / `test-gcp-conformance` jobs (race unit tests, statement-
+     coverage ratchet, behavioral + depth gates, `tools/` tests, `gcplint`, and
+     the fidelity matrix). **A stale `docs/fidelity` is the most common red-CI
+     cause in this repo** — any change to a conformance check or to a service's
+     evidence makes the committed matrix stale, so run
+     `make gen-gcp-fidelity-matrix`, commit `docs/fidelity`, and re-run.
+  3. Push, open the PR against the session base (see above), then
+     `make gcp-ci-wait PR=<number>`. It wraps `gh pr checks --watch --fail-fast`
+     and, on a red check, prints the failing jobs plus their `--log-failed` tail
+     (with the runner's cache-restore tar noise filtered out).
+  4. On a failure: diagnose, fix, commit, push, and run `make gcp-ci-wait
+     PR=<number>` again — repeat until every check passes. Only a failure proven
+     to be runner infrastructure (cancelled run, cache-restore noise) may be
+     dismissed, and then only once `gh run rerun <run-id>` comes back green.
+     Never report the session as done with a red or still-pending check, and
+     never leave the next session a knowingly red PR.
