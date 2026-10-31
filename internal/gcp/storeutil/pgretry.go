@@ -57,6 +57,13 @@ func RetrySerializable[T any](ctx context.Context, fn func() (T, error)) (T, err
 		if err == nil || !IsSerializationFailure(err) || attempt >= SerializableMaxAttempts {
 			return v, err
 		}
+		// Check the context before arming the timer: a cancellation raised by
+		// fn itself leaves both channels ready when the jittered backoff is
+		// short, and select then picks between them at random — which would run
+		// one more attempt after the caller asked to stop.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return zero, ctxErr
+		}
 		select {
 		case <-ctx.Done():
 			return zero, ctx.Err()
