@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"jaiscloud/internal/gcp/resource"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
 	"jaiscloud/internal/model"
 )
@@ -100,7 +101,7 @@ func canonicalGKETarget(v *gkeVirtualCluster) string {
 	if v == nil || v.target == "" {
 		return ""
 	}
-	return "projects/" + v.targetProject + "/locations/" + v.targetLocation + "/clusters/" + v.target
+	return resource.ResourceID(v.targetProject)("container-cluster", v.targetLocation+"/"+v.target)
 }
 
 // resolveGKEEngineVersion dereferences a Spark engine version to a concrete
