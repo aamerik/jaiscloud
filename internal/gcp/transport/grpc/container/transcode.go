@@ -38,8 +38,12 @@ func timestampToString(ts *timestamppb.Timestamp) string {
 
 // clusterToProto renders a stored cluster as the proto Cluster. Name is the
 // short cluster id, matching the REST wire shape (the core stores the short
-// name; the canonical path is derived by the caller).
+// name; the canonical path is derived by the caller). The response messages real
+// GKE always returns (networkConfig, shieldedNodes, defaultMaxPodsConstraint)
+// are filled from the core's read defaults so the two transports cannot differ.
 func clusterToProto(c containerstore.Cluster) *containerpb.Cluster {
+	c = core.WithReadDefaults(c)
+	network, subnetwork := core.NetworkConfigPaths(c)
 	out := &containerpb.Cluster{
 		Name:                  c.Name,
 		Location:              c.Location,
@@ -57,6 +61,14 @@ func clusterToProto(c containerstore.Cluster) *containerpb.Cluster {
 		LoggingService:        c.LoggingService,
 		MonitoringService:     c.MonitoringService,
 		MasterAuth:            &containerpb.MasterAuth{Username: c.AdminUsername, ClusterCaCertificate: c.CaCertificate},
+		NetworkConfig: &containerpb.NetworkConfig{
+			Network:    network,
+			Subnetwork: subnetwork,
+		},
+		ShieldedNodes: &containerpb.ShieldedNodes{Enabled: c.ShieldedNodes != nil && c.ShieldedNodes.Enabled},
+		DefaultMaxPodsConstraint: &containerpb.MaxPodsConstraint{
+			MaxPodsPerNode: c.MaxPodsPerNode,
+		},
 	}
 	if c.AddonsConfig != nil {
 		out.AddonsConfig = addonsConfigToProto(c.AddonsConfig)
@@ -373,6 +385,12 @@ func clusterFromProto(pb *containerpb.Cluster) containerstore.Cluster {
 		if _, _, id, ok := core.ParseClusterName(c.Name); ok {
 			c.Name = id
 		}
+	}
+	if pb.GetShieldedNodes() != nil {
+		c.ShieldedNodes = &containerstore.ShieldedNodes{Enabled: pb.GetShieldedNodes().GetEnabled()}
+	}
+	if n := pb.GetDefaultMaxPodsConstraint().GetMaxPodsPerNode(); n > 0 {
+		c.MaxPodsPerNode = n
 	}
 	if pb.GetAutopilot() != nil {
 		c.Autopilot = &containerstore.Autopilot{Enabled: pb.GetAutopilot().GetEnabled()}

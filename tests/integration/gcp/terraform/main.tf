@@ -227,19 +227,36 @@ resource "google_dataproc_metastore_database_iam_member" "compat" {
   member      = "serviceAccount:${google_service_account.compat.email}"
 }
 
+# ── GKE: the Dataproc-on-GKE prerequisite ─────────────────────────────────────
+# google_container_cluster is the resource DPG37 was about: its read
+# (resourceContainerClusterRead) dereferences legacyAbac.enabled,
+# networkConfig.network, shieldedNodes.enabled and
+# defaultMaxPodsConstraint.maxPodsPerNode unconditionally, so the emulator's
+# cluster read has to render them (as real GKE always does) or the provider
+# SIGSEGVs. A clean apply + a no-diff second plan is the assertion.
+#
+# It is separate from the Dataproc resource below because the emulator routes
+# GKE by host: the provider keeps only the scheme+host of a custom endpoint, so
+# it cannot send the /container path prefix the emulator also accepts, and the
+# bare /v1/.../clusters path belongs to Managed Kafka. run.sh therefore derives
+# container.<host> (container.localhost for the default endpoint) and passes it
+# as container_endpoint.
+resource "google_container_cluster" "gke" {
+  name                = var.gke_cluster
+  location            = var.region
+  initial_node_count  = 1
+  deletion_protection = false
+
+  workload_identity_config {
+    workload_pool = "${var.project}.svc.id.goog"
+  }
+}
+
 # ── Dataproc on GKE (virtual cluster) ─────────────────────────────────────────
 # google_dataproc_cluster with virtual_cluster_config is the provider path the
 # emulator's NodePool reconciler has to satisfy: the create is accepted, the
 # pools it names are materialised in the GKE API, and the read-back carries no
 # nodePoolConfig (it is input-only in the real API).
-#
-# The GKE prerequisite is created out of band by run.sh (create standard,
-# Workload-Identity-enabled cluster) instead of as a google_container_cluster:
-# that resource panics in the provider's read on this emulator because the GKE
-# mock omits nested messages the provider dereferences unconditionally
-# (recorded as DPG37 in the dataproc-gke wave plan). The subject of the gate is
-# the Dataproc resource, and the GKE half is covered by the conformance, gRPC
-# and SDK suites.
 #
 # SPARK is pinned to a fully-qualified release on purpose: aliases are
 # dereferenced at cluster creation (real GCP behaviour), so a config carrying
@@ -248,6 +265,8 @@ resource "google_dataproc_cluster" "gke" {
   name   = "jaiscloud-tf-dataproc-gke"
   region = var.region
   labels = { env = "compat-test" }
+
+  depends_on = [google_container_cluster.gke]
 
   virtual_cluster_config {
     staging_bucket = "jaiscloud-tf-dataproc-staging"

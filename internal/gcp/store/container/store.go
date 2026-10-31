@@ -158,6 +158,13 @@ type WorkloadIdentityConfig struct {
 	WorkloadPool string `json:"workloadPool,omitempty"`
 }
 
+// ShieldedNodes is the persisted subset of google.container.v1.ShieldedNodes.
+// Real GKE enables Shielded Nodes on every new cluster unless the create asks
+// otherwise, so the core stores the flag rather than a "set or not" marker.
+type ShieldedNodes struct {
+	Enabled bool `json:"enabled,omitempty"`
+}
+
 // MaintenancePolicy is the persisted subset of
 // google.container.v1.MaintenancePolicy.
 type MaintenancePolicy struct {
@@ -234,6 +241,15 @@ type Cluster struct {
 	// standard, Workload-Identity-enabled cluster). Both are echoed on read.
 	Autopilot              *Autopilot              `json:"autopilot,omitempty"`
 	WorkloadIdentityConfig *WorkloadIdentityConfig `json:"workloadIdentityConfig,omitempty"`
+
+	// ShieldedNodes and MaxPodsPerNode are the two response messages real GKE
+	// always renders and clients dereference unconditionally (the
+	// hashicorp/google provider does, in its google_container_cluster read).
+	// They are stored because a create may set them; the core's read defaults
+	// fill the GKE values (enabled, 110) for records stored before they were
+	// modelled.
+	ShieldedNodes  *ShieldedNodes `json:"shieldedNodes,omitempty"`
+	MaxPodsPerNode int64          `json:"maxPodsPerNode,omitempty"`
 
 	// AdminUsername is masterAuth.username (SetMasterAuth SET_USERNAME). The
 	// admin password is never echoed, matching real GKE.

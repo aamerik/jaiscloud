@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	core "jaiscloud/internal/gcp/service/container"
 	containerstore "jaiscloud/internal/gcp/store/container"
 	"jaiscloud/internal/model"
 )
@@ -81,6 +82,30 @@ func int32From(m map[string]any, key string) int32 {
 	return int32(intFrom(m[key]))
 }
 
+// int64From reads an int64 that GKE encodes as a JSON string (int64 fields are
+// strings on the REST surface) or, tolerantly, as a JSON number.
+func int64From(v any) int64 {
+	switch x := v.(type) {
+	case string:
+		n, _ := strconv.ParseInt(x, 10, 64)
+		return n
+	case float64:
+		return int64(x)
+	case int64:
+		return x
+	case int:
+		return int64(x)
+	default:
+		return 0
+	}
+}
+
+// boolFrom reads a JSON boolean, treating a missing value as false.
+func boolFrom(v any) bool {
+	b, _ := v.(bool)
+	return b
+}
+
 // clusterFromBody decodes a GKE Cluster JSON object into the store model's
 // writable subset. Input-only/derived fields are ignored; the core fills the
 // defaults.
@@ -103,6 +128,14 @@ func clusterFromBody(m map[string]any) (containerstore.Cluster, error) {
 	c.Network = str(m, "network")
 	c.Subnetwork = str(m, "subnetwork")
 	c.InitialNodeCount = int32From(m, "initialNodeCount")
+	if sn, ok := m["shieldedNodes"].(map[string]any); ok {
+		c.ShieldedNodes = &containerstore.ShieldedNodes{Enabled: boolFrom(sn["enabled"])}
+	}
+	if dpc, ok := m["defaultMaxPodsConstraint"].(map[string]any); ok {
+		if n := int64From(dpc["maxPodsPerNode"]); n > 0 {
+			c.MaxPodsPerNode = n
+		}
+	}
 	if labels := strMap(m["resourceLabels"]); labels != nil {
 		c.ResourceLabels = labels
 	}
@@ -161,6 +194,8 @@ func parseCanonical(name, resource string) (project, location, id string, ok boo
 // ─── wire encoding ────────────────────────────────────────────────────────────
 
 func clusterToJSON(c containerstore.Cluster) map[string]any {
+	c = core.WithReadDefaults(c)
+	network, subnetwork := core.NetworkConfigPaths(c)
 	out := map[string]any{
 		"name":                  c.Name,
 		"location":              c.Location,
@@ -172,6 +207,19 @@ func clusterToJSON(c containerstore.Cluster) map[string]any {
 		"initialClusterVersion": c.InitialClusterVersion,
 		"network":               c.Network,
 		"subnetwork":            c.Subnetwork,
+		// Real GKE always renders these three response messages, and clients
+		// (the hashicorp/google provider among them) dereference them
+		// unconditionally, so they are never omitted.
+		"networkConfig": map[string]any{
+			"network":    network,
+			"subnetwork": subnetwork,
+		},
+		"shieldedNodes": map[string]any{
+			"enabled": c.ShieldedNodes != nil && c.ShieldedNodes.Enabled,
+		},
+		"defaultMaxPodsConstraint": map[string]any{
+			"maxPodsPerNode": strconv.FormatInt(c.MaxPodsPerNode, 10),
+		},
 		"masterAuth": map[string]any{
 			"clusterCaCertificate": c.CaCertificate,
 		},

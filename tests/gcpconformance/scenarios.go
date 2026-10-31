@@ -928,7 +928,9 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "container", Method: "POST", Path: gkeClusterName + ":setLogging",
 			Body: `{"loggingService":"logging.googleapis.com/kubernetes"}`},
 		Scenario{Service: "container", Method: "PUT", Path: gkeClusterName,
-			Body: `{"update":{"desiredMonitoringService":"monitoring.googleapis.com/kubernetes"}}`},
+			Body: `{"update":{"desiredMonitoringService":"monitoring.googleapis.com/kubernetes","desiredShieldedNodes":{"enabled":false}}}`},
+		// A read straight after the update proves the ClusterUpdate fields applied.
+		Scenario{Service: "container", Method: "GET", Path: gkeClusterName},
 		Scenario{Service: "container", Method: "POST", Path: gkeClusterName + ":updateMaster",
 			Body: `{"masterVersion":"1.31.0-gke.100"}`},
 		Scenario{Service: "container", Method: "POST", Path: gkeClusterName + ":startIpRotation"},

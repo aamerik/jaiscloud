@@ -349,8 +349,15 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   cluster is an instantly-`RUNNING` stored record (default master version, `network`/`subnetwork`);
   a create that carries inline `nodePools` materializes those pools in the same call (each with its
   canonical `selfLink`, `RUNNING` status, the cluster's node version and its `initialNodeCount`
-  node count), while one that carries none gets the generated `default-pool`; there is **no real
-  Kubernetes control plane** behind it, so `Autopilot` compatibility,
+  node count), while one that carries none gets the generated `default-pool`. The read carries the
+  nested response messages real GKE always returns and clients dereference unconditionally:
+  `legacyAbac.enabled` (`false` unless `setLegacyAbac` enabled it), `networkConfig.network`/
+  `subnetwork` (relative resource names derived from `network`/`subnetwork`, with a zone reduced to
+  its region), `shieldedNodes.enabled` (GKE's default `true`, honouring a create-time `false`),
+  `defaultMaxPodsConstraint.maxPodsPerNode` (`"110"`, honouring a create-time value) and the
+  `logging.googleapis.com/kubernetes`/`monitoring.googleapis.com/kubernetes` service defaults —
+  while `masterAuth.clusterCaCertificate` stays empty because the mock mints no CA. There is **no
+  real Kubernetes control plane** behind it, so `Autopilot` compatibility,
   `fetchClusterUpgradeInfo`/`fetchNodePoolUpgradeInfo`,
   `completeControlPlaneUpgrade`/`completeNodePoolUpgrade`, `getJsonWebKeys`, `getServerConfig` and
   `listUsableSubnetworks` remain explicit `Unimplemented` stubs, and there is no Artifact
