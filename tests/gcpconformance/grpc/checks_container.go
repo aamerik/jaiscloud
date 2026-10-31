@@ -28,6 +28,7 @@ func containerChecks() []Check {
 	return []Check{
 		{Service: "container", RPC: "CreateCluster", Method: "CreateCluster", KeyField: "CREATE_CLUSTER operation DONE", Run: checkContainerCreateCluster},
 		{Service: "container", RPC: "CreateCluster (nodePools + default-pool fields)", Method: "CreateCluster", KeyField: "InvalidArgument on the default-pool conflict", Run: checkContainerCreateClusterPoolConflict},
+		{Service: "container", RPC: "CreateCluster (nodeConfig default pool)", Method: "CreateCluster", KeyField: "default-pool config + cluster nodeConfig echo", Run: checkContainerCreateClusterNodeConfig},
 		{Service: "container", RPC: "GetCluster", Method: "GetCluster", KeyField: "name/status/masterVersion + nested response messages", Run: checkContainerGetCluster},
 		{Service: "container", RPC: "GetCluster (legacy project/zone)", Method: "GetCluster", KeyField: "legacy project_id/zone/cluster_id addressing", Run: checkContainerGetClusterLegacy},
 		{Service: "container", RPC: "ListClusters", Method: "ListClusters", KeyField: "created cluster present", Run: checkContainerListClusters},
@@ -829,6 +830,64 @@ func checkContainerCreateClusterPoolConflict(ctx context.Context, cfg Config) er
 		if _, err := client.GetCluster(ctx, &containerpb.GetClusterRequest{Name: containerNameRaw(cfg, tc.cluster.GetName())}); status.Code(err) != codes.NotFound {
 			return fmt.Errorf("create with %s + nodePools: rejected cluster %q was persisted (%v)", tc.label, tc.cluster.GetName(), err)
 		}
+	}
+	return nil
+}
+
+// checkContainerCreateClusterNodeConfig verifies that a create sending only the
+// legacy cluster-level node_config + initial_node_count shape applies the config
+// to the generated default-pool, the way real GKE does (Discovery on
+// Cluster.nodeConfig: that configuration "will be used to create a NodePool
+// object with an auto-generated name"), and that the read echoes it: Discovery
+// says the response's Cluster.nodeConfig is "populated with the node
+// configuration of the first node pool" (capture: docs/gcp/gke-create-pool-conflict.md).
+func checkContainerCreateClusterNodeConfig(ctx context.Context, cfg Config) error {
+	client, err := newContainerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	name := cfg.ResourceName("gcpc-grpc-gke-nodeconfig")
+	if _, err := client.CreateCluster(ctx, &containerpb.CreateClusterRequest{
+		Parent: containerParent(cfg),
+		Cluster: &containerpb.Cluster{
+			Name:             name,
+			InitialNodeCount: 1,
+			NodeConfig:       &containerpb.NodeConfig{MachineType: "e2-micro", DiskSizeGb: 50},
+		},
+	}); err != nil {
+		return fmt.Errorf("CreateCluster: %w", err)
+	}
+	c, err := client.GetCluster(ctx, &containerpb.GetClusterRequest{Name: containerNameRaw(cfg, name)})
+	if err != nil {
+		return fmt.Errorf("GetCluster: %w", err)
+	}
+	if got := c.GetNodeConfig().GetMachineType(); got != "e2-micro" {
+		return fmt.Errorf("cluster nodeConfig.machineType = %q, want e2-micro", got)
+	}
+	if got := c.GetNodeConfig().GetDiskSizeGb(); got != 50 {
+		return fmt.Errorf("cluster nodeConfig.diskSizeGb = %d, want 50", got)
+	}
+	pools := c.GetNodePools()
+	if len(pools) != 1 || pools[0].GetName() != "default-pool" {
+		return fmt.Errorf("nodePools = %v, want the generated default-pool", pools)
+	}
+	pool := pools[0]
+	if pool.GetStatus() != containerpb.NodePool_RUNNING {
+		return fmt.Errorf("default-pool status = %v, want RUNNING", pool.GetStatus())
+	}
+	if pool.GetSelfLink() != containerNameRaw(cfg, name)+"/nodePools/default-pool" {
+		return fmt.Errorf("default-pool selfLink = %q", pool.GetSelfLink())
+	}
+	if pool.GetVersion() == "" {
+		return fmt.Errorf("default-pool version is empty, want the cluster's node version")
+	}
+	if got := pool.GetConfig().GetMachineType(); got != "e2-micro" {
+		return fmt.Errorf("default-pool config.machineType = %q, want e2-micro", got)
+	}
+	if got := pool.GetConfig().GetDiskSizeGb(); got != 50 {
+		return fmt.Errorf("default-pool config.diskSizeGb = %d, want 50", got)
 	}
 	return nil
 }

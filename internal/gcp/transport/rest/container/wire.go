@@ -237,6 +237,12 @@ func clusterToJSON(c containerstore.Cluster) map[string]any {
 		}
 		out["nodePools"] = pools
 	}
+	// Discovery: on read this is "populated with the node configuration of the
+	// first node pool" (filled by core.WithReadDefaults), so a create that sent
+	// the legacy nodeConfig + initialNodeCount shape reads it back.
+	if c.NodeConfig != nil {
+		out["nodeConfig"] = nodeConfigToJSON(c.NodeConfig)
+	}
 	if c.LoggingService != "" {
 		out["loggingService"] = c.LoggingService
 	}

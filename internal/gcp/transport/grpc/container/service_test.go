@@ -98,6 +98,45 @@ func TestCreateClusterInlineNodePools(t *testing.T) {
 	}
 }
 
+// TestCreateClusterAppliesNodeConfigToDefaultPool proves the gRPC path applies
+// a legacy cluster-level node_config to the generated default-pool and echoes it
+// on read, matching REST (Discovery: on read the field holds the first pool's
+// node configuration).
+func TestCreateClusterAppliesNodeConfigToDefaultPool(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newGRPCService(t)
+	parent := "projects/p/locations/us-central1"
+
+	cluster := &containerpb.Cluster{
+		Name:             "c1",
+		InitialNodeCount: 2,
+		NodeConfig:       &containerpb.NodeConfig{MachineType: "e2-micro", DiskSizeGb: 50},
+	}
+	if _, err := svc.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: parent, Cluster: cluster}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := svc.GetCluster(ctx, &containerpb.GetClusterRequest{Name: parent + "/clusters/c1"})
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if c.GetNodeConfig().GetMachineType() != "e2-micro" || c.GetNodeConfig().GetDiskSizeGb() != 50 {
+		t.Fatalf("cluster nodeConfig = %v", c.GetNodeConfig())
+	}
+	pools := c.GetNodePools()
+	if len(pools) != 1 || pools[0].GetName() != core.DefaultNodePoolName {
+		t.Fatalf("nodePools = %v", pools)
+	}
+	if pools[0].GetSelfLink() != parent+"/clusters/c1/nodePools/"+core.DefaultNodePoolName {
+		t.Fatalf("default-pool selfLink = %q", pools[0].GetSelfLink())
+	}
+	if pools[0].GetVersion() != core.DefaultMasterVersion {
+		t.Fatalf("default-pool version = %q", pools[0].GetVersion())
+	}
+	if pools[0].GetConfig().GetMachineType() != "e2-micro" || pools[0].GetConfig().GetDiskSizeGb() != 50 {
+		t.Fatalf("default-pool config = %v", pools[0].GetConfig())
+	}
+}
+
 // TestCanonicalCRUD exercises the canonical name/parent form the newer clients
 // and the Java suite use.
 func TestCanonicalCRUD(t *testing.T) {

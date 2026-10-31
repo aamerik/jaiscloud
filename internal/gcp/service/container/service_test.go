@@ -177,16 +177,24 @@ func TestCreateClusterAcceptsZeroInitialNodeCountWithNodePools(t *testing.T) {
 	}
 }
 
-// TestCreateClusterAcceptsNodeConfigWithoutNodePools pins the other half of the
-// guard: nodeConfig is the request shape for the generated default pool, so a
-// create that sends it alone is valid (applying it is DPG42).
-func TestCreateClusterAcceptsNodeConfigWithoutNodePools(t *testing.T) {
+// TestCreateClusterAppliesNodeConfigToDefaultPool pins the DPG42 behaviour:
+// nodeConfig is the request shape for the generated default pool (Discovery on
+// Cluster.nodeConfig), so the pool materializes from it with the same
+// selfLink/version/node count a caller-supplied pool gets, and the cluster read
+// echoes the pool's config (Discovery: "For responses, this field will be
+// populated with the node configuration of the first node pool").
+func TestCreateClusterAppliesNodeConfigToDefaultPool(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService()
 
 	_, err := s.CreateCluster(ctx, "p", "us-central1", containerstore.Cluster{
-		Name:       "c1",
-		NodeConfig: &containerstore.NodeConfig{MachineType: "e2-micro"},
+		Name:             "c1",
+		InitialNodeCount: 2,
+		NodeConfig: &containerstore.NodeConfig{
+			MachineType: "e2-micro",
+			DiskSizeGb:  50,
+			OauthScopes: []string{"scope-a", "scope-b"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateCluster: %v", err)
@@ -195,8 +203,72 @@ func TestCreateClusterAcceptsNodeConfigWithoutNodePools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCluster: %v", err)
 	}
-	if len(c.NodePools) != 1 || c.NodePools[0].Name != "default-pool" {
+	if len(c.NodePools) != 1 || c.NodePools[0].Name != DefaultNodePoolName {
 		t.Fatalf("nodePools = %+v", c.NodePools)
+	}
+	pool := c.NodePools[0]
+	if pool.Status != containerstore.StatusRunning {
+		t.Fatalf("pool status = %q, want RUNNING", pool.Status)
+	}
+	if pool.SelfLink != NodePoolName("p", "us-central1", "c1", DefaultNodePoolName) {
+		t.Fatalf("pool selfLink = %q", pool.SelfLink)
+	}
+	if pool.Version != DefaultMasterVersion {
+		t.Fatalf("pool version = %q, want %q", pool.Version, DefaultMasterVersion)
+	}
+	if pool.InitialNodeCount != 2 || pool.NodeCount != 2 {
+		t.Fatalf("pool node counts = %d/%d, want 2/2", pool.InitialNodeCount, pool.NodeCount)
+	}
+	if pool.Config == nil {
+		t.Fatal("default-pool has no config: the create's nodeConfig was not applied")
+	}
+	if pool.Config.MachineType != "e2-micro" || pool.Config.DiskSizeGb != 50 || len(pool.Config.OauthScopes) != 2 {
+		t.Fatalf("pool config = %+v", pool.Config)
+	}
+	if c.NodeConfig == nil || c.NodeConfig.MachineType != "e2-micro" {
+		t.Fatalf("cluster nodeConfig echo = %+v", c.NodeConfig)
+	}
+}
+
+// TestGetClusterEchoesFirstNodePoolConfig pins the read-shape rule Discovery
+// states for Cluster.nodeConfig: the response is populated from the first node
+// pool, so a cluster created with inline pools echoes pool-a's config (and none
+// at all when no pool has one).
+func TestGetClusterEchoesFirstNodePoolConfig(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+
+	_, err := s.CreateCluster(ctx, "p", "us-central1", containerstore.Cluster{
+		Name: "c1",
+		NodePools: []containerstore.NodePool{
+			{Name: "pool-a", InitialNodeCount: 1, Config: &containerstore.NodeConfig{MachineType: "e2-small"}},
+			{Name: "pool-b", InitialNodeCount: 1, Config: &containerstore.NodeConfig{MachineType: "e2-large"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := s.GetCluster(ctx, "p", "us-central1", "c1")
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if c.NodeConfig == nil || c.NodeConfig.MachineType != "e2-small" {
+		t.Fatalf("cluster nodeConfig echo = %+v, want pool-a's config", c.NodeConfig)
+	}
+
+	// A cluster whose pools carry no config keeps nodeConfig absent rather than
+	// inventing one: the defaulted pool config is DPG46.
+	_, err = s.CreateCluster(ctx, "p", "us-central1", containerstore.Cluster{
+		Name:      "c2",
+		NodePools: []containerstore.NodePool{{Name: "pool-a", InitialNodeCount: 1}},
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	if c, err := s.GetCluster(ctx, "p", "us-central1", "c2"); err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	} else if c.NodeConfig != nil {
+		t.Fatalf("cluster nodeConfig = %+v, want none", c.NodeConfig)
 	}
 }
 

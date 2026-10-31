@@ -79,6 +79,12 @@ func clusterToProto(c containerstore.Cluster) *containerpb.Cluster {
 	if c.Autopilot != nil {
 		out.Autopilot = &containerpb.Autopilot{Enabled: c.Autopilot.Enabled}
 	}
+	// Discovery: on read Cluster.nodeConfig is "populated with the node
+	// configuration of the first node pool" (core.WithReadDefaults derives it),
+	// matching the REST wire shape.
+	if c.NodeConfig != nil {
+		out.NodeConfig = nodeConfigToProto(c.NodeConfig)
+	}
 	if c.WorkloadIdentityConfig != nil {
 		out.WorkloadIdentityConfig = &containerpb.WorkloadIdentityConfig{WorkloadPool: c.WorkloadIdentityConfig.WorkloadPool}
 	}
@@ -258,9 +264,9 @@ func nodePoolToProto(p containerstore.NodePool) *containerpb.NodePool {
 }
 
 // nodeConfigFromProto builds the core's NodeConfig subset from a request
-// NodeConfig (nil in, nil out). The cluster-level nodeConfig is decoded only so
-// a create that combines it with nodePools is rejected; applying it to the
-// generated default pool is DPG42.
+// NodeConfig (nil in, nil out). The cluster-level nodeConfig is decoded so a
+// create that combines it with nodePools is rejected, and so a create that sends
+// it alone materializes the generated default-pool from it.
 func nodeConfigFromProto(c *containerpb.NodeConfig) *containerstore.NodeConfig {
 	if c == nil {
 		return nil

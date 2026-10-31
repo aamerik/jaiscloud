@@ -349,14 +349,18 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   cluster is an instantly-`RUNNING` stored record (default master version, `network`/`subnetwork`);
   a create that carries inline `nodePools` materializes those pools in the same call (each with its
   canonical `selfLink`, `RUNNING` status, the cluster's node version and its `initialNodeCount`
-  node count), while one that carries none gets the generated `default-pool`. Combining `nodePools`
+  node count), while one that carries none gets the generated `default-pool` built from the legacy
+  `initialNodeCount`/`nodeConfig` pair (Discovery: the config "will be used to create a NodePool
+  object with an auto-generated name"), so that pool gets the same `selfLink`/`RUNNING`
+  status/version/node count and the caller's `nodeConfig` as its `config`. Combining `nodePools`
   with either legacy default-pool field is the 400 real GKE returns — `initialNodeCount > 0` gets
   "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a
   node pool.", a `nodeConfig` gets the same sentence with cluster.node_config (it wins when both are
   set), and a zero `initialNodeCount` means "no default node pool" and is accepted, all captured
-  against real GKE in [`gke-create-pool-conflict.md`](gke-create-pool-conflict.md). A cluster-level
-  `nodeConfig` sent without `nodePools` is recorded but not yet applied to the generated
-  `default-pool` or echoed on read. The read carries the
+  against real GKE in [`gke-create-pool-conflict.md`](gke-create-pool-conflict.md). On read, a
+  cluster-level `nodeConfig` is rendered from the first node pool's `config` (Discovery: "this field
+  will be populated with the node configuration of the first node pool"), so the legacy create shape
+  round-trips; the *defaulted* pool config a create leaves unset is still DPG46. The read carries the
   nested response messages real GKE always returns and clients dereference unconditionally:
   `legacyAbac.enabled` (`false` unless `setLegacyAbac` enabled it), `networkConfig.network`/
   `subnetwork` (relative resource names derived from `network`/`subnetwork`, with a zone reduced to

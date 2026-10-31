@@ -48,6 +48,15 @@ func WithReadDefaults(c containerstore.Cluster) containerstore.Cluster {
 	if c.LegacyAbac == nil {
 		c.LegacyAbac = &containerstore.LegacyAbac{}
 	}
+	// Discovery on Cluster.nodeConfig: "For responses, this field will be
+	// populated with the node configuration of the first node pool." The create
+	// path applies a request nodeConfig to the generated default-pool, so the
+	// echo is derived from the pool rather than stored twice (a --dsn import or
+	// snapshot written before the field was modelled gets the same rendering).
+	if len(c.NodePools) > 0 && c.NodePools[0].Config != nil {
+		cfg := *c.NodePools[0].Config
+		c.NodeConfig = &cfg
+	}
 	return c
 }
 
