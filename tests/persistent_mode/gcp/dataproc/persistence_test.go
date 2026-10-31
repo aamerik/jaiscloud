@@ -296,10 +296,11 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 	// emulated GKE control plane at create.
 	const gkeTarget = "exp-gke-target"
 	ensureGKECluster(t, host, project, region, gkeTarget)
+	gkeTargetRef := "projects/" + project + "/locations/" + region + "/clusters/" + gkeTarget
 
 	const gkeClusterName = "exp-gke"
 	vccBody := `{"projectId":"` + project + `","clusterName":"` + gkeClusterName + `",` +
-		`"virtualClusterConfig":{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/` + project + `/locations/` + region + `/clusters/` + gkeTarget + `"}},` +
+		`"virtualClusterConfig":{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"` + gkeTargetRef + `"}},` +
 		`"auxiliaryServicesConfig":{"metastoreConfig":{"dataprocMetastoreService":"` + msName + `"}}}}`
 	code, body = doRequest(t, host, "POST", base+"/clusters", []byte(vccBody), "application/json")
 	if code != http.StatusOK {
@@ -407,7 +408,7 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 	if gkeVCC == nil {
 		t.Fatalf("virtualClusterConfig lost after import: body %s", body)
 	}
-	if target := strField(gkeVCC, "kubernetesClusterConfig", "gkeClusterConfig", "gkeClusterTarget"); target != "projects/proj/locations/us-central1/clusters/gke-1" {
+	if target := strField(gkeVCC, "kubernetesClusterConfig", "gkeClusterConfig", "gkeClusterTarget"); target != gkeTargetRef {
 		t.Fatalf("gkeClusterTarget lost after import: got %q body %s", target, body)
 	}
 	// The Metastore attachment round-trips too.
