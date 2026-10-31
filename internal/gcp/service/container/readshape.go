@@ -3,6 +3,7 @@ package container
 import (
 	"strings"
 
+	"jaiscloud/internal/gcp/resource"
 	containerstore "jaiscloud/internal/gcp/store/container"
 )
 
@@ -67,7 +68,7 @@ func networkPath(project, network string) string {
 	if strings.HasPrefix(network, "projects/") {
 		return network
 	}
-	return "projects/" + project + "/global/networks/" + network
+	return resource.ResourceID(project)("compute-network", network)
 }
 
 func subnetworkPath(project, location, subnetwork string) string {
@@ -77,7 +78,8 @@ func subnetworkPath(project, location, subnetwork string) string {
 	if strings.HasPrefix(subnetwork, "projects/") {
 		return subnetwork
 	}
-	return "projects/" + project + "/regions/" + regionOf(location) + "/subnetworks/" + subnetwork
+	// compute-subnetwork takes "region/name" and owns the project prefix.
+	return resource.ResourceID(project)("compute-subnetwork", regionOf(location)+"/"+subnetwork)
 }
 
 // regionOf maps a cluster location to its region: a location is either a region
