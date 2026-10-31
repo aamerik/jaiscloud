@@ -203,7 +203,7 @@ func TestValidateVirtualClusterConfig_PoolRules(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal: %v", err)
 			}
-			v, err := validateVirtualClusterConfig(raw)
+			v, err := validateVirtualClusterConfig(raw, "demo")
 			if err != nil {
 				if tc.want == "" {
 					t.Fatalf("unexpected error: %v", err)
@@ -288,7 +288,7 @@ func TestValidateGKEPlacement(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal: %v", err)
 			}
-			v, err := validateVirtualClusterConfig(raw)
+			v, err := validateVirtualClusterConfig(raw, "demo")
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}

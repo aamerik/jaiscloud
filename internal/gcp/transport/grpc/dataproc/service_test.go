@@ -534,14 +534,16 @@ func TestCreateCluster_MalformedVirtualClusterConfig(t *testing.T) {
 }
 
 // TestUpdateCluster_VirtualClusterConfigSnakeMask verifies a gRPC FieldMask's
-// snake_case virtual_cluster_config path is normalized and applies the update.
+// snake_case virtual_cluster_config path is normalized to the same field as the
+// REST camelCase path, and therefore hits the recreate-only rule: the patch is
+// InvalidArgument and the stored target is unchanged.
 func TestUpdateCluster_VirtualClusterConfigSnakeMask(t *testing.T) {
 	s := newTestService()
 	ctx := context.Background()
 	if _, err := s.CreateCluster(ctx, gkeClusterReq("gke-1")); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
-	if _, err := s.UpdateCluster(ctx, &dataprocpb.UpdateClusterRequest{
+	_, err := s.UpdateCluster(ctx, &dataprocpb.UpdateClusterRequest{
 		ProjectId:   "proj",
 		Region:      "us-central1",
 		ClusterName: "gke-1",
@@ -560,15 +562,45 @@ func TestUpdateCluster_VirtualClusterConfigSnakeMask(t *testing.T) {
 			},
 		},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"virtual_cluster_config"}},
-	}); err != nil {
-		t.Fatalf("UpdateCluster: %v", err)
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("UpdateCluster snake_case vcc mask = %v, want InvalidArgument (recreate-only)", err)
 	}
 	cl, err := s.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: "proj", Region: "us-central1", ClusterName: "gke-1"})
 	if err != nil {
 		t.Fatalf("GetCluster: %v", err)
 	}
-	if got := cl.GetVirtualClusterConfig().GetKubernetesClusterConfig().GetGkeClusterConfig().GetGkeClusterTarget(); got != "projects/proj/locations/us-central1/clusters/gke-2" {
-		t.Fatalf("gkeClusterTarget = %q, want the updated target", got)
+	if got := cl.GetVirtualClusterConfig().GetKubernetesClusterConfig().GetGkeClusterConfig().GetGkeClusterTarget(); got != "projects/proj/locations/us-central1/clusters/gke-1" {
+		t.Fatalf("gkeClusterTarget = %q, want the stored target (patch must not apply)", got)
+	}
+}
+
+// TestUpdateCluster_WorkerCountSnakeMask verifies the mask normalization on a
+// GCE cluster's documented updatable nested path still applies.
+func TestUpdateCluster_WorkerCountSnakeMask(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	if _, err := s.CreateCluster(ctx, createClusterReq("gce-1")); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	if _, err := s.UpdateCluster(ctx, &dataprocpb.UpdateClusterRequest{
+		ProjectId:   "proj",
+		Region:      "us-central1",
+		ClusterName: "gce-1",
+		Cluster: &dataprocpb.Cluster{
+			ClusterName: "gce-1",
+			Config:      &dataprocpb.ClusterConfig{WorkerConfig: &dataprocpb.InstanceGroupConfig{NumInstances: 5}},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"config.worker_config.num_instances"}},
+	}); err != nil {
+		t.Fatalf("UpdateCluster: %v", err)
+	}
+	cl, err := s.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: "proj", Region: "us-central1", ClusterName: "gce-1"})
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if got := cl.GetConfig().GetWorkerConfig().GetNumInstances(); got != 5 {
+		t.Fatalf("workerConfig.numInstances = %d, want 5", got)
 	}
 }
 

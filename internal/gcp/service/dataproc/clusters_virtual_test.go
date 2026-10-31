@@ -3,6 +3,7 @@ package dataproc
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"jaiscloud/internal/model"
@@ -130,34 +131,50 @@ func TestCreateCluster_GKEAgainstNodePools(t *testing.T) {
 	}
 }
 
-// TestUpdateCluster_VirtualClusterConfig verifies an update can replace the
-// virtualClusterConfig (when the mask applies) and that malformed input is
-// rejected before any write.
-func TestUpdateCluster_VirtualClusterConfig(t *testing.T) {
+// TestUpdateCluster_VirtualClusterConfigRejected verifies the recreate-only
+// lifecycle: real GCP disallows update operations on a Dataproc-on-GKE virtual
+// cluster, so a patch may neither replace nor clear virtualClusterConfig, and the
+// stored value survives a rejected patch.
+func TestUpdateCluster_VirtualClusterConfigRejected(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
 	if _, _, err := p.CreateCluster(ctx, "proj", "us-central1", "gke-1", gkeInput(t, mustJSONMap([]byte(gkeVirtualClusterConfig)))); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
 
-	// A malformed update must not clobber the stored value.
+	cases := map[string]ClusterInput{
+		"valid":           {VirtualClusterConfig: []byte(`{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/proj/locations/us-central1/clusters/gke-2"}}}`)},
+		"gce config swap": {Config: []byte(`{"gceClusterConfig":{"zoneUri":"z"}}`)},
+	}
+	for name, in := range cases {
+		_, _, err := p.UpdateCluster(ctx, "proj", "us-central1", "gke-1", in, []string{"virtualClusterConfig"})
+		pe, ok := err.(*model.ProviderError)
+		if !ok || pe.HTTPStatus != 400 || pe.Code != "InvalidArgument" {
+			t.Fatalf("%s: expected 400 InvalidArgument, got %v", name, err)
+		}
+		if !strings.Contains(pe.Message, "recreate-only") || !strings.Contains(pe.Message, "config.workerConfig.numInstances") {
+			t.Fatalf("%s: error must explain the recreate-only rule and name the updatable fields, got %q", name, pe.Message)
+		}
+	}
+	// A malformed virtualClusterConfig is a shape error, reported as such.
 	bad := ClusterInput{VirtualClusterConfig: []byte(`{"kubernetesClusterConfig":{"gkeClusterConfig":{}}}`)}
 	if _, _, err := p.UpdateCluster(ctx, "proj", "us-central1", "gke-1", bad, []string{"virtualClusterConfig"}); err == nil {
 		t.Fatal("expected malformed virtualClusterConfig update to fail")
 	}
-	c, _ := p.GetCluster(ctx, "proj", "us-central1", "gke-1")
+	// An unmasked patch is rejected too: an empty mask applies every field.
+	if _, _, err := p.UpdateCluster(ctx, "proj", "us-central1", "gke-1",
+		ClusterInput{VirtualClusterConfig: []byte(gkeVirtualClusterConfig)}, nil); err == nil {
+		t.Fatal("expected an unmasked virtualClusterConfig patch to be rejected")
+	}
+	c, err := p.GetCluster(ctx, "proj", "us-central1", "gke-1")
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
 	if gkeOf(t, c.VirtualClusterConfig)["gkeClusterTarget"] == "" {
-		t.Fatalf("stored virtualClusterConfig clobbered by failed update: %s", c.VirtualClusterConfig)
+		t.Fatalf("stored virtualClusterConfig clobbered by rejected patches: %s", c.VirtualClusterConfig)
 	}
-
-	// A valid update replaces it.
-	updated := ClusterInput{VirtualClusterConfig: []byte(`{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"projects/proj/locations/us-central1/clusters/gke-2"}}}`)}
-	if _, _, err := p.UpdateCluster(ctx, "proj", "us-central1", "gke-1", updated, []string{"virtualClusterConfig"}); err != nil {
-		t.Fatalf("UpdateCluster: %v", err)
-	}
-	c, _ = p.GetCluster(ctx, "proj", "us-central1", "gke-1")
-	if got := gkeOf(t, c.VirtualClusterConfig)["gkeClusterTarget"]; got != "projects/proj/locations/us-central1/clusters/gke-2" {
-		t.Fatalf("gkeClusterTarget not updated: %v", got)
+	if len(c.Config) != 0 {
+		t.Fatalf("rejected patch stored a GCE config: %s", c.Config)
 	}
 }
 

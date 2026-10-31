@@ -46,6 +46,7 @@ func dataprocChecks() []Check {
 		{Service: "dataproc", RPC: "CancelJob", Method: "CancelJob", KeyField: "CANCEL_PENDING polls to CANCELLED", Run: checkDPCancelJob},
 		{Service: "dataproc", RPC: "DeleteJob", Method: "DeleteJob", KeyField: "NotFound after delete", Run: checkDPDeleteJob},
 		{Service: "dataproc", RPC: "CreateCluster (vcc)", Method: "CreateCluster", KeyField: "GKE virtualClusterConfig round-trip", Run: checkDPVirtualClusterConfig},
+		{Service: "dataproc", RPC: "UpdateCluster (vcc)", Method: "UpdateCluster", KeyField: "recreate-only: virtualClusterConfig patch is InvalidArgument", Run: checkDPVirtualClusterRecreateOnly},
 		{Service: "dataproc", RPC: "CreateCluster (metastore)", Method: "CreateCluster", KeyField: "auxiliaryServicesConfig.metastoreConfig echo", Run: checkDPMetastoreAttachment},
 		{Service: "dataproc", RPC: "GetJob (placement)", Method: "GetJob", KeyField: "placement.clusterUuid", Run: checkDPJobPlacementClusterUUID},
 		{Service: "dataproc", RPC: "SubmitJob (driver output)", Method: "SubmitJob", KeyField: "driver output/control URIs present", Run: checkDPDriverOutputURIs},
@@ -753,6 +754,100 @@ func checkDPVirtualClusterConfig(ctx context.Context, cfg Config) error {
 	}
 	if t := got.GetVirtualClusterConfig().GetKubernetesClusterConfig().GetGkeClusterConfig().GetGkeClusterTarget(); t != target {
 		return fmt.Errorf("gkeClusterTarget = %q, want %q", t, target)
+	}
+	return nil
+}
+
+// Check 15b: a Dataproc-on-GKE virtual cluster is recreate-only. A create with
+// no kubernetesNamespace renders the cluster name as the effective namespace and
+// dereferences the SPARK alias to a concrete release; a patch touching
+// virtualClusterConfig is InvalidArgument, while a labels-only patch succeeds.
+func checkDPVirtualClusterRecreateOnly(ctx context.Context, cfg Config) error {
+	if err := ensureProbeGKECluster(ctx, cfg); err != nil {
+		return err
+	}
+	client, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := cfg.ResourceName("gcpc-grpc-dp-vccupd")
+	vcc := &dataprocpb.VirtualClusterConfig{
+		InfrastructureConfig: &dataprocpb.VirtualClusterConfig_KubernetesClusterConfig{
+			KubernetesClusterConfig: &dataprocpb.KubernetesClusterConfig{
+				Config: &dataprocpb.KubernetesClusterConfig_GkeClusterConfig{
+					GkeClusterConfig: &dataprocpb.GkeClusterConfig{GkeClusterTarget: dpGkeTarget(cfg)},
+				},
+				KubernetesSoftwareConfig: &dataprocpb.KubernetesSoftwareConfig{
+					ComponentVersion: map[string]string{"SPARK": "3.5"},
+				},
+			},
+		},
+	}
+	op, err := client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: id, VirtualClusterConfig: vcc},
+	})
+	if err != nil {
+		if status.Code(err) != codes.AlreadyExists {
+			return fmt.Errorf("CreateCluster: %w", err)
+		}
+	} else if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("operation Wait: %w", err)
+	}
+
+	got, err := client.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: id})
+	if err != nil {
+		return fmt.Errorf("GetCluster: %w", err)
+	}
+	kcc := got.GetVirtualClusterConfig().GetKubernetesClusterConfig()
+	if ns := kcc.GetKubernetesNamespace(); ns != id {
+		return fmt.Errorf("kubernetesNamespace = %q, want the cluster name %q", ns, id)
+	}
+	if v := kcc.GetKubernetesSoftwareConfig().GetComponentVersion()["SPARK"]; v != "3.5-dataproc-28" {
+		return fmt.Errorf("componentVersion[SPARK] = %q, want the dereferenced release 3.5-dataproc-28", v)
+	}
+
+	// The patch that changes virtualClusterConfig is rejected.
+	_, err = client.UpdateCluster(ctx, &dataprocpb.UpdateClusterRequest{
+		ProjectId:   cfg.Project,
+		Region:      dataprocRegion,
+		ClusterName: id,
+		Cluster:     &dataprocpb.Cluster{ClusterName: id, VirtualClusterConfig: gkeVirtualClusterConfig(dpGkeTarget(cfg))},
+		UpdateMask:  &fieldmaskpb.FieldMask{Paths: []string{"virtual_cluster_config"}},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("virtualClusterConfig patch: got %v, want InvalidArgument", err)
+	}
+	if !strings.Contains(status.Convert(err).Message(), "recreate-only") {
+		return fmt.Errorf("virtualClusterConfig patch message %q does not explain the recreate-only rule", status.Convert(err).Message())
+	}
+
+	// A labels-only patch is still allowed.
+	upd, err := client.UpdateCluster(ctx, &dataprocpb.UpdateClusterRequest{
+		ProjectId:   cfg.Project,
+		Region:      dataprocRegion,
+		ClusterName: id,
+		Cluster:     &dataprocpb.Cluster{ClusterName: id, Labels: map[string]string{"probe": "true"}},
+		UpdateMask:  &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+	})
+	if err != nil {
+		return fmt.Errorf("labels patch: %w", err)
+	}
+	if _, err := upd.Wait(ctx); err != nil {
+		return fmt.Errorf("labels patch Wait: %w", err)
+	}
+	got, err = client.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: id})
+	if err != nil {
+		return fmt.Errorf("GetCluster after patch: %w", err)
+	}
+	if got.GetLabels()["probe"] != "true" {
+		return fmt.Errorf("labels patch not applied: %v", got.GetLabels())
+	}
+	if got.GetConfig() != nil {
+		return fmt.Errorf("labels patch invented a GCE config: %+v", got.GetConfig())
 	}
 	return nil
 }

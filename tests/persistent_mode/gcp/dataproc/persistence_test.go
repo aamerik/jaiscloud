@@ -299,8 +299,11 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 	gkeTargetRef := "projects/" + project + "/locations/" + region + "/clusters/" + gkeTarget
 
 	const gkeClusterName = "exp-gke"
+	// No kubernetesNamespace and an alias componentVersion: both are resolved at
+	// create and must survive a restart as the resolved values.
 	vccBody := `{"projectId":"` + project + `","clusterName":"` + gkeClusterName + `",` +
-		`"virtualClusterConfig":{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"` + gkeTargetRef + `"}},` +
+		`"virtualClusterConfig":{"kubernetesClusterConfig":{"gkeClusterConfig":{"gkeClusterTarget":"` + gkeTargetRef + `"},` +
+		`"kubernetesSoftwareConfig":{"componentVersion":{"SPARK":"3.5"}}},` +
 		`"auxiliaryServicesConfig":{"metastoreConfig":{"dataprocMetastoreService":"` + msName + `"}}}}`
 	code, body = doRequest(t, host, "POST", base+"/clusters", []byte(vccBody), "application/json")
 	if code != http.StatusOK {
@@ -410,6 +413,14 @@ func TestDataprocExportImportRoundTrip(t *testing.T) {
 	}
 	if target := strField(gkeVCC, "kubernetesClusterConfig", "gkeClusterConfig", "gkeClusterTarget"); target != gkeTargetRef {
 		t.Fatalf("gkeClusterTarget lost after import: got %q body %s", target, body)
+	}
+	// The namespace default and the dereferenced engine release are resolved at
+	// create, so a restart must not re-resolve them to something else.
+	if ns := strField(gkeVCC, "kubernetesClusterConfig", "kubernetesNamespace"); ns != gkeClusterName {
+		t.Fatalf("kubernetesNamespace after import = %q, want the cluster name %q (body %s)", ns, gkeClusterName, body)
+	}
+	if v := strField(gkeVCC, "kubernetesClusterConfig", "kubernetesSoftwareConfig", "componentVersion", "SPARK"); v != "3.5-dataproc-28" {
+		t.Fatalf("componentVersion[SPARK] after import = %q, want the resolved release 3.5-dataproc-28 (body %s)", v, body)
 	}
 	// The Metastore attachment round-trips too.
 	msRef := strField(gkeVCC, "auxiliaryServicesConfig", "metastoreConfig", "dataprocMetastoreService")
