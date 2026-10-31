@@ -26,6 +26,7 @@ package sdk_container_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -434,6 +435,89 @@ func TestSDKContainerErrors(t *testing.T) {
 		NodeCount: -1,
 	}).Do()
 	requireAPIError(t, err, 400)
+}
+
+// TestSDKContainerClusterCreateRejectsDefaultPoolFieldsWithNodePools drives the
+// official client through the conflict real GKE 400s on (Discovery:
+// "This field should not be set if node_config or initial_node_count are
+// specified"), with the verbatim server messages captured against real GKE.
+func TestSDKContainerClusterCreateRejectsDefaultPoolFieldsWithNodePools(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+
+	cases := []struct {
+		name    string
+		cluster *container.Cluster
+		want    string
+	}{
+		{
+			name: "initialNodeCount",
+			cluster: &container.Cluster{
+				Name:             unique("c"),
+				InitialNodeCount: 1,
+				NodePools:        []*container.NodePool{{Name: "pool-a", InitialNodeCount: 1}},
+			},
+			want: "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a node pool.",
+		},
+		{
+			name: "nodeConfig",
+			cluster: &container.Cluster{
+				Name:       unique("c"),
+				NodeConfig: &container.NodeConfig{MachineType: "e2-micro"},
+				NodePools:  []*container.NodePool{{Name: "pool-a", InitialNodeCount: 1}},
+			},
+			want: "It's invalid to specify both cluster.node_config and a node pool. Please only provide a node pool.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{Cluster: tc.cluster}).Do()
+			requireAPIError(t, err, 400)
+			var apiErr *googleapi.Error
+			require.ErrorAs(t, err, &apiErr)
+			require.Equal(t, tc.want, apiErr.Message)
+			// The rejected create persists nothing.
+			_, err = svc.Projects.Locations.Clusters.Get(clusterName(tc.cluster.Name)).Do()
+			requireAPIError(t, err, 404)
+		})
+	}
+}
+
+// TestSDKContainerClusterCreatePoolConflictOnTheWire pins the encoded REST
+// contract the apiary client hides: the google.rpc envelope's status string, and
+// the one case the client cannot express — an explicit `initialNodeCount: 0`,
+// which its `omitempty` tag would drop. A zero cluster-level count means "no
+// default node pool", so real GKE accepts it alongside nodePools.
+func TestSDKContainerClusterCreatePoolConflictOnTheWire(t *testing.T) {
+	resetState(t)
+
+	post := func(t *testing.T, body string) (*http.Response, map[string]any) {
+		t.Helper()
+		resp, err := http.Post(endpoint()+"v1/"+parent()+"/clusters", "application/json", strings.NewReader(body)) //nolint:noctx
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		var decoded map[string]any
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&decoded))
+		return resp, decoded
+	}
+
+	// The 400 keeps GKE's envelope: {"error":{"code","message","status"}}.
+	resp, body := post(t, fmt.Sprintf(`{"cluster":{"name":%q,"initialNodeCount":1,"nodePools":[{"name":"pool-a","initialNodeCount":1}]}}`, unique("cw")))
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	apiErr, ok := body["error"].(map[string]any)
+	require.True(t, ok, "error envelope = %v", body)
+	require.Equal(t, "INVALID_ARGUMENT", apiErr["status"])
+	require.Equal(t, "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a node pool.", apiErr["message"])
+
+	// An explicit zero count is accepted, and the inline pool materializes.
+	id := unique("cz")
+	resp, body = post(t, fmt.Sprintf(`{"cluster":{"name":%q,"initialNodeCount":0,"nodePools":[{"name":"pool-a","initialNodeCount":1}]}}`, id))
+	require.Equal(t, http.StatusOK, resp.StatusCode, "create with initialNodeCount 0: %v", body)
+	require.Equal(t, "CREATE_CLUSTER", body["operationType"])
+	got, err := newService(t).Projects.Locations.Clusters.Get(clusterName(id)).Do()
+	require.NoError(t, err)
+	require.Len(t, got.NodePools, 1)
+	require.Equal(t, "pool-a", got.NodePools[0].Name)
 }
 
 // TestSDKContainerClusterNestedMessagesOnCreate pins the create-time decode of

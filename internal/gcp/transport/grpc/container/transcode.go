@@ -257,6 +257,32 @@ func nodePoolToProto(p containerstore.NodePool) *containerpb.NodePool {
 	return out
 }
 
+// nodeConfigFromProto builds the core's NodeConfig subset from a request
+// NodeConfig (nil in, nil out). The cluster-level nodeConfig is decoded only so
+// a create that combines it with nodePools is rejected; applying it to the
+// generated default pool is DPG42.
+func nodeConfigFromProto(c *containerpb.NodeConfig) *containerstore.NodeConfig {
+	if c == nil {
+		return nil
+	}
+	return &containerstore.NodeConfig{
+		MachineType:    c.GetMachineType(),
+		DiskSizeGb:     c.GetDiskSizeGb(),
+		DiskType:       c.GetDiskType(),
+		ImageType:      c.GetImageType(),
+		OauthScopes:    c.GetOauthScopes(),
+		ServiceAccount: c.GetServiceAccount(),
+		Metadata:       c.GetMetadata(),
+		Labels:         c.GetLabels(),
+		ResourceLabels: c.GetResourceLabels(),
+		Tags:           c.GetTags(),
+		MinCpuPlatform: c.GetMinCpuPlatform(),
+		LocalSsdCount:  c.GetLocalSsdCount(),
+		Preemptible:    c.GetPreemptible(),
+		Spot:           c.GetSpot(),
+	}
+}
+
 // nodePoolAutoscalingFromProto builds the core's autoscaling subset.
 func nodePoolAutoscalingFromProto(a *containerpb.NodePoolAutoscaling) *containerstore.NodePoolAutoscaling {
 	return &containerstore.NodePoolAutoscaling{
@@ -307,23 +333,8 @@ func nodePoolFromProto(pb *containerpb.NodePool) containerstore.NodePool {
 			p.Name = id
 		}
 	}
-	if c := pb.GetConfig(); c != nil {
-		p.Config = &containerstore.NodeConfig{
-			MachineType:    c.GetMachineType(),
-			DiskSizeGb:     c.GetDiskSizeGb(),
-			DiskType:       c.GetDiskType(),
-			ImageType:      c.GetImageType(),
-			OauthScopes:    c.GetOauthScopes(),
-			ServiceAccount: c.GetServiceAccount(),
-			Metadata:       c.GetMetadata(),
-			Labels:         c.GetLabels(),
-			ResourceLabels: c.GetResourceLabels(),
-			Tags:           c.GetTags(),
-			MinCpuPlatform: c.GetMinCpuPlatform(),
-			LocalSsdCount:  c.GetLocalSsdCount(),
-			Preemptible:    c.GetPreemptible(),
-			Spot:           c.GetSpot(),
-		}
+	if c := nodeConfigFromProto(pb.GetConfig()); c != nil {
+		p.Config = c
 	}
 	if a := pb.GetAutoscaling(); a != nil {
 		p.Autoscaling = nodePoolAutoscalingFromProto(a)
@@ -392,6 +403,7 @@ func clusterFromProto(pb *containerpb.Cluster) containerstore.Cluster {
 	if n := pb.GetDefaultMaxPodsConstraint().GetMaxPodsPerNode(); n > 0 {
 		c.MaxPodsPerNode = n
 	}
+	c.NodeConfig = nodeConfigFromProto(pb.GetNodeConfig())
 	if pb.GetAutopilot() != nil {
 		c.Autopilot = &containerstore.Autopilot{Enabled: pb.GetAutopilot().GetEnabled()}
 	}

@@ -27,6 +27,13 @@ import (
 // caller supplies no initialClusterVersion. It mirrors the emulator's mock.
 const DefaultMasterVersion = "1.30.5-gke.1014001"
 
+// The cluster-create conflict messages are verbatim real GKE 400s, captured
+// against a live project (see docs/gcp/gke-create-pool-conflict.md).
+const (
+	nodeConfigPoolConflict       = "It's invalid to specify both cluster.node_config and a node pool. Please only provide a node pool."
+	initialNodeCountPoolConflict = "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a node pool."
+)
+
 // validClusterName is GKE's cluster-id grammar.
 var validClusterName = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,38}[a-z0-9])?$`)
 
@@ -63,6 +70,22 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 	}
 	if !validClusterName.MatchString(c.Name) {
 		return containerstore.Operation{}, invalidArgument("invalid cluster name: " + c.Name)
+	}
+	// Discovery on Cluster.nodePools: "This field should not be set if
+	// node_config or initial_node_count are specified", and on nodeConfig /
+	// initialNodeCount: "Do not use this and a node_pool at the same time". Real
+	// GKE answers such a create with a 400 naming the conflicting field (the
+	// node_config message wins when both are set); the emulator accepted it and
+	// ignored the default-pool fields.
+	if len(c.NodePools) > 0 {
+		if c.NodeConfig != nil {
+			return containerstore.Operation{}, invalidArgument(nodeConfigPoolConflict)
+		}
+		// A zero initialNodeCount means "no default node pool", which real GKE
+		// accepts alongside nodePools, so only a positive count conflicts.
+		if c.InitialNodeCount > 0 {
+			return containerstore.Operation{}, invalidArgument(initialNodeCountPoolConflict)
+		}
 	}
 
 	now := clock.Now()

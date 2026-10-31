@@ -22,8 +22,46 @@ func pbCluster(name string) *containerpb.Cluster {
 	return &containerpb.Cluster{Name: name, InitialNodeCount: 1}
 }
 
-// TestCanonicalCRUD exercises the canonical name/parent form the newer clients
-// and the Java suite use.
+// TestCreateClusterRejectsDefaultPoolFieldsWithNodePools proves the gRPC path
+// enforces the same conflict the REST path does: Discovery's nodePools "should
+// not be set if node_config or initial_node_count are specified".
+func TestCreateClusterRejectsDefaultPoolFieldsWithNodePools(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newGRPCService(t)
+	parent := "projects/p/locations/us-central1"
+
+	cases := []struct {
+		name    string
+		cluster *containerpb.Cluster
+		want    string
+	}{
+		{
+			name:    "initialNodeCount",
+			cluster: &containerpb.Cluster{Name: "c1", InitialNodeCount: 1, NodePools: []*containerpb.NodePool{{Name: "pool-a", InitialNodeCount: 1}}},
+			want:    "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a node pool.",
+		},
+		{
+			name:    "nodeConfig",
+			cluster: &containerpb.Cluster{Name: "c1", NodeConfig: &containerpb.NodeConfig{MachineType: "e2-micro"}, NodePools: []*containerpb.NodePool{{Name: "pool-a", InitialNodeCount: 1}}},
+			want:    "It's invalid to specify both cluster.node_config and a node pool. Please only provide a node pool.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: parent, Cluster: tc.cluster})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("code = %v, want InvalidArgument (%v)", status.Code(err), err)
+			}
+			if msg := status.Convert(err).Message(); msg != tc.want {
+				t.Fatalf("message = %q, want %q", msg, tc.want)
+			}
+			if _, err := svc.GetCluster(ctx, &containerpb.GetClusterRequest{Name: parent + "/clusters/c1"}); status.Code(err) != codes.NotFound {
+				t.Fatalf("rejected create persisted a cluster: %v", err)
+			}
+		})
+	}
+}
+
 // TestCreateClusterInlineNodePools proves the gRPC create materializes the
 // caller's node_pools the way REST does, instead of substituting a default-pool.
 func TestCreateClusterInlineNodePools(t *testing.T) {
@@ -60,6 +98,8 @@ func TestCreateClusterInlineNodePools(t *testing.T) {
 	}
 }
 
+// TestCanonicalCRUD exercises the canonical name/parent form the newer clients
+// and the Java suite use.
 func TestCanonicalCRUD(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newGRPCService(t)

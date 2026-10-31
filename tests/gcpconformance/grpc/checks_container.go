@@ -27,6 +27,7 @@ const containerLocation = "us-central1"
 func containerChecks() []Check {
 	return []Check{
 		{Service: "container", RPC: "CreateCluster", Method: "CreateCluster", KeyField: "CREATE_CLUSTER operation DONE", Run: checkContainerCreateCluster},
+		{Service: "container", RPC: "CreateCluster (nodePools + default-pool fields)", Method: "CreateCluster", KeyField: "InvalidArgument on the default-pool conflict", Run: checkContainerCreateClusterPoolConflict},
 		{Service: "container", RPC: "GetCluster", Method: "GetCluster", KeyField: "name/status/masterVersion + nested response messages", Run: checkContainerGetCluster},
 		{Service: "container", RPC: "GetCluster (legacy project/zone)", Method: "GetCluster", KeyField: "legacy project_id/zone/cluster_id addressing", Run: checkContainerGetClusterLegacy},
 		{Service: "container", RPC: "ListClusters", Method: "ListClusters", KeyField: "created cluster present", Run: checkContainerListClusters},
@@ -775,6 +776,59 @@ func checkContainerCreateCluster(ctx context.Context, cfg Config) error {
 	}
 	if op.GetName() == "" || op.GetSelfLink() == "" {
 		return fmt.Errorf("CreateCluster operation missing name/selfLink")
+	}
+	return nil
+}
+
+// checkContainerCreateClusterPoolConflict verifies the create-time conflict real
+// GKE 400s on (Discovery on Cluster.nodePools: "This field should not be set if
+// node_config or initial_node_count are specified"): inline nodePools combined
+// with either legacy default-pool field is InvalidArgument with the server's
+// message (node_config wins when both are set, as captured in
+// docs/gcp/gke-create-pool-conflict.md), and nothing is persisted.
+func checkContainerCreateClusterPoolConflict(ctx context.Context, cfg Config) error {
+	client, err := newContainerClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	const (
+		incConflict = "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a node pool."
+		ncConflict  = "It's invalid to specify both cluster.node_config and a node pool. Please only provide a node pool."
+	)
+	cases := []struct {
+		label   string
+		cluster *containerpb.Cluster
+		want    string
+	}{
+		{
+			label:   "initial_node_count",
+			cluster: &containerpb.Cluster{Name: cfg.ResourceName("gcpc-grpc-gke-conflict-inc"), InitialNodeCount: 1, NodePools: []*containerpb.NodePool{{Name: "pool-a", InitialNodeCount: 1}}},
+			want:    incConflict,
+		},
+		{
+			label:   "node_config",
+			cluster: &containerpb.Cluster{Name: cfg.ResourceName("gcpc-grpc-gke-conflict-nc"), NodeConfig: &containerpb.NodeConfig{MachineType: "e2-micro"}, NodePools: []*containerpb.NodePool{{Name: "pool-a", InitialNodeCount: 1}}},
+			want:    ncConflict,
+		},
+		{
+			label:   "both (node_config precedence)",
+			cluster: &containerpb.Cluster{Name: cfg.ResourceName("gcpc-grpc-gke-conflict-both"), InitialNodeCount: 1, NodeConfig: &containerpb.NodeConfig{MachineType: "e2-micro"}, NodePools: []*containerpb.NodePool{{Name: "pool-a", InitialNodeCount: 1}}},
+			want:    ncConflict,
+		},
+	}
+	for _, tc := range cases {
+		_, err := client.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: containerParent(cfg), Cluster: tc.cluster})
+		if status.Code(err) != codes.InvalidArgument {
+			return fmt.Errorf("create with %s + nodePools: code = %v, want InvalidArgument (%v)", tc.label, status.Code(err), err)
+		}
+		if msg := status.Convert(err).Message(); msg != tc.want {
+			return fmt.Errorf("create with %s + nodePools: message = %q, want %q", tc.label, msg, tc.want)
+		}
+		if _, err := client.GetCluster(ctx, &containerpb.GetClusterRequest{Name: containerNameRaw(cfg, tc.cluster.GetName())}); status.Code(err) != codes.NotFound {
+			return fmt.Errorf("create with %s + nodePools: rejected cluster %q was persisted (%v)", tc.label, tc.cluster.GetName(), err)
+		}
 	}
 	return nil
 }

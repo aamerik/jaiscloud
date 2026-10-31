@@ -128,6 +128,9 @@ func clusterFromBody(m map[string]any) (containerstore.Cluster, error) {
 	c.Network = str(m, "network")
 	c.Subnetwork = str(m, "subnetwork")
 	c.InitialNodeCount = int32From(m, "initialNodeCount")
+	if cfg, ok := m["nodeConfig"].(map[string]any); ok {
+		c.NodeConfig = nodeConfigFromMap(cfg)
+	}
 	if sn, ok := m["shieldedNodes"].(map[string]any); ok {
 		c.ShieldedNodes = &containerstore.ShieldedNodes{Enabled: boolFrom(sn["enabled"])}
 	}
