@@ -114,6 +114,13 @@ func clusterFromBody(m map[string]any) (containerstore.Cluster, error) {
 		// workload pool from the project), matching the API's meaning.
 		c.WorkloadIdentityConfig = &containerstore.WorkloadIdentityConfig{WorkloadPool: str(wi, "workloadPool")}
 	}
+	if pools, ok := m["nodePools"].([]any); ok {
+		for _, raw := range pools {
+			if pm, ok := raw.(map[string]any); ok {
+				c.NodePools = append(c.NodePools, nodePoolFromBody(pm))
+			}
+		}
+	}
 	return c, nil
 }
 

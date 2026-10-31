@@ -24,6 +24,42 @@ func pbCluster(name string) *containerpb.Cluster {
 
 // TestCanonicalCRUD exercises the canonical name/parent form the newer clients
 // and the Java suite use.
+// TestCreateClusterInlineNodePools proves the gRPC create materializes the
+// caller's node_pools the way REST does, instead of substituting a default-pool.
+func TestCreateClusterInlineNodePools(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newGRPCService(t)
+	parent := "projects/p/locations/us-central1"
+
+	cluster := &containerpb.Cluster{
+		Name: "c1",
+		NodePools: []*containerpb.NodePool{
+			{Name: "pool-a", InitialNodeCount: 2, Config: &containerpb.NodeConfig{MachineType: "e2-medium"}},
+			{Name: "pool-b", InitialNodeCount: 1},
+		},
+	}
+	if _, err := svc.CreateCluster(ctx, &containerpb.CreateClusterRequest{Parent: parent, Cluster: cluster}); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := svc.GetCluster(ctx, &containerpb.GetClusterRequest{Name: parent + "/clusters/c1"})
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	pools := c.GetNodePools()
+	if len(pools) != 2 || pools[0].GetName() != "pool-a" || pools[1].GetName() != "pool-b" {
+		t.Fatalf("nodePools = %v", pools)
+	}
+	if pools[0].GetStatus() != containerpb.NodePool_RUNNING {
+		t.Fatalf("pool-a status = %v, want RUNNING", pools[0].GetStatus())
+	}
+	if pools[0].GetVersion() != c.GetCurrentMasterVersion() {
+		t.Fatalf("pool-a version = %q, want %q", pools[0].GetVersion(), c.GetCurrentMasterVersion())
+	}
+	if pools[0].GetConfig().GetMachineType() != "e2-medium" {
+		t.Fatalf("pool-a machineType = %q", pools[0].GetConfig().GetMachineType())
+	}
+}
+
 func TestCanonicalCRUD(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newGRPCService(t)

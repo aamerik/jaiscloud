@@ -68,6 +68,54 @@ func TestProviderClusterCRUD(t *testing.T) {
 	}
 }
 
+func TestProviderCreateClusterWithInlineNodePools(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+
+	body := map[string]any{"cluster": map[string]any{
+		"name": "c1",
+		"nodePools": []any{
+			map[string]any{"name": "pool-a", "initialNodeCount": float64(2),
+				"config": map[string]any{"machineType": "e2-medium"}},
+			map[string]any{"name": "pool-b", "initialNodeCount": float64(1)},
+		},
+	}}
+	if _, err := p.CreateCluster(ctx, req(map[string]any{"project": "p", "location": "us-central1", "body": body})); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+
+	get, err := p.GetCluster(ctx, req(map[string]any{"project": "p", "location": "us-central1", "cluster": "c1"}))
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	pools, ok := get.Data["nodePools"].([]any)
+	if !ok || len(pools) != 2 {
+		t.Fatalf("nodePools = %v", get.Data["nodePools"])
+	}
+	a := pools[0].(map[string]any)
+	if a["name"] != "pool-a" || a["status"] != containerstore.StatusRunning {
+		t.Fatalf("pool-a = %v", a)
+	}
+	if a["selfLink"] != "projects/p/locations/us-central1/clusters/c1/nodePools/pool-a" {
+		t.Fatalf("pool-a selfLink = %v", a["selfLink"])
+	}
+	cfg, _ := a["config"].(map[string]any)
+	if cfg["machineType"] != "e2-medium" {
+		t.Fatalf("pool-a config = %v", a["config"])
+	}
+	if name := pools[1].(map[string]any)["name"]; name != "pool-b" {
+		t.Fatalf("pool-b = %v", pools[1])
+	}
+
+	list, err := p.ListNodePools(ctx, req(map[string]any{"project": "p", "location": "us-central1", "cluster": "c1"}))
+	if err != nil {
+		t.Fatalf("ListNodePools: %v", err)
+	}
+	if got := list.Data["nodePools"].([]any); len(got) != 2 {
+		t.Fatalf("nodePools.list = %v", got)
+	}
+}
+
 func TestProviderOperations(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider(t)

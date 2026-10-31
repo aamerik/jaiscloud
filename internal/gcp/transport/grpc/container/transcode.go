@@ -382,6 +382,9 @@ func clusterFromProto(pb *containerpb.Cluster) containerstore.Cluster {
 			WorkloadPool: pb.GetWorkloadIdentityConfig().GetWorkloadPool(),
 		}
 	}
+	for _, p := range pb.GetNodePools() {
+		c.NodePools = append(c.NodePools, nodePoolFromProto(p))
+	}
 	return c
 }
 

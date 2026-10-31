@@ -89,6 +89,11 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 			Status:           containerstore.StatusRunning,
 			InitialNodeCount: c.InitialNodeCount,
 		}}
+	} else if err := materializeNodePools(project, location, &c); err != nil {
+		// A create request may carry its pools inline (Discovery: Cluster.nodePools);
+		// real GKE materializes them in the same call, so they are stored as
+		// provisioned pools rather than replaced by a default-pool.
+		return containerstore.Operation{}, err
 	}
 	c.CaCertificate = ""
 	c.CreateTime = now
