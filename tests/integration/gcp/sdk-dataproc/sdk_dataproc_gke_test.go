@@ -79,7 +79,9 @@ func TestSDKDataprocOnGKE(t *testing.T) {
 				},
 			},
 			KubernetesSoftwareConfig: &dataproc.KubernetesSoftwareConfig{
-				ComponentVersion: map[string]string{"SPARK": "3.5"},
+				// The image-line alias: real GCP accepts `dataproc-2.2` and
+				// dereferences it to the newest engine release (DPG36).
+				ComponentVersion: map[string]string{"SPARK": "dataproc-2.2"},
 			},
 		},
 	}
@@ -94,6 +96,10 @@ func TestSDKDataprocOnGKE(t *testing.T) {
 	var cluster dataproc.Cluster
 	require.NoError(t, json.Unmarshal(created.Response, &cluster))
 	require.Equal(t, "RUNNING", cluster.Status.State)
+
+	// The image-line alias is dereferenced at create and read back concrete.
+	require.Equal(t, "3.5-dataproc-28",
+		cluster.VirtualClusterConfig.KubernetesClusterConfig.KubernetesSoftwareConfig.ComponentVersion["SPARK"])
 
 	// nodePoolConfig is input-only: the read never echoes it.
 	require.NotNil(t, cluster.VirtualClusterConfig)
@@ -416,9 +422,11 @@ func TestSDKDataprocOnGKEFailurePaths(t *testing.T) {
 			code: 400, message: "must be in the same project",
 		},
 		{
-			name: "unknown engine alias",
+			// Only `dataproc-2.2` is a valid image line; the others are rejected
+			// by real GCP too, so they stay InvalidArgument here (DPG36).
+			name: "unknown image-line alias",
 			mut: func(v *dataproc.VirtualClusterConfig) {
-				v.KubernetesClusterConfig.KubernetesSoftwareConfig.ComponentVersion["SPARK"] = "dataproc-2.2"
+				v.KubernetesClusterConfig.KubernetesSoftwareConfig.ComponentVersion["SPARK"] = "dataproc-2.3"
 			},
 			code: 400, message: "unknown Spark engine version",
 		},

@@ -50,6 +50,7 @@ func dataprocChecks() []Check {
 		{Service: "dataproc", RPC: "CreateCluster (vcc reuse)", Method: "CreateCluster", KeyField: "a second virtual cluster adopts existing pools", Run: checkDPGKEVirtualClusterPoolReuse},
 		{Service: "dataproc", RPC: "CreateCluster (vcc rules)", Method: "CreateCluster", KeyField: "GKE placement/pool validation as client-visible errors", Run: checkDPGKEVirtualClusterRules},
 		{Service: "dataproc", RPC: "UpdateCluster (vcc)", Method: "UpdateCluster", KeyField: "recreate-only: virtualClusterConfig patch is InvalidArgument", Run: checkDPVirtualClusterRecreateOnly},
+		{Service: "dataproc", RPC: "CreateCluster (vcc image alias)", Method: "CreateCluster", KeyField: "dataproc-2.2 dereferences to the newest engine release", Run: checkDPGKEImageVersionAlias},
 		{Service: "dataproc", RPC: "CreateCluster (metastore)", Method: "CreateCluster", KeyField: "auxiliaryServicesConfig.metastoreConfig echo", Run: checkDPMetastoreAttachment},
 		{Service: "dataproc", RPC: "GetJob (placement)", Method: "GetJob", KeyField: "placement.clusterUuid", Run: checkDPJobPlacementClusterUUID},
 		{Service: "dataproc", RPC: "SubmitJob (driver output)", Method: "SubmitJob", KeyField: "driver output/control URIs present", Run: checkDPDriverOutputURIs},
@@ -822,6 +823,62 @@ func checkDPVirtualClusterRecreateOnly(ctx context.Context, cfg Config) error {
 	}
 	if got.GetConfig() != nil {
 		return fmt.Errorf("labels patch invented a GCE config: %+v", got.GetConfig())
+	}
+	return nil
+}
+
+// Check 15c: the image-line alias `dataproc-<major.minor>` is a documented Spark
+// version form, and the only line real GCP accepts for a virtual cluster is
+// `dataproc-2.2`, which dereferences to the newest engine release — it resolves
+// exactly like `latest` (recorded from real GCP, DPG36). Any other image line
+// stays InvalidArgument rather than being mapped by inference.
+func checkDPGKEImageVersionAlias(ctx context.Context, cfg Config) error {
+	if _, err := ensureGKEPrereqCluster(ctx, cfg, "gcpc-gke"); err != nil {
+		return err
+	}
+	client, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	vccWithVersion := func(version string) *dataprocpb.VirtualClusterConfig {
+		vcc := gkeVirtualClusterConfig(dpGkeTarget(cfg))
+		vcc.GetKubernetesClusterConfig().KubernetesSoftwareConfig = &dataprocpb.KubernetesSoftwareConfig{
+			ComponentVersion: map[string]string{"SPARK": version},
+		}
+		return vcc
+	}
+
+	id := cfg.ResourceName("gcpc-grpc-dp-vccimg")
+	op, err := client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: id, VirtualClusterConfig: vccWithVersion("dataproc-2.2")},
+	})
+	if err != nil {
+		if status.Code(err) != codes.AlreadyExists {
+			return fmt.Errorf("CreateCluster(dataproc-2.2): %w", err)
+		}
+	} else if _, err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("operation Wait: %w", err)
+	}
+	got, err := client.GetCluster(ctx, &dataprocpb.GetClusterRequest{ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: id})
+	if err != nil {
+		return fmt.Errorf("GetCluster: %w", err)
+	}
+	if v := got.GetVirtualClusterConfig().GetKubernetesClusterConfig().GetKubernetesSoftwareConfig().GetComponentVersion()["SPARK"]; v != "3.5-dataproc-28" {
+		return fmt.Errorf("componentVersion[SPARK] = %q, want dataproc-2.2 dereferenced to 3.5-dataproc-28", v)
+	}
+
+	// An image line real GCP does not accept is not invented here either.
+	_, err = client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: cfg.ResourceName("gcpc-grpc-dp-vccimg-bad"), VirtualClusterConfig: vccWithVersion("dataproc-2.3")},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("CreateCluster(dataproc-2.3): got %v, want InvalidArgument", err)
 	}
 	return nil
 }

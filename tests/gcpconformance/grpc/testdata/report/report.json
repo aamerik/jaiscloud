@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 492,
-  "passed": 492,
+  "total": 493,
+  "passed": 493,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 492,
-    "passed": 492,
+    "checks": 493,
+    "passed": 493,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -23,8 +23,8 @@
     },
     {
       "service": "dataproc",
-      "total": 31,
-      "passed": 31,
+      "total": 32,
+      "passed": 32,
       "failed": 0,
       "unimplemented": 0
     },
@@ -3060,6 +3060,13 @@
       "method": "UpdateCluster",
       "status": "pass",
       "key_field": "recreate-only: virtualClusterConfig patch is InvalidArgument"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (vcc image alias)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "dataproc-2.2 dereferences to the newest engine release"
     },
     {
       "service": "dataproc",

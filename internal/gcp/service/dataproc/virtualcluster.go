@@ -34,6 +34,19 @@ var gkeEngineReleases = []string{
 	"2.4-dataproc-14",
 }
 
+// gkeImageVersionAliases are the documented `dataproc-<major.minor>` image-line
+// aliases, mapped to the concrete release they dereference to. Recorded from real
+// GCP (docs/gcp/dataproc-gke-version-aliases.md): `dataproc-2.2` is the only
+// image line accepted as a Spark version for virtual clusters — it is the
+// Dataproc image line the GKE engine releases are built on — and it resolves to
+// the same newest release as `latest`. Every other image alias (`dataproc-1.4`,
+// `-1.5`, `-2.0`, `-2.1`, `-2.3`, `-3.0`, `-4.0`) is rejected by real GCP with
+// "'<value>' is not a valid spark version for Virtual clusters.", so it stays
+// InvalidArgument here rather than being mapped by inference.
+var gkeImageVersionAliases = map[string]string{
+	"dataproc-2.2": "3.5-dataproc-28",
+}
+
 // k8sComponentSpark is the only KubernetesComponent the GKE release table uses
 // ("SPARK"); it is the one entry componentVersion must carry.
 const k8sComponentSpark = "SPARK"
@@ -105,11 +118,11 @@ func canonicalGKETarget(v *gkeVirtualCluster) string {
 }
 
 // resolveGKEEngineVersion dereferences a Spark engine version to a concrete
-// release. The documented forms are a fully qualified `<major.minor>-dataproc-<n>`
-// and the aliases `latest`, `<major>` and `<major.minor>`; aliases are
-// dereferenced at cluster creation, so two clusters created from the same alias
-// can differ (recorded: gke-versions). An unknown alias or release is
-// InvalidArgument — never silently accepted.
+// release. The documented forms are a fully qualified `<major.minor>-dataproc-<n>`,
+// the aliases `latest`, `<major>` and `<major.minor>`, and the image-line alias
+// `dataproc-<major.minor>`; aliases are dereferenced at cluster creation, so two
+// clusters created from the same alias can differ (recorded: gke-versions). An
+// unknown alias or release is InvalidArgument — never silently accepted.
 func resolveGKEEngineVersion(v string) (string, error) {
 	s := strings.TrimSpace(v)
 	if s == "" {
@@ -119,6 +132,9 @@ func resolveGKEEngineVersion(v string) (string, error) {
 		if rel == s {
 			return rel, nil
 		}
+	}
+	if rel, ok := gkeImageVersionAliases[s]; ok {
+		return rel, nil
 	}
 	if s == "latest" {
 		return gkeEngineReleases[0], nil
@@ -133,13 +149,14 @@ func resolveGKEEngineVersion(v string) (string, error) {
 		}
 	}
 	return "", invalidArgument(fmt.Sprintf(
-		"unknown Spark engine version %q: use a release such as %s, or an alias (latest, 3, 3.5)",
+		"unknown Spark engine version %q: use a release such as %s, or an alias (latest, 3, 3.5, dataproc-2.2)",
 		v, gkeEngineReleases[0]))
 }
 
-// parseVersionAlias splits a `<major>` or `<major.minor>` alias. Anything else
-// (including the documented `dataproc-<major.minor>` image alias) is not an
-// alias this emulator resolves; see the DPG23 deferral row.
+// parseVersionAlias splits a `<major>` or `<major.minor>` alias. The image-line
+// form `dataproc-<major.minor>` is not a numeric alias: it is resolved by
+// gkeImageVersionAliases, and any image line outside that table is
+// InvalidArgument.
 func parseVersionAlias(s string) (major, minor string, ok bool) {
 	parts := strings.Split(s, ".")
 	if len(parts) > 2 {

@@ -1231,11 +1231,13 @@ func Scenarios(suffix string) []Scenario {
 	dpGkeA := "conf-dpgke-a-" + suffix
 	dpGkeB := "conf-dpgke-b-" + suffix
 	dpGkeC := "conf-dpgke-c-" + suffix
+	dpGkeD := "conf-dpgke-d-" + suffix
 	dpGkePoolA := "conf-dp-pool-a-" + suffix
 	dpGkeShaped := "conf-dp-shaped-" + suffix
 	dpGkeDriver := "conf-dp-driver-" + suffix
 	dpGkeExecutor := "conf-dp-executor-" + suffix
 	dpGkeTaken := "conf-dp-taken-" + suffix
+	dpGkePoolD := "conf-dp-pool-d-" + suffix
 	sc = append(sc,
 		// Prerequisite GKE cluster.
 		Scenario{Service: "container", Method: "POST",
@@ -1275,6 +1277,17 @@ func Scenarios(suffix string) []Scenario {
 			Save: map[string]string{"dpGkeCOp": "name"}},
 		Scenario{Service: "dataproc", Method: "GET", Path: "/v1/${dpGkeCOp}"},
 		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/clusters/" + dpGkeC},
+		// Virtual cluster D: the `dataproc-2.2` image-line alias. It is the only
+		// image line real GCP accepts as a Spark version for a virtual cluster and
+		// it dereferences to the newest engine release, exactly like `latest`
+		// (recorded from real GCP, DPG36).
+		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/clusters",
+			Body: dpGkeVC(dpGkeD, "conf-ns-d-"+suffix,
+				[]string{fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT"]}`, dpGkePoolD)}, "dataproc-2.2"),
+			Save: map[string]string{"dpGkeDOp": "name"}},
+		Scenario{Service: "dataproc", Method: "GET", Path: "/v1/${dpGkeDOp}"},
+		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/clusters/" + dpGkeD},
+		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/clusters/" + dpGkeD},
 		// A Dataproc-on-GKE virtual cluster is recreate-only: a patch that would
 		// apply virtualClusterConfig is InvalidArgument.
 		Scenario{Service: "dataproc", Method: "PATCH",

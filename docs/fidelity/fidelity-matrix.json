@@ -2468,10 +2468,10 @@
       "state": "ga",
       "verified": true,
       "evidence": [
-        "grpc-checks=CreateCluster,CreateCluster (metastore),CreateCluster (on GKE, unknown target),CreateCluster (vcc pools),CreateCluster (vcc reuse),CreateCluster (vcc rules),CreateCluster (vcc)",
+        "grpc-checks=CreateCluster,CreateCluster (metastore),CreateCluster (on GKE, unknown target),CreateCluster (vcc image alias),CreateCluster (vcc pools),CreateCluster (vcc reuse),CreateCluster (vcc rules),CreateCluster (vcc)",
         "mutating",
         "postgres=yes",
-        "transport=grpc (conformance=7/7 pass)",
+        "transport=grpc (conformance=8/8 pass)",
         "verified=true (grpc)"
       ]
     },
@@ -2514,7 +2514,7 @@
         "discovery=dataproc.projects.regions.clusters.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 11 transcript entries)"
+        "verified=true (rest, 12 transcript entries)"
       ]
     },
     {
@@ -2542,7 +2542,7 @@
         "discovery=dataproc.projects.regions.clusters.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 4 transcript entries)"
+        "verified=true (rest, 5 transcript entries)"
       ]
     },
     {
@@ -2597,7 +2597,7 @@
       "evidence": [
         "discovery=dataproc.projects.regions.clusters.get",
         "postgres=yes",
-        "verified=true (rest, 5 transcript entries)"
+        "verified=true (rest, 6 transcript entries)"
       ]
     },
     {
@@ -2623,7 +2623,7 @@
       "evidence": [
         "discovery=dataproc.projects.regions.operations.get",
         "postgres=yes",
-        "verified=true (rest, 5 transcript entries)"
+        "verified=true (rest, 6 transcript entries)"
       ]
     },
     {

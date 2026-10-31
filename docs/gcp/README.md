@@ -10,6 +10,7 @@ reference material it links to.
 | [`testability.md`](testability.md) | The local-testability contract: per service, what a local run may be trusted to prove and what must be verified on real GCP, plus the behaviour classes (`p1`–`p5`) the depth gate requires. |
 | [`bigquery-sql-engine.md`](bigquery-sql-engine.md) | Decision record (BQ0) freezing the BigQuery engine choice (pure-Go in-process SQLite, one engine in memory and `--dsn` modes) and the v1 dialect subset. |
 | [`fidelity-reconciliation.md`](fidelity-reconciliation.md) | The AUD5 reconciliation of the fidelity matrix against wire evidence, code and the official Discovery documents, with the durable re-check. |
+| [`dataproc-gke-version-aliases.md`](dataproc-gke-version-aliases.md) | Real-GCP capture (2026-10-30) of the Dataproc-on-GKE `dataproc-<major.minor>` Spark version alias: only `dataproc-2.2` is accepted and it resolves to `3.5-dataproc-28`. |
 | [`wave-plan-template.md`](wave-plan-template.md) | The template every GCP wave plan must follow (`tools/gcpstatus` parses its index/detail tables). |
 
 Generated, machine-read artifacts stay outside this namespace on purpose:
