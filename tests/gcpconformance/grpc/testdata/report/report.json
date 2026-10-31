@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 494,
-  "passed": 494,
+  "total": 495,
+  "passed": 495,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 494,
-    "passed": 494,
+    "checks": 495,
+    "passed": 495,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -16,8 +16,8 @@
   "services": [
     {
       "service": "container",
-      "total": 30,
-      "passed": 30,
+      "total": 31,
+      "passed": 31,
       "failed": 0,
       "unimplemented": 0
     },
@@ -3151,6 +3151,13 @@
       "method": "CreateCluster",
       "status": "pass",
       "key_field": "CREATE_CLUSTER operation DONE"
+    },
+    {
+      "service": "container",
+      "rpc": "CreateCluster (nodePools + default-pool fields)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "InvalidArgument on the default-pool conflict"
     },
     {
       "service": "container",

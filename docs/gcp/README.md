@@ -11,6 +11,7 @@ reference material it links to.
 | [`bigquery-sql-engine.md`](bigquery-sql-engine.md) | Decision record (BQ0) freezing the BigQuery engine choice (pure-Go in-process SQLite, one engine in memory and `--dsn` modes) and the v1 dialect subset. |
 | [`fidelity-reconciliation.md`](fidelity-reconciliation.md) | The AUD5 reconciliation of the fidelity matrix against wire evidence, code and the official Discovery documents, with the durable re-check. |
 | [`dataproc-gke-version-aliases.md`](dataproc-gke-version-aliases.md) | Real-GCP capture (2026-10-30) of the Dataproc-on-GKE `dataproc-<major.minor>` Spark version alias: only `dataproc-2.2` is accepted and it resolves to `3.5-dataproc-28`. |
+| [`gke-create-pool-conflict.md`](gke-create-pool-conflict.md) | Real-GCP capture (2026-10-31) of the GKE `clusters.create` default-pool conflict: `nodePools` with a positive `initialNodeCount` or a `nodeConfig` is a `400 INVALID_ARGUMENT` with the verbatim server message, while `initialNodeCount: 0` is accepted. |
 | [`wave-plan-template.md`](wave-plan-template.md) | The template every GCP wave plan must follow (`tools/gcpstatus` parses its index/detail tables). |
 
 Generated, machine-read artifacts stay outside this namespace on purpose:

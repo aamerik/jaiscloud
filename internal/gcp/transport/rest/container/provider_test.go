@@ -2,6 +2,7 @@ package container
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	core "jaiscloud/internal/gcp/service/container"
@@ -146,6 +147,51 @@ func TestProviderCreateRejectsMissingCluster(t *testing.T) {
 	p := newProvider(t)
 	if _, err := p.CreateCluster(context.Background(), req(map[string]any{"project": "p", "location": "l"})); err == nil {
 		t.Fatal("expected InvalidArgument for missing cluster object")
+	}
+}
+
+// TestProviderCreateRejectsDefaultPoolFieldsWithNodePools covers the wire
+// path: inline nodePools combined with the legacy default-pool fields is the
+// 400 real GKE returns (docs/gcp/gke-create-pool-conflict.md), and nothing is
+// persisted.
+func TestProviderCreateRejectsDefaultPoolFieldsWithNodePools(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+	pools := []any{map[string]any{"name": "pool-a", "initialNodeCount": float64(1)}}
+
+	cases := []struct {
+		name    string
+		cluster map[string]any
+		want    string
+	}{
+		{
+			name:    "initialNodeCount",
+			cluster: map[string]any{"name": "c1", "initialNodeCount": float64(1), "nodePools": pools},
+			want:    "It's invalid to specify both cluster.initial_node_count and a node pool. Please only provide a node pool.",
+		},
+		{
+			name:    "nodeConfig",
+			cluster: map[string]any{"name": "c1", "nodeConfig": map[string]any{"machineType": "e2-micro"}, "nodePools": pools},
+			want:    "It's invalid to specify both cluster.node_config and a node pool. Please only provide a node pool.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := p.CreateCluster(ctx, req(map[string]any{"project": "p", "location": "us-central1", "body": map[string]any{"cluster": tc.cluster}}))
+			if err == nil {
+				t.Fatal("want InvalidArgument, got nil")
+			}
+			var pe *model.ProviderError
+			if !errors.As(err, &pe) || pe.HTTPStatus != 400 || pe.Code != "InvalidArgument" {
+				t.Fatalf("error = %v, want 400 InvalidArgument", err)
+			}
+			if pe.Message != tc.want {
+				t.Fatalf("message = %q, want %q", pe.Message, tc.want)
+			}
+			if _, err := p.GetCluster(ctx, req(map[string]any{"project": "p", "location": "us-central1", "cluster": "c1"})); err == nil {
+				t.Fatal("rejected create must persist no cluster")
+			}
+		})
 	}
 }
 

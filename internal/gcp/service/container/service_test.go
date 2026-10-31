@@ -105,6 +105,101 @@ func TestCreateClusterMaterializesCallerNodePools(t *testing.T) {
 	}
 }
 
+func TestCreateClusterRejectsDefaultPoolFieldsWithNodePools(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+
+	// Discovery: nodePools "should not be set if node_config or
+	// initial_node_count are specified"; real GKE answers each combination with
+	// a 400 naming the offending field, and node_config wins when both are set.
+	cases := []struct {
+		name    string
+		cluster containerstore.Cluster
+		want    string
+	}{
+		{
+			name:    "initialNodeCount",
+			cluster: containerstore.Cluster{Name: "c1", InitialNodeCount: 1, NodePools: []containerstore.NodePool{{Name: "pool-a", InitialNodeCount: 1}}},
+			want:    initialNodeCountPoolConflict,
+		},
+		{
+			name:    "nodeConfig",
+			cluster: containerstore.Cluster{Name: "c1", NodeConfig: &containerstore.NodeConfig{MachineType: "e2-micro"}, NodePools: []containerstore.NodePool{{Name: "pool-a", InitialNodeCount: 1}}},
+			want:    nodeConfigPoolConflict,
+		},
+		{
+			name:    "both prefer nodeConfig",
+			cluster: containerstore.Cluster{Name: "c1", InitialNodeCount: 1, NodeConfig: &containerstore.NodeConfig{MachineType: "e2-micro"}, NodePools: []containerstore.NodePool{{Name: "pool-a", InitialNodeCount: 1}}},
+			want:    nodeConfigPoolConflict,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.CreateCluster(ctx, "p", "us-central1", tc.cluster)
+			providerErr(t, err, "InvalidArgument")
+			var pe *model.ProviderError
+			if !errors.As(err, &pe) {
+				t.Fatalf("want *model.ProviderError, got %T (%v)", err, err)
+			}
+			if pe.Message != tc.want {
+				t.Fatalf("message = %q, want %q", pe.Message, tc.want)
+			}
+			if _, err := s.GetCluster(ctx, "p", "us-central1", "c1"); err == nil {
+				t.Fatal("rejected create must persist no cluster")
+			}
+		})
+	}
+}
+
+// TestCreateClusterAcceptsZeroInitialNodeCountWithNodePools pins the real-GCP
+// boundary: a zero cluster-level initialNodeCount means "no default node pool",
+// so it does not conflict with nodePools (captured against a live project).
+func TestCreateClusterAcceptsZeroInitialNodeCountWithNodePools(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+
+	_, err := s.CreateCluster(ctx, "p", "us-central1", containerstore.Cluster{
+		Name:      "c1",
+		NodePools: []containerstore.NodePool{{Name: "pool-a", InitialNodeCount: 1}},
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := s.GetCluster(ctx, "p", "us-central1", "c1")
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if len(c.NodePools) != 1 || c.NodePools[0].Name != "pool-a" {
+		t.Fatalf("nodePools = %+v", c.NodePools)
+	}
+	if c.InitialNodeCount != 0 {
+		t.Fatalf("initialNodeCount = %d, want 0", c.InitialNodeCount)
+	}
+}
+
+// TestCreateClusterAcceptsNodeConfigWithoutNodePools pins the other half of the
+// guard: nodeConfig is the request shape for the generated default pool, so a
+// create that sends it alone is valid (applying it is DPG42).
+func TestCreateClusterAcceptsNodeConfigWithoutNodePools(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+
+	_, err := s.CreateCluster(ctx, "p", "us-central1", containerstore.Cluster{
+		Name:       "c1",
+		NodeConfig: &containerstore.NodeConfig{MachineType: "e2-micro"},
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := s.GetCluster(ctx, "p", "us-central1", "c1")
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	if len(c.NodePools) != 1 || c.NodePools[0].Name != "default-pool" {
+		t.Fatalf("nodePools = %+v", c.NodePools)
+	}
+}
+
 func TestCreateClusterRejectsBadNodePools(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService()

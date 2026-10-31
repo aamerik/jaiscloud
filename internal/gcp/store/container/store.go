@@ -223,6 +223,11 @@ type Cluster struct {
 	// InitialNodeCount is the request's cluster-level initialNodeCount; the mock
 	// materializes it as the default node pool's size.
 	InitialNodeCount int32 `json:"initialNodeCount,omitempty"`
+	// NodeConfig is the request's cluster-level nodeConfig (the parameters of
+	// the generated default node pool). It is decoded so a create that also
+	// carries nodePools is rejected the way real GKE rejects it; applying it to
+	// the default pool is still open (DPG42).
+	NodeConfig *NodeConfig `json:"nodeConfig,omitempty"`
 
 	NodePools      []NodePool        `json:"nodePools,omitempty"`
 	ResourceLabels map[string]string `json:"resourceLabels,omitempty"`
