@@ -135,6 +135,10 @@ func cloneCluster(c Cluster) Cluster {
 		v := *c.WorkloadIdentityConfig
 		c.WorkloadIdentityConfig = &v
 	}
+	if c.ShieldedNodes != nil {
+		v := *c.ShieldedNodes
+		c.ShieldedNodes = &v
+	}
 	if c.NetworkPolicy != nil {
 		v := *c.NetworkPolicy
 		c.NetworkPolicy = &v

@@ -1706,7 +1706,7 @@
       "evidence": [
         "discovery=container.projects.locations.clusters.get",
         "postgres=yes",
-        "verified=true (rest, 2 transcript entries)"
+        "verified=true (rest, 3 transcript entries)"
       ]
     },
     {

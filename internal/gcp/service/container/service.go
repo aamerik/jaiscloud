@@ -78,6 +78,24 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 	if c.Subnetwork == "" {
 		c.Subnetwork = "default"
 	}
+	// The response messages real GKE always renders are persisted at create so
+	// a snapshot round-trip carries them; WithReadDefaults still covers records
+	// written before they were modelled.
+	if c.ShieldedNodes == nil {
+		c.ShieldedNodes = &containerstore.ShieldedNodes{Enabled: true}
+	}
+	if c.MaxPodsPerNode <= 0 {
+		c.MaxPodsPerNode = DefaultMaxPodsPerNode
+	}
+	if c.LoggingService == "" {
+		c.LoggingService = LoggingServiceKubernetes
+	}
+	if c.MonitoringService == "" {
+		c.MonitoringService = MonitoringServiceKubernetes
+	}
+	if c.LegacyAbac == nil {
+		c.LegacyAbac = &containerstore.LegacyAbac{}
+	}
 	// Workload Identity is required by Dataproc-on-GKE; an empty pool means the
 	// project default, exactly as GKE fills it.
 	if c.WorkloadIdentityConfig != nil && c.WorkloadIdentityConfig.WorkloadPool == "" {
@@ -120,20 +138,25 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 	return op, nil
 }
 
-// GetCluster returns a cluster by short name.
+// GetCluster returns a cluster by short name, with the response messages real
+// GKE always renders filled in.
 func (s *Service) GetCluster(ctx context.Context, project, location, name string) (containerstore.Cluster, error) {
 	c, err := s.store.GetCluster(ctx, project, location, name)
 	if err != nil {
 		return containerstore.Cluster{}, mapStoreErr(err)
 	}
-	return c, nil
+	return WithReadDefaults(c), nil
 }
 
-// ListClusters lists clusters under a location, sorted by short name.
+// ListClusters lists clusters under a location, sorted by short name, with the
+// response messages real GKE always renders filled in.
 func (s *Service) ListClusters(ctx context.Context, project, location string) ([]containerstore.Cluster, error) {
 	clusters, err := s.store.ListClusters(ctx, project, location)
 	if err != nil {
 		return nil, mapStoreErr(err)
+	}
+	for i := range clusters {
+		clusters[i] = WithReadDefaults(clusters[i])
 	}
 	return clusters, nil
 }

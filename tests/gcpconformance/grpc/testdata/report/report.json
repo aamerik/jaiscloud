@@ -3150,7 +3150,7 @@
       "rpc": "GetCluster",
       "method": "GetCluster",
       "status": "pass",
-      "key_field": "name/status/currentMasterVersion round-trip"
+      "key_field": "name/status/masterVersion + nested response messages"
     },
     {
       "service": "container",
@@ -3318,7 +3318,7 @@
       "rpc": "UpdateCluster",
       "method": "UpdateCluster",
       "status": "pass",
-      "key_field": "UPDATE_CLUSTER DONE + field applied"
+      "key_field": "UPDATE_CLUSTER DONE + fields applied (monitoring, shieldedNodes)"
     },
     {
       "service": "container",

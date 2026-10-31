@@ -148,6 +148,20 @@ func TestSDKContainerClusterLifecycle(t *testing.T) {
 	require.Equal(t, "default-pool", got.NodePools[0].Name)
 	require.Equal(t, "RUNNING", got.NodePools[0].Status)
 
+	// DPG37: real GKE always renders these nested messages, and clients (the
+	// hashicorp/google provider dereferences all four) need them present.
+	require.NotNil(t, got.NetworkConfig)
+	require.Equal(t, "projects/"+projectID()+"/global/networks/default", got.NetworkConfig.Network)
+	require.Equal(t, "projects/"+projectID()+"/regions/"+locationID()+"/subnetworks/default", got.NetworkConfig.Subnetwork)
+	require.NotNil(t, got.ShieldedNodes)
+	require.True(t, got.ShieldedNodes.Enabled)
+	require.NotNil(t, got.DefaultMaxPodsConstraint)
+	require.EqualValues(t, 110, got.DefaultMaxPodsConstraint.MaxPodsPerNode)
+	require.NotNil(t, got.LegacyAbac)
+	require.False(t, got.LegacyAbac.Enabled)
+	require.Equal(t, "logging.googleapis.com/kubernetes", got.LoggingService)
+	require.Equal(t, "monitoring.googleapis.com/kubernetes", got.MonitoringService)
+
 	list, err := svc.Projects.Locations.Clusters.List(parent()).Do()
 	require.NoError(t, err)
 	require.Len(t, list.Clusters, 1)
@@ -420,4 +434,34 @@ func TestSDKContainerErrors(t *testing.T) {
 		NodeCount: -1,
 	}).Do()
 	requireAPIError(t, err, 400)
+}
+
+// TestSDKContainerClusterNestedMessagesOnCreate pins the create-time decode of
+// the two nested settings a caller may set — Shielded Nodes can be disabled and
+// the pod-per-node constraint chosen — because a create body that is silently
+// dropped would read back a cluster the caller never asked for (DPG37).
+func TestSDKContainerClusterNestedMessagesOnCreate(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+
+	id := unique("cn")
+	_, err := svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{
+		Cluster: &container.Cluster{
+			Name:             id,
+			InitialNodeCount: 1,
+			ShieldedNodes: &container.ShieldedNodes{
+				Enabled:         false,
+				ForceSendFields: []string{"Enabled"},
+			},
+			DefaultMaxPodsConstraint: &container.MaxPodsConstraint{MaxPodsPerNode: 64},
+		},
+	}).Do()
+	require.NoError(t, err)
+
+	got, err := svc.Projects.Locations.Clusters.Get(clusterName(id)).Do()
+	require.NoError(t, err)
+	require.NotNil(t, got.ShieldedNodes)
+	require.False(t, got.ShieldedNodes.Enabled)
+	require.NotNil(t, got.DefaultMaxPodsConstraint)
+	require.EqualValues(t, 64, got.DefaultMaxPodsConstraint.MaxPodsPerNode)
 }

@@ -27,7 +27,7 @@ const containerLocation = "us-central1"
 func containerChecks() []Check {
 	return []Check{
 		{Service: "container", RPC: "CreateCluster", Method: "CreateCluster", KeyField: "CREATE_CLUSTER operation DONE", Run: checkContainerCreateCluster},
-		{Service: "container", RPC: "GetCluster", Method: "GetCluster", KeyField: "name/status/currentMasterVersion round-trip", Run: checkContainerGetCluster},
+		{Service: "container", RPC: "GetCluster", Method: "GetCluster", KeyField: "name/status/masterVersion + nested response messages", Run: checkContainerGetCluster},
 		{Service: "container", RPC: "GetCluster (legacy project/zone)", Method: "GetCluster", KeyField: "legacy project_id/zone/cluster_id addressing", Run: checkContainerGetClusterLegacy},
 		{Service: "container", RPC: "ListClusters", Method: "ListClusters", KeyField: "created cluster present", Run: checkContainerListClusters},
 		{Service: "container", RPC: "GetOperation", Method: "GetOperation", KeyField: "operation name/type round-trip", Run: checkContainerGetOperation},
@@ -60,7 +60,7 @@ func containerNodePoolChecks() []Check {
 		{Service: "container", RPC: "SetMaintenancePolicy", Method: "SetMaintenancePolicy", KeyField: "operation DONE", Run: checkSetMaintenancePolicy},
 		{Service: "container", RPC: "SetMasterAuth", Method: "SetMasterAuth", KeyField: "operation DONE", Run: checkSetMasterAuth},
 		{Service: "container", RPC: "SetLabels", Method: "SetLabels", KeyField: "operation DONE + labels applied", Run: checkSetLabels},
-		{Service: "container", RPC: "UpdateCluster", Method: "UpdateCluster", KeyField: "UPDATE_CLUSTER DONE + field applied", Run: checkUpdateCluster},
+		{Service: "container", RPC: "UpdateCluster", Method: "UpdateCluster", KeyField: "UPDATE_CLUSTER DONE + fields applied (monitoring, shieldedNodes)", Run: checkUpdateCluster},
 		{Service: "container", RPC: "UpdateMaster", Method: "UpdateMaster", KeyField: "UPGRADE_MASTER DONE + version applied", Run: checkUpdateMaster},
 		{Service: "container", RPC: "StartIPRotation", Method: "StartIPRotation", KeyField: "operation DONE", Run: checkStartIPRotation},
 		{Service: "container", RPC: "CompleteIPRotation", Method: "CompleteIPRotation", KeyField: "operation DONE", Run: checkCompleteIPRotation},
@@ -599,6 +599,7 @@ func checkUpdateCluster(ctx context.Context, cfg Config) error {
 		Name: containerNameRaw(cfg, cluster),
 		Update: &containerpb.ClusterUpdate{
 			DesiredMonitoringService: "monitoring.googleapis.com/kubernetes",
+			DesiredShieldedNodes:     &containerpb.ShieldedNodes{Enabled: false},
 		},
 	})
 	if err != nil {
@@ -613,6 +614,9 @@ func checkUpdateCluster(ctx context.Context, cfg Config) error {
 	}
 	if got.GetMonitoringService() != "monitoring.googleapis.com/kubernetes" {
 		return fmt.Errorf("monitoringService = %q", got.GetMonitoringService())
+	}
+	if got.GetShieldedNodes() == nil || got.GetShieldedNodes().GetEnabled() {
+		return fmt.Errorf("shieldedNodes = %v, want disabled after desiredShieldedNodes", got.GetShieldedNodes())
 	}
 	return nil
 }
@@ -775,7 +779,8 @@ func checkContainerCreateCluster(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// Check 2: GetCluster returns the short name, RUNNING status and a master version.
+// Check 2: GetCluster returns the short name, RUNNING status, a master version
+// and the nested response messages real GKE always renders.
 func checkContainerGetCluster(ctx context.Context, cfg Config) error {
 	client, err := newContainerClient(ctx, cfg)
 	if err != nil {
@@ -802,6 +807,32 @@ func checkContainerGetCluster(ctx context.Context, cfg Config) error {
 	}
 	if got.GetCurrentMasterVersion() == "" {
 		return fmt.Errorf("GetCluster currentMasterVersion is empty")
+	}
+	// DPG37: real GKE always renders these nested messages, and clients
+	// (hashicorp/google among them) dereference them unconditionally, so they
+	// must not be lost on the gRPC transport either.
+	if got.GetLegacyAbac() == nil || got.GetLegacyAbac().GetEnabled() {
+		return fmt.Errorf("GetCluster legacyAbac = %v, want present and disabled", got.GetLegacyAbac())
+	}
+	wantNetwork := "projects/" + cfg.Project + "/global/networks/default"
+	if n := got.GetNetworkConfig().GetNetwork(); n != wantNetwork {
+		return fmt.Errorf("GetCluster networkConfig.network = %q, want %q", n, wantNetwork)
+	}
+	wantSubnetwork := "projects/" + cfg.Project + "/regions/" + containerLocation + "/subnetworks/default"
+	if s := got.GetNetworkConfig().GetSubnetwork(); s != wantSubnetwork {
+		return fmt.Errorf("GetCluster networkConfig.subnetwork = %q, want %q", s, wantSubnetwork)
+	}
+	if got.GetShieldedNodes() == nil || !got.GetShieldedNodes().GetEnabled() {
+		return fmt.Errorf("GetCluster shieldedNodes = %v, want enabled", got.GetShieldedNodes())
+	}
+	if n := got.GetDefaultMaxPodsConstraint().GetMaxPodsPerNode(); n != 110 {
+		return fmt.Errorf("GetCluster defaultMaxPodsConstraint.maxPodsPerNode = %d, want 110", n)
+	}
+	if got.GetLoggingService() != "logging.googleapis.com/kubernetes" {
+		return fmt.Errorf("GetCluster loggingService = %q", got.GetLoggingService())
+	}
+	if got.GetMonitoringService() != "monitoring.googleapis.com/kubernetes" {
+		return fmt.Errorf("GetCluster monitoringService = %q", got.GetMonitoringService())
 	}
 	return nil
 }

@@ -82,41 +82,53 @@ check_post() {
 
 tf() { "$TF" -chdir="$DIR" "$@"; }
 
+# The GKE surface needs a host whose first DNS label is "container": the
+# provider keeps only the scheme+host of a custom endpoint, so it cannot send
+# the /container path prefix the emulator also accepts, and the bare
+# /v1/projects/{p}/locations/{l}/clusters path belongs to Managed Kafka.
+# container.localhost resolves to the loopback address on the supported hosts.
+CONTAINER_ENDPOINT="$(printf '%s' "$ENDPOINT" | sed -E 's#^(https?://)([^/]+)#\1container.\2#')/container/"
+CONTAINER_HOST="$(printf '%s' "$CONTAINER_ENDPOINT" | sed -E 's#^https?://##; s#[:/].*##')"
+if ! getent hosts "$CONTAINER_HOST" >/dev/null 2>&1; then
+  echo "ERROR: $CONTAINER_HOST does not resolve — the GKE fixture needs a container.* host alias"
+  echo "       (add e.g. '127.0.0.1 container.localhost' to the hosts file, or pass a resolvable ENDPOINT)"
+  exit 1
+fi
+
+TF_VARS=(-var="endpoint=$ENDPOINT" -var="project=$PROJECT" -var="container_endpoint=$CONTAINER_ENDPOINT")
+
 # The Dataproc-on-GKE virtual cluster needs a standard, Workload-Identity-
-# enabled GKE cluster as its target. It is created here, over the emulator's
-# GKE REST surface, rather than as a google_container_cluster: that resource
-# panics in the provider's read because the GKE mock omits nested messages the
-# provider dereferences unconditionally (DPG37 in the dataproc-gke wave plan).
+# enabled GKE cluster as its target; that is google_container_cluster.gke in
+# main.tf (the DPG37 gate), so it is created and destroyed with the fixture.
 GKE_CLUSTER="jaiscloud-tf-gke"
 GKE_PARENT="$ENDPOINT/container/v1/projects/$PROJECT/locations/$REGION/clusters"
-create_gke_prereq() {
-  curl -sf -X POST -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
-    -d "{\"cluster\":{\"name\":\"$GKE_CLUSTER\",\"initialNodeCount\":1,\"network\":\"default\",\"workloadIdentityConfig\":{\"workloadPool\":\"$PROJECT.svc.id.goog\"}}}" \
-    "$GKE_PARENT" >/dev/null
-}
-delete_gke_prereq() {
-  curl -sf -X DELETE -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
-    "$GKE_PARENT/$GKE_CLUSTER" >/dev/null 2>&1 || true
-}
-create_gke_prereq || { echo "ERROR: could not create the GKE prerequisite"; exit 1; }
 
 DESTROYED=0
 destroy() {
   [[ "$DESTROYED" == "1" ]] && return 0
   DESTROYED=1
-  tf destroy -input=false -auto-approve -no-color \
-    -var="endpoint=$ENDPOINT" -var="project=$PROJECT" >/dev/null 2>&1 || true
+  tf destroy -input=false -auto-approve -no-color "${TF_VARS[@]}" >/dev/null 2>&1 || true
 }
-trap 'destroy; delete_gke_prereq' EXIT INT TERM
+trap 'destroy' EXIT INT TERM
 
 echo "== $TF: init / validate / plan / apply (endpoint=$ENDPOINT project=$PROJECT)"
 tf init -input=false -no-color >/dev/null
 tf validate -no-color >/dev/null
-tf plan -input=false -no-color \
-  -var="endpoint=$ENDPOINT" -var="project=$PROJECT" >/dev/null
-tf apply -input=false -auto-approve -no-color \
-  -var="endpoint=$ENDPOINT" -var="project=$PROJECT" >/dev/null
+tf plan -input=false -no-color "${TF_VARS[@]}" >/dev/null
+tf apply -input=false -auto-approve -no-color "${TF_VARS[@]}" >/dev/null
+
+# A second plan must report no changes. This is the permadiff assertion for the
+# google_container_cluster read and the computed fields around it
+# (loggingService/monitoringService/masterAuth): the emulator's defaults have to
+# agree with what the provider stored on apply.
+echo "== $TF: second plan (permadiff check)"
+if tf plan -input=false -no-color -detailed-exitcode "${TF_VARS[@]}" >/dev/null 2>&1; then
+  printf '  [PASS] re-plan reports no changes\n'
+  PASS=$((PASS + 1))
+else
+  printf '  [FAIL] re-plan reports changes (a permadiff)\n'
+  FAIL=$((FAIL + 1))
+fi
 
 out() { tf output -raw "$1" 2>/dev/null || true; }
 SA_EMAIL="$(out service_account_email)"
@@ -204,6 +216,20 @@ check "Dataproc Metastore database IAM grant" \
   "$ENDPOINT/v1/projects/$PROJECT/locations/$REGION/services/jaiscloud-tf-metastore/databases/default:getIamPolicy" \
   'roles/metastore.admin' 'jaiscloud-tf-sa@'
 
+# ── GKE: the cluster the Dataproc-on-GKE prerequisite rides on ────────────────
+# DPG37: real GKE always renders these nested messages and the provider
+# dereferences four of them unconditionally on read.
+check "GKE cluster read renders the nested response messages" \
+  "$GKE_PARENT/$GKE_CLUSTER" \
+  '"legacyAbac":{"enabled":false}' \
+  "\"networkConfig\":{\"network\":\"projects/$PROJECT/global/networks/default\",\"subnetwork\":\"projects/$PROJECT/regions/$REGION/subnetworks/default\"}" \
+  '"shieldedNodes":{"enabled":true}' \
+  '"defaultMaxPodsConstraint":{"maxPodsPerNode":"110"}'
+check "GKE cluster read renders the default logging/monitoring services" \
+  "$GKE_PARENT/$GKE_CLUSTER" \
+  '"loggingService":"logging.googleapis.com/kubernetes"' \
+  '"monitoringService":"monitoring.googleapis.com/kubernetes"'
+
 # ── Dataproc on GKE: the virtual cluster and the pools it reconciled ──────────
 DP_GKE="$GKE_CLUSTER_DP"
 check "Dataproc-on-GKE virtual cluster created" \
@@ -243,13 +269,17 @@ check "Compute-Engine cluster reads back the default instance groups" \
   "$ENDPOINT/v1/projects/$PROJECT/regions/$REGION/clusters/$GCE_CLUSTER_DP" \
   '"numInstances":1' '"numInstances":2'
 
-echo "== destroy"
-destroy
+echo "== destroy (the virtual cluster only, to prove the pools survive it)"
+tf destroy -input=false -auto-approve -no-color \
+  -target=google_dataproc_cluster.gke "${TF_VARS[@]}" >/dev/null
 
 # Real GCP does not delete a virtual cluster's node pools: the pool the destroy
 # removed the virtual cluster for is still readable through the GKE API.
 check "Dataproc node pools survive the virtual-cluster delete" \
   "$GKE_POOLS/jaiscloud-tf-dataproc-pool" '"machineType":"n1-standard-4"'
+
+echo "== destroy"
+destroy
 
 echo "== summary: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]
