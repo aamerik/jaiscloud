@@ -237,6 +237,46 @@ func TestSDKContainerClusterCreateWithInlineNodePools(t *testing.T) {
 	requireAPIError(t, err, 400)
 }
 
+// TestSDKContainerClusterCreateAppliesNodeConfigToDefaultPool covers the legacy
+// create shape through the official client: a cluster-level nodeConfig with
+// initialNodeCount and no nodePools is applied to the generated default-pool and
+// echoed on the cluster read (Discovery: the response's nodeConfig holds the
+// first pool's node configuration).
+func TestSDKContainerClusterCreateAppliesNodeConfigToDefaultPool(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+
+	id := unique("c")
+	_, err := svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{
+		Cluster: &container.Cluster{
+			Name:             id,
+			InitialNodeCount: 2,
+			NodeConfig:       &container.NodeConfig{MachineType: "e2-micro", DiskSizeGb: 50},
+		},
+	}).Do()
+	require.NoError(t, err)
+
+	got, err := svc.Projects.Locations.Clusters.Get(clusterName(id)).Do()
+	require.NoError(t, err)
+	require.NotNil(t, got.NodeConfig)
+	require.Equal(t, "e2-micro", got.NodeConfig.MachineType)
+	require.Equal(t, int64(50), got.NodeConfig.DiskSizeGb)
+	require.Len(t, got.NodePools, 1)
+	pool := got.NodePools[0]
+	require.Equal(t, "default-pool", pool.Name)
+	require.Equal(t, "RUNNING", pool.Status)
+	require.Equal(t, nodePoolName(id, "default-pool"), pool.SelfLink)
+	require.Equal(t, got.CurrentMasterVersion, pool.Version)
+	require.Equal(t, int64(2), pool.InitialNodeCount)
+	require.Equal(t, "e2-micro", pool.Config.MachineType)
+	require.Equal(t, int64(50), pool.Config.DiskSizeGb)
+
+	// The generated pool is addressable as a node pool, like an inline one.
+	gotPool, err := svc.Projects.Locations.Clusters.NodePools.Get(nodePoolName(id, "default-pool")).Do()
+	require.NoError(t, err)
+	require.Equal(t, "e2-micro", gotPool.Config.MachineType)
+}
+
 // TestSDKContainerNodePools covers node-pool CRUD, the update/setter custom
 // methods, and their operation records.
 func TestSDKContainerNodePools(t *testing.T) {

@@ -94,9 +94,20 @@ verbatim messages above — on both transports, since the rule lives in the
 transport-neutral core — and persists nothing for a rejected create. The gate is
 `initialNodeCount > 0` (not "present"), so a negative count combined with pools is
 accepted exactly as real GKE accepts it; the negative-without-pools 400 is
-recorded as DPG49. The REST and gRPC decoders carry a cluster-level `nodeConfig`
-only for this check; applying it to the generated `default-pool` (and rendering
-the pool/node config on read) is DPG42/DPG46.
+recorded as DPG49.
+
+A `nodeConfig` sent *without* `nodePools` is the request shape for the generated
+`default-pool` (Discovery on `Cluster.nodeConfig`: "For requests, this field
+should only be used in lieu of a 'node_pool' object, since this configuration
+(along with the 'initial_node_count') will be used to create a 'NodePool' object
+with an auto-generated name"). It is applied to that pool, which therefore
+carries the same `selfLink`/`RUNNING` status/version/node count an inline pool
+gets, and the cluster read renders `nodeConfig` from the first pool's `config`
+(Discovery on the response: "this field will be populated with the node
+configuration of the first node pool") — so DPG42's legacy shape round-trips on
+both transports. The defaults GKE fills into an otherwise unset pool config
+(machine type, image type, disk, scopes, service account, ABAC/RBAC booleans) are
+DPG46.
 
 Note for those rows: the accepted probe's read echoed a **cluster-level
 `nodeConfig`** (`machineType: e2-medium`, `diskSizeGb: 100`, the six default

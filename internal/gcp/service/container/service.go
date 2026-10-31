@@ -27,6 +27,12 @@ import (
 // caller supplies no initialClusterVersion. It mirrors the emulator's mock.
 const DefaultMasterVersion = "1.30.5-gke.1014001"
 
+// DefaultNodePoolName is the name GKE gives the node pool it generates from a
+// create's cluster-level initialNodeCount/nodeConfig (Discovery on
+// Cluster.nodeConfig: "this configuration (along with the initial_node_count)
+// will be used to create a NodePool object with an auto-generated name").
+const DefaultNodePoolName = "default-pool"
+
 // The cluster-create conflict messages are verbatim real GKE 400s, captured
 // against a live project (see docs/gcp/gke-create-pool-conflict.md).
 const (
@@ -125,12 +131,19 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 		c.WorkloadIdentityConfig = &containerstore.WorkloadIdentityConfig{WorkloadPool: project + ".svc.id.goog"}
 	}
 	if len(c.NodePools) == 0 {
+		// Discovery on Cluster.nodeConfig: "For requests, this field should only
+		// be used in lieu of a node_pool object, since this configuration (along
+		// with the initial_node_count) will be used to create a NodePool object
+		// with an auto-generated name" — so the generated default-pool carries
+		// the caller's nodeConfig, and the shared materialization gives it the
+		// same selfLink/version/node count a caller-supplied pool gets.
 		c.NodePools = []containerstore.NodePool{{
-			Name:             "default-pool",
-			Status:           containerstore.StatusRunning,
+			Name:             DefaultNodePoolName,
 			InitialNodeCount: c.InitialNodeCount,
+			Config:           c.NodeConfig,
 		}}
-	} else if err := materializeNodePools(project, location, &c); err != nil {
+	}
+	if err := materializeNodePools(project, location, &c); err != nil {
 		// A create request may carry its pools inline (Discovery: Cluster.nodePools);
 		// real GKE materializes them in the same call, so they are stored as
 		// provisioned pools rather than replaced by a default-pool.

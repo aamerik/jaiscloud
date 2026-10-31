@@ -195,6 +195,48 @@ func TestProviderCreateRejectsDefaultPoolFieldsWithNodePools(t *testing.T) {
 	}
 }
 
+// TestProviderCreateAppliesNodeConfigToDefaultPool covers the wire path for
+// DPG42: a create that sends the legacy nodeConfig + initialNodeCount shape
+// reads the config back on both the generated pool and the cluster-level echo
+// (Discovery: the response's Cluster.nodeConfig comes from the first pool).
+func TestProviderCreateAppliesNodeConfigToDefaultPool(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+
+	body := map[string]any{"cluster": map[string]any{
+		"name":             "c1",
+		"initialNodeCount": float64(1),
+		"nodeConfig":       map[string]any{"machineType": "e2-micro", "diskSizeGb": float64(50)},
+	}}
+	if _, err := p.CreateCluster(ctx, req(map[string]any{"project": "p", "location": "us-central1", "body": body})); err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+
+	resp, err := p.GetCluster(ctx, req(map[string]any{"project": "p", "location": "us-central1", "cluster": "c1"}))
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	cfg, _ := resp.Data["nodeConfig"].(map[string]any)
+	if cfg["machineType"] != "e2-micro" || cfg["diskSizeGb"] != int32(50) {
+		t.Fatalf("cluster nodeConfig = %v", resp.Data["nodeConfig"])
+	}
+	pools, _ := resp.Data["nodePools"].([]any)
+	if len(pools) != 1 {
+		t.Fatalf("nodePools = %v", resp.Data["nodePools"])
+	}
+	pool, _ := pools[0].(map[string]any)
+	if pool["selfLink"] != "projects/p/locations/us-central1/clusters/c1/nodePools/default-pool" {
+		t.Fatalf("default-pool selfLink = %v", pool["selfLink"])
+	}
+	if pool["version"] != core.DefaultMasterVersion {
+		t.Fatalf("default-pool version = %v", pool["version"])
+	}
+	poolCfg, _ := pool["config"].(map[string]any)
+	if poolCfg["machineType"] != "e2-micro" || poolCfg["diskSizeGb"] != int32(50) {
+		t.Fatalf("default-pool config = %v", pool["config"])
+	}
+}
+
 func TestProviderListPagination(t *testing.T) {
 	ctx := context.Background()
 	p := newProvider(t)
