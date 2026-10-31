@@ -12,9 +12,9 @@ import (
 // ─── version aliases ─────────────────────────────────────────────────────────
 
 // TestResolveGKEEngineVersion covers the documented forms from the
-// "Release versions" guide: fully qualified `<major.minor>-dataproc-<n>` releases
-// and the `latest`/`<major>`/`<major.minor>` aliases, dereferenced to a concrete
-// release at create time.
+// "Release versions" guide: fully qualified `<major.minor>-dataproc-<n>` releases,
+// the `latest`/`<major>`/`<major.minor>` aliases and the `dataproc-<major.minor>`
+// image-line alias, all dereferenced to a concrete release at create time.
 func TestResolveGKEEngineVersion(t *testing.T) {
 	ok := map[string]string{
 		"3.5-dataproc-28": "3.5-dataproc-28",
@@ -26,6 +26,9 @@ func TestResolveGKEEngineVersion(t *testing.T) {
 		"3.1":             "3.1-dataproc-17",
 		"2.4":             "2.4-dataproc-17",
 		" 3.5 ":           "3.5-dataproc-28",
+		// The only image line real GCP accepts for virtual clusters; it resolves
+		// to the same newest release as `latest`.
+		"dataproc-2.2": "3.5-dataproc-28",
 	}
 	for in, want := range ok {
 		got, err := resolveGKEEngineVersion(in)
@@ -33,7 +36,13 @@ func TestResolveGKEEngineVersion(t *testing.T) {
 			t.Fatalf("resolveGKEEngineVersion(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	bad := []string{"", "  ", "9", "3.6", "3.5.1", "3.5-dataproc-99", "dataproc-2.2", "spark-3.5", "3.5-dataproc"}
+	// The image lines real GCP rejects ("not a valid spark version for Virtual
+	// clusters") stay InvalidArgument: they are recorded, not inferred.
+	bad := []string{
+		"", "  ", "9", "3.6", "3.5.1", "3.5-dataproc-99", "spark-3.5", "3.5-dataproc",
+		"dataproc-1.4", "dataproc-1.5", "dataproc-2.0", "dataproc-2.1", "dataproc-2.3",
+		"dataproc-3.0", "dataproc-4.0", "dataproc-2.2.1", "DATAPROC-2.2",
+	}
 	for _, in := range bad {
 		if got, err := resolveGKEEngineVersion(in); err == nil {
 			t.Fatalf("resolveGKEEngineVersion(%q) = %q; want an InvalidArgument", in, got)

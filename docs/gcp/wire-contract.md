@@ -441,8 +441,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   pools are not deleted with the cluster, and there is no autoscaler behaviour or drift detection —
   a virtual cluster is also recreate-only (`clusters.patch` touching `virtualClusterConfig` is
   `InvalidArgument`) and a `kubernetesNamespace` already owned on the same GKE cluster is
-  `FailedPrecondition`, while the SPARK engine alias is dereferenced at create and the
-  `dataproc-<major.minor>` image form is not resolved (DPG36) —
+  `FailedPrecondition`, while the SPARK engine version is dereferenced at create —
+  `latest`/`<major>`/`<major.minor>`/`dataproc-2.2` resolve to a concrete release, and the
+  other `dataproc-<major.minor>` image lines stay `InvalidArgument` because real GCP rejects
+  them too (DPG36, `docs/gcp/dataproc-gke-version-aliases.md`) —
   the cluster is still not scheduled onto a GKE cluster — but in K8s executor mode each Dataproc cluster
   runs in its own Kubernetes
   workload namespace — the caller's `kubernetesClusterConfig.kubernetesNamespace` when supplied,
