@@ -2,21 +2,41 @@
 description: Start the next GCP backlog item from the status ledger
 ---
 
-!`export PATH=/tmp/opencode/go/bin:$HOME/.local/bin:$PATH; make gcp-session-start 2>&1 && { echo; make gcp-status-next N=10 2>&1; echo; echo '--- coverage ---'; make gcp-status-coverage 2>&1 | tail -2; }`
+!`export PATH=/tmp/opencode/go/bin:$HOME/.local/bin:$PATH; set -f; args='$ARGUMENTS'; base=main; q="$args"; case "$args" in base=*) rest="${args#base=}"; base="${rest%% *}"; q="${rest#"$base"}"; q="${q# }";; --base\ *) rest="${args#--base }"; base="${rest%% *}"; q="${rest#"$base"}"; q="${q# }";; esac; set +f; echo "session base: $base"; if [ -n "$q" ]; then echo "item query: $q"; fi; echo; GCP_SESSION_BASE="$base" make gcp-session-start 2>&1 && { echo; make gcp-status-next N=10 2>&1; echo; echo '--- coverage ---'; make gcp-status-coverage 2>&1 | tail -2; }`
 
 You are starting a new GCP work session in the jaiscloud repo. The ledger output
 above is the source of truth for what to do next.
 
 The command first ran `make gcp-session-start`: it aborts on a dirty checkout
 (uncommitted files from a previous or concurrent session) and otherwise fetches
-`upstream` and fast-forwards the local `main` base. If it aborted, no ledger is
+`upstream` and fast-forwards the session base. If it aborted, no ledger is
 shown — stop and report the uncommitted files; do not start an item. When it
-proceeds, branch the item's `Branch` off the refreshed `main`.
+proceeds, branch the item's `Branch` off the refreshed base.
 
-- If arguments were given (`$ARGUMENTS`), assess them with
-  `make gcp-status-check Q="$ARGUMENTS"`. Otherwise take the first `NEXT` item
-  above (ignore the `ATTENTION` list unless it directly blocks the item) and
-  assess **that** item before branching:
+**Base branch.** The base is printed as `session base:` above and defaults to
+`main`. To work off a series integration branch, say so explicitly and keep the
+rest of the argument as the item query:
+
+- `base=<branch>` — e.g. `/gcp:new base=gke datastore timestamps`
+- `--base <branch>` — e.g. `/gcp:new --base gke bigquery load`
+
+There is deliberately no bare-word form: `/gcp:new datastore` is an item query,
+never a branch. A base that does not exist yet is created off `upstream/main`
+by session-start and pushed to origin and upstream (a PR cannot target a branch
+that only exists in the fork), so that series' PRs must then be opened against
+it:
+
+```
+gh pr create --repo jaisrajms/jaiscloud --base <session base> --head <fork>:<item branch>
+```
+
+Say so when a branch was created, because the series' PRs target it instead of
+`main`.
+
+- If an item query was given (`$ARGUMENTS` minus a `base=` prefix), assess it
+  with `make gcp-status-check Q="<the item query>"`. Otherwise take the first
+  `NEXT` item above (ignore the `ATTENTION` list unless it directly blocks the
+  item) and assess **that** item before branching:
   `make gcp-status-check SERVICE=<service> Q="<a few distinctive words from its gap>"`.
   Use the item's keywords, not just its ID: a differently-IDed row in another
   plan family can already have closed the same gap. Verdicts: exit 2 = already

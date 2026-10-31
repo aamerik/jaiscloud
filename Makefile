@@ -1153,7 +1153,7 @@ check-gcp-fidelity-matrix: test-gcp-wire-conformance ## Fail if the committed fi
 	@git diff --exit-code -- docs/fidelity || \
 	  (echo "ERROR: docs/fidelity is stale — run 'make gen-gcp-fidelity-matrix' and commit the result"; exit 1)
 
-gcp-session-start: ## Guard the checkout, fast-forward the gcp base from upstream, rebuild the ledger (used by /gcp:new)
+gcp-session-start: ## Guard the checkout, fast-forward the session base from upstream (create it if new), rebuild the ledger (used by /gcp:new; GCP_SESSION_BASE=<branch> for a series)
 	@bash tools/gcp-session-start.sh
 	@$(MAKE) --no-print-directory gcp-status
 
