@@ -82,6 +82,25 @@ check_post() {
 
 tf() { "$TF" -chdir="$DIR" "$@"; }
 
+# The Dataproc-on-GKE virtual cluster needs a standard, Workload-Identity-
+# enabled GKE cluster as its target. It is created here, over the emulator's
+# GKE REST surface, rather than as a google_container_cluster: that resource
+# panics in the provider's read because the GKE mock omits nested messages the
+# provider dereferences unconditionally (DPG37 in the dataproc-gke wave plan).
+GKE_CLUSTER="jaiscloud-tf-gke"
+GKE_PARENT="$ENDPOINT/container/v1/projects/$PROJECT/locations/$REGION/clusters"
+create_gke_prereq() {
+  curl -sf -X POST -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
+    -d "{\"cluster\":{\"name\":\"$GKE_CLUSTER\",\"initialNodeCount\":1,\"network\":\"default\",\"workloadIdentityConfig\":{\"workloadPool\":\"$PROJECT.svc.id.goog\"}}}" \
+    "$GKE_PARENT" >/dev/null
+}
+delete_gke_prereq() {
+  curl -sf -X DELETE -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
+    "$GKE_PARENT/$GKE_CLUSTER" >/dev/null 2>&1 || true
+}
+create_gke_prereq || { echo "ERROR: could not create the GKE prerequisite"; exit 1; }
+
 DESTROYED=0
 destroy() {
   [[ "$DESTROYED" == "1" ]] && return 0
@@ -89,7 +108,7 @@ destroy() {
   tf destroy -input=false -auto-approve -no-color \
     -var="endpoint=$ENDPOINT" -var="project=$PROJECT" >/dev/null 2>&1 || true
 }
-trap destroy EXIT INT TERM
+trap 'destroy; delete_gke_prereq' EXIT INT TERM
 
 echo "== $TF: init / validate / plan / apply (endpoint=$ENDPOINT project=$PROJECT)"
 tf init -input=false -no-color >/dev/null
@@ -106,6 +125,7 @@ SQL_DB="$(out sql_database_name)"
 SQL_USER="$(out sql_user_name)"
 ENABLED_SERVICE="$(out enabled_service)"
 FED_NAME="$(out metastore_federation_name)"
+GKE_CLUSTER_DP="$(out dataproc_gke_cluster_name)"
 
 echo "== spot checks"
 check "GCS bucket created" "$ENDPOINT/storage/v1/b/jaiscloud-tf-bucket" \
@@ -183,8 +203,36 @@ check "Dataproc Metastore database IAM grant" \
   "$ENDPOINT/v1/projects/$PROJECT/locations/$REGION/services/jaiscloud-tf-metastore/databases/default:getIamPolicy" \
   'roles/metastore.admin' 'jaiscloud-tf-sa@'
 
+# ── Dataproc on GKE: the virtual cluster and the pools it reconciled ──────────
+DP_GKE="$GKE_CLUSTER_DP"
+check "Dataproc-on-GKE virtual cluster created" \
+  "$ENDPOINT/v1/projects/$PROJECT/regions/$REGION/clusters/$DP_GKE" \
+  '"state":"RUNNING"' "jaiscloud-tf-gke" 'jaiscloud-tf-dataproc-pool' 'jaiscloud-tf-dataproc-spark'
+# nodePoolConfig is input-only in the real API: the read must never echo it.
+DP_GKE_BODY="$(curl -sf -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" \
+  "$ENDPOINT/v1/projects/$PROJECT/regions/$REGION/clusters/$DP_GKE" 2>/dev/null || true)"
+if [[ "$DP_GKE_BODY" == *"nodePoolConfig"* ]]; then
+  printf '  [FAIL] Dataproc-on-GKE read echoes input-only nodePoolConfig\n'
+  FAIL=$((FAIL + 1))
+else
+  printf '  [PASS] Dataproc-on-GKE read omits input-only nodePoolConfig\n'
+  PASS=$((PASS + 1))
+fi
+GKE_POOLS="$GKE_PARENT/$GKE_CLUSTER/nodePools"
+check "Dataproc created its shaped node pool in the GKE API" \
+  "$GKE_POOLS/jaiscloud-tf-dataproc-pool" \
+  '"machineType":"n1-standard-4"' '"maxNodeCount":3' '"goog-dataproc-cluster-name":"jaiscloud-tf-dataproc-gke"'
+check "Dataproc created its named-only node pool with the 1/10 defaults" \
+  "$GKE_POOLS/jaiscloud-tf-dataproc-spark" \
+  '"minNodeCount":1' '"maxNodeCount":10'
+
 echo "== destroy"
 destroy
+
+# Real GCP does not delete a virtual cluster's node pools: the pool the destroy
+# removed the virtual cluster for is still readable through the GKE API.
+check "Dataproc node pools survive the virtual-cluster delete" \
+  "$GKE_POOLS/jaiscloud-tf-dataproc-pool" '"machineType":"n1-standard-4"'
 
 echo "== summary: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	container "google.golang.org/api/container/v1"
 	"google.golang.org/api/dataproc/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )
 
@@ -219,4 +220,300 @@ func TestSDKDataprocOnGKEConflictingPoolShape(t *testing.T) {
 	require.Equal(t, "ERROR", cluster.Status.State)
 	require.Contains(t, cluster.Status.Detail, "taken-pool")
 	require.Contains(t, cluster.Status.Detail, "machineType")
+}
+
+// gkePrereq creates the documented Dataproc-on-GKE prerequisite — a standard,
+// Workload-Identity-enabled GKE cluster — through container.v1 and returns its
+// canonical target.
+func gkePrereq(t *testing.T, gke *container.Service, prefix string) string {
+	t.Helper()
+	parent := "projects/" + dpProject + "/locations/" + dpRegion
+	name := unique(prefix)
+	_, err := gke.Projects.Locations.Clusters.Create(parent, &container.CreateClusterRequest{
+		Cluster: &container.Cluster{
+			Name:                   name,
+			WorkloadIdentityConfig: &container.WorkloadIdentityConfig{WorkloadPool: dpProject + ".svc.id.goog"},
+		},
+	}).Do()
+	require.NoError(t, err)
+	return parent + "/clusters/" + name
+}
+
+// gkeVCC builds a VirtualClusterConfig naming target and applies mut to it. The
+// default is one DEFAULT pool with no nodePoolConfig ("any node pool with the
+// specified name is used").
+func gkeVCC(target string, mut ...func(*dataproc.VirtualClusterConfig)) *dataproc.VirtualClusterConfig {
+	vcc := &dataproc.VirtualClusterConfig{
+		StagingBucket: "dataproc-staging-" + dpProject,
+		KubernetesClusterConfig: &dataproc.KubernetesClusterConfig{
+			GkeClusterConfig: &dataproc.GkeClusterConfig{GkeClusterTarget: target},
+			KubernetesSoftwareConfig: &dataproc.KubernetesSoftwareConfig{
+				ComponentVersion: map[string]string{"SPARK": "3.5"},
+			},
+		},
+	}
+	for _, m := range mut {
+		m(vcc)
+	}
+	return vcc
+}
+
+// gkePools returns the target GKE cluster's pools keyed by pool name.
+func gkePools(t *testing.T, gke *container.Service, parent string) map[string]*container.NodePool {
+	t.Helper()
+	pools, err := gke.Projects.Locations.Clusters.NodePools.List(parent).Do()
+	require.NoError(t, err)
+	byName := map[string]*container.NodePool{}
+	for _, p := range pools.NodePools {
+		byName[p.Name] = p
+	}
+	return byName
+}
+
+// createVirtualCluster creates a GKE-backed virtual cluster and waits for its
+// create operation, returning the cluster it settles on.
+func createVirtualCluster(t *testing.T, dp *dataproc.Service, name string, vcc *dataproc.VirtualClusterConfig) *dataproc.Cluster {
+	t.Helper()
+	op, err := dp.Projects.Regions.Clusters.Create(dpProject, dpRegion, &dataproc.Cluster{
+		ProjectId:            dpProject,
+		ClusterName:          name,
+		VirtualClusterConfig: vcc,
+	}).Do()
+	require.NoError(t, err)
+	done := pollOperation(t, dp, op.Name)
+	require.True(t, done.Done)
+	var cluster dataproc.Cluster
+	require.NoError(t, json.Unmarshal(done.Response, &cluster))
+	return &cluster
+}
+
+// TestSDKDataprocOnGKEPoolReuse covers the second half of the cross-API story:
+// the pools a virtual cluster reconciled belong to the GKE cluster, so a second
+// virtual cluster naming them adopts them instead of duplicating them — the
+// pool count through container.v1 stays put.
+func TestSDKDataprocOnGKEPoolReuse(t *testing.T) {
+	ctx := context.Background()
+	dp, err := dataproc.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	gke, err := container.NewService(ctx, gkeOpts()...)
+	require.NoError(t, err)
+
+	target := gkePrereq(t, gke, "gke-reuse")
+	parent := target
+	// The GKE mock materialises its own default pool on cluster create, so the
+	// assertions are deltas against that baseline.
+	baseline := len(gkePools(t, gke, parent))
+	shaped := &dataproc.GkeNodePoolTarget{
+		NodePool: "reuse-shaped",
+		Roles:    []string{"DEFAULT", "CONTROLLER"},
+		NodePoolConfig: &dataproc.GkeNodePoolConfig{
+			Config:      &dataproc.GkeNodeConfig{MachineType: "n1-standard-4", LocalSsdCount: 1},
+			Autoscaling: &dataproc.GkeNodePoolAutoscalingConfig{MinNodeCount: 1, MaxNodeCount: 4},
+			Locations:   []string{dpRegion + "-a"},
+		},
+	}
+	named := &dataproc.GkeNodePoolTarget{
+		NodePool: "reuse-named",
+		Roles:    []string{"SPARK_DRIVER", "SPARK_EXECUTOR"},
+	}
+	first := createVirtualCluster(t, dp, unique("dpgke-reuse-a"), gkeVCC(target, func(v *dataproc.VirtualClusterConfig) {
+		v.KubernetesClusterConfig.GkeClusterConfig.NodePoolTarget = []*dataproc.GkeNodePoolTarget{shaped, named}
+	}))
+	require.Equal(t, "RUNNING", first.Status.State)
+	require.Len(t, gkePools(t, gke, parent), baseline+2)
+
+	// The pools outlive the virtual cluster that created them.
+	del, err := dp.Projects.Regions.Clusters.Delete(dpProject, dpRegion, first.ClusterName).Do()
+	require.NoError(t, err)
+	require.True(t, pollOperation(t, dp, del.Name).Done)
+	afterDelete := gkePools(t, gke, parent)
+	require.Len(t, afterDelete, baseline+2)
+	require.Contains(t, afterDelete, "reuse-shaped")
+	require.Contains(t, afterDelete, "reuse-named")
+
+	// A second virtual cluster on the same GKE cluster adopts those pools: the
+	// same two, verified against the same shape, with no duplicate created.
+	uuidBefore := afterDelete["reuse-shaped"].Config.Labels["goog-dataproc-cluster-uuid"]
+	second := createVirtualCluster(t, dp, unique("dpgke-reuse-b"), gkeVCC(target, func(v *dataproc.VirtualClusterConfig) {
+		v.KubernetesClusterConfig.GkeClusterConfig.NodePoolTarget = []*dataproc.GkeNodePoolTarget{shaped, named}
+	}))
+	require.Equal(t, "RUNNING", second.Status.State, "status detail: %s", second.Status.Detail)
+	afterReuse := gkePools(t, gke, parent)
+	require.Len(t, afterReuse, baseline+2, "a second virtual cluster must not duplicate the pools")
+	require.Equal(t, uuidBefore, afterReuse["reuse-shaped"].Config.Labels["goog-dataproc-cluster-uuid"],
+		"an adopted pool keeps the labels of the virtual cluster that created it")
+}
+
+// TestSDKDataprocOnGKEFailurePaths asserts every documented create-time rule as
+// an API error through the Dataproc client, and the recreate-only/namespace
+// rules on the existing-cluster path.
+func TestSDKDataprocOnGKEFailurePaths(t *testing.T) {
+	ctx := context.Background()
+	dp, err := dataproc.NewService(ctx, opts()...)
+	require.NoError(t, err)
+	gke, err := container.NewService(ctx, gkeOpts()...)
+	require.NoError(t, err)
+
+	target := gkePrereq(t, gke, "gke-fail")
+
+	cases := []struct {
+		name    string
+		mut     func(*dataproc.VirtualClusterConfig)
+		code    int
+		message string
+	}{
+		{
+			name: "missing DEFAULT role",
+			mut: func(v *dataproc.VirtualClusterConfig) {
+				v.KubernetesClusterConfig.GkeClusterConfig.NodePoolTarget = []*dataproc.GkeNodePoolTarget{
+					{NodePool: "only-driver", Roles: []string{"SPARK_DRIVER"}},
+				}
+			},
+			code: 400, message: "DEFAULT",
+		},
+		{
+			name: "two pools claim one role",
+			mut: func(v *dataproc.VirtualClusterConfig) {
+				v.KubernetesClusterConfig.GkeClusterConfig.NodePoolTarget = []*dataproc.GkeNodePoolTarget{
+					{NodePool: "role-a", Roles: []string{"DEFAULT"}},
+					{NodePool: "role-b", Roles: []string{"DEFAULT"}},
+				}
+			},
+			code: 400, message: "only one nodePoolTarget",
+		},
+		{
+			name: "pool outside the region",
+			mut: func(v *dataproc.VirtualClusterConfig) {
+				v.KubernetesClusterConfig.GkeClusterConfig.NodePoolTarget = []*dataproc.GkeNodePoolTarget{{
+					NodePool: "wrong-zone",
+					Roles:    []string{"DEFAULT"},
+					NodePoolConfig: &dataproc.GkeNodePoolConfig{
+						Locations: []string{"us-east1-b"},
+					},
+				}}
+			},
+			code: 400, message: "not a zone in region",
+		},
+		{
+			name: "autoscaler bounds",
+			mut: func(v *dataproc.VirtualClusterConfig) {
+				v.KubernetesClusterConfig.GkeClusterConfig.NodePoolTarget = []*dataproc.GkeNodePoolTarget{{
+					NodePool: "bad-bounds",
+					Roles:    []string{"DEFAULT"},
+					NodePoolConfig: &dataproc.GkeNodePoolConfig{
+						Autoscaling: &dataproc.GkeNodePoolAutoscalingConfig{MinNodeCount: 5, MaxNodeCount: 2},
+					},
+				}}
+			},
+			code: 400, message: "0 <= minNodeCount <= maxNodeCount",
+		},
+		{
+			name: "target in another project",
+			mut: func(v *dataproc.VirtualClusterConfig) {
+				v.KubernetesClusterConfig.GkeClusterConfig.GkeClusterTarget =
+					"projects/another-project/locations/" + dpRegion + "/clusters/elsewhere"
+			},
+			code: 400, message: "must be in the same project",
+		},
+		{
+			name: "unknown engine alias",
+			mut: func(v *dataproc.VirtualClusterConfig) {
+				v.KubernetesClusterConfig.KubernetesSoftwareConfig.ComponentVersion["SPARK"] = "dataproc-2.2"
+			},
+			code: 400, message: "unknown Spark engine version",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vcc := gkeVCC(target, tc.mut)
+			_, err := dp.Projects.Regions.Clusters.Create(dpProject, dpRegion, &dataproc.Cluster{
+				ProjectId:            dpProject,
+				ClusterName:          unique("dpgke-bad"),
+				VirtualClusterConfig: vcc,
+			}).Do()
+			requireCode(t, err, tc.code, tc.name)
+			var gerr *googleapi.Error
+			require.ErrorAs(t, err, &gerr)
+			require.Contains(t, gerr.Message, tc.message, tc.name)
+		})
+	}
+
+	// The target cluster itself must exist, be standard, and have Workload
+	// Identity: each is a create-time rejection, not an ERROR-status cluster.
+	t.Run("missing GKE cluster", func(t *testing.T) {
+		missing := "projects/" + dpProject + "/locations/" + dpRegion + "/clusters/does-not-exist"
+		_, err := dp.Projects.Regions.Clusters.Create(dpProject, dpRegion, &dataproc.Cluster{
+			ProjectId:            dpProject,
+			ClusterName:          unique("dpgke-bad"),
+			VirtualClusterConfig: gkeVCC(missing),
+		}).Do()
+		requireCode(t, err, 404, "missing GKE cluster")
+	})
+
+	t.Run("target without Workload Identity", func(t *testing.T) {
+		name := unique("gke-no-wi")
+		_, err := gke.Projects.Locations.Clusters.Create("projects/"+dpProject+"/locations/"+dpRegion,
+			&container.CreateClusterRequest{Cluster: &container.Cluster{Name: name}}).Do()
+		require.NoError(t, err)
+		_, err = dp.Projects.Regions.Clusters.Create(dpProject, dpRegion, &dataproc.Cluster{
+			ProjectId:            dpProject,
+			ClusterName:          unique("dpgke-bad"),
+			VirtualClusterConfig: gkeVCC("projects/" + dpProject + "/locations/" + dpRegion + "/clusters/" + name),
+		}).Do()
+		requireCode(t, err, 400, "target without Workload Identity")
+	})
+
+	t.Run("Autopilot target", func(t *testing.T) {
+		name := unique("gke-autopilot")
+		_, err := gke.Projects.Locations.Clusters.Create("projects/"+dpProject+"/locations/"+dpRegion,
+			&container.CreateClusterRequest{Cluster: &container.Cluster{
+				Name:                   name,
+				Autopilot:              &container.Autopilot{Enabled: true},
+				WorkloadIdentityConfig: &container.WorkloadIdentityConfig{WorkloadPool: dpProject + ".svc.id.goog"},
+			}}).Do()
+		require.NoError(t, err)
+		_, err = dp.Projects.Regions.Clusters.Create(dpProject, dpRegion, &dataproc.Cluster{
+			ProjectId:            dpProject,
+			ClusterName:          unique("dpgke-bad"),
+			VirtualClusterConfig: gkeVCC("projects/" + dpProject + "/locations/" + dpRegion + "/clusters/" + name),
+		}).Do()
+		requireCode(t, err, 400, "Autopilot target")
+	})
+
+	// Recreate-only: a patch that would apply virtualClusterConfig is rejected;
+	// the same patch on a GCE cluster is not (covered by the depth suite).
+	t.Run("patch is recreate-only", func(t *testing.T) {
+		name := unique("dpgke-patch")
+		created := createVirtualCluster(t, dp, name, gkeVCC(target))
+		require.Equal(t, "RUNNING", created.Status.State)
+		_, err := dp.Projects.Regions.Clusters.Patch(dpProject, dpRegion, name, &dataproc.Cluster{
+			VirtualClusterConfig: gkeVCC(target),
+		}).UpdateMask("virtualClusterConfig").Do()
+		requireCode(t, err, 400, "patch is recreate-only")
+		var gerr *googleapi.Error
+		require.ErrorAs(t, err, &gerr)
+		require.Contains(t, gerr.Message, "recreate-only")
+	})
+
+	// A kubernetesNamespace is owned by one virtual cluster at a time; a second
+	// one on the same GKE cluster is FailedPrecondition. Dropping the namespace
+	// (which then defaults to the new cluster's name) allows the recreate.
+	t.Run("duplicate kubernetesNamespace", func(t *testing.T) {
+		namespace := unique("ns")
+		first := createVirtualCluster(t, dp, unique("dpgke-ns-a"), gkeVCC(target, func(v *dataproc.VirtualClusterConfig) {
+			v.KubernetesClusterConfig.KubernetesNamespace = namespace
+		}))
+		require.Equal(t, "RUNNING", first.Status.State)
+		_, err := dp.Projects.Regions.Clusters.Create(dpProject, dpRegion, &dataproc.Cluster{
+			ProjectId:   dpProject,
+			ClusterName: unique("dpgke-ns-b"),
+			VirtualClusterConfig: gkeVCC(target, func(v *dataproc.VirtualClusterConfig) {
+				v.KubernetesClusterConfig.KubernetesNamespace = namespace
+			}),
+		}).Do()
+		requireCode(t, err, 400, "duplicate kubernetesNamespace")
+		var gerr *googleapi.Error
+		require.ErrorAs(t, err, &gerr)
+		require.Contains(t, gerr.Message, "already used by Dataproc virtual cluster")
+	})
 }

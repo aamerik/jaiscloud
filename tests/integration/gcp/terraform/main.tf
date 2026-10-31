@@ -227,6 +227,71 @@ resource "google_dataproc_metastore_database_iam_member" "compat" {
   member      = "serviceAccount:${google_service_account.compat.email}"
 }
 
+# ── Dataproc on GKE (virtual cluster) ─────────────────────────────────────────
+# google_dataproc_cluster with virtual_cluster_config is the provider path the
+# emulator's NodePool reconciler has to satisfy: the create is accepted, the
+# pools it names are materialised in the GKE API, and the read-back carries no
+# nodePoolConfig (it is input-only in the real API).
+#
+# The GKE prerequisite is created out of band by run.sh (create standard,
+# Workload-Identity-enabled cluster) instead of as a google_container_cluster:
+# that resource panics in the provider's read on this emulator because the GKE
+# mock omits nested messages the provider dereferences unconditionally
+# (recorded as DPG37 in the dataproc-gke wave plan). The subject of the gate is
+# the Dataproc resource, and the GKE half is covered by the conformance, gRPC
+# and SDK suites.
+#
+# SPARK is pinned to a fully-qualified release on purpose: aliases are
+# dereferenced at cluster creation (real GCP behaviour), so a config carrying
+# "3.5" would show a permanent diff against the stored "3.5-dataproc-28".
+resource "google_dataproc_cluster" "gke" {
+  name   = "jaiscloud-tf-dataproc-gke"
+  region = var.region
+  labels = { env = "compat-test" }
+
+  virtual_cluster_config {
+    staging_bucket = "jaiscloud-tf-dataproc-staging"
+
+    kubernetes_cluster_config {
+      kubernetes_namespace = "jaiscloud-tf-dataproc"
+
+      gke_cluster_config {
+        gke_cluster_target = "projects/${var.project}/locations/${var.region}/clusters/${var.gke_cluster}"
+
+        node_pool_target {
+          node_pool = "jaiscloud-tf-dataproc-pool"
+          roles     = ["DEFAULT", "CONTROLLER"]
+
+          node_pool_config {
+            config {
+              machine_type    = "n1-standard-4"
+              local_ssd_count = 1
+            }
+
+            autoscaling {
+              min_node_count = 1
+              max_node_count = 3
+            }
+
+            locations = ["${var.region}-a"]
+          }
+        }
+
+        node_pool_target {
+          node_pool = "jaiscloud-tf-dataproc-spark"
+          roles     = ["SPARK_DRIVER", "SPARK_EXECUTOR"]
+        }
+      }
+
+      kubernetes_software_config {
+        component_version = {
+          SPARK = "3.5-dataproc-28"
+        }
+      }
+    }
+  }
+}
+
 # ── Outputs (consumed by run.sh spot checks) ──────────────────────────────────
 output "bucket_name" {
   value = google_storage_bucket.compat.name
@@ -278,4 +343,8 @@ output "enabled_service" {
 
 output "metastore_federation_name" {
   value = google_dataproc_metastore_federation.compat.name
+}
+
+output "dataproc_gke_cluster_name" {
+  value = google_dataproc_cluster.gke.name
 }
