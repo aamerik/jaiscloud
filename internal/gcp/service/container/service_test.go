@@ -67,6 +67,61 @@ func TestCreateClusterReturnsOperationAndStoresCluster(t *testing.T) {
 	}
 }
 
+func TestCreateClusterMaterializesCallerNodePools(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+
+	_, err := s.CreateCluster(ctx, "p", "l", containerstore.Cluster{
+		Name: "c1",
+		NodePools: []containerstore.NodePool{
+			{Name: "pool-a", InitialNodeCount: 2},
+			{Name: "pool-b", InitialNodeCount: 1, NodeCount: 5},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	c, err := s.GetCluster(ctx, "p", "l", "c1")
+	if err != nil {
+		t.Fatalf("GetCluster: %v", err)
+	}
+	// The caller's pools replace the default-pool real GKE only generates when
+	// the request carries no nodePools.
+	if len(c.NodePools) != 2 || c.NodePools[0].Name != "pool-a" || c.NodePools[1].Name != "pool-b" {
+		t.Fatalf("nodePools = %+v", c.NodePools)
+	}
+	a, b := c.NodePools[0], c.NodePools[1]
+	if a.Status != containerstore.StatusRunning || b.Status != containerstore.StatusRunning {
+		t.Fatalf("pool status = %q/%q, want RUNNING", a.Status, b.Status)
+	}
+	if a.SelfLink != "projects/p/locations/l/clusters/c1/nodePools/pool-a" {
+		t.Fatalf("pool-a selfLink = %q", a.SelfLink)
+	}
+	if a.Version != DefaultMasterVersion || b.Version != DefaultMasterVersion {
+		t.Fatalf("pool versions = %q/%q, want %q", a.Version, b.Version, DefaultMasterVersion)
+	}
+	if a.NodeCount != 2 || b.NodeCount != 5 {
+		t.Fatalf("node counts = %d/%d, want 2/5", a.NodeCount, b.NodeCount)
+	}
+}
+
+func TestCreateClusterRejectsBadNodePools(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService()
+
+	cases := map[string][]containerstore.NodePool{
+		"empty name":   {{Name: ""}},
+		"invalid name": {{Name: "Bad_Name"}},
+		"duplicate":    {{Name: "pool-a"}, {Name: "pool-a"}},
+	}
+	for name, pools := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := s.CreateCluster(ctx, "p", "l", containerstore.Cluster{Name: "c1", NodePools: pools})
+			providerErr(t, err, "InvalidArgument")
+		})
+	}
+}
+
 func TestCreateClusterErrors(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService()

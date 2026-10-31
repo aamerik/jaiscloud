@@ -168,6 +168,60 @@ func TestSDKContainerClusterLifecycle(t *testing.T) {
 	requireAPIError(t, err, 404)
 }
 
+// TestSDKContainerClusterCreateWithInlineNodePools pins create-time pools: a
+// Cluster body that carries node_pools materializes them in the same call
+// (real GKE behavior) instead of silently getting a lone default-pool.
+func TestSDKContainerClusterCreateWithInlineNodePools(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+
+	id := unique("c")
+	_, err := svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{
+		Cluster: &container.Cluster{
+			Name: id,
+			NodePools: []*container.NodePool{
+				{Name: "pool-a", InitialNodeCount: 2, Config: &container.NodeConfig{MachineType: "e2-medium"}},
+				{Name: "pool-b", InitialNodeCount: 1},
+			},
+		},
+	}).Do()
+	require.NoError(t, err)
+
+	got, err := svc.Projects.Locations.Clusters.Get(clusterName(id)).Do()
+	require.NoError(t, err)
+	require.Len(t, got.NodePools, 2)
+	require.Equal(t, "pool-a", got.NodePools[0].Name)
+	require.Equal(t, "pool-b", got.NodePools[1].Name)
+	for _, p := range got.NodePools {
+		require.Equal(t, "RUNNING", p.Status)
+		require.Equal(t, nodePoolName(id, p.Name), p.SelfLink)
+		require.Equal(t, got.CurrentMasterVersion, p.Version)
+	}
+	require.Equal(t, "e2-medium", got.NodePools[0].Config.MachineType)
+
+	// The materialized pools are full members of the cluster's node-pool
+	// collection: listable and individually addressable afterwards.
+	pools, err := svc.Projects.Locations.Clusters.NodePools.List(clusterName(id)).Do()
+	require.NoError(t, err)
+	require.Len(t, pools.NodePools, 2)
+	pool, err := svc.Projects.Locations.Clusters.NodePools.Get(nodePoolName(id, "pool-b")).Do()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), pool.InitialNodeCount)
+
+	// A pool name supplied twice is rejected, as real GKE does.
+	dup := unique("c")
+	_, err = svc.Projects.Locations.Clusters.Create(parent(), &container.CreateClusterRequest{
+		Cluster: &container.Cluster{
+			Name: dup,
+			NodePools: []*container.NodePool{
+				{Name: "pool-a", InitialNodeCount: 1},
+				{Name: "pool-a", InitialNodeCount: 1},
+			},
+		},
+	}).Do()
+	requireAPIError(t, err, 400)
+}
+
 // TestSDKContainerNodePools covers node-pool CRUD, the update/setter custom
 // methods, and their operation records.
 func TestSDKContainerNodePools(t *testing.T) {

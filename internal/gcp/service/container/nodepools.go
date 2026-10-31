@@ -52,6 +52,39 @@ func (s *Service) CreateNodePool(ctx context.Context, project, location, cluster
 	return s.recordNodePoolOperation(ctx, project, location, containerstore.OperationCreateNodePool, p.SelfLink, now)
 }
 
+// materializeNodePools validates the pools a cluster create request supplied
+// inline and fills the fields real GKE assigns when it materializes them: the
+// canonical selfLink, the pool's node version (inherited from the cluster) and
+// the node count implied by initialNodeCount. The mock has no node lifecycle,
+// so the pools are stored RUNNING, matching CreateNodePool.
+func materializeNodePools(project, location string, c *containerstore.Cluster) error {
+	seen := make(map[string]bool, len(c.NodePools))
+	out := make([]containerstore.NodePool, 0, len(c.NodePools))
+	for _, p := range c.NodePools {
+		if p.Name == "" {
+			return invalidArgument("node pool name is required")
+		}
+		if !validNodePoolName.MatchString(p.Name) {
+			return invalidArgument("invalid node pool name: " + p.Name)
+		}
+		if seen[p.Name] {
+			return invalidArgument("duplicate node pool name: " + p.Name)
+		}
+		seen[p.Name] = true
+		p.Status = containerstore.StatusRunning
+		p.SelfLink = NodePoolName(project, location, c.Name, p.Name)
+		if p.Version == "" {
+			p.Version = c.CurrentMasterVersion
+		}
+		if p.NodeCount == 0 {
+			p.NodeCount = p.InitialNodeCount
+		}
+		out = append(out, p)
+	}
+	c.NodePools = out
+	return nil
+}
+
 // GetNodePool returns a node pool by short name.
 func (s *Service) GetNodePool(ctx context.Context, project, location, cluster, pool string) (containerstore.NodePool, error) {
 	c, err := s.store.GetCluster(ctx, project, location, cluster)

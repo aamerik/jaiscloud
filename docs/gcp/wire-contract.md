@@ -346,9 +346,12 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `setResourceLabels`/`startIpRotation`/`completeIpRotation`), served over both the REST surface and
   the native gRPC `google.container.v1.ClusterManager` transport. Every mutating call returns a GKE
   `Operation` (correct `operationType`, `DONE`) and the recorded fields are echoed on read-back. A
-  cluster is an instantly-`RUNNING` stored record (default master version, a `default-pool`,
-  `network`/`subnetwork`); there is **no real Kubernetes control plane** behind it, so `Autopilot`
-  compatibility, `fetchClusterUpgradeInfo`/`fetchNodePoolUpgradeInfo`,
+  cluster is an instantly-`RUNNING` stored record (default master version, `network`/`subnetwork`);
+  a create that carries inline `nodePools` materializes those pools in the same call (each with its
+  canonical `selfLink`, `RUNNING` status, the cluster's node version and its `initialNodeCount`
+  node count), while one that carries none gets the generated `default-pool`; there is **no real
+  Kubernetes control plane** behind it, so `Autopilot` compatibility,
+  `fetchClusterUpgradeInfo`/`fetchNodePoolUpgradeInfo`,
   `completeControlPlaneUpgrade`/`completeNodePoolUpgrade`, `getJsonWebKeys`, `getServerConfig` and
   `listUsableSubnetworks` remain explicit `Unimplemented` stubs, and there is no Artifact
   Registry/OCI pull path. GKE shares the canonical
