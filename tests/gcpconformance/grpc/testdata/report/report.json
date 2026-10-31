@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 489,
-  "passed": 489,
+  "total": 492,
+  "passed": 492,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 489,
-    "passed": 489,
+    "checks": 492,
+    "passed": 492,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -23,8 +23,8 @@
     },
     {
       "service": "dataproc",
-      "total": 28,
-      "passed": 28,
+      "total": 31,
+      "passed": 31,
       "failed": 0,
       "unimplemented": 0
     },
@@ -3032,6 +3032,27 @@
       "method": "CreateCluster",
       "status": "pass",
       "key_field": "GKE virtualClusterConfig round-trip"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (vcc pools)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "reconciled pools read back through ClusterManager + survive delete"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (vcc reuse)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "a second virtual cluster adopts existing pools"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (vcc rules)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "GKE placement/pool validation as client-visible errors"
     },
     {
       "service": "dataproc",

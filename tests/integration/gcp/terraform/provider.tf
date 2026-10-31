@@ -35,6 +35,12 @@ variable "region" {
   default     = "us-central1"
 }
 
+variable "gke_cluster" {
+  type        = string
+  description = "Name of the GKE cluster run.sh creates as the Dataproc-on-GKE prerequisite."
+  default     = "jaiscloud-tf-gke"
+}
+
 provider "google" {
   project = var.project
   region  = var.region
@@ -59,4 +65,9 @@ provider "google" {
   # federation resource (google_dataproc_metastore_federation) and the
   # database IAM member go through the same v1 custom endpoint.
   dataproc_metastore_custom_endpoint = "${var.endpoint}/v1/"
+
+  # Dataproc (clusters incl. the Dataproc-on-GKE virtual cluster). The provider
+  # keeps only the scheme+host of a custom endpoint, so the plain v1 root is
+  # right for dataproc: it carries no path-prefix requirement.
+  dataproc_custom_endpoint = "${var.endpoint}/"
 }

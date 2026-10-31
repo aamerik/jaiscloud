@@ -356,7 +356,9 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   it is disambiguated by host (the first DNS label is `container`, as in
   `container.googleapis.com`) or by the `/container` path prefix Terraform/gcloud use; Managed
   Kafka's routing for the default host is unchanged. The `ClusterManager` seam exists so a real
-  engine could attach later.
+  engine could attach later. This control plane is what a Dataproc-on-GKE virtual cluster reconciles
+  against: a `nodePoolTarget` is created or verified through the node-pool operations above and read
+  back through `NodePools.list`/`get` (see the Dataproc row and §5).
 - **Cloud Run (run.googleapis.com)** — the Cloud Run Admin v2 control plane, served over both the REST surface and the native gRPC
   `google.cloud.run.v2.Services`/`Revisions` transports: service
   `create`/`get`/`list`/`update` (PATCH)/`delete`, revision `list`/`get`/`delete` (one revision per
@@ -434,6 +436,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   existing one (adopted when the caller sends no `nodePoolConfig`, which is input-only and never
   read back); a mismatch leaves the cluster in `ERROR` with the pool and field in `status.detail`,
   pools are not deleted with the cluster, and there is no autoscaler behaviour or drift detection —
+  a virtual cluster is also recreate-only (`clusters.patch` touching `virtualClusterConfig` is
+  `InvalidArgument`) and a `kubernetesNamespace` already owned on the same GKE cluster is
+  `FailedPrecondition`, while the SPARK engine alias is dereferenced at create and the
+  `dataproc-<major.minor>` image form is not resolved (DPG36) —
   the cluster is still not scheduled onto a GKE cluster — but in K8s executor mode each Dataproc cluster
   runs in its own Kubernetes
   workload namespace — the caller's `kubernetesClusterConfig.kubernetesNamespace` when supplied,

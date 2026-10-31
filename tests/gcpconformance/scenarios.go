@@ -1209,6 +1209,89 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/clusters/" + dpCluster},
 	)
 
+	// ─── Dataproc on GKE: cross-API virtual cluster + node pools ──────────────
+	// The cross-API chain users actually exercise: a standard,
+	// Workload-Identity-enabled GKE cluster is created through container.v1
+	// (path-mode prefix, as in the GKE block above), then virtual clusters are
+	// created through dataproc.v1 and their pools are read back through the GKE
+	// API. Three shapes are recorded: one named-only pool ("any node pool with
+	// the specified name is used"), three pools with a shaped/autoscaled one, and
+	// an ERROR-status cluster from a nodePoolConfig that disagrees with an
+	// existing pool. The patch rejection and the pools-survive-delete read close
+	// the lifecycle. nodePoolConfig is input-only, so the virtual-cluster reads
+	// carry nodePoolTarget without it.
+	dpGkeCluster := "conf-gke-dp-" + suffix
+	dpGkeClusterBase := "/container/v1/projects/" + p + "/locations/us-central1/clusters/" + dpGkeCluster
+	dpGkeTarget := "projects/" + p + "/locations/us-central1/clusters/" + dpGkeCluster
+	dpGkeVC := func(name, namespace string, pools []string, software string) string {
+		return fmt.Sprintf(
+			`{"projectId":%q,"clusterName":%q,"virtualClusterConfig":{"stagingBucket":%q,"kubernetesClusterConfig":{"kubernetesNamespace":%q,"gkeClusterConfig":{"gkeClusterTarget":%q,"nodePoolTarget":[%s]},"kubernetesSoftwareConfig":{"componentVersion":{"SPARK":%q}}}}}`,
+			p, name, "dataproc-staging-"+p, namespace, dpGkeTarget, strings.Join(pools, ","), software)
+	}
+	dpGkeA := "conf-dpgke-a-" + suffix
+	dpGkeB := "conf-dpgke-b-" + suffix
+	dpGkeC := "conf-dpgke-c-" + suffix
+	dpGkePoolA := "conf-dp-pool-a-" + suffix
+	dpGkeShaped := "conf-dp-shaped-" + suffix
+	dpGkeDriver := "conf-dp-driver-" + suffix
+	dpGkeExecutor := "conf-dp-executor-" + suffix
+	dpGkeTaken := "conf-dp-taken-" + suffix
+	sc = append(sc,
+		// Prerequisite GKE cluster.
+		Scenario{Service: "container", Method: "POST",
+			Path: "/container/v1/projects/" + p + "/locations/us-central1/clusters",
+			Body: fmt.Sprintf(`{"cluster":{"name":%q,"initialNodeCount":1,"workloadIdentityConfig":{"workloadPool":%q}}}`,
+				dpGkeCluster, p+".svc.id.goog")},
+		// Virtual cluster A: one named-only pool, created by the reconciler.
+		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/clusters",
+			Body: dpGkeVC(dpGkeA, "conf-ns-a-"+suffix,
+				[]string{fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT"]}`, dpGkePoolA)}, "3.5"),
+			Save: map[string]string{"dpGkeAOp": "name"}},
+		Scenario{Service: "dataproc", Method: "GET", Path: "/v1/${dpGkeAOp}"},
+		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/clusters/" + dpGkeA},
+		Scenario{Service: "container", Method: "GET", Path: dpGkeClusterBase + "/nodePools"},
+		Scenario{Service: "container", Method: "GET", Path: dpGkeClusterBase + "/nodePools/" + dpGkePoolA},
+		// Virtual cluster B: three pools, one caller-shaped with autoscaling and
+		// a zone, the driver/executor split across two named-only pools.
+		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/clusters",
+			Body: dpGkeVC(dpGkeB, "conf-ns-b-"+suffix, []string{
+				fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT","CONTROLLER"],"nodePoolConfig":{"config":{"machineType":"n1-standard-4","localSsdCount":1},"autoscaling":{"minNodeCount":1,"maxNodeCount":4},"locations":["us-central1-a"]}}`, dpGkeShaped),
+				fmt.Sprintf(`{"nodePool":%q,"roles":["SPARK_DRIVER"]}`, dpGkeDriver),
+				fmt.Sprintf(`{"nodePool":%q,"roles":["SPARK_EXECUTOR"]}`, dpGkeExecutor),
+			}, "latest"),
+			Save: map[string]string{"dpGkeBOp": "name"}},
+		Scenario{Service: "dataproc", Method: "GET", Path: "/v1/${dpGkeBOp}"},
+		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/clusters/" + dpGkeB},
+		Scenario{Service: "container", Method: "GET", Path: dpGkeClusterBase + "/nodePools"},
+		// Virtual cluster C: an existing pool with a shape the request
+		// disagrees with. The create is accepted and the cluster settles in
+		// ERROR with a status.detail naming the pool and the field.
+		Scenario{Service: "container", Method: "POST", Path: dpGkeClusterBase + "/nodePools",
+			Body: fmt.Sprintf(`{"nodePool":{"name":%q,"initialNodeCount":1,"config":{"machineType":"e2-medium"}}}`, dpGkeTaken)},
+		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/clusters",
+			Body: dpGkeVC(dpGkeC, "conf-ns-c-"+suffix, []string{
+				fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT"],"nodePoolConfig":{"config":{"machineType":"n1-standard-4"}}}`, dpGkeTaken),
+			}, "3.5"),
+			Save: map[string]string{"dpGkeCOp": "name"}},
+		Scenario{Service: "dataproc", Method: "GET", Path: "/v1/${dpGkeCOp}"},
+		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/clusters/" + dpGkeC},
+		// A Dataproc-on-GKE virtual cluster is recreate-only: a patch that would
+		// apply virtualClusterConfig is InvalidArgument.
+		Scenario{Service: "dataproc", Method: "PATCH",
+			Path: dpBase + "/clusters/" + dpGkeA + "?updateMask=virtualClusterConfig",
+			Body: dpGkeVC(dpGkeA, "conf-ns-a-"+suffix,
+				[]string{fmt.Sprintf(`{"nodePool":%q,"roles":["DEFAULT"]}`, dpGkePoolA)}, "3.5")},
+		// Deletes: the virtual clusters go, their pools stay (real GCP keeps
+		// them), so the pool read after the delete is the proof.
+		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/clusters/" + dpGkeA,
+			Save: map[string]string{"dpGkeADelOp": "name"}},
+		Scenario{Service: "dataproc", Method: "GET", Path: "/v1/${dpGkeADelOp}"},
+		Scenario{Service: "dataproc", Method: "DELETE", Path: dpBase + "/clusters/" + dpGkeB},
+		Scenario{Service: "container", Method: "GET", Path: dpGkeClusterBase + "/nodePools/" + dpGkePoolA},
+		Scenario{Service: "container", Method: "GET", Path: dpGkeClusterBase + "/nodePools/" + dpGkeShaped},
+		Scenario{Service: "container", Method: "DELETE", Path: dpGkeClusterBase},
+	)
+
 	// ─── Firestore control plane: composite index, runQuery, backups ──────────
 	// The probe cannot stage these either: a composite index needs two fields and
 	// returns its id inside the create operation's response; runQuery needs a

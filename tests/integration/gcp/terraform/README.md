@@ -18,6 +18,8 @@ Only services `jaiscloud-gcp` implements are declared in `main.tf`:
 - Cloud KMS (key ring + crypto key)
 - Pub/Sub (topic + subscription + topic/subscription IAM members)
 - Cloud SQL for PostgreSQL (instance + database + user)
+- Dataproc Metastore (federation + database IAM member)
+- Dataproc (a Dataproc-on-GKE virtual cluster with two node-pool targets)
 - Cloud Resource Manager project-level IAM
   (`/v1/projects/{project}:getIamPolicy`) and project lookup
 - Service Usage (`/v1/projects/{project}/services`)
@@ -26,6 +28,19 @@ Deliberately **excluded** because it makes `apply` fail (and abort the run):
 
 - **Cloud Run v2** — not implemented; declared out of scope in
   `docs/gcp/wire-contract.md` §5.
+- **`google_container_cluster`** — the provider's cluster read dereferences
+  nested response messages the GKE mock does not emit (`legacyAbac`,
+  `networkConfig`, `shieldedNodes`, `defaultMaxPodsConstraint`) and panics
+  (`SIGSEGV` in `resourceContainerClusterRead`). `run.sh` therefore creates the
+  Dataproc-on-GKE prerequisite cluster itself over the GKE REST API and passes
+  its name in (`var.gke_cluster`); the mock gap is recorded as **DPG37** in
+  `plan_docs/gcp-dataproc-gke-wave-plan.md`, and the GKE half of the cross-API
+  contract is gated by the conformance, gRPC and SDK suites instead.
+- **`google_dataproc_cluster` with a plain `cluster_config`** (Compute-Engine
+  clusters) — the emulator's GCE cluster read omits `config.softwareConfig`,
+  which the provider flattens without a nil check and so panics
+  (`flattenSoftwareConfig`); recorded as **DPG38**. Only the
+  `virtual_cluster_config` shape is exercised here.
 
 Keep `main.tf` in sync with the emulator's supported surface: one unimplemented
 resource aborts the whole `apply`, so nothing else runs.
@@ -85,6 +100,15 @@ below, then `destroy` (also on exit via a trap, so failures still clean up):
   and project `:getIamPolicy` accepts the provider's POST
 - The `google_project_service` API is `ENABLED` and appears in
   `GET .../services?filter=state:ENABLED`
+- The Dataproc-on-GKE virtual cluster is `RUNNING`, echoes both `nodePoolTarget`
+  names and the GKE target, and its read carries **no** `nodePoolConfig`
+  (input-only in the real API)
+- The node pools it named exist through the GKE API
+  (`GET /container/v1/…/nodePools`): the caller-shaped one with `machineType`
+  `n1-standard-4`, `maxNodeCount: 3` and the `goog-dataproc-cluster-name` label,
+  the named-only one with the 1/10 autoscaler defaults
+- After `destroy` removes the virtual cluster, the pool is still readable —
+  real Dataproc does not delete a virtual cluster's node pools
 
 ## Provenance
 
