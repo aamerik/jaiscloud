@@ -22,11 +22,21 @@ func newTestService() *Service {
 	return NewService(core.NewService(dpstore.NewMemoryStore(), store.NewMemoryResourceStore()), "proj")
 }
 
+// gceClusterConfig is the minimal Compute-Engine placement a create needs: a
+// cluster must carry exactly one of config or virtualClusterConfig.
+func gceClusterConfig() *dataprocpb.ClusterConfig {
+	return &dataprocpb.ClusterConfig{GceClusterConfig: &dataprocpb.GceClusterConfig{ZoneUri: "us-central1-a"}}
+}
+
 func createClusterReq(id string) *dataprocpb.CreateClusterRequest {
 	return &dataprocpb.CreateClusterRequest{
 		ProjectId: "proj",
 		Region:    "us-central1",
-		Cluster:   &dataprocpb.Cluster{ClusterName: id, Labels: map[string]string{"env": "dev"}},
+		Cluster: &dataprocpb.Cluster{
+			ClusterName: id,
+			Config:      gceClusterConfig(),
+			Labels:      map[string]string{"env": "dev"},
+		},
 	}
 }
 

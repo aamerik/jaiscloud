@@ -33,6 +33,21 @@ func newProvider(t *testing.T) *Provider {
 	return NewProvider(core.NewService(dataprocstore.NewMemoryStore(), store.NewMemoryResourceStore()), "proj")
 }
 
+// gceBody is the minimal create body: a cluster must carry exactly one of
+// config or virtualClusterConfig, so a test that is not about the placement
+// sends the Compute-Engine shape.
+func gceBody(clusterName string, labels map[string]any) map[string]any {
+	body := map[string]any{
+		"projectId":   "proj",
+		"clusterName": clusterName,
+		"config":      map[string]any{"gceClusterConfig": map[string]any{"zoneUri": "us-central1-a"}},
+	}
+	if labels != nil {
+		body["labels"] = labels
+	}
+	return body
+}
+
 func TestCreateCluster_LRO(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
@@ -99,12 +114,31 @@ func TestCreateCluster_LRO(t *testing.T) {
 	}
 }
 
+// TestCreateCluster_RequiresPlacement verifies Discovery's "Exactly one of
+// ClusterConfig or VirtualClusterConfig must be specified": a create carrying
+// neither is 400 InvalidArgument and leaves no cluster behind.
+func TestCreateCluster_RequiresPlacement(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	_, err := p.CreateCluster(ctx, testNR(map[string]any{
+		"region": "us-central1",
+		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+	}))
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 400 || pe.Code != "InvalidArgument" {
+		t.Fatalf("expected 400 InvalidArgument, got %v", err)
+	}
+	if _, err := p.GetCluster(ctx, testNR(map[string]any{"region": "us-central1", "clusterName": "c1"})); err == nil {
+		t.Fatal("a rejected create must not persist a cluster")
+	}
+}
+
 func TestCreateCluster_AlreadyExists(t *testing.T) {
 	p := newProvider(t)
 	ctx := context.Background()
 	body := map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}
 	if _, err := p.CreateCluster(ctx, testNR(body)); err != nil {
 		t.Fatalf("first create: %v", err)
@@ -260,7 +294,7 @@ func TestUpdateClusterVsStopClusterConcurrent_NoLostUpdate(t *testing.T) {
 	ctx := context.Background()
 	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1", "labels": map[string]any{"env": "dev"}},
+		"body":   gceBody("c1", map[string]any{"env": "dev"}),
 	})); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -306,7 +340,7 @@ func TestDeleteCluster(t *testing.T) {
 	ctx := context.Background()
 	_, err := p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -325,7 +359,7 @@ func TestStartStopCluster(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	if _, err := p.StopCluster(ctx, testNR(map[string]any{"region": "us-central1", "clusterName": "c1"})); err != nil {
 		t.Fatalf("stop: %v", err)
@@ -376,7 +410,7 @@ func TestSubmitJob_MockProgression(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	resp, err := p.SubmitJob(ctx, testNR(map[string]any{
 		"region": "us-central1",
@@ -417,7 +451,7 @@ func TestUpdateJob_Labels(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	if _, err := p.SubmitJob(ctx, testNR(map[string]any{
 		"region": "us-central1",
@@ -461,7 +495,7 @@ func TestSubmitJob_SchedulingRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	resp, err := p.SubmitJob(ctx, testNR(map[string]any{
 		"region": "us-central1",
@@ -494,7 +528,7 @@ func TestSubmitJob_UnsupportedJobTypeFailsLoud(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	resp, err := p.SubmitJob(ctx, testNR(map[string]any{
 		"region": "us-central1",
@@ -526,7 +560,7 @@ func TestSubmitJob_MissingPlacement(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 
 	for name, job := range map[string]map[string]any{
@@ -556,7 +590,7 @@ func TestSubmitJob_UnsupportedExtraTypes(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 
 	for _, typ := range []string{"prestoJob", "trinoJob", "flinkJob"} {
@@ -597,7 +631,7 @@ func TestSubmitJob_SparkSqlJobAccepted(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 
 	resp, err := p.SubmitJob(ctx, testNR(map[string]any{
@@ -624,7 +658,7 @@ func TestListJobs(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	_, _ = p.SubmitJob(ctx, testNR(map[string]any{
 		"region": "us-central1",
@@ -656,7 +690,7 @@ func TestListJobs_FilterAndMatcher(t *testing.T) {
 	for _, c := range []string{"c1", "c2"} {
 		if _, err := p.CreateCluster(ctx, testNR(map[string]any{
 			"region": "us-central1",
-			"body":   map[string]any{"projectId": "proj", "clusterName": c},
+			"body":   gceBody(c, nil),
 		})); err != nil {
 			t.Fatalf("CreateCluster(%s): %v", c, err)
 		}
@@ -731,7 +765,7 @@ func TestListClusters_FilterAndPageSize(t *testing.T) {
 		t.Helper()
 		if _, err := p.CreateCluster(ctx, testNR(map[string]any{
 			"region": "us-central1",
-			"body":   map[string]any{"projectId": "proj", "clusterName": name, "labels": labels},
+			"body":   gceBody(name, labels),
 		})); err != nil {
 			t.Fatalf("CreateCluster(%s): %v", name, err)
 		}
@@ -789,7 +823,7 @@ func TestSubmitJobAsOperation(t *testing.T) {
 	ctx := context.Background()
 	_, _ = p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	}))
 	resp, err := p.SubmitJobAsOperation(ctx, testNR(map[string]any{
 		"region": "us-central1",
@@ -868,7 +902,7 @@ func TestOperationTTLSweep(t *testing.T) {
 	// Creating a cluster mints an LRO, which triggers the sweep.
 	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	})); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}
@@ -944,7 +978,7 @@ func TestJobSubstateTerminalOmitted(t *testing.T) {
 	ctx := context.Background()
 	if _, err := p.CreateCluster(ctx, testNR(map[string]any{
 		"region": "us-central1",
-		"body":   map[string]any{"projectId": "proj", "clusterName": "c1"},
+		"body":   gceBody("c1", nil),
 	})); err != nil {
 		t.Fatalf("CreateCluster: %v", err)
 	}

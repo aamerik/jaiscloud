@@ -31,6 +31,7 @@ import (
 func dataprocChecks() []Check {
 	return []Check{
 		{Service: "dataproc", RPC: "CreateCluster", Method: "CreateCluster", KeyField: "LRO done + RUNNING cluster", Run: checkDPCreateCluster},
+		{Service: "dataproc", RPC: "CreateCluster (no placement)", Method: "CreateCluster", KeyField: "InvalidArgument when neither config nor virtualClusterConfig is set", Run: checkDPCreateClusterNoPlacement},
 		{Service: "dataproc", RPC: "CreateCluster (on GKE, unknown target)", Method: "CreateCluster", KeyField: "NotFound for an unresolvable gkeClusterTarget", Run: checkDPCreateClusterGKEUnknownTarget},
 		{Service: "dataproc", RPC: "GetCluster", Method: "GetCluster", KeyField: "clusterName round-trip", Run: checkDPGetCluster}, {Service: "dataproc", RPC: "ListClusters", Method: "ListClusters", KeyField: "created cluster present", Run: checkDPListClusters},
 		{Service: "dataproc", RPC: "UpdateCluster", Method: "UpdateCluster", KeyField: "labels updated via LRO", Run: checkDPUpdateCluster},
@@ -85,6 +86,13 @@ func newDataprocJobClient(ctx context.Context, cfg Config) (*dataproc.JobControl
 // dataprocClusterID is the run-unique cluster shared by the probes.
 func dataprocClusterID(cfg Config) string { return cfg.ResourceName("gcpc-grpc-dp") }
 
+// probeClusterConfig is the minimal Compute-Engine placement: a create must
+// carry exactly one of config or virtualClusterConfig ("Exactly one of
+// ClusterConfig or VirtualClusterConfig must be specified").
+func probeClusterConfig() *dataprocpb.ClusterConfig {
+	return &dataprocpb.ClusterConfig{GceClusterConfig: &dataprocpb.GceClusterConfig{ZoneUri: "us-central1-a"}}
+}
+
 // ensureDataprocCluster creates the run-unique probe cluster, treating
 // AlreadyExists as success so repeated probes are idempotent.
 func ensureDataprocCluster(ctx context.Context, client *dataproc.ClusterControllerClient, cfg Config) (string, error) {
@@ -92,7 +100,7 @@ func ensureDataprocCluster(ctx context.Context, client *dataproc.ClusterControll
 	op, err := client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
 		ProjectId: cfg.Project,
 		Region:    dataprocRegion,
-		Cluster:   &dataprocpb.Cluster{ClusterName: id, Labels: map[string]string{"probe": "gcpc"}},
+		Cluster:   &dataprocpb.Cluster{ClusterName: id, Config: probeClusterConfig(), Labels: map[string]string{"probe": "gcpc"}},
 	})
 	if err != nil {
 		if status.Code(err) == codes.AlreadyExists {
@@ -140,7 +148,7 @@ func checkDPCreateCluster(ctx context.Context, cfg Config) error {
 	op, err := client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
 		ProjectId: cfg.Project,
 		Region:    dataprocRegion,
-		Cluster:   &dataprocpb.Cluster{ClusterName: id, Labels: map[string]string{"probe": "gcpc"}},
+		Cluster:   &dataprocpb.Cluster{ClusterName: id, Config: probeClusterConfig(), Labels: map[string]string{"probe": "gcpc"}},
 	})
 	if err != nil {
 		return fmt.Errorf("CreateCluster: %w", err)
@@ -169,6 +177,36 @@ func checkDPCreateCluster(ctx context.Context, cfg Config) error {
 	}
 	if cluster.GetStatus().GetState() != dataprocpb.ClusterStatus_RUNNING {
 		return fmt.Errorf("cluster state = %v, want RUNNING", cluster.GetStatus().GetState())
+	}
+	return nil
+}
+
+// checkDPCreateClusterNoPlacement verifies Discovery's "Exactly one of
+// ClusterConfig or VirtualClusterConfig must be specified": a create carrying
+// neither is InvalidArgument, and no cluster is persisted from it.
+func checkDPCreateClusterNoPlacement(ctx context.Context, cfg Config) error {
+	client, err := newDataprocClusterClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+	defer client.Close()
+
+	id := cfg.ResourceName("gcpc-grpc-dp-noplacement")
+	_, err = client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
+		ProjectId: cfg.Project,
+		Region:    dataprocRegion,
+		Cluster:   &dataprocpb.Cluster{ClusterName: id},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		return fmt.Errorf("create without config or virtualClusterConfig: code = %v, want InvalidArgument", status.Code(err))
+	}
+	if msg := status.Convert(err).Message(); !strings.Contains(msg, "exactly one of config or virtualClusterConfig") {
+		return fmt.Errorf("create without placement message = %q", msg)
+	}
+	if _, err := client.GetCluster(ctx, &dataprocpb.GetClusterRequest{
+		ProjectId: cfg.Project, Region: dataprocRegion, ClusterName: id,
+	}); status.Code(err) != codes.NotFound {
+		return fmt.Errorf("rejected create left a cluster behind: code = %v, want NotFound", status.Code(err))
 	}
 	return nil
 }
@@ -353,7 +391,7 @@ func checkDPDeleteCluster(ctx context.Context, cfg Config) error {
 	defer client.Close()
 	id := cfg.ResourceName("gcpc-grpc-dp-del")
 	if op, err := client.CreateCluster(ctx, &dataprocpb.CreateClusterRequest{
-		ProjectId: cfg.Project, Region: dataprocRegion, Cluster: &dataprocpb.Cluster{ClusterName: id},
+		ProjectId: cfg.Project, Region: dataprocRegion, Cluster: &dataprocpb.Cluster{ClusterName: id, Config: probeClusterConfig()},
 	}); err != nil {
 		return fmt.Errorf("create: %w", err)
 	} else if _, err := op.Wait(ctx); err != nil {

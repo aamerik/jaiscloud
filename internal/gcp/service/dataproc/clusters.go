@@ -58,7 +58,12 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 	if region == "" || name == "" {
 		return dpstore.Cluster{}, dpstore.Operation{}, invalidArgument("missing region or clusterName")
 	}
-	if len(in.Config) > 0 && len(in.VirtualClusterConfig) > 0 {
+	// Discovery's Cluster.config/virtualClusterConfig descriptions make the two
+	// mutually exclusive and one of them required: "Exactly one of ClusterConfig
+	// or VirtualClusterConfig must be specified". A create carrying neither is
+	// therefore as invalid as one carrying both — and staying tolerant would
+	// hand the caller an invented default GCE config on the read.
+	if (len(in.Config) > 0) == (len(in.VirtualClusterConfig) > 0) {
 		return dpstore.Cluster{}, dpstore.Operation{}, invalidArgument("cluster must specify exactly one of config or virtualClusterConfig")
 	}
 	gkeVCC, err := validateVirtualClusterConfig(in.VirtualClusterConfig, name)
