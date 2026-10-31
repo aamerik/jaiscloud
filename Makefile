@@ -1248,6 +1248,13 @@ gcp-ci-preflight: ## Mirror CI's offline GCP gates before pushing (unit+race, li
 gcp-ci-wait: ## Wait for PR=<n>'s checks; on failure print the failing logs and exit 1
 	@test -n "$(PR)" || { echo 'usage: make gcp-ci-wait PR=<number>  (repo: GCP_REPO=<owner>/<repo>)'; exit 2; }
 	@set -e; repo="$${GCP_REPO:-jaisrajms/jaiscloud}"; \
+	echo "gcp-ci-wait: waiting for checks on PR $(PR) (new PRs report none for ~30s)"; \
+	for i in $$(seq 1 20); do \
+	  n=$$(gh pr checks "$(PR)" --repo "$$repo" --json name --jq 'length' 2>/dev/null || echo 0); \
+	  [ "$${n:-0}" -gt 0 ] && break; \
+	  [ "$$i" -eq 20 ] && { echo "gcp-ci-wait: no checks reported on PR $(PR)"; exit 1; }; \
+	  sleep 15; \
+	done; \
 	if gh pr checks "$(PR)" --repo "$$repo" --watch --fail-fast --interval 20; then \
 	  echo "gcp-ci-wait: all checks passed on PR $(PR)"; exit 0; \
 	fi; \
