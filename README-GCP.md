@@ -216,6 +216,28 @@ import (
 conn, err := grpc.NewClient("localhost:8081", grpc.WithTransportCredentials(insecure.NewCredentials()))
 ```
 
+### Terraform / OpenTofu
+
+The stock `hashicorp/google` provider talks to the emulator through its per-service custom endpoints (keep `user_project_override = false`; the provider needs a credential present, the emulator ignores its value):
+
+```hcl
+provider "google" {
+  project                  = "test-project"
+  region                   = "us-central1"
+  user_project_override    = false
+  dataproc_custom_endpoint = "http://localhost:8080/"
+}
+```
+
+`google_dataproc_cluster` with `virtual_cluster_config` plans, applies and re-reads with no diff, and the node pools it reconciles are readable through the GKE API — that is the path `make test-gcp-terraform` gates. Point `gke_cluster_target` at an existing GKE cluster: `gcloud container clusters create` works against the emulator with `CLOUDSDK_API_ENDPOINT_OVERRIDES_CONTAINER=http://localhost:8080/container/` (or a direct `POST /container/v1/projects/{p}/locations/{l}/clusters` with a `workloadIdentityConfig`, which Dataproc-on-GKE requires).
+
+Two provider paths do **not** work yet, because the emulator's reads omit nested messages the provider dereferences unconditionally — not because of the Dataproc resource:
+
+- `google_container_cluster` — the cluster read omits `legacyAbac`/`networkConfig`/`shieldedNodes`/`defaultMaxPodsConstraint` and the provider panics in its read-back (DPG37), so create the prerequisite out of band as above.
+- `google_dataproc_cluster` with a plain `cluster_config` (Compute-Engine clusters) — the read omits `config.softwareConfig`, which the provider flattens without a nil check (DPG38). The `virtual_cluster_config` shape is unaffected.
+
+The provider's own schema also requires `kubernetes_cluster_config.kubernetes_namespace` and `node_pool_config.locations`, which the API marks optional, so a real-GCP config that omits them needs them added. There is no `google_dataproc_cluster` data source and no import support upstream, so inspection is `terraform state show`, `terraform plan -refresh-only`, or the REST API.
+
 ---
 
 ## Configuration

@@ -36,6 +36,11 @@ Deliberately **excluded** because it makes `apply` fail (and abort the run):
   its name in (`var.gke_cluster`); the mock gap is recorded as **DPG37** in
   `plan_docs/gcp-dataproc-gke-wave-plan.md`, and the GKE half of the cross-API
   contract is gated by the conformance, gRPC and SDK suites instead.
+- **`google_dataproc_cluster` with a plain `cluster_config`** (Compute-Engine
+  clusters) — the emulator's GCE cluster read omits `config.softwareConfig`,
+  which the provider flattens without a nil check and so panics
+  (`flattenSoftwareConfig`); recorded as **DPG38**. Only the
+  `virtual_cluster_config` shape is exercised here.
 
 Keep `main.tf` in sync with the emulator's supported surface: one unimplemented
 resource aborts the whole `apply`, so nothing else runs.
