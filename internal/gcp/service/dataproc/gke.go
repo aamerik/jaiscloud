@@ -132,7 +132,13 @@ type gkeVirtualCluster struct {
 	// canonical target, checked against the virtual cluster's own.
 	targetProject  string
 	targetLocation string
-	poolTargets    []gkePoolTarget
+	// namespace is the effective kubernetesNamespace: the caller's value, or the
+	// cluster name when it was not set (the API's documented default).
+	namespace string
+	// software is the parsed KubernetesSoftwareConfig (nil when the caller sent
+	// none), with every component version already resolved.
+	software    *gkeSoftwareConfig
+	poolTargets []gkePoolTarget
 }
 
 // gkePoolTarget is one GkeNodePoolTarget after name normalisation.
@@ -158,12 +164,13 @@ type gkeNodePoolConfig struct {
 
 // validateVirtualClusterConfig validates the required shape of a caller-supplied
 // dataproc.v1.VirtualClusterConfig and returns the parsed GKE placement (nil for
-// a cluster with no virtualClusterConfig). It checks the API's structure and the
-// GkeNodePoolTarget rules that need no store lookup: pool roles, the
-// one-DEFAULT/one-pool-per-role constraints, the single-zone rule, the
-// Spot/preemptible restrictions and the autoscaler bounds. Unknown sub-fields
-// are accepted and preserved verbatim.
-func validateVirtualClusterConfig(raw json.RawMessage) (*gkeVirtualCluster, error) {
+// a cluster with no virtualClusterConfig). It checks the API's structure, the
+// effective Kubernetes namespace, the software config and the staging-bucket
+// form, plus the GkeNodePoolTarget rules that need no store lookup: pool roles,
+// the one-DEFAULT/one-pool-per-role constraints, the single-zone rule, the
+// Spot/preemptible restrictions and the autoscaler bounds. Unknown sub-fields are
+// accepted and preserved verbatim. clusterName supplies the namespace default.
+func validateVirtualClusterConfig(raw json.RawMessage, clusterName string) (*gkeVirtualCluster, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
@@ -184,7 +191,21 @@ func validateVirtualClusterConfig(raw json.RawMessage) (*gkeVirtualCluster, erro
 	if target == "" && len(pools) == 0 {
 		return nil, invalidArgument("gkeClusterConfig requires gkeClusterTarget or nodePoolTarget")
 	}
-	out := &gkeVirtualCluster{}
+	out := &gkeVirtualCluster{namespace: bodyString(kcc, "kubernetesNamespace")}
+	if out.namespace == "" {
+		// "If not specified, the name of the Dataproc Cluster is used."
+		out.namespace = clusterName
+	}
+	if software, ok := kcc["kubernetesSoftwareConfig"].(map[string]any); ok {
+		parsed, err := parseKubernetesSoftwareConfig(software)
+		if err != nil {
+			return nil, err
+		}
+		out.software = parsed
+	}
+	if err := validateStagingBucketForm(bodyString(vcc, "stagingBucket")); err != nil {
+		return nil, err
+	}
 	if target != "" {
 		project, location, id, ok := splitGKEClusterName(target)
 		if !ok {

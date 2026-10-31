@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 488,
-  "passed": 488,
+  "total": 489,
+  "passed": 489,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 488,
-    "passed": 488,
+    "checks": 489,
+    "passed": 489,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -23,8 +23,8 @@
     },
     {
       "service": "dataproc",
-      "total": 27,
-      "passed": 27,
+      "total": 28,
+      "passed": 28,
       "failed": 0,
       "unimplemented": 0
     },
@@ -3032,6 +3032,13 @@
       "method": "CreateCluster",
       "status": "pass",
       "key_field": "GKE virtualClusterConfig round-trip"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "UpdateCluster (vcc)",
+      "method": "UpdateCluster",
+      "status": "pass",
+      "key_field": "recreate-only: virtualClusterConfig patch is InvalidArgument"
     },
     {
       "service": "dataproc",

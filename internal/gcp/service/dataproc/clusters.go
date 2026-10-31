@@ -61,7 +61,7 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 	if len(in.Config) > 0 && len(in.VirtualClusterConfig) > 0 {
 		return dpstore.Cluster{}, dpstore.Operation{}, invalidArgument("cluster must specify exactly one of config or virtualClusterConfig")
 	}
-	gkeVCC, err := validateVirtualClusterConfig(in.VirtualClusterConfig)
+	gkeVCC, err := validateVirtualClusterConfig(in.VirtualClusterConfig, name)
 	if err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
@@ -74,12 +74,29 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 	if err := s.validateClusterMetastore(ctx, project, region, in); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
+	// A Kubernetes namespace belongs to one live virtual cluster per GKE
+	// cluster: real Dataproc verifies that "another Dataproc VirtualCluster is
+	// not installed into it", which is why the recreate guide drops
+	// kubernetesNamespace before re-creating.
+	if err := s.validateGKENamespaceOwnership(ctx, project, region, name, gkeVCC); err != nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, err
+	}
+	// Persist the effective virtualClusterConfig: the namespace defaulted to the
+	// cluster name and the SPARK componentVersion dereferenced from its alias, so
+	// a read echoes the values the cluster actually runs with. The k8s placement
+	// namespace keeps using the caller's value only (see resolveClusterNamespace).
+	requestedNamespace := KubernetesNamespaceFromVirtualClusterConfig(in.VirtualClusterConfig)
+	normalizedVCC, err := applyVirtualClusterDefaults(in.VirtualClusterConfig, name, gkeVCC)
+	if err != nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, err
+	}
+	in.VirtualClusterConfig = normalizedVCC
 	now := clock.Now().UTC()
 	// Provision the cluster's workload namespace before persisting the record, so
 	// a job submitted immediately after create has a placement. Mock execution
 	// yields ("", false); an RBAC/tech failure falls back to the process-wide
 	// namespace (see resolveClusterNamespace).
-	ns, nsOwned := s.resolveClusterNamespace(ctx, project, region, name, in)
+	ns, nsOwned := s.resolveClusterNamespace(ctx, project, region, name, requestedNamespace)
 	c := dpstore.Cluster{
 		ProjectID:            project,
 		Region:               region,
@@ -220,7 +237,7 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 		return len(mask) == 0 || containsMaskField(mask, field)
 	}
 	if in.VirtualClusterConfig != nil && apply("virtualClusterConfig") {
-		if _, err := validateVirtualClusterConfig(in.VirtualClusterConfig); err != nil {
+		if _, err := validateVirtualClusterConfig(in.VirtualClusterConfig, name); err != nil {
 			return dpstore.Cluster{}, dpstore.Operation{}, err
 		}
 	}
@@ -232,6 +249,12 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 	current, err := s.advanceCluster(ctx, project, region, name)
 	if err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
+	}
+	// Dataproc on GKE is recreate-only: real GCP disallows update operations on a
+	// virtual cluster, so a patch may not touch virtualClusterConfig or add a GCE
+	// config to a GKE-backed cluster.
+	if err := rejectGKEVirtualClusterUpdate(current, in, mask); err != nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
 	// Validate the attachment of the cluster this update will actually produce
 	// (the effective merged config under the mask), not the raw request body.
