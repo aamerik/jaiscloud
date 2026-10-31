@@ -1,14 +1,14 @@
 {
   "endpoint": "localhost:8081",
   "project": "jaiscloud-project",
-  "total": 487,
-  "passed": 487,
+  "total": 488,
+  "passed": 488,
   "failed": 0,
   "unimplemented": 0,
   "rollup": {
     "services": 25,
-    "checks": 487,
-    "passed": 487,
+    "checks": 488,
+    "passed": 488,
     "failed": 0,
     "unimplemented": 0,
     "pass_rate": 100
@@ -23,8 +23,8 @@
     },
     {
       "service": "dataproc",
-      "total": 26,
-      "passed": 26,
+      "total": 27,
+      "passed": 27,
       "failed": 0,
       "unimplemented": 0
     },
@@ -2920,6 +2920,13 @@
       "method": "CreateCluster",
       "status": "pass",
       "key_field": "LRO done + RUNNING cluster"
+    },
+    {
+      "service": "dataproc",
+      "rpc": "CreateCluster (on GKE, unknown target)",
+      "method": "CreateCluster",
+      "status": "pass",
+      "key_field": "NotFound for an unresolvable gkeClusterTarget"
     },
     {
       "service": "dataproc",

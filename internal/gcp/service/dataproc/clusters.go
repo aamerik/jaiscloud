@@ -39,36 +39,6 @@ func ClusterInputFromMap(body map[string]any) ClusterInput {
 	return in
 }
 
-// validateVirtualClusterConfig validates the required shape of a caller-supplied
-// dataproc.v1.VirtualClusterConfig. The emulator models the GKE placement as
-// metadata only (there is no GKE control plane), so this checks the API's
-// required structure: kubernetesClusterConfig.gkeClusterConfig must name a
-// target cluster (gkeClusterTarget) or at least one node pool
-// (nodePoolTarget). Unknown sub-fields are accepted and preserved verbatim.
-func validateVirtualClusterConfig(raw json.RawMessage) error {
-	if len(raw) == 0 {
-		return nil
-	}
-	var vcc map[string]any
-	if err := json.Unmarshal(raw, &vcc); err != nil {
-		return invalidArgument("virtualClusterConfig must be an object")
-	}
-	kcc, ok := vcc["kubernetesClusterConfig"].(map[string]any)
-	if !ok {
-		return invalidArgument("virtualClusterConfig requires kubernetesClusterConfig")
-	}
-	gke, ok := kcc["gkeClusterConfig"].(map[string]any)
-	if !ok {
-		return invalidArgument("kubernetesClusterConfig requires gkeClusterConfig")
-	}
-	target, _ := gke["gkeClusterTarget"].(string)
-	pools, _ := gke["nodePoolTarget"].([]any)
-	if target == "" && len(pools) == 0 {
-		return invalidArgument("gkeClusterConfig requires gkeClusterTarget or nodePoolTarget")
-	}
-	return nil
-}
-
 // clusterPlacement is the human-readable placement of a cluster for logs.
 func clusterPlacement(c dpstore.Cluster) string {
 	if c.IsGKEBacked() {
@@ -91,7 +61,11 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 	if len(in.Config) > 0 && len(in.VirtualClusterConfig) > 0 {
 		return dpstore.Cluster{}, dpstore.Operation{}, invalidArgument("cluster must specify exactly one of config or virtualClusterConfig")
 	}
-	if err := validateVirtualClusterConfig(in.VirtualClusterConfig); err != nil {
+	gkeVCC, err := validateVirtualClusterConfig(in.VirtualClusterConfig)
+	if err != nil {
+		return dpstore.Cluster{}, dpstore.Operation{}, err
+	}
+	if err := validateGKEPlacement(gkeVCC, project, region); err != nil {
 		return dpstore.Cluster{}, dpstore.Operation{}, err
 	}
 	if err := validateMetastoreConfigShape(in); err != nil {
@@ -120,12 +94,32 @@ func (s *Service) CreateCluster(ctx context.Context, project, region, name strin
 		Namespace:            ns,
 		NamespaceOwned:       nsOwned,
 	}
+	// Reconcile the Dataproc-on-GKE placement against the emulated GKE service:
+	// resolve gkeClusterTarget, then create or verify each nodePoolTarget. A
+	// provisioning failure is not a transport error — real Dataproc fails the
+	// create operation, so the cluster is persisted in ERROR with a
+	// status.detail naming the pool and field, and its pools survive a delete. A
+	// resolution failure (unknown/Autopilot/no-Workload-Identity target) rejects
+	// the request instead: nothing was created.
+	reconcileErr := s.reconcileGKEVirtualCluster(ctx, project, region, name, c.ClusterUUID, gkeVCC, in.Labels)
+	var poolFailure *gkeReconcileFailure
+	if reconcileErr != nil {
+		if !errors.As(reconcileErr, &poolFailure) {
+			return dpstore.Cluster{}, dpstore.Operation{}, reconcileErr
+		}
+		c.Status = gkeErrorState(poolFailure.err, now)
+	}
 	if err := s.store.CreateCluster(ctx, project, region, c); err != nil {
 		s.rollbackNamespace(ctx, ns, nsOwned)
 		return dpstore.Cluster{}, dpstore.Operation{}, mapErr(err)
 	}
-	slog.Info("dataproc: cluster creating", "project", project, "region", region, "cluster", name,
-		"placement", clusterPlacement(c), "namespace", ns, "namespaceOwned", nsOwned)
+	if reconcileErr != nil {
+		slog.Warn("dataproc: cluster create failed GKE node-pool reconciliation",
+			"project", project, "region", region, "cluster", name, "detail", c.Status.Detail)
+	} else {
+		slog.Info("dataproc: cluster creating", "project", project, "region", region, "cluster", name,
+			"placement", clusterPlacement(c), "namespace", ns, "namespaceOwned", nsOwned)
+	}
 	s.emitClusterStateChange(ctx, project, region, c, dpstore.ClusterStatus{})
 	op, err := s.createClusterOperation(ctx, project, region, "create", ClusterName(project, region, name),
 		clusterOperationMetadata(name, c.ClusterUUID, "CREATE", "RUNNING"))
@@ -226,7 +220,7 @@ func (s *Service) UpdateCluster(ctx context.Context, project, region, name strin
 		return len(mask) == 0 || containsMaskField(mask, field)
 	}
 	if in.VirtualClusterConfig != nil && apply("virtualClusterConfig") {
-		if err := validateVirtualClusterConfig(in.VirtualClusterConfig); err != nil {
+		if _, err := validateVirtualClusterConfig(in.VirtualClusterConfig); err != nil {
 			return dpstore.Cluster{}, dpstore.Operation{}, err
 		}
 	}

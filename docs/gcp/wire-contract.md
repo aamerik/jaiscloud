@@ -428,8 +428,13 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
 - **Approximated, not modelled** — Cloud Workflows executes synchronously, ignores
   `filter`/`orderBy`, fails loud on a `switch` with no matching condition and on `retry.predicate`,
   and has no subworkflows/IAM/CMEK; Dataproc Serverless (Batch) is not implemented;
-  a GKE-backed cluster's `virtualClusterConfig` is still a metadata-only GKE control plane (the
-  Dataproc path attaches no external GKE cluster), but in K8s executor mode each Dataproc cluster
+  a GKE-backed cluster's `gkeClusterTarget` is resolved through the emulated GKE control plane at
+  create (same project/region, standard not Autopilot, Workload Identity enabled) and its
+  `nodePoolTarget` pools are created through the GKE API or verified field-by-field against an
+  existing one (adopted when the caller sends no `nodePoolConfig`, which is input-only and never
+  read back); a mismatch leaves the cluster in `ERROR` with the pool and field in `status.detail`,
+  pools are not deleted with the cluster, and there is no autoscaler behaviour or drift detection —
+  the cluster is still not scheduled onto a GKE cluster — but in K8s executor mode each Dataproc cluster
   runs in its own Kubernetes
   workload namespace — the caller's `kubernetesClusterConfig.kubernetesNamespace` when supplied,
   else a deterministic derived name — provisioned on cluster create and removed on cluster

@@ -106,6 +106,14 @@ func clusterFromBody(m map[string]any) (containerstore.Cluster, error) {
 	if labels := strMap(m["resourceLabels"]); labels != nil {
 		c.ResourceLabels = labels
 	}
+	if ap, ok := m["autopilot"].(map[string]any); ok {
+		c.Autopilot = &containerstore.Autopilot{Enabled: boolVal(ap, "enabled")}
+	}
+	if wi, ok := m["workloadIdentityConfig"].(map[string]any); ok {
+		// An empty object still enables Workload Identity (the core defaults the
+		// workload pool from the project), matching the API's meaning.
+		c.WorkloadIdentityConfig = &containerstore.WorkloadIdentityConfig{WorkloadPool: str(wi, "workloadPool")}
+	}
 	return c, nil
 }
 
@@ -195,6 +203,12 @@ func clusterToJSON(c containerstore.Cluster) map[string]any {
 	}
 	if c.MaintenancePolicy != nil {
 		out["maintenancePolicy"] = maintenancePolicyToJSON(c.MaintenancePolicy)
+	}
+	if c.Autopilot != nil {
+		out["autopilot"] = map[string]any{"enabled": c.Autopilot.Enabled}
+	}
+	if c.WorkloadIdentityConfig != nil {
+		out["workloadIdentityConfig"] = map[string]any{"workloadPool": c.WorkloadIdentityConfig.WorkloadPool}
 	}
 	if c.AdminUsername != "" {
 		out["masterAuth"].(map[string]any)["username"] = c.AdminUsername

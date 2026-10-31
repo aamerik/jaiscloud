@@ -78,6 +78,11 @@ func (s *Service) CreateCluster(ctx context.Context, project, location string, c
 	if c.Subnetwork == "" {
 		c.Subnetwork = "default"
 	}
+	// Workload Identity is required by Dataproc-on-GKE; an empty pool means the
+	// project default, exactly as GKE fills it.
+	if c.WorkloadIdentityConfig != nil && c.WorkloadIdentityConfig.WorkloadPool == "" {
+		c.WorkloadIdentityConfig = &containerstore.WorkloadIdentityConfig{WorkloadPool: project + ".svc.id.goog"}
+	}
 	if len(c.NodePools) == 0 {
 		c.NodePools = []containerstore.NodePool{{
 			Name:             "default-pool",

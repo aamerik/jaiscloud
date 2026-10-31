@@ -64,6 +64,12 @@ func clusterToProto(c containerstore.Cluster) *containerpb.Cluster {
 	if c.LegacyAbac != nil {
 		out.LegacyAbac = &containerpb.LegacyAbac{Enabled: c.LegacyAbac.Enabled}
 	}
+	if c.Autopilot != nil {
+		out.Autopilot = &containerpb.Autopilot{Enabled: c.Autopilot.Enabled}
+	}
+	if c.WorkloadIdentityConfig != nil {
+		out.WorkloadIdentityConfig = &containerpb.WorkloadIdentityConfig{WorkloadPool: c.WorkloadIdentityConfig.WorkloadPool}
+	}
 	if c.NetworkPolicy != nil {
 		out.NetworkPolicy = &containerpb.NetworkPolicy{
 			Provider: networkPolicyProviderToProto(c.NetworkPolicy.Provider),
@@ -366,6 +372,14 @@ func clusterFromProto(pb *containerpb.Cluster) containerstore.Cluster {
 	if strings.Contains(c.Name, "/") {
 		if _, _, id, ok := core.ParseClusterName(c.Name); ok {
 			c.Name = id
+		}
+	}
+	if pb.GetAutopilot() != nil {
+		c.Autopilot = &containerstore.Autopilot{Enabled: pb.GetAutopilot().GetEnabled()}
+	}
+	if pb.GetWorkloadIdentityConfig() != nil {
+		c.WorkloadIdentityConfig = &containerstore.WorkloadIdentityConfig{
+			WorkloadPool: pb.GetWorkloadIdentityConfig().GetWorkloadPool(),
 		}
 	}
 	return c
