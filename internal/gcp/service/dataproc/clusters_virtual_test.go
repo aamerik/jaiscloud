@@ -14,6 +14,13 @@ import (
 // target, node pools and software config, plus an auxiliary metastore).
 const gkeVirtualClusterConfig = `{"stagingBucket":"dataproc-staging-proj","kubernetesClusterConfig":{"kubernetesNamespace":"dataproc","gkeClusterConfig":{"gkeClusterTarget":"projects/proj/locations/us-central1/clusters/gke-1","nodePoolTarget":[{"nodePool":"projects/proj/locations/us-central1/clusters/gke-1/nodePools/default","roles":["DEFAULT"]}]},"kubernetesSoftwareConfig":{"componentVersion":{"SPARK":"3.5"}}},"auxiliaryServicesConfig":{"metastoreConfig":{"dataprocMetastoreService":"projects/proj/locations/us-central1/services/hms"}}}`
 
+// gceInput builds a minimal Compute-Engine ClusterInput. A create must carry
+// exactly one of config or virtualClusterConfig, so a test that is not about
+// the placement sends the GCE shape rather than an empty request.
+func gceInput() ClusterInput {
+	return ClusterInput{Config: []byte(`{"gceClusterConfig":{"zoneUri":"us-central1-a"}}`)}
+}
+
 // gkeInput builds a ClusterInput from a GKE virtualClusterConfig map.
 func gkeInput(t *testing.T, vcc map[string]any) ClusterInput {
 	t.Helper()
@@ -189,6 +196,22 @@ func TestCreateCluster_BothConfigAndVirtualClusterConfigRejected(t *testing.T) {
 	pe, ok := err.(*model.ProviderError)
 	if !ok || pe.HTTPStatus != 400 || pe.Code != "InvalidArgument" {
 		t.Fatalf("expected 400 InvalidArgument, got %v", err)
+	}
+}
+
+// TestCreateCluster_NeitherConfigRejected verifies the same "exactly one" rule
+// rejects a create that carries neither: real Dataproc cannot place such a
+// cluster, and accepting it would make every read invent a GCE config.
+func TestCreateCluster_NeitherConfigRejected(t *testing.T) {
+	p := newProvider(t)
+	ctx := context.Background()
+	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "neither", ClusterInput{})
+	pe, ok := err.(*model.ProviderError)
+	if !ok || pe.HTTPStatus != 400 || pe.Code != "InvalidArgument" {
+		t.Fatalf("expected 400 InvalidArgument, got %v", err)
+	}
+	if _, err := p.GetCluster(ctx, "proj", "us-central1", "neither"); err == nil {
+		t.Fatal("a rejected create must not persist a cluster")
 	}
 }
 

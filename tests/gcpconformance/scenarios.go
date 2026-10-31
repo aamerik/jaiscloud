@@ -1181,8 +1181,10 @@ func Scenarios(suffix string) []Scenario {
 		`{"id":%q,"placement":{"managedCluster":{"clusterName":%q}},"jobs":[{"stepId":"extract","pysparkJob":{"mainPythonFileUri":"gs://conf/%s/extract.py"}}]}`,
 		dpTemplate, dpCluster, suffix)
 	sc = append(sc,
+		// A create must carry exactly one of config or virtualClusterConfig, so
+		// the GCE chain sends the Compute-Engine shape (the read fills the rest).
 		Scenario{Service: "dataproc", Method: "POST", Path: dpBase + "/clusters",
-			Body: fmt.Sprintf(`{"projectId":%q,"clusterName":%q}`, p, dpCluster),
+			Body: fmt.Sprintf(`{"projectId":%q,"clusterName":%q,"config":{"gceClusterConfig":{"zoneUri":"us-central1-a"}}}`, p, dpCluster),
 			Save: map[string]string{"dpClusterOp": "name"}},
 		Scenario{Service: "dataproc", Method: "GET", Path: "/v1/${dpClusterOp}"},
 		Scenario{Service: "dataproc", Method: "GET", Path: dpBase + "/clusters/" + dpCluster},
