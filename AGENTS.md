@@ -39,10 +39,15 @@ invoking shell must be in the `docker` group (or `sg docker -c '…'`).
 **Starting a session (`/gcp:new`):** the command first runs
 `make gcp-session-start`, which aborts if the current checkout has uncommitted
 changes (commit or stash a previous or concurrent session's work first),
-otherwise `git fetch upstream --prune` and fast-forwards the local `main` base
-from `upstream/main` (`--ff-only`, so a diverged base fails loudly rather than
-resetting), then rebuilds the ledger. Branch the item's `Branch` off the
-refreshed `main`. Always refresh from `upstream` — `origin` is a fork and its
+otherwise `git fetch upstream --prune` and fast-forwards the session base from
+`upstream` (`--ff-only`, so a diverged base fails loudly rather than resetting),
+then rebuilds the ledger. The base defaults to local `main` and is overridable
+for a series: `/gcp:new gke` (a single bare word) or `/gcp:new base=gke <query>`
+sets `GCP_SESSION_BASE`. A base that does not exist yet is created off
+`upstream/main` and pushed to origin **and** upstream — upstream matters because
+a PR cannot target a branch that exists only in the fork — and that series' PRs
+then use it as their base instead of `main`. Branch the item's `Branch` off the
+refreshed base. Always refresh from `upstream` — `origin` is a fork and its
 branches are stale. The old `gcp` branch is frozen: it was merged into `main`
 (#610, released as `v0.1.1`), so nothing new targets it.
 

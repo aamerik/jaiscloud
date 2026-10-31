@@ -2,20 +2,39 @@
 description: Start the next GCP backlog item from the status ledger
 ---
 
-!`export PATH=/tmp/opencode/go/bin:$HOME/.local/bin:$PATH; make gcp-session-start 2>&1 && { echo; make gcp-status-next N=10 2>&1; echo; echo '--- coverage ---'; make gcp-status-coverage 2>&1 | tail -2; }`
+!`export PATH=/tmp/opencode/go/bin:$HOME/.local/bin:$PATH; set -f; args='$ARGUMENTS'; base=main; q="$args"; case "$args" in base=*) rest="${args#base=}"; base="${rest%% *}"; q="${rest#"$base"}"; q="${q# }";; --base\ *) rest="${args#--base }"; base="${rest%% *}"; q="${rest#"$base"}"; q="${q# }";; '') q="";; *) set -- $args; if [ $# -eq 1 ] && [ "${1#*=}" = "$1" ]; then base="$1"; q=""; fi;; esac; set +f; echo "session base: $base"; if [ -n "$q" ]; then echo "item query: $q"; fi; echo; GCP_SESSION_BASE="$base" make gcp-session-start 2>&1 && { echo; make gcp-status-next N=10 2>&1; echo; echo '--- coverage ---'; make gcp-status-coverage 2>&1 | tail -2; }`
 
 You are starting a new GCP work session in the jaiscloud repo. The ledger output
 above is the source of truth for what to do next.
 
 The command first ran `make gcp-session-start`: it aborts on a dirty checkout
 (uncommitted files from a previous or concurrent session) and otherwise fetches
-`upstream` and fast-forwards the local `main` base. If it aborted, no ledger is
+`upstream` and fast-forwards the session base. If it aborted, no ledger is
 shown — stop and report the uncommitted files; do not start an item. When it
-proceeds, branch the item's `Branch` off the refreshed `main`.
+proceeds, branch the item's `Branch` off the refreshed base.
+
+**Base branch.** The base is printed as `session base:` above. It defaults to
+`main`; the argument selects another one:
+
+- `base=<branch>` or `--base <branch>` — explicit base, with the rest of the
+  argument as the item query (`/gcp:new base=gke datastore timestamps`).
+- a single bare word — the base branch itself (`/gcp:new gke`, `/gcp:new ui`),
+  with no item query. A one-word item query needs the `base=` form
+  (`/gcp:new base=main datastore`) — otherwise it would be read as a branch name.
+- anything else — an item query, based on `main`.
+
+If the branch does not exist yet, session-start creates it off `upstream/main`
+and pushes it to origin and upstream: that is how a series gets an integration
+branch (e.g. `gke`) whose PRs share one base. Say so when it happens, because
+the series' PRs must then be opened against it:
+
+```
+gh pr create --repo jaisrajms/jaiscloud --base <session base> --head <fork>:<item branch>
+```
 
 - If arguments were given (`$ARGUMENTS`), assess them with
-  `make gcp-status-check Q="$ARGUMENTS"`. Otherwise take the first `NEXT` item
-  above (ignore the `ATTENTION` list unless it directly blocks the item) and
+  `make gcp-status-check Q="<the item query>"`. Otherwise take the first `NEXT`
+  item above (ignore the `ATTENTION` list unless it directly blocks the item) and
   assess **that** item before branching:
   `make gcp-status-check SERVICE=<service> Q="<a few distinctive words from its gap>"`.
   Use the item's keywords, not just its ID: a differently-IDed row in another
