@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # gcp-session-start.sh — prepare a clean GCP work session. Called by
-# `make gcp-session-start`, and therefore by the `/gcp:new` command.
+# `make gcp-session-start`, and therefore by the `/gcp/new` command.
 #
 #   1. Refuse to start if the current checkout has uncommitted changes. A
 #      previous or concurrent session's work must be committed or stashed first.

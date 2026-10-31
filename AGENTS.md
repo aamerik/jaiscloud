@@ -6,7 +6,7 @@
 ## GCP parity work — check the status ledger before you plan
 
 **Toolchain:** `go` is on `PATH`; the `make gcp-status*` targets (which shell
-out to `go build`) and any `go`/`gofmt` work need it. The `/gcp:*` slash
+out to `go build`) and any `go`/`gofmt` work need it. The `/gcp/*` slash
 commands prepend their own toolchain dir when they run. The **optional** floci
 Java interop suite also needs `JAVA_HOME` and `mvn` on `PATH`.
 
@@ -36,13 +36,13 @@ host) for image builds; the emulator and the docker-executor gates use the
 **local** daemon at `/var/run/docker.sock` (`docker --context default`), so the
 invoking shell must be in the `docker` group (or `sg docker -c '…'`).
 
-**Starting a session (`/gcp:new`):** the command first runs
+**Starting a session (`/gcp/new`):** the command first runs
 `make gcp-session-start`, which aborts if the current checkout has uncommitted
 changes (commit or stash a previous or concurrent session's work first),
 otherwise `git fetch upstream --prune` and fast-forwards the session base from
 `upstream` (`--ff-only`, so a diverged base fails loudly rather than resetting),
 then rebuilds the ledger. The base defaults to `main`; for a series, name it
-explicitly with `base=<branch>` (`/gcp:new base=gke datastore timestamps`) or
+explicitly with `base=<branch>` (`/gcp/new base=gke datastore timestamps`) or
 `--base <branch>`, which sets `GCP_SESSION_BASE`. There is no bare-word form —
 an argument without `base=` is always an item query, never a branch. A base that
 does not exist yet is created off `upstream/main` and pushed to origin **and**
@@ -92,10 +92,10 @@ parseable index/detail.
    in priority order — the wave-plan execution order (Wave 1 client-impact
    first), with an explicit `Pri` (P1–P20) as the fallback when an item is not in
    a wave and `impact` breaking ties — plus a separate `ATTENTION` list. Take
-   the top item unless told otherwise. Slash aliases: `/gcp:next` (show next),
-   `/gcp:new` (next item + start), `/gcp:plan <service>` (scaffold a GA wave plan),
-   `/gcp:status`, `/gcp:list`, `/gcp:audit`,
-   `/gcp:find` (nested `/gcp/next` etc. resolve too).
+   the top item unless told otherwise. Slash commands live in
+   `.opencode/commands/gcp/` and are invoked nested: `/gcp/next` (show next),
+   `/gcp/new` (next item + start), `/gcp/plan <service>` (scaffold a GA wave
+   plan), `/gcp/status`, `/gcp/list`, `/gcp/audit`, `/gcp/find`.
 4. **Know what is *not* done and why.** `make gcp-status-audit` classifies the
    not-done items: `oversight?` (declared in a finished wave, not merged),
    `unowned` (fix verdict, no branch, only a historical table), `stale-doc` (a

@@ -17,10 +17,10 @@ proceeds, branch the item's `Branch` off the refreshed base.
 `main`. To work off a series integration branch, say so explicitly and keep the
 rest of the argument as the item query:
 
-- `base=<branch>` — e.g. `/gcp:new base=gke datastore timestamps`
-- `--base <branch>` — e.g. `/gcp:new --base gke bigquery load`
+- `base=<branch>` — e.g. `/gcp/new base=gke datastore timestamps`
+- `--base <branch>` — e.g. `/gcp/new --base gke bigquery load`
 
-There is deliberately no bare-word form: `/gcp:new datastore` is an item query,
+There is deliberately no bare-word form: `/gcp/new datastore` is an item query,
 never a branch. A base that does not exist yet is created off `upstream/main`
 by session-start and pushed to origin and upstream (a PR cannot target a branch
 that only exists in the fork), so that series' PRs must then be opened against
@@ -47,7 +47,7 @@ Say so when a branch was created, because the series' PRs target it instead of
   `## <ID> — <service>: <feature>`, then one or two sentences of context (what
   the gap is and why it matters — real GCP vs the emulator). Then implement.
 - Read the item's `plan doc` and its `source` section from the ledger. **If the item
-  has no plan doc yet, create it first with `/gcp:plan <service>`** (or
+  has no plan doc yet, create it first with `/gcp/plan <service>`** (or
   `make gcp-plan-new SERVICE=<service>`) and follow the `gcp-phase-workflow` skill §0 —
   do not implement an unscheduled item. Then **load the `gcp-phase-workflow` skill**
   (use the skill tool with id `gcp-phase-workflow`; if it is not registered, read

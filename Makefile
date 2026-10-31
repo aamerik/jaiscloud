@@ -201,7 +201,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-gcp-differential-bigquery record-gcp-differential-bigquery \
         test-gcp-terraform test-gcp-opentofu \
         gen-gcp-fidelity-matrix check-gcp-fidelity-matrix ga-check \
-        gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-behavioral-gate gcp-status-depth-gate gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff gcp-ci-preflight gcp-ci-wait check-gcp-command-aliases
+        gcp-session-start gcp-status gcp-status-audit gcp-status-coverage gcp-status-behavioral-gate gcp-status-depth-gate gcp-status-evidence gcp-status-lint-plans gcp-status-next gcp-status-check gcp-plan-new gcp-status-finalize gcp-matrix-diff gcp-ci-preflight gcp-ci-wait
 
 # ─── Help ─────────────────────────────────────────────────────────────────────
 # NOTE: 'make --help' and 'make -h' show GNU Make's own flags (cannot be overridden).
@@ -1156,7 +1156,7 @@ check-gcp-fidelity-matrix: test-gcp-wire-conformance ## Fail if the committed fi
 	@git diff --exit-code -- docs/fidelity || \
 	  (echo "ERROR: docs/fidelity is stale — run 'make gen-gcp-fidelity-matrix' and commit the result"; exit 1)
 
-gcp-session-start: ## Guard the checkout, fast-forward the session base from upstream (create it if new), rebuild the ledger (used by /gcp:new; GCP_SESSION_BASE=<branch> for a series)
+gcp-session-start: ## Guard the checkout, fast-forward the session base from upstream (create it if new), rebuild the ledger (used by /gcp/new; GCP_SESSION_BASE=<branch> for a series)
 	@bash tools/gcp-session-start.sh
 	@$(MAKE) --no-print-directory gcp-status
 
@@ -1228,14 +1228,6 @@ gcp-status-finalize: ## Finalize a completed plan doc: PLAN=plan_docs/<doc>.md I
 	  if [ -n "$(OPS)" ]; then $(MAKE) --no-print-directory gcp-matrix-diff REF=upstream/main; fi; \
 	fi
 
-check-gcp-command-aliases: ## Fail if the nested /gcp/* and flat /gcp:* .opencode command copies have drifted
-	@for f in .opencode/commands/gcp/*.md; do \
-	  name=$$(basename "$$f"); flat=".opencode/commands/gcp:$$name"; \
-	  [ -f "$$flat" ] || { echo "ERROR: $$flat is missing (the flat alias set must match gcp/*.md)"; exit 1; }; \
-	  cmp -s "$$f" "$$flat" || { echo "ERROR: $$f and $$flat differ — they must stay byte-identical (cp one over the other)"; exit 1; }; \
-	done
-	@echo "ok: the nested /gcp/* and flat /gcp:* command copies are identical"
-
 # Pre-push mirror of the gates the `test-gcp-unit` and `test-gcp-conformance` CI
 # jobs run offline (no Docker, no booted emulator; the client/conformance jobs
 # are `ga-check`). Run it before `git push` on a GCP session — a stale
@@ -1248,7 +1240,7 @@ gcp-ci-preflight: ## Mirror CI's offline GCP gates before pushing (unit+race, li
 	$(MAKE) --no-print-directory gcp-status-behavioral-gate gcp-status-depth-gate
 	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/...
 	go run ./tools/lint/gcplint ./internal/gcp/... ./cmd/jaiscloud-gcp
-	$(MAKE) --no-print-directory check-gcp-command-aliases check-gcp-fidelity-matrix
+	$(MAKE) --no-print-directory check-gcp-fidelity-matrix
 
 # Block until a PR's checks settle; on a red check, print the failing jobs and
 # their `--log-failed` tail (minus the runner's cache-restore tar noise) so the
